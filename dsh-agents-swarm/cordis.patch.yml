@@ -1,0 +1,8 @@
+# dsh-agents-swarm bundle patch: inserts the sidebar entry row into the web
+# profile roster. Applied as a profile bundle layer (`dsh.bundle.patch`).
+#
+# The row carries a browser half (exports "./client"); the node half is an
+# empty Loader seat.
+- insert:
+    - id: agents-swarm
+      name: 'dsh-agents-swarm'

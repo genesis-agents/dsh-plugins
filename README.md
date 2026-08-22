@@ -7,7 +7,8 @@ One directory per plugin; each is a self-contained package with its own
 
 | Plugin | What it does |
 |---|---|
-| `dsh-brand-mine` | Fills the sidebar and conversation Hero brand slots with a custom mark and wordmark |
+| `dsh-brand-mine` | Genesis honeycomb mark, the `Genesis Harness` wordmark, and a `deepseek` origin badge, in the sidebar and conversation Hero brand slots |
+| `dsh-agents-swarm` | The Agents Swarm sidebar entry, its page, and the local source library behind it |
 
 ## Install locally
 
