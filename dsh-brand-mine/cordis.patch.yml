@@ -1,0 +1,9 @@
+# dsh-brand-mine bundle patch: inserts the browser-brand plugin row into the
+# web profile roster. Applied as a profile bundle layer (the `dsh.bundle.patch`
+# manifest field) over dsh-base.
+#
+# The row carries a browser half (exports "./client"); the node half is an
+# empty Loader seat, matching how dsh-client-ui-brand-official is rostered.
+- insert:
+    - id: ui-brand-mine
+      name: 'dsh-brand-mine'
