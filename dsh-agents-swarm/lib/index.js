@@ -25,6 +25,7 @@ import { admissibleUrl, fetchDocument, readableText, readArticle, displayModeOf,
 import { sourceFeeds } from "./sources.js";
 import { enrichThumbnails, imageForPage, ENRICHABLE_TYPES, DEFAULT_ENRICH_LIMIT } from "./enrich.js";
 import { createPublishRoutes } from "./publish-routes.js";
+import { PUBLISH_DEFAULTS, readPublishConfig, startPublishTimer } from "./publish-schedule.js";
 
 /** Route prefix this plugin owns on the dsh web server. */
 const ROUTE_PREFIX = "/swarm-api";
@@ -395,7 +396,7 @@ export function ensureSourceRoster(store, logger) {
 /**
  * Read the plugin's configuration, filling defaults for anything unset.
  * @param store - the source library.
- * @returns `{ feeds, jobs, transcriptLanguages, supadataKey }`.
+ * @returns the configuration, including the daily-episode schedule.
  */
 export function readConfig(store) {
   return {
@@ -404,6 +405,7 @@ export function readConfig(store) {
     transcriptLanguages: store.getSetting("transcriptLanguages", DEFAULT_TRANSCRIPT_LANGUAGES),
     supadataKey: store.getSetting("supadataKey", ""),
     collectIntervalMinutes: store.getSetting("collectIntervalMinutes", DEFAULT_COLLECT_INTERVAL_MINUTES),
+    ...readPublishConfig(store),
   };
 }
 
@@ -443,11 +445,42 @@ export function writeConfig(store, patch) {
     const minutes = Number(patch.collectIntervalMinutes);
     if (!Number.isFinite(minutes) || minutes < 0) problems.push("collectIntervalMinutes must be zero or a positive number");
     else if (minutes > 0 && minutes < MIN_COLLECT_INTERVAL_MINUTES) {
-      problems.push();
+      // Was `problems.push()` with no argument, which pushed `undefined`: the
+      // patch was rejected and the page was told why in an empty string.
+      problems.push(`collectIntervalMinutes must be at least ${MIN_COLLECT_INTERVAL_MINUTES}, or zero to turn collection off`);
     }
   }
+  // The daily episode. `publishAt` is checked rather than coerced because a
+  // typo there fails SILENTLY: the timer reads an unparseable time as "no
+  // schedule" and simply never fires, which looks exactly like a schedule that
+  // is set and working until the morning it does not arrive.
+  if (patch.publishAt !== undefined && !(typeof patch.publishAt === "string" && (patch.publishAt === "" || /^([01]\d|2[0-3]):[0-5]\d$/.test(patch.publishAt)))) {
+    problems.push("publishAt must be HH:MM on a 24-hour clock, or empty to turn the daily episode off");
+  }
+  if (patch.publishKinds !== undefined) {
+    if (!Array.isArray(patch.publishKinds)) problems.push("publishKinds must be an array");
+    else {
+      for (const kind of patch.publishKinds) {
+        if (!RESOURCE_TYPES.includes(kind)) problems.push(`publishKinds must be drawn from ${RESOURCE_TYPES.join(", ")}`);
+      }
+    }
+  }
+  for (const [key, low, high] of [["publishSources", 1, 20], ["publishMinutes", 2, 20], ["publishMinSources", 1, 20]]) {
+    if (patch[key] === undefined) continue;
+    const value = Number(patch[key]);
+    if (!Number.isFinite(value) || value < low || value > high) problems.push(`${key} must be between ${low} and ${high}`);
+  }
+  if (patch.publishHosts !== undefined && (typeof patch.publishHosts?.a !== "string" || typeof patch.publishHosts?.b !== "string")) {
+    problems.push("publishHosts must be { a, b } naming two voices");
+  }
   if (problems.length > 0) return problems;
-  for (const key of ["feeds", "jobs", "transcriptLanguages", "supadataKey", "collectIntervalMinutes"]) {
+  for (const key of [
+    "feeds", "jobs", "transcriptLanguages", "supadataKey", "collectIntervalMinutes",
+    // `publishLastRun` is deliberately absent: it is the schedule's own record
+    // of what it did, and a page that could write it could make the timer
+    // believe today is already served.
+    "publishAt", "publishKinds", "publishSources", "publishMinutes", "publishHosts", "publishMinSources",
+  ]) {
     if (patch[key] !== undefined) store.setSetting(key, patch[key]);
   }
   return [];
@@ -1345,6 +1378,7 @@ export function apply(ctx) {
   // and log a success.
   ensureSourceRoster(store, ctx.logger);
   const stopTimer = startCollectionTimer(store, ctx.logger);
+  const stopPublish = startPublishTimer(store, createChat(ctx), ctx.logger);
   ctx.on("dispose", () => {
     stopTimer();
     dispose();

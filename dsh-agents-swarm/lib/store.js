@@ -171,6 +171,11 @@ function withColumns(row) {
   const thumbnail = row.thumbnail_url;
   if (typeof thumbnail === "string" && thumbnail !== "") base.thumbnailUrl = thumbnail;
   else if (thumbnail === null) delete base.thumbnailUrl;
+  // Collected rows carry no `createdAt` in the snapshot — the column is set by
+  // `put` at write time, and is what `sortBy: "createdAt"` orders on. Serving
+  // the row without it hands the page a list ordered by a field it cannot see,
+  // so anything asking "what arrived since X" silently compares undefined.
+  if (typeof row.created_at === "string") base.createdAt = row.created_at;
   return base;
 }
 
@@ -353,7 +358,7 @@ export class SourceStore {
     const limit = Math.max(1, Math.min(100, Number(take) || 20));
     const offset = Math.max(0, Number(skip) || 0);
     const rows = this.db.prepare(
-      `SELECT raw, thumbnail_url FROM resources ${clause} ORDER BY ${order} IS NULL, ${order} DESC LIMIT ? OFFSET ?`,
+      `SELECT raw, thumbnail_url, created_at FROM resources ${clause} ORDER BY ${order} IS NULL, ${order} DESC LIMIT ? OFFSET ?`,
     ).all(...params, limit, offset);
     return {
       rows: rows.map(withColumns),
@@ -368,7 +373,7 @@ export class SourceStore {
    * @returns the stored row, or undefined.
    */
   get(id) {
-    const row = this.db.prepare("SELECT raw, thumbnail_url FROM resources WHERE id = ?").get(id);
+    const row = this.db.prepare("SELECT raw, thumbnail_url, created_at FROM resources WHERE id = ?").get(id);
     return row === undefined ? undefined : withColumns(row);
   }
 

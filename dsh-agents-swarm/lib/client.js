@@ -2979,6 +2979,43 @@ window.__ModuleLoader__.load({
 		* wastes more: every bad script would cost the full render before anyone
 		* could see it was bad.
 		*/
+		/**
+		* One line describing the standing order: what it would draw on now, and
+		* what it did last.
+		*
+		* The last run is reported by its OUTCOME rather than as "ran / did not
+		* run", because the interesting failure is the quiet one — a morning
+		* that produced nothing because three sources had not arrived reads
+		* identically to a morning that never fired, and only one of those is
+		* a problem worth touching.
+		* @param schedule - the payload from `/publish/schedule`.
+		* @param zh - whether to write Chinese.
+		* @returns the line.
+		*/
+		function scheduleNote(schedule, zh) {
+			const parts = [];
+			if (schedule.publishAt === "") {
+				parts.push(zh ? "定时发布已关闭 —— 填入时间即可开启。" : "No standing order — set a time to start one.");
+			} else {
+				parts.push(zh
+					? `现在有 ${schedule.waiting} 条新信源在等，少于 ${schedule.publishMinSources} 条就跳过当天。`
+					: `${schedule.waiting} new source(s) waiting; a day with fewer than ${schedule.publishMinSources} is skipped.`);
+			}
+			const last = schedule.publishLastRun;
+			if (last === null || last === undefined) {
+				parts.push(zh ? "还没有跑过。" : "It has not run yet.");
+			} else if (typeof last.error === "string") {
+				parts.push((zh ? `上次 ${formatStamp(last.at)} 失败：` : `Last run ${formatStamp(last.at)} failed: `) + last.error);
+			} else if (typeof last.skipped === "string") {
+				parts.push((zh ? `上次 ${formatStamp(last.at)} 跳过：` : `Last run ${formatStamp(last.at)} skipped: `) + last.skipped);
+			} else {
+				parts.push(zh
+					? `上次 ${formatStamp(last.at)} 用 ${last.sources} 条信源生成了一集。`
+					: `Last run ${formatStamp(last.at)} made an episode from ${last.sources} source(s).`);
+			}
+			return parts.join(" ");
+		}
+
 		function PublishTab({ zh }) {
 			const [kindId, setKindId] = useState(KINDS[0].id);
 			const [rows, setRows] = useState([]);
@@ -2989,6 +3026,8 @@ window.__ModuleLoader__.load({
 			const [hosts, setHosts] = useState(null);
 			const [job, setJob] = useState(null);
 			const [episodes, setEpisodes] = useState([]);
+			const [schedule, setSchedule] = useState(null);
+			const [watchUntil, setWatchUntil] = useState(0);
 			const [busy, setBusy] = useState(false);
 			const [error, setError] = useState("");
 			const kind = KINDS.find((candidate) => candidate.id === kindId) ?? KINDS[0];
@@ -3058,6 +3097,72 @@ window.__ModuleLoader__.load({
 				return () => { live = false; clearInterval(timer); };
 			}, [job, loadEpisodes]);
 
+			const loadSchedule = useCallback(async () => {
+				try {
+					const response = await fetch(`${apiBase()}/publish/schedule`);
+					const payload = await response.json();
+					if (payload?.success === true) setSchedule(payload.data);
+				} catch {
+					// The schedule strip is a reading of server state; failing to
+					// read it must not stop someone making an episode by hand.
+				}
+			}, []);
+
+			useEffect(() => { void loadSchedule(); }, [loadSchedule]);
+
+			// Watching a scheduled or manual run land. It ends on its own
+			// deadline, and on unmount, so a tab left open does not poll forever.
+			useEffect(() => {
+				if (watchUntil === 0) return;
+				const timer = setInterval(() => {
+					if (Date.now() > watchUntil) { setWatchUntil(0); return; }
+					void loadEpisodes();
+					void loadSchedule();
+				}, 5000);
+				return () => { clearInterval(timer); };
+			}, [watchUntil, loadEpisodes, loadSchedule]);
+
+			// Written through /config rather than a route of its own: these are
+			// the same settings the Host reads at every tick, and one writer for
+			// them means one whitelist to keep honest.
+			const saveSchedule = useCallback(async (patch) => {
+				setBusy(true);
+				try {
+					const response = await fetch(`${apiBase()}/config`, {
+						method: "PUT",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify(patch)
+					});
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
+					await loadSchedule();
+				} catch (cause) {
+					setError(String(cause?.message ?? cause));
+				} finally {
+					setBusy(false);
+				}
+			}, [loadSchedule]);
+
+			const runNow = useCallback(async () => {
+				setBusy(true);
+				setError("");
+				try {
+					const response = await fetch(`${apiBase()}/publish/run-now`, { method: "POST" });
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
+					// It takes minutes and reports only through the settings it
+					// writes, so the page watches for the episode instead of a
+					// job id: the first one to appear IS the answer. The deadline
+					// goes into state rather than a bare setInterval, so leaving
+					// the tab stops the polling instead of leaking it.
+					setWatchUntil(Date.now() + 15 * 60 * 1000);
+				} catch (cause) {
+					setError(String(cause?.message ?? cause));
+				} finally {
+					setBusy(false);
+				}
+			}, [loadEpisodes, loadSchedule]);
+
 			const toggle = useCallback((id) => {
 				setChosen((previous) => {
 					const next = new Set(previous);
@@ -3126,6 +3231,74 @@ window.__ModuleLoader__.load({
 						children: zh
 							? "把选中的信源讲成一段双人对话，并汇成可订阅的播客。"
 							: "Selected sources spoken as a two-host conversation, and the feed they publish to."
+					}),
+
+					// ── the standing order ───────────────────────────────────
+					// Placed before the manual controls, not after, because it is
+					// the thing that runs without anyone here. A machine that
+					// stays on earns its keep by making the episode while you
+					// sleep; doing it by hand is the fallback, not the feature.
+					schedule === null ? null : jsxs("div", {
+						style: {
+							display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap",
+							padding: "12px 14px", marginBottom: "16px",
+							border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "12px",
+							background: "var(--dsw-specific-menu)", boxShadow: "var(--dsw-shadow-lv1)"
+						},
+						children: [
+							jsx("span", {
+								style: { fontSize: "12px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+								children: zh ? "每天" : "Every day at"
+							}),
+							jsx("input", {
+								type: "time",
+								value: schedule.publishAt,
+								"aria-label": zh ? "每日生成时间" : "Daily episode time",
+								onChange: (event) => { setSchedule((previous) => ({ ...previous, publishAt: event.target.value })); },
+								onBlur: (event) => { void saveSchedule({ publishAt: event.target.value }); },
+								style: { ...SEARCH_STYLE, width: "104px", height: "30px", fontSize: "12px" }
+							}),
+							jsxs("label", {
+								style: { display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+								children: [
+									jsx("span", { children: zh ? "取最新" : "newest" }),
+									jsx("input", {
+										type: "number", min: 1, max: 20, value: schedule.publishSources,
+										onChange: (event) => { setSchedule((previous) => ({ ...previous, publishSources: Number(event.target.value) || 1 })); },
+										onBlur: (event) => { void saveSchedule({ publishSources: Math.max(1, Math.min(20, Number(event.target.value) || 8)) }); },
+										style: { ...SEARCH_STYLE, width: "58px", height: "30px", fontSize: "12px" }
+									}),
+									jsx("span", { children: zh ? "条，讲" : "sources," })
+								]
+							}),
+							jsxs("label", {
+								style: { display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+								children: [
+									jsx("input", {
+										type: "number", min: 2, max: 20, value: schedule.publishMinutes,
+										onChange: (event) => { setSchedule((previous) => ({ ...previous, publishMinutes: Number(event.target.value) || 2 })); },
+										onBlur: (event) => { void saveSchedule({ publishMinutes: Math.max(2, Math.min(20, Number(event.target.value) || 8)) }); },
+										style: { ...SEARCH_STYLE, width: "58px", height: "30px", fontSize: "12px" }
+									}),
+									jsx("span", { children: zh ? "分钟" : "min" })
+								]
+							}),
+							jsx("span", { style: { flex: 1 } }),
+							jsx("button", {
+								type: "button",
+								disabled: busy || watchUntil !== 0,
+								style: { ...controlStyle(), height: "30px", fontSize: "12px" },
+								onClick: () => { void runNow(); },
+								children: watchUntil !== 0 ? (zh ? "生成中…" : "Running…") : (zh ? "立即生成" : "Run now")
+							}),
+							// The second line: what the standing order would do right
+							// now, and what it did last. A schedule whose only
+							// feedback arrives once a day is one nobody trusts.
+							jsx("div", {
+								style: { flexBasis: "100%", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+								children: scheduleNote(schedule, zh)
+							})
+						]
 					}),
 
 					// ── step one: what the episode is about ──────────────────

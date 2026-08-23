@@ -21,6 +21,7 @@
 import { DEFAULT_HOSTS, TTS_BACKENDS, VOICES, concatMp3, synthesizeTurns } from "./tts.js";
 import { generateScript } from "./podcast.js";
 import { buildFeed, deleteEpisode, episodePath, getEpisode, listEpisodes, saveEpisode } from "./episodes.js";
+import { pickSources, readPublishConfig, runScheduled } from "./publish-schedule.js";
 
 /** Sources one episode may draw on. */
 const MAX_SOURCES = 20;
@@ -165,6 +166,35 @@ export function createPublishRoutes({ store, chat, logger, sendJson, readJson })
         return true;
       }
       sendJson(res, 200, { success: true, data: job });
+      return true;
+    }
+
+    // ── the schedule: what the always-on machine does by itself ────
+    if (req.method === "GET" && path === "/publish/schedule") {
+      const config = readPublishConfig(store);
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          ...config,
+          // What TODAY would draw on, so the schedule can be judged before it
+          // runs rather than by reading tomorrow's episode. A schedule whose
+          // only feedback arrives once a day is a schedule nobody trusts.
+          waiting: pickSources(store, config).length,
+        },
+      });
+      return true;
+    }
+
+    if (req.method === "POST" && path === "/publish/run-now") {
+      if (chat === undefined) {
+        sendJson(res, 503, { success: false, error: "no model routed" });
+        return true;
+      }
+      // Answered immediately for the same reason a render is: this IS a render,
+      // plus a model call. `markSkips: false` — a manual run that finds nothing
+      // must not mark the day served and cancel the morning's scheduled one.
+      void runScheduled(store, chat, logger, { markSkips: false });
+      sendJson(res, 202, { success: true, data: { started: true } });
       return true;
     }
 

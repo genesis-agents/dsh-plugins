@@ -13,8 +13,10 @@ Two things here only work on a machine that stays on:
 - **Collection.** The roster is 72 feeds on an hourly timer. A laptop that
   sleeps collects nothing while it sleeps, and the timer counts from process
   start, so every wake restarts the clock rather than catching up.
-- **Publishing.** An episode generated at 06:00 is only useful if something
-  was awake at 06:00 to generate it.
+- **Publishing.** The 发布 tab holds a standing order: a time of day, how many
+  of the newest sources to draw on, and how long the episode should run. An
+  episode generated at 07:00 is only useful if something was awake at 07:00 to
+  generate it.
 
 The database moving is a consequence, not the point: it has to sit on the same
 machine as the process that writes it. **Do not put the SQLite file on a
@@ -132,11 +134,38 @@ listening only on loopback, the browser still sees a loopback origin, and the
 `/api` trust fence needs no exception.
 
 `dsh --profile web --host 0.0.0.0 --trusted-host macmini.local:3080` also
-works and needs no tunnel. It is offered here only to be dismissed: this
-deployment runs with the `danger-full-access` permission preset, which means an
-agent with a shell on that machine. Binding it to the LAN publishes that shell
-to every device on the network, with no authentication in front of it. The
-tunnel costs one command and removes the entire question.
+works and needs no tunnel. It is offered here only to be dismissed. This
+deployment runs the `danger-full-access` permission preset, which is an agent
+with a shell; binding it to the network publishes that shell with nothing in
+front of it. A home network is not a safe room — it holds guests' phones and
+appliances that receive firmware from their vendors — and the tunnel costs one
+command.
+
+From outside the house, add Tailscale rather than forwarding a port on the
+router. It reaches the machine without opening anything to the internet, and
+the same tunnel command then works from anywhere.
+
+## What a home machine changes, and what it does not
+
+**Does not change: what the collectors can reach.** Everything the Host fetches
+server-side — the 72 feeds, `og:image` for thumbnails, the reader view, the
+transcript fallbacks — goes out over the same kind of residential connection it
+does today, so a source that opens now still opens there. A machine in a data
+centre would not have that property: bot protection treats hosting ranges far
+more harshly than consumer ones, and the sites already refusing this
+installation (McKinsey, behind a bot check) are the mild end of that.
+
+**Does not change: YouTube transcripts.** That fetch runs in the BROWSER, not
+on the Host — it carries the viewer's own YouTube session, which is the only
+reason it works at all. It keeps working from wherever the browser is, and is
+indifferent to where the Host moved.
+
+**Does change: what "local" means for speech.** Episodes are currently spoken
+by Edge's read-aloud endpoint, which is free and keyless but sends each line to
+Microsoft. On a machine in the house, a local backend (Kokoro, 82M parameters,
+several times faster than real time on Apple Silicon) makes that literally
+true: the script never leaves the building. On a rented machine it would only
+mean a different company's data centre.
 
 ## Keeping it running
 
@@ -175,6 +204,13 @@ Then stop the Mac from sleeping, or the timer stops with it:
 sudo pmset -a sleep 0 disablesleep 1
 ```
 
+Both timers are wall-clock aware in different ways, and the difference matters
+on a machine that occasionally goes down. Collection runs on an interval, so a
+restart restarts its clock. The daily episode runs at a *time*, and a run
+missed while the machine was off is caught up when it comes back — but only
+within six hours, so booting at noon does not produce the 07:00 episode. Set a
+time that is inside the window you expect the machine to be up.
+
 ## Checking it actually works
 
 In this order, because each answers a different question:
@@ -182,11 +218,16 @@ In this order, because each answers a different question:
 ```sh
 curl -s localhost:3080/swarm-api/stats            # the library opened, and where from
 curl -s localhost:3080/swarm-api/collect/status   # the timer is running, and its last run
+curl -s localhost:3080/swarm-api/publish/schedule # the standing order, and what it did last
 curl -s -X POST localhost:3080/web-search-api/test -d '{"backend":"serper"}' \
      -H 'content-type: application/json'          # search reaches the network
 ```
 
-The last one reports `via: "seam"` when the search went through
+`publish/schedule` also reports `waiting` — how many new sources the next
+episode would draw on. If that is zero every morning, collection is the thing
+that is broken, not publishing.
+
+The search check reports `via: "seam"` when the search went through
 `ctx.web.search()` — the same entry the model's `web_search` tool uses. `via:
 "backend"` means it only proved the backend works, not that the harness routes
 to it.
