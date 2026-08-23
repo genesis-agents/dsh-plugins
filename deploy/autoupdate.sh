@@ -61,23 +61,52 @@ fi
 
 say "updated $(git rev-parse --short "$BEFORE") -> $(git rev-parse --short "$REMOTE")"
 
-# Dependencies can change with the code, and a plugin whose imports moved will
-# fail to load rather than run slightly wrong.
-for plugin in dsh-agents-swarm dsh-web-search-serper dsh-agent-presets; do
-  [ -f "$plugin/package.json" ] || continue
-  ( cd "$plugin" && pnpm install --silent >>"$LOG" 2>&1 ) || say "pnpm install failed in $plugin"
-done
+# Reconcile the profile with the code that just arrived, every time.
+#
+# Pulling alone is not deploying. A commit can rename a plugin -- and one did:
+# the package moved under a scope, the checkout here updated to match, and the
+# profile went on linking the old name. The Loader imports the name in the
+# patch file, could not find it, and the box stayed down until somebody went
+# looking -- with nothing in this log but a warning nobody was reading.
+# setup.sh is idempotent and merges what it does not own,
+# so running it on every update costs a few seconds and closes that gap.
+apply_profile() {
+  bash "$REPO/deploy/setup.sh" >>"$LOG" 2>&1 || say "setup.sh failed"
+}
 
-launchctl kickstart -k "gui/$(id -u)/$SERVICE" >>"$LOG" 2>&1
+# Restart and wait for it to actually answer. Answering is the test, not
+# exiting zero: the harness starts, fails to mount a plugin, and stays up
+# serving a page with the feature missing.
+restart_and_wait() {
+  launchctl kickstart -k "gui/$(id -u)/$SERVICE" >>"$LOG" 2>&1
+  for _ in $(seq 1 60); do
+    curl -fsS -m 2 "http://127.0.0.1:${DSH_PORT:-3080}/swarm-api/stats" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  return 1
+}
 
-# Confirm it came back. A restart that leaves the box down is worse than the
-# stale version it replaced, and this is the only moment anything is watching.
-for _ in $(seq 1 60); do
-  if curl -fsS -m 2 "http://127.0.0.1:${DSH_PORT:-3080}/swarm-api/stats" >/dev/null 2>&1; then
-    say "restarted and answering"
-    exit 0
-  fi
-  sleep 1
-done
-say "WARNING restarted but not answering after 60s"
+apply_profile
+if restart_and_wait; then
+  say "restarted and answering"
+  exit 0
+fi
+
+# Roll back. The previous revision was serving a minute ago, and a box that is
+# up on yesterday's code is worth more than one that is down on today's --
+# especially here, where nobody is watching and the only alternative was a
+# warning nobody read.
+say "WARNING $(git rev-parse --short "$REMOTE") did not answer in 60s; rolling back to $(git rev-parse --short "$BEFORE")"
+if ! git reset --hard --quiet "$BEFORE" 2>>"$LOG"; then
+  say "FAILED rollback checkout; box is down on $(git rev-parse --short HEAD)"
+  exit 1
+fi
+apply_profile
+if restart_and_wait; then
+  # Deliberately still an error exit: the update failed and something should
+  # say so, even though the box is serving again.
+  say "rolled back to $(git rev-parse --short "$BEFORE") and answering"
+  exit 1
+fi
+say "FAILED box is down on $(git rev-parse --short "$BEFORE") after rollback"
 exit 1

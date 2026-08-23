@@ -70,20 +70,61 @@ mkdir -p "$PROFILE"
 NAMES=()
 for plugin in "${PLUGINS[@]}"; do NAMES+=("$(package_name "$plugin")"); done
 
-{
-  printf '{\n  "name": "dsh-profile-web",\n  "private": true,\n  "dependencies": {\n'
-  for i in "${!PLUGINS[@]}"; do
-    comma=","; [ "$i" -eq $(( ${#PLUGINS[@]} - 1 )) ] && comma=""
-    printf '    "%s": "link:%s/%s"%s\n' "${NAMES[$i]}" "$REPO" "${PLUGINS[$i]}" "$comma"
-  done
-  printf '  },\n  "dsh": {\n    "profile": {\n      "bundles": [\n'
-  printf '        "@deepseek-ai/dsh-base",\n        "@deepseek-ai/dsh-web-app",\n'
-  for i in "${!PLUGINS[@]}"; do
-    comma=","; [ "$i" -eq $(( ${#PLUGINS[@]} - 1 )) ] && comma=""
-    printf '        "%s"%s\n' "${NAMES[$i]}" "$comma"
-  done
-  printf '      ]\n    }\n  }\n}\n'
-} > "$PROFILE/package.json"
+# Merged into what is already there, not regenerated over it. This repo is not
+# the only source of plugins on every machine: the always-on box carries two
+# that live elsewhere, and a setup script that rebuilt the manifest from its
+# own list deleted them without saying so. Anything this repo does not own is
+# copied through untouched.
+#
+# Written by node rather than printf. The manifest has a foreign half now, and
+# hand-emitting JSON around values somebody else wrote is how a stray quote
+# turns a profile into a parse error on a machine nobody is watching.
+DSH_REPO="$REPO" DSH_MANIFEST="$PROFILE/package.json" \
+DSH_DIRS="${PLUGINS[*]}" DSH_NAMES="${NAMES[*]}" node --input-type=module -e '
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+
+const repo = process.env.DSH_REPO;
+const file = process.env.DSH_MANIFEST;
+const dirs = process.env.DSH_DIRS.split(" ");
+const names = process.env.DSH_NAMES.split(" ");
+const BASE = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"];
+
+let m = {};
+if (existsSync(file)) {
+  // A manifest we cannot parse is not a reason to stop: it is exactly the
+  // state somebody runs this script to get out of.
+  try { m = JSON.parse(readFileSync(file, "utf8")); } catch { m = {}; }
+}
+m.name = "dsh-profile-web";
+m.private = true;
+m.dependencies ??= {};
+m.dsh ??= {};
+m.dsh.profile ??= {};
+m.dsh.profile.bundles ??= [];
+
+// Ours under either name: the names we install under today, plus any key
+// already pointing at one of our directories. That second half is what
+// carries a rename onto a machine that still has the old name -- after a
+// rename the path is the only thing the two versions still share.
+const ours = new Set(names);
+for (const [key, value] of Object.entries(m.dependencies)) {
+  if (typeof value === "string" && dirs.some((d) => value.endsWith("/" + d))) ours.add(key);
+}
+
+const deps = {};
+for (const [k, v] of Object.entries(m.dependencies)) if (!ours.has(k)) deps[k] = v;
+names.forEach((n, i) => { deps[n] = "link:" + repo + "/" + dirs[i]; });
+m.dependencies = Object.fromEntries(Object.entries(deps).sort(([a], [b]) => a.localeCompare(b)));
+
+// Bundle order is load order, and a patch only sees what was applied before
+// it, so foreign bundles keep the position they were given. Ours go last, in
+// the order this repo declares them.
+const kept = m.dsh.profile.bundles.filter((b) => !ours.has(b) && !BASE.includes(b));
+m.dsh.profile.bundles = [...BASE, ...kept, ...names];
+
+writeFileSync(file, JSON.stringify(m, null, 2) + "\n");
+if (kept.length) process.stdout.write("  kept " + kept.length + " plugin(s) this repo does not own\n");
+'
 say "wrote profile manifest"
 
 # pnpm builds the links from the `link:` values. Do NOT hand-link with `ln -sfn`
