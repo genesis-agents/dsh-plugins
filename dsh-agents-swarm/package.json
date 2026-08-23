@@ -1,8 +1,25 @@
 {
-  "name": "dsh-agents-swarm",
-  "description": "Agents entry in the DSH sidebar footer, with a tabbed panel",
+  "name": "@genesis-agents/dsh-agents-swarm",
   "version": "0.1.0",
-  "private": true,
+  "description": "A source library for DeepSeek Harness: 72 feeds on an hourly timer, a reader with transcripts and translation, and a publisher that turns what it collects into a podcast, a digest, or a report",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "rss",
+    "feed-reader",
+    "podcast",
+    "text-to-speech",
+    "digest"
+  ],
+  "homepage": "https://github.com/genesis-agents/dsh-plugins/tree/main/dsh-agents-swarm#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/genesis-agents/dsh-plugins.git",
+    "directory": "dsh-agents-swarm"
+  },
+  "bugs": "https://github.com/genesis-agents/dsh-plugins/issues",
+  "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -13,6 +30,20 @@
       "default": "./lib/client.js"
     },
     "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "lib",
+    "tests",
+    "cordis.patch.yml",
+    "pnpm-workspace.yaml",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "dsh": {
     "bundle": {
@@ -26,7 +57,6 @@
       "platform": "web"
     }
   },
-  "license": "MIT",
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
     "jsdom": "^30.0.1",

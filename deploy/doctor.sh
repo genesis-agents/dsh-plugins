@@ -3,13 +3,19 @@
 # Check that this machine's installation actually works.
 #
 # Not a smoke test of whether things are installed — a test of whether they
-# DO anything. That distinction is the whole point. Every failure this
-# deployment has produced was silent: npm blocked a native build and reported
-# it as a warning while exiting 0; pnpm blocked the speech library the same way
-# and the failure surfaced hours later at the first attempt to speak; `ln -s`
-# under Git Bash made a directory copy and the plugin ran stale code for an
-# hour while reporting itself enabled. In each case "installed" was true and
+# DO anything. That distinction is the whole point. `ln -s` under Git Bash made
+# a directory copy and the plugin ran stale code for an hour while reporting
+# itself enabled; npm blocked build scripts for node-pty and koffi and reported
+# it as a warning while exiting 0. In each case "installed" was true and
 # "works" was false.
+#
+# It cuts the other way too, which is why these checks run the thing rather
+# than reasoning about it. ERR_PNPM_IGNORED_BUILDS from msedge-tts looked like
+# the same class of failure and was written up as one here — wrongly. That
+# package ships its compiled output and speaks fine with every script blocked;
+# the skipped script was a guard refusing non-pnpm installs. A check that only
+# reads warnings would have produced a confident wrong answer in both
+# directions.
 #
 # So each check below exercises the thing rather than looking for it, and says
 # what to do when it fails. Run it any time something seems wrong, not only
@@ -162,9 +168,10 @@ else
   bad "plugin dependencies not installed" "cd $SWARM && pnpm install"
 fi
 
-# The check that catches a blocked build script. `msedge-tts` present in
-# node_modules proves nothing: pnpm can place it unbuilt, report
-# ERR_PNPM_IGNORED_BUILDS as a warning, exit 0, and fail only here.
+# Presence in node_modules proves nothing about whether speech works: the
+# network path needs a token the endpoint issues, the WebSocket has its own
+# handshake, and any of it can fail while the package sits there looking
+# installed. So this synthesises a real utterance.
 if [ -d "$SWARM/node_modules/msedge-tts" ]; then
   SPOKE="$(cd "$SWARM" && node -e "
     import('./lib/tts.js')

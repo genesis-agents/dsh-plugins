@@ -507,7 +507,7 @@ The most valuable thing in this document. Each of these has actually happened.
 | Host B speaks in Host A's voice | Label matched only exact lowercase `"b"` |
 | Plugin runs stale code | `ln -s` under Git Bash on Windows makes a directory **copy**. Check for `l…->`, not `d…` |
 | Whole UI blank | Two plugins on one single slot at equal priority |
-| Install "succeeds", audio mute | npm and pnpm block native build scripts and report it as a **warning**, exiting 0 |
+| Install "succeeds", something fails later | npm blocks native build scripts and reports it as a **warning**, exiting 0. The reverse also happens: the same warning from a package that ships its build output means nothing, and reading it as a failure is its own wrong answer |
 | Library serves fine, translation fails | `.credentials.yaml` not moved — `settings.yaml` names the provider but not its key |
 | Over-reported date comparisons | `datetime('now')` renders with a space, stored ISO uses `T`, and `'T' > ' '` |
 | Feed lists episodes, none download | Enclosures hardcoded `http://` behind a TLS-terminating proxy |

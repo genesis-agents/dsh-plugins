@@ -1,7 +1,14 @@
-# msedge-tts ships a build script. pnpm blocks those by default and prints
-# ERR_PNPM_IGNORED_BUILDS, which does NOT fail the install — the package lands
-# unbuilt and only fails later, at the first attempt to speak. Approving it here
-# means a fresh clone on a new machine produces working audio rather than an
-# install that looked clean.
+# msedge-tts ships a `preinstall` of `npx only-allow pnpm` — a guard that
+# refuses installs by anything but pnpm. pnpm blocks it by default and prints
+# ERR_PNPM_IGNORED_BUILDS, which reads like a build was skipped.
+#
+# It was not. The package's `main` is `./dist/index` and its `files` is
+# `["dist/"]`, so the compiled output ships; `build` is `tsc` and only runs in
+# its own repo. Verified rather than assumed: installed with `--ignore-scripts`
+# and every script blocked, it still synthesises audio.
+#
+# Approved here only to silence the warning under pnpm. Blocking it is in fact
+# what lets npm users install this package at all, since `only-allow pnpm`
+# would otherwise refuse them.
 allowBuilds:
   msedge-tts: true

@@ -79,11 +79,16 @@ for p in dsh-agents-swarm dsh-web-search-serper dsh-brand-mine dsh-agent-presets
 done
 ```
 
-The `allow-scripts` line is not optional and is easy to skip: npm blocks build
-scripts for `node-pty` and `koffi` — both native — and reports it as a
-*warning* while exiting 0. The install looks fine and the failure arrives later.
-`msedge-tts` has the same shape on the pnpm side, which is why
-`dsh-agents-swarm/pnpm-workspace.yaml` now approves it in the repo.
+The `allow-scripts` line is easy to skip: npm blocks build scripts for
+`node-pty` and `koffi` — both native — and reports it as a *warning* while
+exiting 0, so the install looks fine and any failure arrives later.
+
+`msedge-tts` produces the same warning on the pnpm side and was written up here
+as the same problem. It is not: that package ships its compiled output, and it
+synthesises audio with every script blocked — checked by installing it with
+`--ignore-scripts` and speaking a line. The script pnpm skips is a guard that
+refuses non-pnpm installs. `pnpm-workspace.yaml` approves it only to silence
+the warning.
 
 `dsh-agents-swarm` needs its own dependencies (`jsdom`, `@mozilla/readability`,
 `turndown`, `msedge-tts`) because a linked plugin resolves from its real path,
