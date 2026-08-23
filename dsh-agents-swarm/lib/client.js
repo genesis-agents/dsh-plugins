@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 		* both is how "deployed but apparently absent" becomes legible instead
 		* of costing an afternoon.
 		*/
-		const CLIENT_VERSION = "0.3.2";
+		const CLIENT_VERSION = "0.3.3";
 
 		//#region locale + mark
 		/**
@@ -4270,7 +4270,21 @@ window.__ModuleLoader__.load({
 												type: "time",
 												value: schedule.publishAt,
 												onChange: (event) => { setSchedule((previous) => ({ ...previous, publishAt: event.target.value })); },
-												onBlur: (event) => { void saveSchedule({ publishAt: event.target.value }); },
+												onBlur: (event) => {
+													// An empty field is a half-finished edit, not an
+													// instruction to stop publishing. The switch above
+													// exists because clearing the time used to be the
+													// only way to turn this off; that reading was taken
+													// out of the UI and left in this handler, so
+													// clearing the field and clicking away still
+													// disarmed the daily episode — silently, the first
+													// evidence being a morning with nothing in it.
+													if (!event.target.value) {
+														setSchedule((previous) => ({ ...previous, publishAt: lastAt || "07:00" }));
+														return;
+													}
+													void saveSchedule({ publishAt: event.target.value });
+												},
 												style: { ...SEARCH_STYLE, width: "108px", height: "30px", fontSize: "12px", fontVariantNumeric: "tabular-nums" }
 											})
 										]

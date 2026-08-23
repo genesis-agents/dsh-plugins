@@ -133,12 +133,20 @@ Three steps, and the third is the one that matters.
 #    dsh-agents-swarm/package.json  and  lib/client.js's CLIENT_VERSION
 cd dsh-agents-swarm && npm test && npm publish --access public
 
-# 2. let the box pick it up (five minutes, or force it)
+# 2. only now push the bump
+git push
+
+# 3. let the box pick it up (five minutes, or force it)
 ssh box 'cd ~/engineering/dsh-plugins && bash deploy/autoupdate.sh'
 
-# 3. verify what was published, not what was committed
-./release-check.sh 0.3.2 0.3.2
+# 4. verify what was published, not what was committed
+./release-check.sh 0.3.3 0.3.2
 ```
+
+Publish before pushing, in that order. A release box installs the caret of the
+version the checkout names, so the bump commit is what moves it — push first
+and the box pulls a version the registry does not have yet, fails to install,
+and rolls back.
 
 Step 3 installs the published versions into a throwaway `DSH_HOME` and boots a
 real harness on them. Everything cheaper than that has been passed by a package
