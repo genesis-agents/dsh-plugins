@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 		* both is how "deployed but apparently absent" becomes legible instead
 		* of costing an afternoon.
 		*/
-		const CLIENT_VERSION = "0.3.3";
+		const CLIENT_VERSION = "0.3.4";
 
 		//#region locale + mark
 		/**
@@ -5180,6 +5180,10 @@ window.__ModuleLoader__.load({
 			const [feedUrl, setFeedUrl] = useState("");
 			const [feedType, setFeedType] = useState("BLOG");
 			const [status, setStatus] = useState(null);
+			// Feeds first: it is the pane with something to decide in it. The
+			// other two are a log you read when something looks wrong and a key
+			// you set once.
+			const [pane, setPane] = useState("feeds");
 			// The settings page belongs to no one kind, so the log borrows a
 			// single accent for failures rather than tinting itself at random.
 			const alert = KINDS[0];
@@ -5266,215 +5270,310 @@ window.__ModuleLoader__.load({
 				background: "var(--dsw-specific-menu)"
 			};
 
+			// Three panes, because these are three jobs.
+			//
+			// This was one column: the collection log, the collectors, seventy-two
+			// feeds spelled out in full, the transcript key, and the run button,
+			// in that order. Adding a feed meant scrolling past the log, and
+			// reading the log meant scrolling past the feeds — it was a list of
+			// everything the word "sources" can mean, in the order the features
+			// happened to be written. Nothing here changed except which third of
+			// it you are looking at.
+			const PANES = [
+				{ id: "feeds", zh: "订阅源", en: "Feeds", count: config.feeds.length },
+				{ id: "collect", zh: "采集", en: "Collection" },
+				{ id: "keys", zh: "密钥", en: "Keys" }
+			];
+
 			return jsxs("div", {
 				style: { padding: "4px 4px 32px", maxWidth: "720px" },
 				children: [
 					jsx(VersionLine, { zh }),
-					// ── collection log ────────────────────────────────────────
-					// What the scheduler has actually been doing. Until now the only
-					// record was `ctx.logger`, whose output does not reach this
-					// harness's stdout, so a run left no trace anyone could read and
-					// diagnosing one meant inferring it from timestamps on the rows.
-					jsx("h3", { style: { ...heading, marginTop: "8px" }, children: zh ? "采集记录" : "Collection log" }),
-					status === null ? jsx("p", { style: hint, children: zh ? "读取中…" : "Loading…" }) : jsxs("div", {
-						style: { marginBottom: "16px" },
-						children: [
+					jsx("div", {
+						role: "tablist",
+						style: {
+							display: "flex", gap: "2px", marginBottom: "18px",
+							borderBottom: "1px solid var(--dsw-alias-border-l1)"
+						},
+						children: PANES.map((candidate) => jsxs("button", {
+							type: "button",
+							role: "tab",
+							"aria-selected": pane === candidate.id,
+							onClick: () => { setPane(candidate.id); },
+							style: {
+								appearance: "none", background: "transparent", cursor: "pointer",
+								padding: "7px 12px", marginBottom: "-1px", border: "none",
+								borderBottom: "2px solid " + (pane === candidate.id ? "var(--dsw-alias-label-primary)" : "transparent"),
+								color: pane === candidate.id ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)",
+								fontSize: "12px", fontWeight: pane === candidate.id ? 600 : 500
+							},
+							children: [
+								jsx("span", { children: zh ? candidate.zh : candidate.en }),
+								candidate.count === undefined ? null : jsx("span", {
+									// The count belongs on the tab. How many feeds there
+									// are is the first thing anyone wants from this pane,
+									// and putting it here saves opening it to find out.
+									style: {
+										marginLeft: "6px", fontSize: "11px", fontVariantNumeric: "tabular-nums",
+										color: "var(--dsw-alias-label-secondary)"
+									},
+									children: candidate.count
+								})
+							]
+						}, candidate.id))
+					}),
+					jsx("div", {
+						role: "tabpanel",
+						"aria-label": zh ? PANES.find((p) => p.id === pane).zh : PANES.find((p) => p.id === pane).en,
+						children: pane === "feeds"
+							? jsxs("div", { children: [
+							// ── feeds ─────────────────────────────────────────────────
 							jsx("p", {
 								style: hint,
-								children: status.intervalMinutes > 0
-									? (zh ? `每 ${status.intervalMinutes} 分钟自动采集一次。` : `Collecting every ${status.intervalMinutes} minutes.`)
-									: (zh ? "自动采集已关闭（间隔为 0）。" : "Automatic collection is off (interval is 0).")
+								children: zh
+									? "每次采集都会拉取这些订阅源。URL 归一化去重，重复条目不会入库。"
+									: "Pulled on every collection run. Rows are deduplicated by normalized URL, so re-runs cost nothing."
 							}),
-							status.runs.length === 0
-								? jsx("div", { style: { ...rowStyle, color: "var(--dsw-alias-label-secondary)", fontSize: "12px" }, children: zh ? "服务启动后还没有跑过。" : "No run since this process started." })
-								: jsxs("div", {
-									children: status.runs.slice(0, 8).map((run, at) => jsxs("div", {
-										style: {
-											...rowStyle, alignItems: "flex-start", flexDirection: "column", gap: "4px",
-											borderColor: run.failures.length === 0 ? "var(--dsw-alias-border-l1)" : hue(alert, 0.45)
-										},
+							config.feeds.length === 0
+								? jsx("p", { style: { ...hint, fontStyle: "italic" }, children: zh ? "尚未添加订阅源。" : "No feed configured yet." })
+								: null,
+							// Grouped by kind, and named.
+							//
+							// Seventy-two rows of raw URL, in the order they were added,
+							// is not a list anybody reads -- and the names were right
+							// there in the config, unused. A row now leads with what the
+							// source is called and carries its URL underneath, and the
+							// rows sit under the kind they belong to, so finding whether
+							// a paper feed is already configured is a glance rather than
+							// a scan. `index` stays the position in the ORIGINAL array,
+							// because that is what Remove splices.
+							...config.feeds
+								.map((feed, index) => ({ feed, index }))
+								.sort((a, b) =>
+									(a.feed.type ?? "BLOG").localeCompare(b.feed.type ?? "BLOG")
+									|| (a.feed.name ?? a.feed.url).localeCompare(b.feed.name ?? b.feed.url))
+								.flatMap((entry, at, all) => {
+									const kind = entry.feed.type ?? "BLOG";
+									const first = at === 0 || (all[at - 1].feed.type ?? "BLOG") !== kind;
+									const count = all.filter((other) => (other.feed.type ?? "BLOG") === kind).length;
+									return first
+										? [jsxs("div", {
+											style: {
+												display: "flex", alignItems: "baseline", gap: "8px",
+												margin: "16px 0 6px", fontSize: "11px", letterSpacing: "0.04em",
+												color: "var(--dsw-alias-label-secondary)"
+											},
+											children: [
+												jsx("span", { style: { fontWeight: 600 }, children: kind }),
+												jsx("span", { style: { fontVariantNumeric: "tabular-nums" }, children: count })
+											]
+										}, "kind" + kind), entry]
+										: [entry];
+								})
+								.map((entry) => (entry.feed === undefined ? entry : (({ feed, index }) => jsxs("div", {
+								style: rowStyle,
+								children: [
+									jsxs("span", {
+										style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "2px" },
 										children: [
-											jsxs("div", {
-												style: { display: "flex", flexWrap: "wrap", gap: "10px", fontSize: "12px", width: "100%" },
-												children: [
-													jsx("span", { style: { fontWeight: 600, color: "var(--dsw-alias-label-primary)" }, children: formatStamp(run.startedAt) }),
-													jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: (zh ? "作业 " : "jobs ") + run.jobs }),
-													jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: (zh ? "抓取 " : "fetched ") + run.fetched }),
-													jsx("span", {
-														style: { color: run.added > 0 ? hue(alert) : "var(--dsw-alias-label-secondary)", fontWeight: run.added > 0 ? 600 : 400 },
-														children: (zh ? "新增 " : "added ") + run.added
-													}),
-													run.thumbnails === undefined || run.thumbnails === null ? null : jsx("span", {
-														style: { color: "var(--dsw-alias-label-secondary)" },
-														children: (zh ? "补图 " : "thumbnails ") + run.thumbnails.found + "/" + run.thumbnails.looked
-													}),
-													jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: run.seconds + "s" }),
-													jsx("span", { style: { flex: 1 } }, "spacer"),
-													jsx("span", {
-														style: { color: run.failures.length === 0 ? "var(--dsw-alias-label-secondary)" : hue(alert), fontWeight: run.failures.length === 0 ? 400 : 600 },
-														children: run.failures.length === 0 ? (zh ? "全部成功" : "all ok") : (zh ? `${run.failures.length} 个源失败` : `${run.failures.length} failed`)
-													})
-												]
+											jsx("span", {
+												style: { fontSize: "13px", color: "var(--dsw-alias-label-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+												children: feed.name ?? hostOf(feed.url) ?? feed.url
 											}),
-											...run.failures.slice(0, 4).map((failure, index) => jsx("div", {
-												style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
-												children: `${failure.source} — ${failure.error}`
-											}, `f${index}`))
+											jsx("span", {
+												style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+												children: feed.url
+											})
 										]
-									}, `run${at}`))
-								}),
-							status.nextExpectedAt === null ? null : jsx("p", {
-								style: { ...hint, marginTop: "8px" },
-								children: (zh ? "下次预计 " : "Next expected ") + formatStamp(status.nextExpectedAt)
-							})
-						]
-					}),
-					// ── collectors ────────────────────────────────────────────
-					jsx("h3", { style: { ...heading, marginTop: "8px" }, children: zh ? "采集任务" : "Collectors" }),
-					jsx("p", {
-						style: hint,
-						children: zh
-							? "确定性采集：定时抓取并写入本地信源库，不经过模型。"
-							: "Deterministic intake: fetched and written to the local library without a model in the loop."
-					}),
-					...config.jobs.map((job, index) => jsx("div", {
-						style: rowStyle,
-						children: jsxs("span", {
-							style: { flex: 1, fontSize: "13px", color: "var(--dsw-alias-label-primary)" },
-							children: [job.collector, jsx("span", {
-								style: { marginLeft: "8px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
-								children: JSON.stringify(job.options ?? {})
-							}, "opt")]
-						})
-					}, "job" + index)),
-
-					// ── feeds ─────────────────────────────────────────────────
-					jsx("h3", { style: heading, children: zh ? "RSS / Atom 订阅源" : "RSS / Atom feeds" }),
-					jsx("p", {
-						style: hint,
-						children: zh
-							? "每次采集都会拉取这些订阅源。URL 归一化去重，重复条目不会入库。"
-							: "Pulled on every collection run. Rows are deduplicated by normalized URL, so re-runs cost nothing."
-					}),
-					config.feeds.length === 0
-						? jsx("p", { style: { ...hint, fontStyle: "italic" }, children: zh ? "尚未添加订阅源。" : "No feed configured yet." })
-						: null,
-					...config.feeds.map((feed, index) => jsxs("div", {
-						style: rowStyle,
-						children: [
-							jsx("span", {
-								style: {
-									padding: "1px 8px", borderRadius: "999px", fontSize: "11px",
-									background: "var(--dsw-alias-interactive-bg-hover)", color: "var(--dsw-alias-label-secondary)"
-								},
-								children: feed.type ?? "BLOG"
+									}),
+									jsx("button", {
+										type: "button",
+										disabled: busy,
+										style: { ...controlStyle(), height: "28px", fontSize: "12px" },
+										onClick: () => {
+											void save({ feeds: config.feeds.filter((_, at) => at !== index) }, zh ? "已移除。" : "Removed.");
+										},
+										children: zh ? "移除" : "Remove"
+									})
+								]
+							}, "feed" + index))(entry))),
+							jsxs("div", {
+								style: { display: "flex", gap: "8px", marginTop: "10px" },
+								children: [
+									jsx("select", {
+										value: feedType,
+										onChange: (event) => { setFeedType(event.target.value); },
+										style: controlStyle(),
+										children: config.resourceTypes.map((type) => jsx("option", { value: type, children: type }, type))
+									}, "type"),
+									jsx("input", {
+										type: "url",
+										value: feedUrl,
+										placeholder: "https://example.com/feed.xml",
+										onChange: (event) => { setFeedUrl(event.target.value); },
+										style: { ...SEARCH_STYLE, height: "34px", flex: 1 }
+									}, "url"),
+									jsx("button", {
+										type: "button",
+										disabled: busy || feedUrl.trim() === "",
+										style: controlStyle(),
+										onClick: () => {
+											void save(
+												{ feeds: config.feeds.concat([{ url: feedUrl.trim(), type: feedType }]) },
+												zh ? "已添加。" : "Added."
+											);
+											setFeedUrl("");
+										},
+										children: zh ? "添加" : "Add"
+									}, "add")
+								]
 							}),
-							jsx("span", {
-								style: { flex: 1, minWidth: 0, fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--dsw-alias-label-primary)" },
-								children: feed.url
-							}),
-							jsx("button", {
-								type: "button",
-								disabled: busy,
-								style: { ...controlStyle(), height: "28px", fontSize: "12px" },
-								onClick: () => {
-									void save({ feeds: config.feeds.filter((_, at) => at !== index) }, zh ? "已移除。" : "Removed.");
-								},
-								children: zh ? "移除" : "Remove"
-							})
-						]
-					}, "feed" + index)),
-					jsxs("div", {
-						style: { display: "flex", gap: "8px", marginTop: "10px" },
-						children: [
-							jsx("select", {
-								value: feedType,
-								onChange: (event) => { setFeedType(event.target.value); },
-								style: controlStyle(),
-								children: config.resourceTypes.map((type) => jsx("option", { value: type, children: type }, type))
-							}, "type"),
-							jsx("input", {
-								type: "url",
-								value: feedUrl,
-								placeholder: "https://example.com/feed.xml",
-								onChange: (event) => { setFeedUrl(event.target.value); },
-								style: { ...SEARCH_STYLE, height: "34px", flex: 1 }
-							}, "url"),
-							jsx("button", {
-								type: "button",
-								disabled: busy || feedUrl.trim() === "",
-								style: controlStyle(),
-								onClick: () => {
-									void save(
-										{ feeds: config.feeds.concat([{ url: feedUrl.trim(), type: feedType }]) },
-										zh ? "已添加。" : "Added."
-									);
-									setFeedUrl("");
-								},
-								children: zh ? "添加" : "Add"
-							}, "add")
-						]
-					}),
 
-					// ── provider key ──────────────────────────────────────────
-					jsx("h3", { style: heading, children: zh ? "字幕服务密钥" : "Transcript provider key" }),
-					jsx("p", {
-						style: hint,
-						children: zh
-							? "YouTube 已加固 timedtext 接口，服务端直取多数视频会返回空。官方 Data API 的 captions.download 只授权视频所属频道，无法读第三方视频。因此需要 Supadata 密钥作为兜底 —— 免费通道优先，密钥只在它失败时才消耗。"
-							: "YouTube has hardened timedtext, so a server-side fetch returns an empty body for most videos, and the official Data API authorizes captions.download only for the owning channel. A Supadata key is the fallback; the free route is always tried first, so the key is spent only where it must be."
-					}),
-					jsxs("div", {
-						style: { display: "flex", gap: "8px", alignItems: "center" },
-						children: [
-							jsx("input", {
-								type: "password",
-								value: keyDraft,
-								placeholder: config.supadataKeySet
-									? (zh ? "已配置（留空则保持不变）" : "Configured (leave blank to keep)")
-									: (zh ? "尚未配置" : "Not configured"),
-								onChange: (event) => { setKeyDraft(event.target.value); },
-								style: { ...SEARCH_STYLE, height: "34px", flex: 1 }
-							}, "key"),
-							jsx("button", {
-								type: "button",
-								disabled: busy || keyDraft.trim() === "",
-								style: controlStyle(),
-								onClick: () => {
-									void save({ supadataKey: keyDraft.trim() }, zh ? "密钥已保存。" : "Key saved.");
-									setKeyDraft("");
-								},
-								children: zh ? "保存" : "Save"
-							}, "save"),
-							config.supadataKeySet
-								? jsx("button", {
-									type: "button",
-									disabled: busy,
-									style: controlStyle(),
-									onClick: () => { void save({ supadataKey: "" }, zh ? "密钥已清除。" : "Key cleared."); },
-									children: zh ? "清除" : "Clear"
-								}, "clear")
-								: null
-						]
-					}),
-
-					// ── run ───────────────────────────────────────────────────
-					jsx("h3", { style: heading, children: zh ? "立即采集" : "Run now" }),
-					jsxs("div", {
-						style: { display: "flex", alignItems: "center", gap: "10px" },
-						children: [
-							jsx("button", {
-								type: "button",
-								disabled: busy,
-								style: controlStyle(),
-								onClick: () => { void collect(); },
-								children: busy ? (zh ? "采集中…" : "Collecting…") : (zh ? "运行全部采集任务" : "Run every collector")
+							] })
+							: pane === "collect"
+							? jsxs("div", { children: [
+							// ── collectors ────────────────────────────────────────────
+							jsx("h3", { style: { ...heading, marginTop: "8px" }, children: zh ? "采集任务" : "Collectors" }),
+							jsx("p", {
+								style: hint,
+								children: zh
+									? "确定性采集：定时抓取并写入本地信源库，不经过模型。"
+									: "Deterministic intake: fetched and written to the local library without a model in the loop."
 							}),
-							notice === "" ? null : jsx("span", {
-								style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
-								children: notice
-							})
-						]
+							...config.jobs.map((job, index) => jsx("div", {
+								style: rowStyle,
+								children: jsxs("span", {
+									style: { flex: 1, fontSize: "13px", color: "var(--dsw-alias-label-primary)" },
+									children: [job.collector, jsx("span", {
+										style: { marginLeft: "8px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+										children: JSON.stringify(job.options ?? {})
+									}, "opt")]
+								})
+							}, "job" + index)),
+
+							// ── collection log ────────────────────────────────────────
+							// What the scheduler has actually been doing. Until now the only
+							// record was `ctx.logger`, whose output does not reach this
+							// harness's stdout, so a run left no trace anyone could read and
+							// diagnosing one meant inferring it from timestamps on the rows.
+							jsx("h3", { style: { ...heading, marginTop: "8px" }, children: zh ? "采集记录" : "Collection log" }),
+							status === null ? jsx("p", { style: hint, children: zh ? "读取中…" : "Loading…" }) : jsxs("div", {
+								style: { marginBottom: "16px" },
+								children: [
+									jsx("p", {
+										style: hint,
+										children: status.intervalMinutes > 0
+											? (zh ? `每 ${status.intervalMinutes} 分钟自动采集一次。` : `Collecting every ${status.intervalMinutes} minutes.`)
+											: (zh ? "自动采集已关闭（间隔为 0）。" : "Automatic collection is off (interval is 0).")
+									}),
+									status.runs.length === 0
+										? jsx("div", { style: { ...rowStyle, color: "var(--dsw-alias-label-secondary)", fontSize: "12px" }, children: zh ? "服务启动后还没有跑过。" : "No run since this process started." })
+										: jsxs("div", {
+											children: status.runs.slice(0, 8).map((run, at) => jsxs("div", {
+												style: {
+													...rowStyle, alignItems: "flex-start", flexDirection: "column", gap: "4px",
+													borderColor: run.failures.length === 0 ? "var(--dsw-alias-border-l1)" : hue(alert, 0.45)
+												},
+												children: [
+													jsxs("div", {
+														style: { display: "flex", flexWrap: "wrap", gap: "10px", fontSize: "12px", width: "100%" },
+														children: [
+															jsx("span", { style: { fontWeight: 600, color: "var(--dsw-alias-label-primary)" }, children: formatStamp(run.startedAt) }),
+															jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: (zh ? "作业 " : "jobs ") + run.jobs }),
+															jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: (zh ? "抓取 " : "fetched ") + run.fetched }),
+															jsx("span", {
+																style: { color: run.added > 0 ? hue(alert) : "var(--dsw-alias-label-secondary)", fontWeight: run.added > 0 ? 600 : 400 },
+																children: (zh ? "新增 " : "added ") + run.added
+															}),
+															run.thumbnails === undefined || run.thumbnails === null ? null : jsx("span", {
+																style: { color: "var(--dsw-alias-label-secondary)" },
+																children: (zh ? "补图 " : "thumbnails ") + run.thumbnails.found + "/" + run.thumbnails.looked
+															}),
+															jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: run.seconds + "s" }),
+															jsx("span", { style: { flex: 1 } }, "spacer"),
+															jsx("span", {
+																style: { color: run.failures.length === 0 ? "var(--dsw-alias-label-secondary)" : hue(alert), fontWeight: run.failures.length === 0 ? 400 : 600 },
+																children: run.failures.length === 0 ? (zh ? "全部成功" : "all ok") : (zh ? `${run.failures.length} 个源失败` : `${run.failures.length} failed`)
+															})
+														]
+													}),
+													...run.failures.slice(0, 4).map((failure, index) => jsx("div", {
+														style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+														children: `${failure.source} — ${failure.error}`
+													}, `f${index}`))
+												]
+											}, `run${at}`))
+										}),
+									status.nextExpectedAt === null ? null : jsx("p", {
+										style: { ...hint, marginTop: "8px" },
+										children: (zh ? "下次预计 " : "Next expected ") + formatStamp(status.nextExpectedAt)
+									})
+								]
+							}),
+							// ── run ───────────────────────────────────────────────────
+							jsx("h3", { style: heading, children: zh ? "立即采集" : "Run now" }),
+							jsxs("div", {
+								style: { display: "flex", alignItems: "center", gap: "10px" },
+								children: [
+									jsx("button", {
+										type: "button",
+										disabled: busy,
+										style: controlStyle(),
+										onClick: () => { void collect(); },
+										children: busy ? (zh ? "采集中…" : "Collecting…") : (zh ? "运行全部采集任务" : "Run every collector")
+									})
+								]
+							}),
+							] })
+							: jsxs("div", { children: [
+							// ── provider key ──────────────────────────────────────────
+							jsx("p", {
+								style: hint,
+								children: zh
+									? "YouTube 已加固 timedtext 接口，服务端直取多数视频会返回空。官方 Data API 的 captions.download 只授权视频所属频道，无法读第三方视频。因此需要 Supadata 密钥作为兜底 —— 免费通道优先，密钥只在它失败时才消耗。"
+									: "YouTube has hardened timedtext, so a server-side fetch returns an empty body for most videos, and the official Data API authorizes captions.download only for the owning channel. A Supadata key is the fallback; the free route is always tried first, so the key is spent only where it must be."
+							}),
+							jsxs("div", {
+								style: { display: "flex", gap: "8px", alignItems: "center" },
+								children: [
+									jsx("input", {
+										type: "password",
+										value: keyDraft,
+										placeholder: config.supadataKeySet
+											? (zh ? "已配置（留空则保持不变）" : "Configured (leave blank to keep)")
+											: (zh ? "尚未配置" : "Not configured"),
+										onChange: (event) => { setKeyDraft(event.target.value); },
+										style: { ...SEARCH_STYLE, height: "34px", flex: 1 }
+									}, "key"),
+									jsx("button", {
+										type: "button",
+										disabled: busy || keyDraft.trim() === "",
+										style: controlStyle(),
+										onClick: () => {
+											void save({ supadataKey: keyDraft.trim() }, zh ? "密钥已保存。" : "Key saved.");
+											setKeyDraft("");
+										},
+										children: zh ? "保存" : "Save"
+									}, "save"),
+									config.supadataKeySet
+										? jsx("button", {
+											type: "button",
+											disabled: busy,
+											style: controlStyle(),
+											onClick: () => { void save({ supadataKey: "" }, zh ? "密钥已清除。" : "Key cleared."); },
+											children: zh ? "清除" : "Clear"
+										}, "clear")
+										: null
+								]
+							}),
+							] })
+					}),
+					// One line for both, below the panes: a save made on Feeds is
+					// confirmed where the reader is, rather than under the Run button
+					// on a pane they are not looking at.
+					notice === "" ? null : jsx("p", {
+						style: { marginTop: "14px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						children: notice
 					}),
 					error === "" ? null : jsx("p", {
 						style: { marginTop: "14px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
@@ -5518,11 +5617,17 @@ window.__ModuleLoader__.load({
 		//#endregion
 		exports.apply = apply;
 		exports.inject = inject;
-		// Pure helpers, exported for the bundle's own test harness.
+		// Exported for the bundle's own test harness: pure helpers, and the
+		// components themselves. The components are here because a check that
+		// never CALLS one cannot see a ReferenceError inside it, and that is
+		// exactly how this file has failed — a page that renders nothing at all,
+		// with the bundle served, the plugin registered, and every other check
+		// green. tests/settings.test.mjs calls them.
 		exports.__test__ = {
 			KINDS, SORTS, youTubeVideoId, thumbnailOf, hostOf, sourceNameOf,
 			authorLine, descriptionOf, formatDate, resourcesUrl, unwrapFeed,
-			renderMarkdown, mergeBySentence, formatTime, displayModeOf, buildExport, stampFor
+			renderMarkdown, mergeBySentence, formatTime, displayModeOf, buildExport, stampFor,
+			SourcesSettings, SwarmPage, PublishTab, ExploreTab
 		};
 		return module.exports;
 	}
