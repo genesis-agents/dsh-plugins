@@ -1,6 +1,6 @@
 {
   "name": "@ai4gensteam/dsh-web-search",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Web search for the DeepSeek Harness ctx.web seam, over interchangeable backends: Serper, Tavily, and Brave",
   "keywords": [
     "dsh",
