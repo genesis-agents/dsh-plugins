@@ -3,10 +3,25 @@
 # Configure this machine's harness profile from what is in this repo.
 #
 # Idempotent, and safe to re-run after a `git pull` — that is the point. Every
-# machine-independent choice (which plugins, in which order) lives in git;
-# everything genuinely per-machine reduces to ONE value, the library:
+# machine-independent choice (which plugins, in which order) lives in git; what
+# is left is two per-machine decisions.
 #
-#   ./setup.sh                                   this machine owns the library
+# The first is WHICH COPY of the plugins to run:
+#
+#   ./setup.sh                     link this checkout   -> the page says "dev"
+#   ./setup.sh --release           install from npm     -> the page says "release"
+#
+# A machine somebody is developing on wants the checkout, because an edit shows
+# up on the next restart. A machine that is only serving wants the published
+# package, because that is the artifact everyone else gets, and running
+# anything else means the thing you tested is not the thing that is running.
+#
+# Plugins marked `"private": true` are never published and stay linked in both
+# modes; there is nothing on the registry to install.
+#
+# The second is WHERE THE LIBRARY LIVES:
+#
+#   ./setup.sh                                   this machine owns it
 #   ./setup.sh https://box.tailnet.ts.net        it proxies to the one that does
 #   ./setup.sh /srv/data/swarm-sources.sqlite    it owns one at a chosen path
 #
@@ -16,14 +31,41 @@
 # credentials on the next run; both are worse than one manual step.
 set -euo pipefail
 
-LIBRARY="${1:-}"
+MODE=""
+PROFILE_NAME=web
+LIBRARY=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --release)  MODE=release ;;
+    --checkout) MODE=checkout ;;
+    --profile)  PROFILE_NAME="${2:?--profile needs a name}"; shift ;;
+    -h|--help)  sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*)         echo "unknown option: $1" >&2; exit 1 ;;
+    *)          LIBRARY="$1" ;;
+  esac
+  shift
+done
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Under Git Bash, `pwd` gives /d/engineering/... which pnpm on Windows cannot
 # resolve -- the manifest is written, pnpm reports success, and the link is
 # simply absent. cygpath turns it into a path the platform's own tools accept.
 if command -v cygpath >/dev/null 2>&1; then REPO="$(cygpath -m "$REPO")"; fi
 DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
-PROFILE="$DSH_HOME/profiles/web"
+PROFILE="$DSH_HOME/profiles/$PROFILE_NAME"
+
+# The mode sticks to the machine, exactly like the library location below it.
+# The self-update runs this script with no arguments after every pull, so a
+# mode that defaulted instead of persisting would quietly demote the release
+# box to a development build five minutes after somebody set it.
+MODE_FILE="$DSH_HOME/swarm-plugin-source.txt"
+if [ -n "$MODE" ]; then
+  mkdir -p "$DSH_HOME"
+  printf '%s\n' "$MODE" > "$MODE_FILE"
+elif [ -f "$MODE_FILE" ]; then
+  MODE="$(tr -d '[:space:]' < "$MODE_FILE")"
+fi
+case "$MODE" in release|checkout) ;; *) MODE=checkout ;; esac
 
 # The bundle order is not cosmetic: patches apply in list order, so a bundle
 # placed before the one it customizes is overwritten by it. Kept here, in git,
@@ -36,13 +78,11 @@ PROFILE="$DSH_HOME/profiles/web"
 # name produced a profile that worked here and could never work from npm.
 PLUGINS=(dsh-agents-swarm dsh-web-search-serper dsh-agent-presets)
 
-# The package name a directory publishes under.
-#
 # Read from INSIDE the directory. Passing an absolute path breaks under Git
 # Bash, whose /d/engineering/... is not a path Node on Windows can open -- the
 # same trap that once made doctor.sh report a perfectly good profile as broken.
-package_name() {
-  ( cd "$REPO/$1" && node -p "require('./package.json').name" )
+manifest_field() {
+  ( cd "$REPO/$1" && node -p "String(require('./package.json').$2 ?? '')" )
 }
 
 say() { printf '  %s\n' "$*"; }
@@ -54,21 +94,31 @@ NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 
 echo "repo:    $REPO"
 echo "profile: $PROFILE"
+echo "mode:    $MODE"
 
-# ── plugin dependencies ────────────────────────────────────────────────────
-# Each plugin resolves its own dependencies from its real path, not from the
-# profile, because the profile links to it rather than copying it.
+# ── what each plugin contributes to the manifest ───────────────────────────
+# A published plugin in release mode comes from the registry, pinned to the
+# version this checkout represents. Caret rather than exact, so a patch release
+# lands on the next run without a commit here, and a major never does.
+NAMES=(); VALUES=(); LINKED=0; INSTALLED=0
 for plugin in "${PLUGINS[@]}"; do
-  if [ -f "$REPO/$plugin/package.json" ]; then
+  [ -f "$REPO/$plugin/package.json" ] || continue
+  NAMES+=("$(manifest_field "$plugin" name)")
+  if [ "$MODE" = release ] && [ "$(manifest_field "$plugin" private)" != "true" ]; then
+    VALUES+=("^$(manifest_field "$plugin" version)")
+    INSTALLED=$((INSTALLED + 1))
+  else
+    VALUES+=("link:$REPO/$plugin")
+    LINKED=$((LINKED + 1))
+    # A linked plugin resolves its own dependencies from its real path, not
+    # from the profile, because the profile points at it rather than copying
+    # it. An installed one arrives from the registry with its own already.
     ( cd "$REPO/$plugin" && pnpm install --silent )
-    say "deps: $plugin"
   fi
 done
 
 # ── the profile manifest ───────────────────────────────────────────────────
 mkdir -p "$PROFILE"
-NAMES=()
-for plugin in "${PLUGINS[@]}"; do NAMES+=("$(package_name "$plugin")"); done
 
 # Merged into what is already there, not regenerated over it. This repo is not
 # the only source of plugins on every machine: the always-on box carries two
@@ -79,14 +129,14 @@ for plugin in "${PLUGINS[@]}"; do NAMES+=("$(package_name "$plugin")"); done
 # Written by node rather than printf. The manifest has a foreign half now, and
 # hand-emitting JSON around values somebody else wrote is how a stray quote
 # turns a profile into a parse error on a machine nobody is watching.
-DSH_REPO="$REPO" DSH_MANIFEST="$PROFILE/package.json" \
-DSH_DIRS="${PLUGINS[*]}" DSH_NAMES="${NAMES[*]}" node --input-type=module -e '
+DSH_MANIFEST="$PROFILE/package.json" DSH_DIRS="${PLUGINS[*]}" \
+DSH_NAMES="${NAMES[*]}" DSH_VALUES="${VALUES[*]}" node --input-type=module -e '
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 
-const repo = process.env.DSH_REPO;
 const file = process.env.DSH_MANIFEST;
 const dirs = process.env.DSH_DIRS.split(" ");
 const names = process.env.DSH_NAMES.split(" ");
+const values = process.env.DSH_VALUES.split(" ");
 const BASE = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"];
 
 let m = {};
@@ -113,7 +163,7 @@ for (const [key, value] of Object.entries(m.dependencies)) {
 
 const deps = {};
 for (const [k, v] of Object.entries(m.dependencies)) if (!ours.has(k)) deps[k] = v;
-names.forEach((n, i) => { deps[n] = "link:" + repo + "/" + dirs[i]; });
+names.forEach((n, i) => { deps[n] = values[i]; });
 m.dependencies = Object.fromEntries(Object.entries(deps).sort(([a], [b]) => a.localeCompare(b)));
 
 // Bundle order is load order, and a patch only sees what was applied before
@@ -127,20 +177,68 @@ if (kept.length) process.stdout.write("  kept " + kept.length + " plugin(s) this
 '
 say "wrote profile manifest"
 
-# pnpm builds the links from the `link:` values. Do NOT hand-link with `ln -sfn`
-# — that leaves node_modules/.pnpm disagreeing with what is on disk.
-( cd "$PROFILE" && pnpm install --silent )
+# pnpm builds both kinds of dependency from the manifest. Do NOT hand-link with
+# `ln -sfn` — that leaves node_modules/.pnpm disagreeing with what is on disk.
+#
+# Retried exactly once, and only for one error.
+#
+# pnpm refuses to run a dependency's lifecycle scripts until somebody decides
+# about that dependency, writes `<name>: set this to true or false` into the
+# profile's pnpm-workspace.yaml, and exits non-zero — after everything real has
+# already succeeded, which under `set -e` killed this script. Somebody has to
+# answer, and the answer here is no: this profile mounts plugins, it does not
+# build anything, and a lifecycle script is arbitrary code running at install
+# time. So the placeholders are answered `false`, out loud, and the install is
+# retried once.
+#
+# Today that is exactly one package, msedge-tts, whose only script is
+# `preinstall: npx only-allow pnpm` — a guard that refuses non-pnpm installs
+# and produces nothing. Speech still synthesises with it blocked; that was
+# checked rather than assumed.
+#
+# Matching the error rather than ignoring the exit code keeps a genuine install
+# failure fatal.
+install_profile() {
+  local out
+  out="$( cd "$PROFILE" && pnpm install 2>&1 )" && return 0
+  case "$out" in
+    *ERR_PNPM_IGNORED_BUILDS*)
+      local ws="$PROFILE/pnpm-workspace.yaml"
+      if [ -f "$ws" ] && grep -q 'set this to true or false' "$ws"; then
+        say "denied build scripts: $(grep -oE '^  [^:]+: set this to true or false' "$ws" | sed 's/^  //; s/:.*//' | tr '\n' ' ')"
+        # sed -i on this file only, and only on the placeholder line pnpm just
+        # wrote. Anything already answered keeps its answer.
+        sed -i 's/: set this to true or false$/: false/' "$ws"
+      fi
+      ( cd "$PROFILE" && pnpm install --silent ) && return 0
+      ;;
+  esac
+  printf '%s\n' "$out" >&2
+  return 1
+}
+install_profile
 
-# A real symlink, not a directory copy. Under Git Bash on Windows `ln -s`
-# silently copies, and the result is a plugin frozen at the moment it was
-# created: it loads, reports itself enabled, and runs stale code. Checked here
-# rather than discovered an hour later.
-for name in "${NAMES[@]}"; do
-  link="$PROFILE/node_modules/$name"
-  [ -e "$link" ] || { echo "missing: $link" >&2; exit 1; }
-  [ -L "$link" ] || [ -d "$link" ] || { echo "not linked: $link" >&2; exit 1; }
+# Present, and of the kind this mode asked for. A release box running a
+# symlinked checkout reports itself as a development build and serves code
+# nobody published; that is the failure this check exists to name.
+for i in "${!NAMES[@]}"; do
+  path="$PROFILE/node_modules/${NAMES[$i]}"
+  [ -e "$path" ] || { echo "missing: $path" >&2; exit 1; }
+  case "${VALUES[$i]}" in
+    link:*) [ -L "$path" ] || [ -d "$path" ] || { echo "not linked: $path" >&2; exit 1; } ;;
+    *)
+      # Under Git Bash on Windows `ln -s` silently copies, so "is a directory"
+      # cannot tell an install from a link. What the plugin reports can: the
+      # channel is inferred from whether the code sits under node_modules.
+      CH="$( cd "$path" && node --input-type=module -e \
+             'const m = await import("./lib/version.js"); process.stdout.write(m.PLUGIN_CHANNEL)' 2>/dev/null || echo unknown )"
+      [ "$CH" = release ] || [ "$CH" = unknown ] \
+        || { echo "${NAMES[$i]} came from the registry but reports channel=$CH" >&2; exit 1; }
+      ;;
+  esac
 done
-say "linked ${#PLUGINS[@]} plugin(s)"
+[ "$INSTALLED" -gt 0 ] && say "installed $INSTALLED plugin(s) from the registry"
+[ "$LINKED" -gt 0 ] && say "linked $LINKED plugin(s) from this checkout"
 
 # ── the one per-machine value ──────────────────────────────────────────────
 POINTER="$DSH_HOME/swarm-library-location.txt"
@@ -158,7 +256,11 @@ fi
 
 echo
 echo "next:"
-echo "  dsh web --no-open        # then open http://127.0.0.1:3080"
+if [ "$PROFILE_NAME" = web ]; then
+  echo "  dsh web --no-open        # then open http://127.0.0.1:3080"
+else
+  echo "  dsh web --profile $PROFILE_NAME --no-open"
+fi
 case "$LIBRARY" in
   http://*|https://*) ;;
   *) echo "  keys go in $DSH_HOME/settings.yaml and $DSH_HOME/.credentials.yaml" ;;
