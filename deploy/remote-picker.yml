@@ -1,0 +1,20 @@
+# Pin the in-page directory browser instead of the native chooser.
+#
+# The host runs on a Mac nobody is sitting at; the operator is always on
+# another machine. dsh-host-directory-picker-auto answers exactly this
+# question at boot, but its signal for "remote operator" is SSH_CONNECTION,
+# and this host is started by launchd -- so it resolves to "native" and opens
+# a macOS folder dialog on an unattended screen. The browser then waits for a
+# person who cannot see it, which is what "choosing a workspace does nothing"
+# actually is.
+#
+# Pinning the pair directly is what the auto module documents as the
+# alternative to its row: both the Host backend and the client surface, since
+# one resolved interaction composes both faces.
+- id: directory-picker
+  disabled: true
+- insert:
+    - id: directory-picker-browse
+      name: "@deepseek-ai/dsh-host-directory-picker-browse"
+    - id: directory-picker-surface
+      name: "@deepseek-ai/dsh-client-ui-directory-picker-browse"

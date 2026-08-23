@@ -4,8 +4,10 @@ What this repository is, where every piece runs, and which parts are safe to
 replace. Written to be maintained: each section says what is true today and
 what would have to change to make it false.
 
-Status as of 2026-08-23, commit `9d5f5b6`. Running on `genesiss-mac-mini`
-(macOS 26.3.1, Apple Silicon, 16 GB), reached over Tailscale.
+Status as of 2026-08-23. Everything runs on `genesiss-mac-mini` (macOS 26.3.1,
+Apple Silicon, 16 GB), reached over Tailscale; the Windows workstation
+contributes a browser and an SSH tunnel and nothing else. Section 2 says why
+that is the wrong split and what replaces it.
 
 ---
 
@@ -77,7 +79,73 @@ The three constraints that fix this shape:
 
 ---
 
-## 2. The four plugins
+## 2. Where each piece runs
+
+Two machines and a browser. The split is not a design goal — it exists because
+the machine you work at and the machine that stays on are not the same machine.
+
+| Piece | Runs on | Why there and not elsewhere |
+|---|---|---|
+| SQLite library (20,696 rows) | **Mac** | Must share a machine with the process that writes it — WAL needs shared memory a network share cannot provide |
+| Thumbnails, episode MP3s | **Mac** | Paths derive from the library's; copying the library carries them |
+| Collection timer (hourly, 72 feeds) | **Mac** | A machine that sleeps collects nothing while it sleeps |
+| Publish timer (daily 07:00) | **Mac** | An episode made at 07:00 needs something awake at 07:00 |
+| Every `/swarm-api` route | **Mac** | They serve the library, which is there |
+| RSS feed + episode audio | **Mac** | A podcast client has to reach it when you are not looking |
+| Outbound fetches — feeds, `og:image`, reader | **Mac** | Goes out over a residential connection, which bot protection treats far more gently than a hosting range |
+| Model calls — translation, scripts | **Mac** → external | Initiated by the host; the key lives in `~/.dsh/.credentials.yaml` there |
+| Speech synthesis | **Mac** → external | Edge read-aloud, free and keyless |
+| Search — Serper / Tavily / Brave | **Mac** → external | Same |
+| YouTube transcript fetch | **Browser** | Carries the viewer's own YouTube session, the only reason it works; indifferent to where the host lives |
+| Playback, reading, everything you look at | **Browser** | Wherever you opened it |
+| **Nothing** | **Windows** | See below — this is the current problem, not the design |
+
+### What Windows contributes today
+
+A browser and an SSH tunnel. That is all. The harness that was running there is
+stopped, its copy of the library at `D:\engineering\dsh-db\` is a
+point-in-time snapshot from the migration and goes stale immediately, and every
+byte of the UI — the page, its plugin bundles, its fonts — is pulled through
+the tunnel from the Mac.
+
+That is a bad arrangement and it shows. Measured server-to-server over the
+tailnet, the Mac answers in 40 ms and delivers a 1.5 MB episode in 123 ms
+(~12 MB/s). The same 11 KB plugin bundle through the SSH tunnel timed out
+repeatedly and surfaced in the browser as *"Failed to load plugins"*. The
+network was never slow; one long-lived forwarded TCP session was.
+
+The fix is not a better tunnel. It is to stop putting the UI on the wire at
+all: run a harness on Windows too, serve the page from loopback, and let only
+the library data cross the network — server to server, where it is fast.
+
+### Do you need a Mac?
+
+**No, and you do not need two machines either.** Nothing here is macOS-specific
+by design. What the deployment actually requires is one property:
+
+> A machine that stays on, if you want collection and daily episodes to happen
+> without you.
+
+That yields three honest topologies:
+
+| Topology | When it fits | Cost |
+|---|---|---|
+| **One always-on machine** | You have a box that is always up and you are willing to open a browser at it (or near it) | Simplest by far. No tailnet, no proxy, no split. This is the default the plugin ships as |
+| **Just your laptop** | You accept that collection only runs while the laptop is awake | Zero setup. Feeds are hourly and forgiving; you lose the overnight window and the morning episode |
+| **Split: workstation + always-on box** | Your daily machine sleeps and your always-on box is headless | What this deployment does, and the table at the top of this section |
+
+The always-on box does not have to be a Mac. It needs Node 24 or newer, enough
+disk for the library, and a network. A Linux server, a NAS that runs containers,
+an old laptop with the lid closed — all fine. macOS shows up in
+[`mac-mini.md`](./mac-mini.md) as `launchd`, an arm64 Node tarball, and a
+directory-picker quirk; those are how *that* OS is served, not requirements.
+
+One thing genuinely does argue for a machine **at home** rather than a rented
+one: the collectors fetch 72 sites, and bot protection is markedly harsher on
+hosting ranges than on residential connections. A VPS works, but expect more
+sources to refuse it.
+
+## 3. The four plugins
 
 | Plugin | What it is | `lib/` |
 |---|---|---|
@@ -144,7 +212,7 @@ renders, so `dsh-brand-mine` now states `-1`.
 
 ---
 
-## 3. The pipeline
+## 4. The pipeline
 
 Ten stages from a feed to something in your ears. Colour marks where each runs.
 
@@ -196,7 +264,7 @@ chain, and records what it did. Design notes worth keeping:
 
 ---
 
-## 4. Data
+## 5. Data
 
 One SQLite file. Everything else derives its location from it, which is what
 makes the library a single directory you can copy.
@@ -275,7 +343,7 @@ anywhere in the code** — a regex sweep for drive letters over every `.js`,
 
 ---
 
-## 5. HTTP surface
+## 6. HTTP surface
 
 All under `/swarm-api` except where noted.
 
@@ -301,7 +369,7 @@ the whole body makes seeking silently reload from the start.
 
 ---
 
-## 6. Seams
+## 7. Seams
 
 What can be replaced, at what cost. This is the section to read before planning
 any change.
@@ -334,7 +402,7 @@ library, that is a refactor of the call layer, not a driver change.
 
 ---
 
-## 7. Operating it
+## 8. Operating it
 
 ### Is it alive
 
@@ -381,7 +449,7 @@ is silent.
 
 ---
 
-## 8. Failures that do not announce themselves
+## 9. Failures that do not announce themselves
 
 The most valuable thing in this document. Each of these has actually happened.
 
@@ -407,7 +475,7 @@ itself enabled — none of them is evidence about the thing you actually wanted.
 
 ---
 
-## 9. Where this stands
+## 10. Where this stands
 
 **Real and complete.** The source library (20,696 rows, reader, transcripts,
 translation, on-demand thumbnails) and publishing (script, speech, episodes,
