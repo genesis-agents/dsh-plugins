@@ -2964,6 +2964,389 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 
+		//#region publish tab
+		/**
+		* The 发布 tab: selected sources, spoken as a two-host conversation.
+		*
+		* Three steps, kept separate on purpose. Picking sources is cheap and
+		* reversible. Writing the script costs one model call and produces
+		* something worth READING before committing to the next step — a script
+		* that misread the sources is obvious in ten seconds of reading and
+		* invisible after ten minutes of synthesis. Only then does rendering
+		* spend a request per turn.
+		*
+		* Collapsing them into one button would be a smaller interface that
+		* wastes more: every bad script would cost the full render before anyone
+		* could see it was bad.
+		*/
+		function PublishTab({ zh }) {
+			const [kindId, setKindId] = useState(KINDS[0].id);
+			const [rows, setRows] = useState([]);
+			const [chosen, setChosen] = useState(() => new Set());
+			const [minutes, setMinutes] = useState(6);
+			const [script, setScript] = useState(null);
+			const [voices, setVoices] = useState(null);
+			const [hosts, setHosts] = useState(null);
+			const [job, setJob] = useState(null);
+			const [episodes, setEpisodes] = useState([]);
+			const [busy, setBusy] = useState(false);
+			const [error, setError] = useState("");
+			const kind = KINDS.find((candidate) => candidate.id === kindId) ?? KINDS[0];
+
+			const loadEpisodes = useCallback(async () => {
+				try {
+					const response = await fetch(`${apiBase()}/publish/episodes`);
+					const payload = await response.json();
+					if (payload?.success === true) setEpisodes(payload.data.episodes);
+				} catch {
+					// The list is a convenience; failing to read it must not
+					// stop someone from making the next episode.
+				}
+			}, []);
+
+			useEffect(() => {
+				void (async () => {
+					try {
+						const response = await fetch(`${apiBase()}/publish/voices`);
+						const payload = await response.json();
+						if (payload?.success !== true) return;
+						setVoices(payload.data.voices);
+						setHosts(payload.data.hosts);
+					} catch {
+						// Without the voice list the page still works on defaults.
+					}
+				})();
+				void loadEpisodes();
+			}, [loadEpisodes]);
+
+			useEffect(() => {
+				let live = true;
+				void (async () => {
+					try {
+						const response = await fetch(resourcesUrl({ base: apiBase(), kind, sortBy: "publishedAt", search: "", skip: 0 }));
+						const payload = await response.json();
+						if (!live || payload?.success !== true) return;
+						setRows(unwrapFeed(payload).rows);
+					} catch (cause) {
+						if (live) setError(String(cause?.message ?? cause));
+					}
+				})();
+				return () => { live = false; };
+			}, [kind]);
+
+			// Polling, not a stream: a render is a sequence of discrete steps and
+			// the page only needs the count. A second connection held open for
+			// minutes would buy nothing and add a reconnection story.
+			useEffect(() => {
+				if (job === null || job.state !== "running") return;
+				let live = true;
+				const timer = setInterval(async () => {
+					try {
+						const response = await fetch(`${apiBase()}/publish/jobs/${encodeURIComponent(job.id)}`);
+						const payload = await response.json();
+						if (!live) return;
+						if (payload?.success !== true) {
+							setJob((previous) => ({ ...previous, state: "error", error: payload?.error ?? "lost" }));
+							return;
+						}
+						setJob(payload.data);
+						if (payload.data.state === "done") void loadEpisodes();
+					} catch {
+						// A missed poll is not a failed render; the next one tells us.
+					}
+				}, 1500);
+				return () => { live = false; clearInterval(timer); };
+			}, [job, loadEpisodes]);
+
+			const toggle = useCallback((id) => {
+				setChosen((previous) => {
+					const next = new Set(previous);
+					if (next.has(id)) next.delete(id);
+					else next.add(id);
+					return next;
+				});
+			}, []);
+
+			const writeScript = useCallback(async () => {
+				setBusy(true);
+				setError("");
+				setScript(null);
+				try {
+					const response = await fetch(`${apiBase()}/publish/script`, {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({ resourceIds: [...chosen], minutes })
+					});
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
+					setScript(payload.data);
+				} catch (cause) {
+					setError(String(cause?.message ?? cause));
+				} finally {
+					setBusy(false);
+				}
+			}, [chosen, minutes]);
+
+			const render = useCallback(async () => {
+				if (script === null) return;
+				setBusy(true);
+				setError("");
+				try {
+					const response = await fetch(`${apiBase()}/publish/render`, {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({ title: script.title, turns: script.turns, sourceIds: script.sourceIds, hosts })
+					});
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
+					setJob({ id: payload.data.jobId, state: "running", done: 0, total: payload.data.total });
+				} catch (cause) {
+					setError(String(cause?.message ?? cause));
+				} finally {
+					setBusy(false);
+				}
+			}, [script, hosts]);
+
+			const remove = useCallback(async (id) => {
+				await fetch(`${apiBase()}/publish/episodes/${encodeURIComponent(id)}`, { method: "DELETE" });
+				await loadEpisodes();
+			}, [loadEpisodes]);
+
+			const feedUrl = `${window.location.origin}/swarm-api/publish/feed.xml`;
+			const running = job !== null && job.state === "running";
+
+			return jsxs("div", {
+				children: [
+					// Stated here rather than read out of TABS by index: the tab
+					// list is a separate declaration and a positional reference
+					// into it breaks silently the day a tab is inserted before
+					// this one.
+					jsx("p", {
+						style: LEDE_STYLE,
+						children: zh
+							? "把选中的信源讲成一段双人对话，并汇成可订阅的播客。"
+							: "Selected sources spoken as a two-host conversation, and the feed they publish to."
+					}),
+
+					// ── step one: what the episode is about ──────────────────
+					jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", marginBottom: "10px" },
+						children: [
+							...KINDS.map((candidate) => jsx("button", {
+								type: "button",
+								style: { ...chipStyle(candidate, candidate.id === kindId), height: "28px", fontSize: "12px" },
+								onClick: () => { setKindId(candidate.id); },
+								children: zh ? candidate.zh : candidate.en
+							}, candidate.id)),
+							jsx("span", { style: { flex: 1 } }),
+							jsx("span", {
+								style: { fontSize: "12px", color: chosen.size === 0 ? "var(--dsw-alias-label-secondary)" : hue(kind), fontWeight: chosen.size === 0 ? 400 : 600 },
+								children: zh ? `已选 ${chosen.size} 条` : `${chosen.size} selected`
+							})
+						]
+					}),
+
+					jsx("div", {
+						style: {
+							maxHeight: "230px", overflowY: "auto", marginBottom: "14px",
+							border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "12px",
+							background: "var(--dsw-specific-menu)"
+						},
+						children: rows.length === 0
+							? jsx("div", { style: { padding: "16px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" }, children: zh ? "这一类暂时没有信源。" : "No sources of this kind yet." })
+							: jsxs("div", {
+								children: rows.map((row) => jsxs("label", {
+									style: {
+										display: "flex", alignItems: "flex-start", gap: "10px", padding: "9px 12px",
+										borderBottom: "1px solid var(--dsw-alias-border-l1)", cursor: "pointer", fontSize: "12px"
+									},
+									children: [
+										jsx("input", {
+											type: "checkbox",
+											checked: chosen.has(row.id),
+											onChange: () => { toggle(row.id); },
+											style: { flex: "none", marginTop: "2px" }
+										}),
+										jsxs("span", {
+											style: { flex: 1, minWidth: 0 },
+											children: [
+												jsx("span", { style: { color: "var(--dsw-alias-label-primary)" }, children: row.title }),
+												jsx("span", {
+													style: { display: "block", marginTop: "2px", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+													children: `${sourceNameOf(row)} · ${formatDate(row.publishedAt)}`
+												})
+											]
+										})
+									]
+								}, row.id))
+							})
+					}),
+
+					// ── step two: the script ─────────────────────────────────
+					jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px", flexWrap: "wrap" },
+						children: [
+							jsxs("label", {
+								style: { display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+								children: [
+									jsx("span", { children: zh ? "目标时长" : "Target length" }),
+									jsx("input", {
+										type: "number", min: 2, max: 20, value: minutes,
+										onChange: (event) => { setMinutes(Math.max(2, Math.min(20, Number(event.target.value) || 6))); },
+										style: { ...SEARCH_STYLE, width: "68px", height: "30px", fontSize: "12px" }
+									}),
+									jsx("span", { children: zh ? "分钟" : "min" })
+								]
+							}),
+							jsx("button", {
+								type: "button",
+								disabled: busy || running || chosen.size === 0,
+								style: { ...controlStyle(), height: "30px", opacity: chosen.size === 0 ? 0.5 : 1, color: hue(kind), borderColor: hue(kind, 0.45) },
+								onClick: () => { void writeScript(); },
+								children: busy && script === null ? (zh ? "写稿中…" : "Writing…") : (zh ? "生成对话稿" : "Write the script")
+							}),
+							script === null ? null : jsx("span", {
+								style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+								children: zh
+									? `${script.turns.length} 轮 · ${script.chars} 字 · 约 ${script.estimatedMinutes} 分钟`
+									: `${script.turns.length} turns · ${script.chars} chars · ~${script.estimatedMinutes} min`
+							})
+						]
+					}),
+
+					script === null ? null : jsxs("div", {
+						style: {
+							marginBottom: "14px", border: "1px solid var(--dsw-alias-border-l1)",
+							borderRadius: "12px", background: "var(--dsw-specific-menu)", overflow: "hidden"
+						},
+						children: [
+							jsxs("div", {
+								style: {
+									display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px",
+									borderBottom: "1px solid var(--dsw-alias-border-l1)"
+								},
+								children: [
+									jsx("span", { style: { flex: 1, fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" }, children: script.title }),
+									voices === null || hosts === null ? null : jsxs("span", {
+										style: { display: "flex", gap: "6px" },
+										children: [
+											jsx("select", {
+												value: hosts.a,
+												"aria-label": zh ? "主持人 A 的声音" : "Host A voice",
+												onChange: (event) => { setHosts((previous) => ({ ...previous, a: event.target.value })); },
+												style: { ...controlStyle(), height: "26px", fontSize: "11px", padding: "0 4px" },
+												children: voices.map((voice) => jsx("option", { value: voice.id, children: `A · ${voice.label}` }, voice.id))
+											}),
+											jsx("select", {
+												value: hosts.b,
+												"aria-label": zh ? "主持人 B 的声音" : "Host B voice",
+												onChange: (event) => { setHosts((previous) => ({ ...previous, b: event.target.value })); },
+												style: { ...controlStyle(), height: "26px", fontSize: "11px", padding: "0 4px" },
+												children: voices.map((voice) => jsx("option", { value: voice.id, children: `B · ${voice.label}` }, voice.id))
+											})
+										]
+									}),
+									jsx("button", {
+										type: "button",
+										disabled: busy || running,
+										style: { ...controlStyle(), height: "26px", fontSize: "11px", color: hue(kind), borderColor: hue(kind, 0.45) },
+										onClick: () => { void render(); },
+										children: running
+											? (zh ? `合成中 ${job.done}/${job.total}` : `Rendering ${job.done}/${job.total}`)
+											: (zh ? "合成音频" : "Render audio")
+									})
+								]
+							}),
+							jsx("div", {
+								style: { maxHeight: "260px", overflowY: "auto", padding: "10px 12px" },
+								children: script.turns.map((turn, at) => jsxs("div", {
+									style: { display: "flex", gap: "10px", marginBottom: "8px", fontSize: "12px", lineHeight: "19px" },
+									children: [
+										jsx("span", {
+											style: {
+												flex: "none", width: "18px", height: "18px", borderRadius: "50%",
+												display: "inline-flex", alignItems: "center", justifyContent: "center",
+												fontSize: "10px", fontWeight: 600,
+												background: turn.speaker === "a" ? hue(kind, 0.12) : "var(--dsw-alias-interactive-bg-hover)",
+												color: turn.speaker === "a" ? hue(kind) : "var(--dsw-alias-label-secondary)"
+											},
+											children: turn.speaker.toUpperCase()
+										}),
+										jsx("span", { style: { flex: 1, minWidth: 0, color: "var(--dsw-alias-label-primary)" }, children: turn.text })
+									]
+								}, `t${at}`))
+							})
+						]
+					}),
+
+					job !== null && job.state === "error" ? jsx("div", {
+						style: { ...NOTE_STYLE, minHeight: 0, padding: "10px", marginBottom: "12px", color: "rgb(220,38,38)" },
+						children: (zh ? "合成失败：" : "Render failed: ") + job.error
+					}) : null,
+
+					// ── step three: what came out ────────────────────────────
+					jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: "10px", margin: "22px 0 8px" },
+						children: [
+							jsx("h3", { style: { margin: 0, fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" }, children: zh ? "已发布" : "Published" }),
+							jsx("span", { style: { flex: 1 } }),
+							episodes.length === 0 ? null : jsx("button", {
+								type: "button",
+								style: { ...controlStyle(), height: "26px", fontSize: "11px" },
+								// Copying the feed URL is the whole point of the RSS:
+								// an episode that only plays in this tab is a file,
+								// and one a podcast client subscribes to is a habit.
+								onClick: () => { void navigator.clipboard?.writeText(feedUrl); },
+								children: zh ? "复制订阅地址" : "Copy feed URL"
+							})
+						]
+					}),
+
+					episodes.length === 0
+						? jsx("div", { style: NOTE_STYLE, children: zh ? "还没有生成过节目。" : "No episode yet." })
+						: jsxs("div", {
+							children: episodes.map((episode) => jsxs("div", {
+								style: {
+									marginBottom: "10px", padding: "12px",
+									border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "12px",
+									background: "var(--dsw-specific-menu)", boxShadow: "var(--dsw-shadow-lv1)"
+								},
+								children: [
+									jsxs("div", {
+										style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "8px" },
+										children: [
+											jsx("span", { style: { flex: 1, minWidth: 0, fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" }, children: episode.title }),
+											jsx("span", {
+												style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+												children: `${Math.round(episode.durationSeconds / 60)} ${zh ? "分钟" : "min"} · ${formatStamp(episode.createdAt)}`
+											}),
+											jsx("button", {
+												type: "button",
+												style: { ...controlStyle(), height: "24px", fontSize: "11px" },
+												onClick: () => { void remove(episode.id); },
+												children: zh ? "删除" : "Delete"
+											})
+										]
+									}),
+									jsx("audio", {
+										controls: true,
+										preload: "none",
+										src: `${apiBase()}/publish/episodes/${encodeURIComponent(episode.id)}/audio`,
+										style: { width: "100%", height: "32px" }
+									})
+								]
+							}, episode.id))
+						}),
+
+					error === "" ? null : jsx("div", {
+						style: { ...NOTE_STYLE, minHeight: 0, padding: "10px", marginTop: "12px", color: "rgb(220,38,38)" },
+						children: error
+					})
+				]
+			});
+		}
+		//#endregion
+
 		//#region page tabs
 		/**
 		* The four stages of the swarm pipeline, in the order work moves
@@ -2994,6 +3377,12 @@ window.__ModuleLoader__.load({
 				ledeEn: "Scenarios played forward from the research, with their assumptions stated.",
 				ledeZh: "基于研究结论向前推演的情景，并显式列出所依赖的假设。",
 				emptyEn: "No scenario built yet.", emptyZh: "尚未建立推演情景。"
+			},
+			{
+				id: "publish", en: "Publish", zh: "发布",
+				ledeEn: "Selected sources spoken as a two-host conversation, and the feed they publish to.",
+				ledeZh: "把选中的信源讲成一段双人对话，并汇成可订阅的播客。",
+				emptyEn: "No episode yet.", emptyZh: "还没有生成过节目。"
 			}
 		];
 		//#endregion
@@ -3165,6 +3554,8 @@ window.__ModuleLoader__.load({
 							style: active.id === "sources" ? { ...WIDE_STYLE, height: "100%", minHeight: 0 } : CONTENT_STYLE,
 							children: active.id === "sources"
 								? jsx(ExploreTab, { zh })
+								: active.id === "publish"
+								? jsx(PublishTab, { zh })
 								: jsxs("div", {
 									children: [
 										jsx("p", { style: LEDE_STYLE, children: zh ? active.ledeZh : active.ledeEn }),

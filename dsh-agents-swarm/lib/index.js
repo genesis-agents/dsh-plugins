@@ -24,6 +24,7 @@ import { translateBatch, isSupportedLanguage, BATCH_SIZE, TARGET_LANGUAGES } fro
 import { admissibleUrl, fetchDocument, readableText, readArticle, displayModeOf, documentUrlOf } from "./proxy.js";
 import { sourceFeeds } from "./sources.js";
 import { enrichThumbnails, imageForPage, ENRICHABLE_TYPES, DEFAULT_ENRICH_LIMIT } from "./enrich.js";
+import { createPublishRoutes } from "./publish-routes.js";
 
 /** Route prefix this plugin owns on the dsh web server. */
 const ROUTE_PREFIX = "/swarm-api";
@@ -693,10 +694,18 @@ async function readJson(req, limit = 256 * 1024) {
  * @returns the node:http handler.
  */
 export function createHandler(store, logger, chat) {
+  // The publish surface is a separate module because it is a different
+  // subject with its own lifecycle — a render is a job, not a request — and
+  // folding forty lines of job bookkeeping into this router would bury the
+  // library routes it sits beside.
+  const publish = createPublishRoutes({ store, chat, logger, sendJson, readJson });
+
   return async function handle(req, res) {
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname.slice(ROUTE_PREFIX.length) || "/";
     const query = url.searchParams;
+
+    if (path.startsWith("/publish/") && await publish(req, res, path)) return;
 
     // ── reads ───────────────────────────────────────────────────────────
     if (req.method === "GET" && path === "/resources") {

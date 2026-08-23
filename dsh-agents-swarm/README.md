@@ -71,3 +71,36 @@ A published plugin should instead ship a self-contained `prepare` script, the wa
 [turtle-ui](https://github.com/deepseek-harness/turtle-ui) does. Until then there
 is no separate `src/`: one file per concern under `lib/` IS the source, and a
 stale `src/` that no longer matched it was removed rather than left to mislead.
+
+## Publish
+
+The 发布 tab turns selected sources into a two-host podcast episode: one model
+call writes the dialogue, Edge's read-aloud voices speak it, and the episodes
+are served as an RSS feed a podcast client can subscribe to.
+
+Three steps, kept separate deliberately. Picking sources is free. Writing the
+script costs one model call and produces something worth READING before
+committing — a script that misread the sources is obvious in ten seconds of
+reading and invisible after ten minutes of synthesis. Only then does rendering
+spend one synthesis request per turn.
+
+| Route | What it does |
+|---|---|
+| `GET /publish/voices` | Voices, default hosts, and the TTS backends |
+| `POST /publish/script` | Sources in, dialogue turns out. One model call. |
+| `POST /publish/render` | Starts a render JOB; returns an id |
+| `GET /publish/jobs/:id` | Progress, and the episode id when it finishes |
+| `GET /publish/episodes` | Episodes, newest first |
+| `GET /publish/episodes/:id/audio` | The MP3, with Range support so seeking works |
+| `GET /publish/feed.xml` | RSS 2.0 with the iTunes namespace |
+
+Rendering is a job rather than a request because a ten-minute episode is forty
+synthesis round trips, and an HTTP request held open for minutes reads as a
+hang. Jobs are in memory: a restart loses an in-flight render, which is the
+right trade, since audio for half the turns is worth nothing. A finished
+episode is persisted beside the database, for the same reason thumbnails are —
+a library copied to another machine carries its episodes with it.
+
+Speech is `msedge-tts`, which needs no key and no GPU. It is behind a backend
+list so a local one (Kokoro on Apple Silicon) can be added without changing
+anything above it.
