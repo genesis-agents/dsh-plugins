@@ -39,6 +39,30 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 
+		/**
+		* Whether a click is on a control that only resizes the shell.
+		*
+		* Neither signal is ideal and that is why there are two. `aria-label` is
+		* the honest one but is written in the shell's language, so matching it
+		* means matching every locale the shell ships. The CSS-module class is
+		* language-proof but hashed per build — except for the suffix, which is
+		* the source-level name and survives. Together they cover each other's
+		* gap, and if both miss, the fallback is the old behaviour: the page
+		* closes, which is wrong but not harmful.
+		* @param target - the element the pointer went down on.
+		* @returns true when the click only changes layout.
+		*/
+		function isLayoutToggle(target) {
+			const button = target.closest('button, [role="button"]');
+			if (button === null) return false;
+			// The suffix, not the whole class: a CSS module renders this as
+			// `KzdQ8a_toggle`, and only the hash before the underscore moves
+			// between builds.
+			if (/[_-]toggle\b/i.test(String(button.className))) return true;
+			const label = (button.getAttribute("aria-label") ?? "") + " " + (button.getAttribute("title") ?? "");
+			return /侧边栏|sidebar|collapse|expand/i.test(label);
+		}
+
 		//#region locale + mark
 		/**
 		* Whether the document is presenting Chinese. The slot's `label` is
@@ -4303,6 +4327,12 @@ window.__ModuleLoader__.load({
 			// appeared to do nothing and there was no way to reach what had just
 			// been created.
 			//
+			// Collapsing the sidebar is NOT one of those requests, and treating
+			// it as one threw the reader back to the home page mid-article: the
+			// toggle lives in the shell, so it matched the rule, but it
+			// navigates nowhere — it only changes how wide the sidebar is. The
+			// page re-measures for that (the frame's ResizeObserver) and stays.
+			//
 			// Any click in the shell around this page is a request for the shell
 			// — a new session, another workspace, settings — so the page steps
 			// aside for it. Capture phase, so the decision is made before the
@@ -4316,6 +4346,7 @@ window.__ModuleLoader__.load({
 					if (!(target instanceof Element)) return;
 					if (target.closest("[data-swarm-left]") !== null) return;
 					if (target.closest("[data-swarm-trigger]") !== null) return;
+					if (isLayoutToggle(target)) return;
 					setOpen(false);
 				};
 				document.addEventListener("pointerdown", onPointerDown, true);
