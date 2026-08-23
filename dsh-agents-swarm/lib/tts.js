@@ -353,6 +353,7 @@ export async function synthesizeTurns(turns, hosts = DEFAULT_HOSTS, onProgress) 
  * Browsers, ffmpeg, and podcast apps all play the result correctly. Producing a
  * properly indexed file would mean a real MP3 muxer or an ffmpeg dependency,
  * and neither is worth it before someone reports a player that stumbles.
+ *
  * A segment that is not playable audio throws rather than being skipped. The
  * earlier version filtered them out, which meant a caller handing over a bare
  * `Uint8Array` — the same bytes, just not a `Buffer` — got a shorter episode

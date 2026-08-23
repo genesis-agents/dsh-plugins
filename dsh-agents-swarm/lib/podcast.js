@@ -334,19 +334,17 @@ function asEntries(sources) {
 }
 
 /**
- * The prompt asking for one episode.
+ * The material block for every usable source, within the shared ceiling.
  *
- * The instructions are written in English even when the episode is Chinese.
- * Naming the target language explicitly is reliable, whereas writing the whole
- * prompt in the target language invites the model to echo the prompt's own
- * register back in the dialogue; the rest of this plugin prompts in English
- * for the same reason.
+ * Extracted because two callers need it and they have to agree: the prompt
+ * names the language the episode must be written in, and `generateScript`
+ * reports which language that was. One definition assembled twice is cheap
+ * next to the model call; two definitions mean the page eventually offers
+ * English voices for a Chinese script.
  * @param sources - `[{ row, transcript }]`, or bare rows.
- * @param options - `{ minutes, language, hostA, hostB, focus }`; `language` is
- *   a language key, and anything else means detect it from the material.
- * @returns the user prompt.
+ * @returns `{ blocks, material }`.
  */
-export function buildPrompt(sources, options = {}) {
+function assembleMaterial(sources) {
   const entries = asEntries(sources);
   if (entries.length === 0) throw new Error("an episode needs at least one source");
 
@@ -362,14 +360,40 @@ export function buildPrompt(sources, options = {}) {
     .map((entry) => sourceMaterial(entry.row, entry.transcript, perSource))
     .filter((block) => block !== "");
   if (blocks.length === 0) throw new Error("none of the selected sources carry a usable title");
-  const material = blocks.join("\n\n");
+  return { blocks, material: blocks.join("\n\n") };
+}
 
-  const requested = typeof options.language === "string" ? options.language : "";
-  // Own properties only, for the reason `estimateMinutes` gives: inherited
-  // keys such as "constructor" are not undefined and produced a TypeError
-  // here rather than the documented fall back to detection.
-  const code = Object.hasOwn(LANGUAGES, requested) ? requested : detectLanguage(material);
-  const profile = LANGUAGES[code];
+/**
+ * The language key an episode will actually be written in.
+ *
+ * A caller's choice wins, but only when it names a language this module has a
+ * profile for. Own properties only: `LANGUAGES["constructor"]` is not
+ * undefined, and a language field arriving from a request body can be any
+ * string at all. Anything else falls back to detection over the material.
+ * @param requested - the caller's `options.language`, whatever it is.
+ * @param material - the assembled source material.
+ * @returns a key of the language table.
+ */
+function languageCode(requested, material) {
+  return Object.hasOwn(LANGUAGES, requested) ? requested : detectLanguage(material);
+}
+
+/**
+ * The prompt asking for one episode.
+ *
+ * The instructions are written in English even when the episode is Chinese.
+ * Naming the target language explicitly is reliable, whereas writing the whole
+ * prompt in the target language invites the model to echo the prompt's own
+ * register back in the dialogue; the rest of this plugin prompts in English
+ * for the same reason.
+ * @param sources - `[{ row, transcript }]`, or bare rows.
+ * @param options - `{ minutes, language, hostA, hostB, focus }`; `language` is
+ *   a language key, and anything else means detect it from the material.
+ * @returns the user prompt.
+ */
+export function buildPrompt(sources, options = {}) {
+  const { blocks, material } = assembleMaterial(sources);
+  const profile = LANGUAGES[languageCode(options.language, material)];
   // Coerced, because a minutes field arriving from a JSON body is as likely to
   // be "10" as 10, and silently returning a twelve-minute episode to a caller
   // who asked for ten is worse than either honouring it or refusing it.
@@ -590,7 +614,9 @@ const MAX_ANSWER_CHARS = 2_000_000;
  * @param chat - the streaming chat entry point from `createChat`.
  * @param sources - `[{ row, transcript }]`, or bare rows.
  * @param options - as {@link buildPrompt}, passed straight through.
- * @returns `{ title, turns, chars }`, where `chars` counts spoken text only.
+ * @returns `{ title, turns, chars, language, estimatedMinutes }`, where
+ *   `chars` counts spoken text only and `estimatedMinutes` is that count read
+ *   back through the speaking rate for `language`.
  */
 export async function generateScript(chat, sources, options = {}) {
   const prompt = buildPrompt(sources, options);
@@ -642,7 +668,7 @@ export async function generateScript(chat, sources, options = {}) {
   // to spend forty synthesis calls wants the length that will actually play.
   // Over the MATERIAL, not the prompt: the instructions are English, and
   // detecting over them would call every episode English.
-  const language = options.language ?? detectLanguage(assembleMaterial(sources).material);
+  const language = languageCode(options.language, assembleMaterial(sources).material);
   return {
     title,
     turns: merged,

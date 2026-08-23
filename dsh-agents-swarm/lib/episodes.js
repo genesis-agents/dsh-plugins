@@ -27,10 +27,14 @@ import { storePath } from "./index.js";
  * Bitrate every episode is encoded at.
  *
  * Speech at 48 kbit/s mono is indistinguishable from a higher rate on a phone
- * speaker and keeps a twenty-minute episode near seven megabytes. The duration
- * estimate below depends on this being what the encoder was actually told, so
- * the value lives here and the synthesis side reads it rather than repeating
- * the number.
+ * speaker and keeps a twenty-minute episode near seven megabytes.
+ *
+ * This must match what the encoder was actually told, and nothing enforces
+ * that: the synthesis side names its format as one opaque string,
+ * `audio-24khz-48kbitrate-mono-mp3` in `tts.js`, which no arithmetic here can
+ * read the bitrate out of. The two are kept in step by hand. Changing one
+ * without the other does not break anything loudly — it just makes every
+ * duration in the list and the feed wrong by the ratio between them.
  */
 export const BITRATE_BITS_PER_SECOND = 48_000;
 
@@ -236,6 +240,7 @@ function writeIndex(records, env) {
  * be re-read as text — which is how someone checks what a host actually said
  * without sitting through twenty minutes of audio, and how an old script could
  * later be re-voiced without paying for the model again.
+ *
  * `script` arrives in either shape the rest of this plugin deals in: the bare
  * array of turns, or the `{ title, turns }` object that `generateScript` and
  * `parseScript` return and that the publish route forwards. Accepting only the
