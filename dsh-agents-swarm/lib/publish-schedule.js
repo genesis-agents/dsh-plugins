@@ -20,6 +20,8 @@
 import { generateScript } from "./podcast.js";
 import { DEFAULT_HOSTS, concatMp3, synthesizeTurns } from "./tts.js";
 import { saveEpisode } from "./episodes.js";
+import { findFormat, generateDocument } from "./documents.js";
+import { saveDocument } from "./document-store.js";
 
 /** How often the wall clock is consulted. */
 const TICK_MS = 60_000;
@@ -46,6 +48,14 @@ export const PUBLISH_DEFAULTS = {
   publishMinutes: 8,
   publishHosts: DEFAULT_HOSTS,
   publishMinSources: 3,
+  // Which artefacts the daily run produces. A list rather than a boolean per
+  // format: the same selection of sources becomes a podcast, a digest, or a
+  // report, and somebody who wants all three should get all three from one
+  // gathering rather than three separate schedules racing each other for the
+  // same rows.
+  publishArtifacts: ["podcast"],
+  // Written formats follow the sources unless told otherwise.
+  publishChinese: false,
 };
 
 /**
@@ -61,7 +71,10 @@ export function readPublishConfig(store) {
     publishMinutes: store.getSetting("publishMinutes", PUBLISH_DEFAULTS.publishMinutes),
     publishHosts: store.getSetting("publishHosts", PUBLISH_DEFAULTS.publishHosts),
     publishMinSources: store.getSetting("publishMinSources", PUBLISH_DEFAULTS.publishMinSources),
+    publishArtifacts: store.getSetting("publishArtifacts", PUBLISH_DEFAULTS.publishArtifacts),
+    publishChinese: store.getSetting("publishChinese", PUBLISH_DEFAULTS.publishChinese),
     publishLastRun: store.getSetting("publishLastRun", null),
+    publishLastManualRun: store.getSetting("publishLastManualRun", null),
   };
 }
 
@@ -151,16 +164,57 @@ export async function publishOnce(store, chat, logger) {
   }
 
   const withTranscripts = sources.map((row) => ({ row, transcript: store.getTranscript(row.id) }));
-  const script = await generateScript(chat, withTranscripts, { minutes: config.publishMinutes });
-  const hosts = config.publishHosts ?? DEFAULT_HOSTS;
-  const { segments } = await synthesizeTurns(script.turns, hosts);
-  const episode = await saveEpisode({
-    audio: concatMp3(segments),
-    title: script.title,
-    script,
-    sourceIds: sources.map((row) => row.id),
-    voices: hosts,
-  });
+  const sourceIds = sources.map((row) => row.id);
+  const wanted = Array.isArray(config.publishArtifacts) && config.publishArtifacts.length > 0
+    ? config.publishArtifacts
+    : PUBLISH_DEFAULTS.publishArtifacts;
+
+  // Each artefact is attempted independently and a failure in one does not
+  // take the others with it. A model that refuses a report is no reason to
+  // skip the podcast the same sources would have produced, and the run's
+  // record says which ones landed rather than reporting the whole morning as
+  // a failure.
+  const made = [];
+  const failed = [];
+
+  if (wanted.includes("podcast")) {
+    try {
+      const script = await generateScript(chat, withTranscripts, { minutes: config.publishMinutes });
+      const hosts = config.publishHosts ?? DEFAULT_HOSTS;
+      const { segments } = await synthesizeTurns(script.turns, hosts);
+      const episode = await saveEpisode({
+        audio: concatMp3(segments),
+        title: script.title,
+        script,
+        sourceIds,
+        voices: hosts,
+      });
+      made.push({ kind: "podcast", id: episode.id, title: episode.title });
+    } catch (cause) {
+      failed.push(`podcast: ${String(cause?.message ?? cause)}`);
+    }
+  }
+
+  for (const id of wanted) {
+    const format = findFormat(id);
+    if (format === undefined) continue;
+    try {
+      const document = await generateDocument(chat, withTranscripts, { format, zh: config.publishChinese === true });
+      const record = saveDocument({
+        text: document.text,
+        title: document.title,
+        format: format.id,
+        sourceIds,
+      });
+      made.push({ kind: format.id, id: record.id, title: record.title });
+    } catch (cause) {
+      failed.push(`${format.id}: ${String(cause?.message ?? cause)}`);
+    }
+  }
+
+  if (made.length === 0) {
+    throw new Error(failed.length === 0 ? "nothing was armed to publish" : failed.join("; "));
+  }
 
   // The watermark is the newest row this episode covered, so tomorrow's
   // episode starts where this one stopped. Recording the run time instead
@@ -176,12 +230,20 @@ export async function publishOnce(store, chat, logger) {
   store.setSetting("publishLastRun", {
     date: localDate(),
     at: new Date().toISOString(),
-    episodeId: episode.id,
+    made,
+    // Kept for the page, which reads it to link the last episode.
+    episodeId: made.find((entry) => entry.kind === "podcast")?.id,
     sources: sources.length,
+    // Recorded even on a partial success, so a format that has been failing
+    // every morning is visible rather than merely absent.
+    partial: failed.length === 0 ? undefined : failed.join("; "),
     watermark,
   });
-  logger?.info?.(`swarm: scheduled episode "${episode.title}" from ${sources.length} source(s)`);
-  return { ran: true, episodeId: episode.id, sources: sources.length };
+  logger?.info?.(
+    `swarm: scheduled run made ${made.map((entry) => entry.kind).join(", ")} from ${sources.length} source(s)`
+    + (failed.length === 0 ? "" : ` (failed: ${failed.join("; ")})`),
+  );
+  return { ran: true, made, sources: sources.length };
 }
 
 /**
@@ -202,17 +264,30 @@ export async function publishOnce(store, chat, logger) {
  */
 export async function runScheduled(store, chat, logger, { markSkips = false } = {}) {
   const stamp = () => ({ date: localDate(), at: new Date().toISOString() });
+  // A manual run reports separately from the timer. It must not write
+  // `publishLastRun`, because that is what tells the timer the day is served —
+  // but with no record at all, pressing "Run now" and getting a legitimate
+  // skip produced nothing whatsoever: no episode, no message, no way to tell
+  // the button from a button that does not work.
+  const note = (value) => {
+    if (markSkips) store.setSetting("publishLastRun", value);
+    else store.setSetting("publishLastManualRun", value);
+  };
   try {
     const result = await publishOnce(store, chat, logger);
-    if (!result.ran) {
-      logger?.info?.(`swarm: scheduled episode skipped — ${result.reason}`);
-      if (markSkips) store.setSetting("publishLastRun", { ...stamp(), skipped: result.reason });
+    if (result.ran) {
+      if (!markSkips) {
+        store.setSetting("publishLastManualRun", { ...stamp(), made: result.made, sources: result.sources });
+      }
+      return result;
     }
+    logger?.info?.(`swarm: scheduled run skipped — ${result.reason}`);
+    note({ ...stamp(), skipped: result.reason });
     return result;
   } catch (cause) {
     const error = String(cause?.message ?? cause);
-    logger?.warn?.(`swarm: scheduled episode failed: ${error}`);
-    if (markSkips) store.setSetting("publishLastRun", { ...stamp(), error });
+    logger?.warn?.(`swarm: scheduled run failed: ${error}`);
+    note({ ...stamp(), error });
     return { ran: false, reason: error, failed: true };
   }
 }

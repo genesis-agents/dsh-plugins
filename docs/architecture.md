@@ -257,6 +257,26 @@ flowchart TB
 Blue runs on the Mac mini, orange in the browser, grey reaches an external
 service (as do the model and TTS calls inside stages 5, 6, and 7).
 
+**发布 is a group of formats, not a page.** The same selection of sources
+becomes a podcast for the commute, a digest for the two minutes before a
+meeting, or a report for the afternoon that needs the synthesis. All three
+share every step but the last:
+
+| Format | Ending | Artefact |
+|---|---|---|
+| 播客 Podcast | script → speech → concatenation | MP3 + an RSS entry |
+| 摘要 Digest | ~500 words, one entry per source | Markdown |
+| 报告 Report | ~1,400 words, grouped into themes with disagreements named | Markdown |
+
+Two written formats rather than one because they answer different questions
+and a single prompt asked to do both does neither. A digest answers *what
+happened* and is deliberately refused the synthesis; a report answers *what it
+means* and is worth the longer read precisely because it does that synthesis.
+
+Documents are Markdown files with a JSON index beside the episodes, not rows in
+the database — an artefact is something you can open in an editor, hand to
+someone, or grep without going through this process at all.
+
 **Scheduled publishing** wires 6 → 9 together. At the configured local time the
 timer takes the newest sources collected since the last episode, runs the whole
 chain, and records what it did. Design notes worth keeping:
@@ -272,6 +292,15 @@ chain, and records what it did. Design notes worth keeping:
 - **A thin day is skipped, not padded.** An episode from two press releases
   costs the same model call, takes the same place in the feed, and teaches the
   listener the feed is not worth opening.
+- **Every armed format from ONE gathering.** `publishArtifacts` is a list, so
+  a morning that produces a podcast and a digest reads the sources once. Each
+  is attempted independently: a model that refuses the report is no reason to
+  skip the podcast the same sources would have produced, and the run records
+  which ones landed rather than reporting the whole morning as a failure.
+- **A manual run reports separately.** `publishLastRun` is what tells the timer
+  a day is served, so pressing *Run now* must not write it — but with no record
+  at all, a legitimate skip produced nothing whatsoever, which is
+  indistinguishable from a broken button. It writes `publishLastManualRun`.
 - **A watermark, not a timestamp.** Each episode records the newest row it
   covered so the next starts there. It deliberately steps over rows it did not
   cover — a digest that works through a backlog falls further behind daily.

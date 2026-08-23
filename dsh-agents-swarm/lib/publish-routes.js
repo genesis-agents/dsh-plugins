@@ -22,6 +22,8 @@ import { DEFAULT_HOSTS, TTS_BACKENDS, VOICES, concatMp3, synthesizeTurns } from 
 import { generateScript } from "./podcast.js";
 import { buildFeed, deleteEpisode, episodePath, getEpisode, listEpisodes, saveEpisode } from "./episodes.js";
 import { pickSources, readPublishConfig, runScheduled } from "./publish-schedule.js";
+import { DOCUMENT_FORMATS, findFormat, generateDocument } from "./documents.js";
+import { deleteDocument, getDocument, listDocuments, saveDocument } from "./document-store.js";
 
 /** Sources one episode may draw on. */
 const MAX_SOURCES = 20;
@@ -166,6 +168,95 @@ export function createPublishRoutes({ store, chat, logger, sendJson, readJson })
         return true;
       }
       sendJson(res, 200, { success: true, data: job });
+      return true;
+    }
+
+    // ── written formats: the digest and the report ──────────────────
+    // Not a job, unlike a render: one model call, and the reader wants to see
+    // the result before deciding whether to keep it. A minute of waiting for
+    // something you are about to read is different from four minutes of
+    // waiting for forty synthesis round trips.
+    if (req.method === "GET" && path === "/publish/formats") {
+      sendJson(res, 200, { success: true, data: { formats: DOCUMENT_FORMATS } });
+      return true;
+    }
+
+    if (req.method === "POST" && path === "/publish/document") {
+      if (chat === undefined) {
+        sendJson(res, 503, { success: false, error: "no model routed" });
+        return true;
+      }
+      let body;
+      try {
+        body = await readJson(req);
+      } catch (cause) {
+        sendJson(res, 400, { success: false, error: String(cause?.message ?? cause) });
+        return true;
+      }
+      const format = findFormat(body.format);
+      if (format === undefined) {
+        sendJson(res, 400, { success: false, error: `unknown format: ${body.format}` });
+        return true;
+      }
+      const ids = Array.isArray(body.resourceIds) ? body.resourceIds.slice(0, MAX_SOURCES) : [];
+      const sources = ids.map((id) => store.get(id)).filter((row) => row !== undefined);
+      if (sources.length === 0) {
+        sendJson(res, 400, { success: false, error: "select at least one source that exists" });
+        return true;
+      }
+      // A video's substance is its transcript, exactly as for a script.
+      const withTranscripts = sources.map((row) => ({ row, transcript: store.getTranscript(row.id) }));
+      try {
+        const document = await generateDocument(chat, withTranscripts, {
+          format,
+          zh: body.zh === true,
+          guidance: typeof body.guidance === "string" ? body.guidance : "",
+        });
+        const record = saveDocument({
+          text: document.text,
+          title: document.title,
+          format: format.id,
+          sourceIds: sources.map((row) => row.id),
+          guidance: body.guidance,
+        });
+        logger?.info?.(`swarm: wrote a ${format.id} "${record.title}" from ${sources.length} source(s)`);
+        sendJson(res, 200, { success: true, data: { ...record, text: document.text } });
+      } catch (cause) {
+        sendJson(res, 502, { success: false, error: String(cause?.message ?? cause) });
+      }
+      return true;
+    }
+
+    if (req.method === "GET" && path === "/publish/documents") {
+      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
+      sendJson(res, 200, {
+        success: true,
+        data: listDocuments({
+          take: params.get("take") ?? undefined,
+          skip: params.get("skip") ?? undefined,
+          format: params.get("format") ?? undefined,
+        }),
+      });
+      return true;
+    }
+
+    if (req.method === "GET" && path.startsWith("/publish/documents/")) {
+      const document = getDocument(decodeURIComponent(path.slice("/publish/documents/".length)));
+      if (document === undefined) {
+        sendJson(res, 404, { success: false, error: "no such document" });
+        return true;
+      }
+      sendJson(res, 200, { success: true, data: document });
+      return true;
+    }
+
+    if (req.method === "DELETE" && path.startsWith("/publish/documents/")) {
+      try {
+        const removed = deleteDocument(decodeURIComponent(path.slice("/publish/documents/".length)));
+        sendJson(res, 200, { success: true, data: { removed } });
+      } catch (cause) {
+        sendJson(res, 400, { success: false, error: String(cause?.message ?? cause) });
+      }
       return true;
     }
 

@@ -27,6 +27,7 @@ import { enrichThumbnails, imageForPage, ENRICHABLE_TYPES, DEFAULT_ENRICH_LIMIT 
 import { createPublishRoutes } from "./publish-routes.js";
 import { PUBLISH_DEFAULTS, readPublishConfig, startPublishTimer } from "./publish-schedule.js";
 import { createProxyHandler } from "./remote.js";
+import { DOCUMENT_FORMATS } from "./documents.js";
 import { LIBRARY_ENV, mediaDirs, resolveLibrary, writeLibraryPointer } from "./library.js";
 
 /** Route prefix this plugin owns on the dsh web server. */
@@ -460,6 +461,19 @@ export function writeConfig(store, patch) {
   if (patch.publishHosts !== undefined && (typeof patch.publishHosts?.a !== "string" || typeof patch.publishHosts?.b !== "string")) {
     problems.push("publishHosts must be { a, b } naming two voices");
   }
+  if (patch.publishArtifacts !== undefined) {
+    // Validated against what can actually be produced, so arming a format that
+    // does not exist fails at the moment somebody asks for it rather than at
+    // seven the next morning.
+    const known = new Set(["podcast", ...DOCUMENT_FORMATS.map((format) => format.id)]);
+    if (!Array.isArray(patch.publishArtifacts)) problems.push("publishArtifacts must be an array");
+    else for (const id of patch.publishArtifacts) {
+      if (!known.has(id)) problems.push(`publishArtifacts must be drawn from ${[...known].join(", ")}`);
+    }
+  }
+  if (patch.publishChinese !== undefined && typeof patch.publishChinese !== "boolean") {
+    problems.push("publishChinese must be true or false");
+  }
   if (problems.length > 0) return problems;
   for (const key of [
     "feeds", "jobs", "transcriptLanguages", "supadataKey", "collectIntervalMinutes",
@@ -467,6 +481,7 @@ export function writeConfig(store, patch) {
     // of what it did, and a page that could write it could make the timer
     // believe today is already served.
     "publishAt", "publishKinds", "publishSources", "publishMinutes", "publishHosts", "publishMinSources",
+    "publishArtifacts", "publishChinese",
   ]) {
     if (patch[key] !== undefined) store.setSetting(key, patch[key]);
   }

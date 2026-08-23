@@ -158,9 +158,13 @@ export function writeLibraryPointer(value, env = process.env, home = defaultHome
  * to another machine carries its images and episodes with it — and so there is
  * still exactly one thing to point at.
  * @param path - the resolved database path.
- * @returns `{ thumbnails, episodes }` absolute directories.
+ * @returns `{ thumbnails, episodes, documents }` absolute directories.
  */
 export function mediaDirs(path) {
   const root = dirname(path);
-  return { thumbnails: join(root, "thumbnails"), episodes: join(root, "episodes") };
+  return {
+    thumbnails: join(root, "thumbnails"),
+    episodes: join(root, "episodes"),
+    documents: join(root, "documents"),
+  };
 }

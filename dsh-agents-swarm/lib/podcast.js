@@ -344,7 +344,7 @@ function asEntries(sources) {
  * @param sources - `[{ row, transcript }]`, or bare rows.
  * @returns `{ blocks, material }`.
  */
-function assembleMaterial(sources) {
+export function assembleMaterial(sources) {
   const entries = asEntries(sources);
   if (entries.length === 0) throw new Error("an episode needs at least one source");
 

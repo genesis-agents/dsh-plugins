@@ -3097,6 +3097,34 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @returns the line.
 		*/
+		/**
+		* One line describing the last manual run, or "" when there has not been one.
+		*
+		* Separate from {@link scheduleNote} because the two answer different
+		* questions and sharing a line would make a skip look like the schedule
+		* had failed. The timer's record also must not be written by a manual
+		* run: `publishLastRun` is what tells the timer a day is served, so a
+		* manual run that wrote it would silently cancel the morning's.
+		* @param schedule - the payload from `/publish/schedule`.
+		* @param zh - whether to write Chinese.
+		* @returns the line, or "".
+		*/
+		function manualNote(schedule, zh) {
+			const run = schedule?.publishLastManualRun;
+			if (run === null || run === undefined) return "";
+			const when = formatStamp(run.at);
+			if (typeof run.error === "string") {
+				return (zh ? `立即生成 ${when} 失败：` : `Run now at ${when} failed: `) + run.error;
+			}
+			if (typeof run.skipped === "string") {
+				return (zh ? `立即生成 ${when} 跳过：` : `Run now at ${when} skipped: `) + run.skipped;
+			}
+			const kinds = Array.isArray(run.made) ? run.made.map((entry) => entry.kind).join(zh ? "、" : ", ") : "";
+			return zh
+				? `立即生成 ${when}：用 ${run.sources} 条信源做了 ${kinds}。`
+				: `Run now at ${when}: made ${kinds} from ${run.sources} source(s).`;
+		}
+
 		function scheduleNote(schedule, zh) {
 			const parts = [];
 			if (schedule.publishAt === "") {
@@ -3368,6 +3396,9 @@ window.__ModuleLoader__.load({
 		*/
 		const EPISODE_PAGE = 6;
 
+		/** Documents fetched at a time, for the same reason as episodes. */
+		const DOCUMENT_PAGE = 8;
+
 		/** The − and + of a stepper: same weight, same box, no platform spinner. */
 		const STEPPER_BUTTON = {
 			appearance: "none", border: "none", background: "transparent",
@@ -3529,7 +3560,325 @@ window.__ModuleLoader__.load({
 			});
 		}
 
-		function PublishTab({ zh }) {
+		/**
+		* A written format: the digest and the report share everything but a
+		* prompt, so they share this.
+		*
+		* Publishing is not one shape. The podcast was the first format the
+		* library grew and it set the pipeline — choose sources, gather them,
+		* ask a model, store the artefact, list it, schedule it — but speech was
+		* only the last step of that. A digest and a report reuse the whole
+		* pipeline and replace the ending, which is why they are a sibling tab
+		* rather than a separate feature.
+		* @param zh - whether to write Chinese.
+		* @param format - the format entry from the Host.
+		* @param accent - `r,g,b` for this tab.
+		*/
+		function DocumentFormat({ zh, format, accent }) {
+			const [picked, setPicked] = useState(() => new Map());
+			const [guidance, setGuidance] = useState("");
+			const [busy, setBusy] = useState(false);
+			const [error, setError] = useState("");
+			const [documents, setDocuments] = useState([]);
+			const [total, setTotal] = useState(0);
+			const [openId, setOpenId] = useState(undefined);
+			const [body, setBody] = useState(null);
+
+			const chosen = picked.size;
+
+			const togglePick = useCallback((row) => {
+				setPicked((previous) => {
+					const next = new Map(previous);
+					if (next.has(row.id)) next.delete(row.id);
+					else next.set(row.id, row);
+					return next;
+				});
+			}, []);
+
+			const load = useCallback(async (take = DOCUMENT_PAGE) => {
+				try {
+					const response = await fetch(`${apiBase()}/publish/documents?format=${format.id}&take=${take}`);
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? "could not list");
+					setDocuments(payload.data.documents);
+					setTotal(payload.data.total);
+				} catch (cause) {
+					setError(String(cause?.message ?? cause));
+				}
+			}, [format.id]);
+
+			useEffect(() => { void load(); }, [load]);
+
+			// The body is fetched only when a document is opened. The list holds
+			// titles and dates; reading fifty files to render fifty rows would
+			// make the list slower the more useful it became.
+			useEffect(() => {
+				if (openId === undefined) { setBody(null); return; }
+				let live = true;
+				setBody(null);
+				fetch(`${apiBase()}/publish/documents/${encodeURIComponent(openId)}`)
+					.then((response) => response.json())
+					.then((payload) => {
+						if (!live) return;
+						if (payload?.success !== true) throw new Error(payload?.error ?? "could not read it");
+						setBody(payload.data);
+					})
+					.catch((cause) => { if (live) setError(String(cause?.message ?? cause)); });
+				return () => { live = false; };
+			}, [openId]);
+
+			const write = useCallback(async () => {
+				setBusy(true);
+				setError("");
+				try {
+					const response = await fetch(`${apiBase()}/publish/document`, {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({
+							format: format.id,
+							zh: isChinese(),
+							guidance,
+							resourceIds: [...picked.keys()],
+						}),
+					});
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
+					// Straight to the finished thing. The reason to press the
+					// button was to read what comes out of it.
+					await load();
+					setOpenId(payload.data.id);
+					setBody(payload.data);
+					setPicked(new Map());
+				} catch (cause) {
+					setError(String(cause?.message ?? cause));
+				} finally {
+					setBusy(false);
+				}
+			}, [format.id, guidance, picked, load]);
+
+			const remove = useCallback(async (id) => {
+				await fetch(`${apiBase()}/publish/documents/${encodeURIComponent(id)}`, { method: "DELETE" });
+				if (id === openId) setOpenId(undefined);
+				await load();
+			}, [openId, load]);
+
+			const CARD = {
+				border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "12px",
+				background: "var(--dsw-specific-menu)", boxShadow: "var(--dsw-shadow-lv1)"
+			};
+
+			return jsxs("div", {
+				children: [
+					jsx("p", {
+						style: { ...LEDE_STYLE, marginTop: 0 },
+						children: zh ? format.blurb.zh : format.blurb.en
+					}),
+
+					jsxs("div", {
+						style: { ...CARD, padding: "16px", marginBottom: "22px" },
+						children: [
+							jsx(StepHeading, {
+								step: 1, accent,
+								title: zh ? "选择信源" : "Choose the sources",
+								hint: chosen === 0 ? "" : (zh ? `已选 ${chosen} 条` : `${chosen} selected`)
+							}),
+							jsx(SourceField, { zh, picked, onPick: togglePick, accent }),
+							chosen === 0 ? null : jsx("div", {
+								style: { ...CARD, marginTop: "12px", overflow: "hidden", boxShadow: "none" },
+								children: [...picked.values()].map((row, at) => jsxs("div", {
+									style: {
+										display: "flex", alignItems: "flex-start", gap: "10px", padding: "9px 13px",
+										borderBottom: at === picked.size - 1 ? "none" : "1px solid var(--dsw-alias-border-l1)",
+										fontSize: "12px"
+									},
+									children: [
+										jsx("span", {
+											style: {
+												flex: "none", marginTop: "1px", width: "15px", fontSize: "11px", fontWeight: 600,
+												fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-tertiary)"
+											},
+											children: String(at + 1)
+										}),
+										jsxs("span", {
+											style: { flex: 1, minWidth: 0 },
+											children: [
+												jsx("span", { style: { color: "var(--dsw-alias-label-primary)", lineHeight: "18px" }, children: row.title }),
+												jsx("span", {
+													style: { display: "block", marginTop: "2px", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+													children: `${sourceNameOf(row)} · ${formatDate(row.publishedAt)}`
+												})
+											]
+										}),
+										jsx("button", {
+											type: "button",
+											"aria-label": zh ? "移出" : "Remove",
+											onClick: () => { togglePick(row); },
+											style: {
+												flex: "none", appearance: "none", border: "none", background: "transparent",
+												padding: "2px", cursor: "pointer", lineHeight: 0, color: "var(--dsw-alias-label-tertiary)"
+											},
+											children: jsx("svg", {
+												width: 12, height: 12, viewBox: "0 0 24 24", fill: "none",
+												stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", "aria-hidden": "true",
+												children: jsx("path", { d: "M6 6l12 12M18 6L6 18" })
+											})
+										})
+									]
+								}, row.id))
+							}),
+
+							jsx("div", { style: { height: "20px" } }),
+
+							jsx(StepHeading, {
+								step: 2, accent,
+								title: zh ? `生成${format.zh}` : `Write the ${format.en.toLowerCase()}`
+							}),
+							jsxs("div", {
+								style: { display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" },
+								children: [
+									jsx("input", {
+										type: "text",
+										value: guidance,
+										placeholder: zh ? "想让它侧重什么？（可留空）" : "Anything it should focus on? (optional)",
+										onChange: (event) => { setGuidance(event.target.value); },
+										style: { ...SEARCH_STYLE, flex: 1, minWidth: "200px", height: "32px", fontSize: "12px" }
+									}),
+									jsx("button", {
+										type: "button",
+										disabled: busy || chosen === 0,
+										style: {
+											...controlStyle(), height: "32px",
+											opacity: chosen === 0 ? 0.5 : 1,
+											color: `rgb(${accent})`, borderColor: `rgba(${accent}, 0.45)`
+										},
+										onClick: () => { void write(); },
+										children: busy
+											? (zh ? "撰写中…" : "Writing…")
+											: (zh ? `生成${format.zh}` : `Write it`)
+									}),
+									chosen !== 0 ? null : jsx("span", {
+										style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+										children: zh ? "先加几条信源" : "Add some sources first"
+									})
+								]
+							})
+						]
+					}),
+
+					jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: "10px", margin: "0 0 12px" },
+						children: [
+							jsx("h3", {
+								style: { margin: 0, fontSize: "14px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+								children: zh ? `已生成的${format.zh}` : `${format.en}s`
+							}),
+							total === 0 ? null : jsx("span", {
+								style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)", fontVariantNumeric: "tabular-nums" },
+								children: String(total)
+							})
+						]
+					}),
+
+					documents.length === 0
+						? jsx("div", {
+							style: { ...CARD, padding: "20px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+							children: zh ? `还没有生成过${format.zh}。` : `Nothing written yet.`
+						})
+						: jsxs("div", {
+							children: [
+								jsx("div", {
+									style: { ...CARD, overflow: "hidden" },
+									children: documents.map((record, at) => {
+										const open = record.id === openId;
+										return jsxs("div", {
+											style: {
+												borderBottom: at === documents.length - 1 ? "none" : "1px solid var(--dsw-alias-border-l1)",
+												background: open ? `rgba(${accent}, 0.035)` : "transparent"
+											},
+											children: [
+												jsxs("div", {
+													style: { display: "flex", alignItems: "center", gap: "12px", padding: "11px 15px" },
+													children: [
+														jsx("button", {
+															type: "button",
+															onClick: () => { setOpenId(open ? undefined : record.id); },
+															style: {
+																flex: 1, minWidth: 0, textAlign: "left", appearance: "none",
+																border: "none", background: "transparent", padding: 0, cursor: "pointer",
+																font: "inherit", fontSize: "13px", fontWeight: open ? 600 : 400,
+																lineHeight: "19px", color: "var(--dsw-alias-label-primary)",
+																...(open ? {} : { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" })
+															},
+															children: record.title
+														}),
+														jsx("span", {
+															style: {
+																flex: "none", fontSize: "11px", fontVariantNumeric: "tabular-nums",
+																color: "var(--dsw-alias-label-secondary)"
+															},
+															children: `${record.sourceIds.length} ${zh ? "条" : "src"} · ${formatStamp(record.createdAt)}`
+														}),
+														jsx("button", {
+															type: "button",
+															"aria-label": zh ? "删除" : "Delete",
+															title: zh ? "删除" : "Delete",
+															onClick: () => { void remove(record.id); },
+															style: {
+																flex: "none", appearance: "none", border: "none", background: "transparent",
+																padding: "2px", cursor: "pointer", lineHeight: 0, color: "var(--dsw-alias-label-tertiary)"
+															},
+															children: jsx("svg", {
+																width: 13, height: 13, viewBox: "0 0 24 24", fill: "none",
+																stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", "aria-hidden": "true",
+																children: jsx("path", { d: "M5 7h14M10 7V5h4v2M9 7v11M15 7v11M6 7l1 13h10l1-13" })
+															})
+														})
+													]
+												}),
+												!open ? null : jsxs("div", {
+													style: { padding: "0 15px 16px" },
+													children: [
+														body === null
+															? jsx("div", { style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" }, children: zh ? "读取中…" : "Loading…" })
+															: body.missing === true
+															// The index and the files can disagree. Saying which
+															// beats rendering an empty document that looks like a
+															// model that produced nothing.
+															? jsx("div", { style: { fontSize: "12px", color: "rgb(220,38,38)" }, children: zh ? "这篇的文件不见了，只剩记录。" : "The file for this one is gone; only the record remains." })
+															: jsx("div", { style: { maxWidth: "760px" }, children: renderMarkdown(body.text, "article") }),
+														body === null || body.missing === true ? null : jsx("button", {
+															type: "button",
+															style: { ...controlStyle(), height: "26px", fontSize: "11px", marginTop: "10px" },
+															onClick: () => { void navigator.clipboard?.writeText(body.text); },
+															children: zh ? "复制 Markdown" : "Copy Markdown"
+														})
+													]
+												})
+											]
+										}, record.id);
+									})
+								}),
+								documents.length >= total ? null : jsx("div", {
+									style: { display: "flex", justifyContent: "center", padding: "12px 0 2px" },
+									children: jsx("button", {
+										type: "button",
+										style: { ...controlStyle(), height: "28px", fontSize: "12px" },
+										onClick: () => { void load(documents.length + DOCUMENT_PAGE); },
+										children: zh ? `再显示 ${Math.min(DOCUMENT_PAGE, total - documents.length)} 篇` : `Show ${Math.min(DOCUMENT_PAGE, total - documents.length)} more`
+									})
+								})
+							]
+						}),
+
+					error === "" ? null : jsx("div", {
+						style: { ...NOTE_STYLE, minHeight: 0, padding: "11px 14px", marginTop: "14px", color: "rgb(220,38,38)" },
+						children: error
+					})
+				]
+			});
+		}
+
+		function PodcastFormat({ zh }) {
 			// Local, because only this tab selects and only this tab spends it.
 			// It lived on the page for one iteration, when the plan was to pick
 			// in 信源; that plan taxed a reading surface with a mode most visits
@@ -3564,6 +3913,29 @@ window.__ModuleLoader__.load({
 			// The schedule's fields, likewise. It is a setting you touch twice
 			// a year and read every day.
 			const [tuning, setTuning] = useState(false);
+			const [lastAt, setLastAt] = useState("07:00");
+			const [artifactChoices, setArtifactChoices] = useState([{ id: "podcast", label: zh ? "播客" : "Podcast" }]);
+
+			// The formats come from the Host so this list cannot drift from what
+			// can actually be produced — arming something that does not exist
+			// would fail at seven the next morning rather than here.
+			useEffect(() => {
+				let live = true;
+				fetch(`${apiBase()}/publish/formats`)
+					.then((response) => response.json())
+					.then((payload) => {
+						if (!live || payload?.success !== true) return;
+						setArtifactChoices([
+							{ id: "podcast", label: zh ? "播客" : "Podcast" },
+							...payload.data.formats.map((format) => ({ id: format.id, label: zh ? format.zh : format.en })),
+						]);
+					})
+					.catch(() => {
+						// The podcast choice alone still works, and it is the one
+						// with an audience waiting on a feed.
+					});
+				return () => { live = false; };
+			}, [zh]);
 			const [schedule, setSchedule] = useState(null);
 			const [watchUntil, setWatchUntil] = useState(0);
 			const [busy, setBusy] = useState(false);
@@ -3746,6 +4118,17 @@ window.__ModuleLoader__.load({
 			const running = job !== null && job.state === "running";
 			const accent = kind.hue;
 			const armed = schedule !== null && schedule.publishAt !== "";
+			const armedArtifacts = Array.isArray(schedule?.publishArtifacts) && schedule.publishArtifacts.length > 0
+				? schedule.publishArtifacts
+				: ["podcast"];
+			// Held so switching off and on again restores the time you chose
+			// rather than making you type it a second time. Client-side on
+			// purpose: it is a convenience, not a setting, and persisting it
+			// would mean a second place where the schedule's time is written
+			// down.
+			useEffect(() => {
+				if (schedule !== null && schedule.publishAt !== "") setLastAt(schedule.publishAt);
+			}, [schedule]);
 			const CARD = {
 				border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "12px",
 				background: "var(--dsw-specific-menu)", boxShadow: "var(--dsw-shadow-lv1)"
@@ -3768,17 +4151,38 @@ window.__ModuleLoader__.load({
 							jsxs("div", {
 								style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" },
 								children: [
-									jsx("span", {
+									// A switch, not a dot. The only way to turn this off used
+									// to be clearing the time field, which reads as editing a
+									// setting rather than as disabling a feature — and left no
+									// way back except retyping the time you had chosen.
+									jsx("button", {
+										type: "button",
+										role: "switch",
+										"aria-checked": armed,
+										"aria-label": zh ? "自动发布" : "Publish on a schedule",
+										onClick: () => { void saveSchedule({ publishAt: armed ? "" : (lastAt || "07:00") }); },
 										style: {
-											flex: "none", width: "7px", height: "7px", borderRadius: "50%",
-											background: armed ? `rgb(${accent})` : "var(--dsw-alias-border-l2)"
-										}
+											flex: "none", width: "34px", height: "19px", borderRadius: "10px",
+											border: "none", padding: 0, cursor: "pointer", position: "relative",
+											background: armed ? `rgb(${accent})` : "var(--dsw-alias-border-l2)",
+											transition: "background 160ms ease"
+										},
+										children: jsx("span", {
+											style: {
+												position: "absolute", top: "2px", left: armed ? "17px" : "2px",
+												width: "15px", height: "15px", borderRadius: "50%",
+												background: "#fff", boxShadow: "0 1px 2px #0000002e",
+												transition: "left 160ms ease"
+											}
+										})
 									}),
 									jsx("span", {
 										style: { fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
 										children: armed
-											? (zh ? `每天 ${schedule.publishAt} 自动生成一集` : `An episode every day at ${schedule.publishAt}`)
-											: (zh ? "自动发布已关闭" : "No standing order")
+											? (zh
+												? `每天 ${schedule.publishAt} 自动生成${armedArtifacts.map((id) => artifactChoices.find((c) => c.id === id)?.label ?? id).join("、")}`
+												: `${armedArtifacts.map((id) => artifactChoices.find((c) => c.id === id)?.label ?? id).join(" + ")} every day at ${schedule.publishAt}`)
+											: (zh ? "自动发布已关闭" : "Automatic publishing is off")
 									}),
 									jsx("span", { style: { flex: 1, minWidth: "8px" } }),
 									jsx("button", {
@@ -3788,7 +4192,7 @@ window.__ModuleLoader__.load({
 										onClick: () => { void runNow(); },
 										children: watchUntil !== 0 ? (zh ? "生成中…" : "Running…") : (zh ? "立即生成" : "Run now")
 									}),
-									jsx("button", {
+									!armed ? null : jsx("button", {
 										type: "button",
 										"aria-expanded": tuning,
 										style: { ...controlStyle(), height: "27px", fontSize: "12px" },
@@ -3799,9 +4203,26 @@ window.__ModuleLoader__.load({
 							}),
 							jsx("div", {
 								style: { marginTop: "8px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
-								children: scheduleNote(schedule, zh)
+								children: armed
+									? scheduleNote(schedule, zh)
+									: (zh
+										? "打开后每天自动做一集。手动生成不受影响。"
+										: "Turn it on to get one every day. Making them by hand still works.")
 							}),
-							!tuning ? null : jsxs("div", {
+							// What "Run now" did, separately from what the timer did.
+							// Pressing it and getting a legitimate skip used to
+							// produce nothing at all — no artefact and no message,
+							// which is indistinguishable from a broken button.
+							manualNote(schedule, zh) === "" ? null : jsx("div", {
+								style: {
+									marginTop: "7px", fontSize: "11px", lineHeight: "17px",
+									color: schedule.publishLastManualRun?.error === undefined
+										? "var(--dsw-alias-label-secondary)"
+										: "rgb(220,38,38)"
+								},
+								children: manualNote(schedule, zh)
+							}),
+							!tuning || !armed ? null : jsxs("div", {
 								style: {
 									display: "flex", alignItems: "flex-end", gap: "18px", flexWrap: "wrap",
 									marginTop: "13px", paddingTop: "13px", borderTop: "1px solid var(--dsw-alias-border-l1)"
@@ -3841,6 +4262,48 @@ window.__ModuleLoader__.load({
 												onChange: (event) => { setSchedule((previous) => ({ ...previous, publishMinutes: Number(event.target.value) || 2 })); },
 												onBlur: (event) => { void saveSchedule({ publishMinutes: Math.max(2, Math.min(20, Number(event.target.value) || 8)) }); },
 												style: NUM_INPUT
+											})
+										]
+									}),
+									// What the daily run makes. Chips rather than
+									// checkboxes because this is a small closed set and
+									// the state that matters — which are on — should be
+									// legible without reading each label's box.
+									jsxs("div", {
+										style: { display: "flex", flexDirection: "column", gap: "5px" },
+										children: [
+											jsx("span", { style: FIELD_LABEL, children: zh ? "每天生成" : "Produce" }),
+											jsx("div", {
+												style: { display: "flex", gap: "6px", flexWrap: "wrap", height: "30px", alignItems: "center" },
+												children: artifactChoices.map((choice) => {
+													const on = armedArtifacts.includes(choice.id);
+													return jsx("button", {
+														type: "button",
+														"aria-pressed": on,
+														onClick: () => {
+															// At least one, always. An armed schedule that
+															// produces nothing is a timer that runs every
+															// morning to do no work, and the run would fail
+															// with "nothing was armed to publish" — a state
+															// nobody would choose on purpose.
+															const next = on
+																? armedArtifacts.filter((id) => id !== choice.id)
+																: [...armedArtifacts, choice.id];
+															if (next.length === 0) return;
+															void saveSchedule({ publishArtifacts: next });
+														},
+														style: {
+															appearance: "none", cursor: "pointer", font: "inherit",
+															height: "26px", padding: "0 11px", borderRadius: "999px", fontSize: "12px",
+															border: `1px solid ${on ? `rgba(${accent}, 0.45)` : "var(--dsw-alias-border-l2)"}`,
+															background: on ? `rgba(${accent}, 0.09)` : "transparent",
+															color: on ? `rgb(${accent})` : "var(--dsw-alias-label-secondary)",
+															fontWeight: on ? 600 : 400,
+															transition: "background 140ms ease, color 140ms ease"
+														},
+														children: choice.label
+													}, choice.id);
+												})
 											})
 										]
 									})
@@ -4193,6 +4656,94 @@ window.__ModuleLoader__.load({
 				]
 			});
 		}
+		/**
+		* 发布 is a group, not a page.
+		*
+		* Publishing is not one shape. The same selection of sources becomes a
+		* podcast for the commute, a digest for the two minutes before a
+		* meeting, or a report for the afternoon that needs the synthesis — and
+		* all three share everything up to the last step: choose sources, gather
+		* their substance, ask a model, store the artefact, list it, schedule
+		* it. Only the ending differs.
+		*
+		* Formats are discovered from the Host rather than listed here, so
+		* adding one is a change in one place. The podcast is not among them
+		* because it is not a written document: it has voices, a render job,
+		* and an RSS feed, and folding it into the same component would mean a
+		* component with two unrelated halves and a flag choosing between them.
+		*/
+		function PublishTab({ zh }) {
+			const [formats, setFormats] = useState([]);
+			const [active, setActive] = useState("podcast");
+
+			useEffect(() => {
+				let live = true;
+				fetch(`${apiBase()}/publish/formats`)
+					.then((response) => response.json())
+					.then((payload) => {
+						if (!live || payload?.success !== true) return;
+						setFormats(payload.data.formats);
+					})
+					.catch(() => {
+						// Without the list the podcast still works, which is the
+						// format that has an audience waiting on a feed.
+					});
+				return () => { live = false; };
+			}, []);
+
+			const entries = [
+				{ id: "podcast", label: zh ? "播客" : "Podcast", accent: KINDS.find((k) => k.id === "youtube")?.hue ?? "220,38,38" },
+				...formats.map((format, at) => ({
+					id: format.id,
+					label: zh ? format.zh : format.en,
+					// A colour per format, taken from the palette the source
+					// kinds already use, so the whole panel stays one family.
+					accent: (KINDS[(at + 1) % KINDS.length] ?? KINDS[0]).hue,
+					format,
+				})),
+			];
+			const current = entries.find((entry) => entry.id === active) ?? entries[0];
+
+			return jsxs("div", {
+				children: [
+					// A segmented control rather than a second row of underlined
+					// tabs: these sit directly below the panel's own tab bar, and
+					// two rows of the same treatment read as one confused
+					// navigation with no hierarchy between them.
+					jsx("div", {
+						role: "tablist",
+						style: {
+							display: "inline-flex", gap: "2px", padding: "3px", marginBottom: "16px",
+							background: "var(--dsw-alias-interactive-bg-hover)", borderRadius: "10px"
+						},
+						children: entries.map((entry) => jsx("button", {
+							type: "button",
+							role: "tab",
+							"aria-selected": entry.id === current.id,
+							onClick: () => { setActive(entry.id); },
+							style: {
+								appearance: "none", border: "none", cursor: "pointer", font: "inherit",
+								padding: "0 14px", height: "28px", borderRadius: "8px", fontSize: "12px",
+								fontWeight: entry.id === current.id ? 600 : 400,
+								background: entry.id === current.id ? "var(--dsw-specific-menu)" : "transparent",
+								color: entry.id === current.id ? `rgb(${entry.accent})` : "var(--dsw-alias-label-secondary)",
+								boxShadow: entry.id === current.id ? "var(--dsw-shadow-lv1)" : "none",
+								transition: "background 140ms ease, color 140ms ease"
+							},
+							children: entry.label
+						}, entry.id))
+					}),
+
+					current.id === "podcast"
+						? jsx(PodcastFormat, { zh })
+						// Keyed by format so switching between digest and report
+						// remounts rather than carrying one format's selection and
+						// document list into the other.
+						: jsx(DocumentFormat, { zh, format: current.format, accent: current.accent }, current.id)
+				]
+			});
+		}
+
 		//#endregion
 
 		//#region page tabs
