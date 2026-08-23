@@ -73,12 +73,20 @@ window.__ModuleLoader__.load({
 		//#region plugin
 		/** Required service: the UI slot registry. */
 		const inject = ["slots"];
+		/**
+		* Rank that wins a contested brand seat. Lower renders; these are single
+		* slots, so an equal rank is a COLLISION that takes the whole UI down
+		* rather than a second occupant. `@linxin666/dsh-liangshen` claims
+		* `sidebar.brand.mark` from 0.2.9, which a `^0.2.1` profile picks up on a
+		* fresh install — this is what that looked like.
+		*/
+		const SHADOW = -1;
 		/** Fill every shipped brand slot as one declaration-aware registration set. */
 		function apply(ctx) {
 			ctx.slots.inject("sidebar.brand.mark", () => ctx.slots.inject("sidebar.brand.name", () => ctx.slots.inject("conversation.hero.brand.mark", function* () {
-				yield ctx.slots.register({ name: "sidebar.brand.mark" }, MyBrandMark);
-				yield ctx.slots.register({ name: "sidebar.brand.name" }, MyBrandName);
-				yield ctx.slots.register({ name: "conversation.hero.brand.mark" }, MyBrandMark);
+				yield ctx.slots.register({ name: "sidebar.brand.mark", priority: SHADOW }, MyBrandMark);
+				yield ctx.slots.register({ name: "sidebar.brand.name", priority: SHADOW }, MyBrandName);
+				yield ctx.slots.register({ name: "conversation.hero.brand.mark", priority: SHADOW }, MyBrandMark);
 			})));
 		}
 		//#endregion
