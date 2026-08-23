@@ -67,6 +67,31 @@ function itemLink(block) {
   return tagText(block, "link");
 }
 
+/**
+ * Resolve an item's link against the feed it came from.
+ *
+ * A `<link>` is allowed to be relative, and some feeds use that — Stanford AI
+ * Lab publishes `/blog/linkbert/`. Stored verbatim it becomes a row that can
+ * never be opened, and the failure is invisible at collection time because
+ * there is nothing malformed about the string. Resolution has to be against
+ * the feed's own URL, not against its origin: a feed served from a
+ * subdirectory would otherwise send every item to the wrong path.
+ * @param link - the item's link, possibly relative.
+ * @param baseUrl - the feed's URL.
+ * @returns an absolute URL, or an empty string when none can be formed.
+ */
+export function absoluteLink(link, baseUrl) {
+  const raw = String(link ?? "").trim();
+  if (raw === "") return "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (baseUrl === undefined) return "";
+  try {
+    return new URL(raw, baseUrl).toString();
+  } catch {
+    return "";
+  }
+}
+
 /** Normalize a feed date to an ISO string, or undefined. */
 function isoDate(value) {
   if (value === "") return undefined;
@@ -85,14 +110,14 @@ function isoDate(value) {
  * @param options - `{ type, sourceType }` stamped on every row.
  * @returns the parsed rows.
  */
-export function parseFeed(xml, { type = "BLOG", sourceType } = {}) {
+export function parseFeed(xml, { type = "BLOG", sourceType, baseUrl } = {}) {
   const blocks = [
     ...String(xml).matchAll(/<item(?:\s[^>]*)?>([\s\S]*?)<\/item>/gi),
     ...String(xml).matchAll(/<entry(?:\s[^>]*)?>([\s\S]*?)<\/entry>/gi),
   ];
   const rows = [];
   for (const [, block] of blocks) {
-    const url = itemLink(block);
+    const url = absoluteLink(itemLink(block), baseUrl);
     const title = plainText(tagText(block, "title"));
     if (url === "" || title === "") continue;
     const summary = plainText(tagText(block, "description", "summary", "content"));
@@ -122,7 +147,13 @@ export function parseFeed(xml, { type = "BLOG", sourceType } = {}) {
 export async function collectFeed({ url, type = "BLOG", sourceType }) {
   const response = await fetch(url, { headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" } });
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
-  return parseFeed(await response.text(), { type, sourceType: sourceType ?? new URL(url).hostname.replace(/^www\./, "") });
+  // `response.url`, not the requested one: a feed that redirects moves the
+  // base a relative link has to resolve against.
+  return parseFeed(await response.text(), {
+    type,
+    baseUrl: response.url === "" ? url : response.url,
+    sourceType: sourceType ?? new URL(url).hostname.replace(/^www\./, ""),
+  });
 }
 
 /** arXiv landing page, as its paper. */

@@ -15,13 +15,14 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { SourceStore, RESOURCE_TYPES } from "./store.js";
 import { COLLECTORS, runCollector } from "./collect.js";
 import { registerLibraryTool } from "./tool.js";
 import { resolveTranscript, listCaptionTracks, transcriptFromXml, fetchVideoDetails } from "./transcript.js";
 import { translateBatch, isSupportedLanguage, BATCH_SIZE, TARGET_LANGUAGES } from "./translate.js";
 import { admissibleUrl, fetchDocument, readableText, readArticle, displayModeOf, documentUrlOf } from "./proxy.js";
+import { sourceFeeds } from "./sources.js";
 
 /** Route prefix this plugin owns on the dsh web server. */
 const ROUTE_PREFIX = "/swarm-api";
@@ -107,6 +108,16 @@ export function storePath(env = process.env) {
  */
 export function writeStorePointer(path, env = process.env) {
   writeFileSync(join(resolveDshHome(env), LOCATION_POINTER), `${path}\n`, "utf8");
+}
+
+/**
+ * Where locally held thumbnails live: beside the database, so a library that
+ * is copied to another machine carries its images with it.
+ * @param env - process environment.
+ * @returns the absolute directory path.
+ */
+export function thumbnailDir(env = process.env) {
+  return join(dirname(storePath(env)), "thumbnails");
 }
 
 /** Upstream origin for the seed action, without a trailing slash. */
@@ -213,8 +224,13 @@ const DEFAULT_JOBS = [
   { collector: "hackernews", options: { query: "AI", max: 50, minPoints: 50 } },
 ];
 
-/** Minutes between automatic collection runs; 0 disables the timer. */
-const DEFAULT_COLLECT_INTERVAL_MINUTES = 0;
+// Minutes between automatic collection runs; 0 disables the timer.
+//
+// Hourly is what the reference uses for news and is comfortably slower than
+// any of these feeds publish. It is on by default because a source library
+// that only holds what was migrated into it stops being a source library the
+// day after the migration.
+const DEFAULT_COLLECT_INTERVAL_MINUTES = 60;
 
 /** Shortest interval accepted, so a misconfiguration cannot hammer a provider. */
 const MIN_COLLECT_INTERVAL_MINUTES = 15;
@@ -285,6 +301,32 @@ export function videoIdOf(url) {
     if (match !== null) return match[1];
   }
   return undefined;
+}
+
+/**
+ * Version stamp for the shipped roster. Bumping it re-installs the roster over
+ * whatever is stored.
+ */
+const ROSTER_VERSION = 1;
+
+/**
+ * Install the shipped source roster the first time, and never again.
+ *
+ * Seeding on every boot — which is what the reference does — means an operator
+ * cannot remove a source: it comes back on restart. Stamping the version makes
+ * this a one-time migration, so the roster is a starting point rather than
+ * something the plugin keeps re-asserting over the operator's edits.
+ * @param store - the source library.
+ * @param logger - Cordis logger.
+ * @returns true when the roster was installed by this call.
+ */
+export function ensureSourceRoster(store, logger) {
+  if (Number(store.getSetting("rosterVersion", 0)) >= ROSTER_VERSION) return false;
+  const feeds = sourceFeeds();
+  store.setSetting("feeds", feeds);
+  store.setSetting("rosterVersion", ROSTER_VERSION);
+  logger?.info?.(`swarm: installed ${feeds.length} source feed(s)`);
+  return true;
 }
 
 /**
@@ -935,6 +977,40 @@ export function createHandler(store, logger, chat) {
       return;
     }
 
+    // ── locally held thumbnails ─────────────────────────────────────────
+    //
+    // The upstream stores paper thumbnails in R2 and hands out 7-day SigV4
+    // presigned URLs. A migrated library therefore carries links that expire
+    // a week after the migration and cannot be re-signed without the bucket's
+    // credentials, which we do not have. The images were copied beside the
+    // database instead, and this route serves them from there — so the
+    // library stays whole on its own, which is the entire point of migrating
+    // it off a service that is being retired.
+    if (req.method === "GET" && path.startsWith("/thumbnail/")) {
+      const id = decodeURIComponent(path.slice("/thumbnail/".length));
+      // The id is a path segment, so a traversal attempt has to be refused
+      // rather than normalised: `..` here would read outside the store.
+      if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+        sendJson(res, 400, { success: false, error: "malformed thumbnail id" });
+        return;
+      }
+      const file = join(thumbnailDir(), `${id}.jpg`);
+      if (!existsSync(file)) {
+        sendJson(res, 404, { success: false, error: "no such thumbnail" });
+        return;
+      }
+      const body = readFileSync(file);
+      res.writeHead(200, {
+        "content-type": "image/jpeg",
+        "content-length": body.byteLength,
+        // Immutable: the file is named by a resource id and is only ever
+        // replaced wholesale.
+        "cache-control": "public, max-age=604800, immutable",
+      });
+      res.end(body);
+      return;
+    }
+
     // ── transcript translation ──────────────────────────────────────────
     if (req.method === "GET" && path === "/transcript/translation") {
       const resourceId = query.get("resourceId") ?? "";
@@ -1071,6 +1147,9 @@ export function apply(ctx) {
   });
   // Agents reach the same library the page reads: one store, two faces.
   registerLibraryTool(ctx, store);
+  // Before the timer: a first run with an empty roster would collect nothing
+  // and log a success.
+  ensureSourceRoster(store, ctx.logger);
   const stopTimer = startCollectionTimer(store, ctx.logger);
   ctx.on("dispose", () => {
     stopTimer();
