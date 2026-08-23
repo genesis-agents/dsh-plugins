@@ -1,2 +1,7 @@
+# msedge-tts ships a build script. pnpm blocks those by default and prints
+# ERR_PNPM_IGNORED_BUILDS, which does NOT fail the install — the package lands
+# unbuilt and only fails later, at the first attempt to speak. Approving it here
+# means a fresh clone on a new machine produces working audio rather than an
+# install that looked clean.
 allowBuilds:
-  msedge-tts: set this to true or false
+  msedge-tts: true

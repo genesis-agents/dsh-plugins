@@ -1,10 +1,11 @@
 # Running everything on the Mac mini
 
-Written against this deployment: a Windows desktop that has been the host, and
-a Mac mini that should take over. **Untested** — it is derived from how this
-installation is actually wired, not from having run it there. Every step says
-what to check, so a wrong assumption surfaces at that step rather than three
-steps later.
+**Done.** This describes a migration that was carried out, on
+`genesiss-mac-mini` (macOS 26.3.1, Apple Silicon, 16 GB), reached over
+Tailscale at `100.92.251.1` as user `genesis`. Where the first draft of this
+guide guessed wrong, the step now says what actually worked and what the wrong
+version looked like — those are the parts worth reading if you do it again on
+another machine.
 
 ## Why move at all
 
@@ -23,39 +24,76 @@ machine as the process that writes it. **Do not put the SQLite file on a
 network share** — the store opens it in WAL mode, and WAL does not work over a
 network filesystem. It needs shared memory that SMB and NFS cannot provide.
 
-## What has to move
+## What moved
 
-| | Where it is now | Notes |
-|---|---|---|
-| The library | `D:\engineering\dsh-db\swarm-sources.sqlite` | 82 MB; 20,696 rows. The only copy. |
-| Paper thumbnails | `D:\engineering\dsh-db\thumbnails\` | 150 files. Rescued from presigned URLs that have since expired — not re-fetchable. |
-| Episodes | `D:\engineering\dsh-db\episodes\` | Created by the publish tab, beside the database for the same reason. |
-| Plugins | `D:\engineering\dsh-plugins\` | Clone from GitHub instead of copying. |
-| Profile | `~/.dsh/profiles/web/` | `package.json` names Windows paths — see below. |
-| Settings | `~/.dsh/settings.yaml` | **Holds API keys.** Move it deliberately, not with a bulk copy. |
-| Presets | `~/.dsh/.agent-presets/` | `dsh-agent-presets` republishes its own at boot; anything hand-edited there is not in git. |
+| | From | To | Verified |
+|---|---|---|---|
+| The library | `D:\engineering\dsh-db\swarm-sources.sqlite` | `~/engineering/dsh-db/` | `integrity_check: ok`, 20,696 rows |
+| Paper thumbnails | `D:\engineering\dsh-db\thumbnails\` | beside the library | 150 files. Rescued from presigned URLs that have since expired — **not re-fetchable** |
+| Episodes | `D:\engineering\dsh-db\episodes\` | beside the library | 3 files, playable over the RSS enclosure |
+| Plugins | `D:\engineering\dsh-plugins\` | cloned from GitHub | 13/13 tests pass on arm64 |
+| Profile | `~/.dsh/profiles/web/` | rewritten with macOS paths | all four are real symlinks |
+| Settings + credentials | `~/.dsh/settings.yaml`, `~/.dsh/.credentials.yaml` | same paths | search returns `via: "seam"` |
+| Presets | `~/.dsh/.agent-presets/` | republished at boot | `dsh-agent-presets` writes its own |
+
+The database is not a copy to keep in sync — it is **the** library now. The
+Windows copy at `D:\engineering\dsh-db\` is a point-in-time snapshot from the
+moment of the move and goes stale immediately. Do not run collection on both.
 
 ## Steps
 
+The machine started bare: no Node, no pnpm, no Homebrew, no `~/.dsh`.
+Everything below installs into the user's own directory, so none of it needs
+an administrator password. That matters more than it sounds — the one step
+that DOES need `sudo` is the one still outstanding at the bottom.
+
 ### 1. Node
 
-`node:sqlite` is used unguarded, so Node 24 or newer. Check first:
+`node:sqlite` is used unguarded, so Node 24 or newer. Installed from the
+official arm64 tarball rather than Homebrew, which would have meant installing
+Homebrew and the Xcode command line tools first:
 
 ```sh
-node --version   # must be >= 24
+V=$(curl -fsSL https://nodejs.org/dist/index.json     | python3 -c "import json,sys;print([r['version'] for r in json.load(sys.stdin) if r['version'].startswith('v24.')][0])")
+mkdir -p ~/.local/node
+curl -fsSL "https://nodejs.org/dist/$V/node-$V-darwin-arm64.tar.xz"   | tar -xJ -C ~/.local/node --strip-components=1
+echo 'export PATH="$HOME/.local/node/bin:$PATH"' >> ~/.zprofile
 ```
 
-### 2. The repositories
+Put it on `PATH` in the same breath. Without that, `node` itself runs but
+`npm` does not: npm's shebang is `#!/usr/bin/env node`, so it fails with
+`env: node: No such file or directory` — which reads like a broken install
+rather than a missing `PATH` entry.
+
+### 2. The harness and the plugins
+
+The harness does not have to be cloned. It publishes as `@deepseek-ai/dsh`,
+same version as the working checkout:
 
 ```sh
+npm config set allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs --location=user
+npm i -g pnpm @deepseek-ai/dsh
 git clone https://github.com/genesis-agents/dsh-plugins.git ~/engineering/dsh-plugins
-cd ~/engineering/dsh-plugins/dsh-agents-swarm && pnpm install
-cd ../dsh-web-search-serper && npm install
+for p in dsh-agents-swarm dsh-web-search-serper dsh-brand-mine dsh-agent-presets; do
+  (cd ~/engineering/dsh-plugins/$p && pnpm install)
+done
 ```
+
+The `allow-scripts` line is not optional and is easy to skip: npm blocks build
+scripts for `node-pty` and `koffi` — both native — and reports it as a
+*warning* while exiting 0. The install looks fine and the failure arrives later.
+`msedge-tts` has the same shape on the pnpm side, which is why
+`dsh-agents-swarm/pnpm-workspace.yaml` now approves it in the repo.
 
 `dsh-agents-swarm` needs its own dependencies (`jsdom`, `@mozilla/readability`,
 `turndown`, `msedge-tts`) because a linked plugin resolves from its real path,
 not from the profile.
+
+Check the plugin runs on this architecture before going further:
+
+```sh
+cd ~/engineering/dsh-plugins/dsh-agents-swarm && node --test tests/*.test.mjs
+```
 
 ### 3. The library
 
@@ -87,63 +125,79 @@ no separate configuration — which is exactly why they live beside it.
 ### 5. The profile
 
 Recreate rather than copy: `~/.dsh/profiles/web/package.json` names
-`link:D:/engineering/...`, and those paths do not exist on macOS. Edit the
-dependency values to the new absolute paths, then re-link. On macOS the links
-are ordinary symlinks:
+`link:D:/engineering/...`, and those paths do not exist on macOS. Write the
+same file with macOS paths, then let pnpm build the links — do NOT hand-link
+with `ln -sfn`, which the first draft of this guide said to do. `pnpm install`
+in the profile directory creates them from the `link:` values, and doing it by
+hand leaves `node_modules/.pnpm` disagreeing with what is on disk.
 
 ```sh
-cd ~/.dsh/profiles/web/node_modules
-ln -sfn ~/engineering/dsh-plugins/dsh-agents-swarm      dsh-agents-swarm
-ln -sfn ~/engineering/dsh-plugins/dsh-brand-mine        dsh-brand-mine
-ln -sfn ~/engineering/dsh-plugins/dsh-agent-presets     dsh-agent-presets
-ln -sfn ~/engineering/dsh-plugins/dsh-web-search-serper dsh-web-search-serper
-ls -la | grep dsh-          # every one must show as l… ->, not d…
+mkdir -p ~/.dsh/profiles/web
+# same package.json, with link:/Users/<you>/engineering/dsh-plugins/<plugin>
+cd ~/.dsh/profiles/web && pnpm install
+ls -la node_modules | grep dsh-     # every one must show as l… ->, not d…
 ```
 
 That last check is not ceremony. On the Windows box `ln -s` under Git Bash
 produced a real directory **copy** instead of a link, and the result was a
 plugin frozen at the moment it was created — it loaded, reported itself
-enabled, and ran stale code for an hour before the cause was found.
+enabled, and ran stale code for an hour before the cause was found. On macOS
+they come out as real symlinks.
 
 ### 6. Keys
 
-Copy the values, not the file — `settings.yaml` on the Mac will accumulate its
-own state. The ones that matter:
+Two files, and the second is the one that is easy to miss:
 
-```yaml
-web-search:
-  active: serper
-  backends:
-    serper:
-      apiKey: ...
+| File | Holds |
+|---|---|
+| `~/.dsh/settings.yaml` | the Serper key, the model *choice*, the locale |
+| `~/.dsh/.credentials.yaml` | `OPENAI_API_KEY` and `DEEPSEEK_API_KEY` |
+
+`settings.yaml` names the model provider but not its key — it says
+`apiKeyEnv: OPENAI_API_KEY`, and the value lives in `.credentials.yaml`
+(leading dot, easy to miss in an `ls`). Move that one too, or the library
+comes up fine, serves every row, and then fails at the first translation or
+script with nothing obviously wrong.
+
+```sh
+scp ~/.dsh/settings.yaml ~/.dsh/.credentials.yaml you@mac:/Users/you/.dsh/
+ssh you@mac 'chmod 600 ~/.dsh/settings.yaml ~/.dsh/.credentials.yaml'
 ```
 
-Or export them in the launch environment instead (`SERPER_API_KEY`), which
-keeps them out of a file that gets backed up.
+Neither file holds a Windows path, so they transfer as they are.
+
+### 7. Start it
+
+```sh
+dsh web --no-open
+```
+
+Not `dsh --profile web web` and not `dsh web --profile web`: `web` IS the alias
+for `--profile web`, and passing both gives
+`web takes none of parent --profile, --patch, ...` or `unknown option
+'--profile'`. Both errors go to the log, not the terminal, if you started it
+with `nohup`.
 
 ## Reaching it from the Windows box
 
-**Use an SSH tunnel. Do not bind to `0.0.0.0`.**
+Tailscale is installed on both. The Mac is `genesiss-mac-mini` /
+`100.92.251.1`. Tunnel the port rather than binding it:
 
 ```sh
-ssh -N -L 3080:127.0.0.1:3080 you@macmini.local
+ssh -N -L 3080:127.0.0.1:3080 genesis@100.92.251.1
 ```
 
 Then open `http://127.0.0.1:3080` on Windows as before. The harness keeps
 listening only on loopback, the browser still sees a loopback origin, and the
-`/api` trust fence needs no exception.
+`/api` trust fence needs no exception. Because it goes over the tailnet, the
+same command works from outside the house.
 
-`dsh --profile web --host 0.0.0.0 --trusted-host macmini.local:3080` also
-works and needs no tunnel. It is offered here only to be dismissed. This
-deployment runs the `danger-full-access` permission preset, which is an agent
-with a shell; binding it to the network publishes that shell with nothing in
-front of it. A home network is not a safe room — it holds guests' phones and
-appliances that receive firmware from their vendors — and the tunnel costs one
-command.
-
-From outside the house, add Tailscale rather than forwarding a port on the
-router. It reaches the machine without opening anything to the internet, and
-the same tunnel command then works from anywhere.
+`dsh web --host 0.0.0.0 --trusted-host ...` also works and needs no tunnel. It
+is mentioned here only to be dismissed. This deployment runs the
+`danger-full-access` permission preset, which is an agent with a shell; binding
+it to the network publishes that shell with nothing in front of it. A home
+network is not a safe room — it holds guests' phones and appliances that
+receive firmware from their vendors — and the tunnel costs one command.
 
 ## What a home machine changes, and what it does not
 
@@ -180,36 +234,55 @@ mean a different company's data centre.
   <key>Label</key><string>team.genesis.dsh</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/node</string>
-    <string>--import</string><string>tsx/esm</string>
-    <string>apps/cli/src/bin.ts</string>
-    <string>web</string><string>--no-open</string>
+    <string>/Users/genesis/.local/node/bin/node</string>
+    <string>/Users/genesis/.local/node/bin/dsh</string>
+    <string>web</string>
+    <string>--no-open</string>
   </array>
-  <key>WorkingDirectory</key><string>/Users/you/engineering/deepseek-harness</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/Users/genesis/.local/node/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key><string>/Users/genesis</string>
+  </dict>
+  <key>WorkingDirectory</key><string>/Users/genesis</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/Users/you/Library/Logs/dsh.log</string>
-  <key>StandardErrorPath</key><string>/Users/you/Library/Logs/dsh.err</string>
+  <key>StandardOutPath</key><string>/Users/genesis/Library/Logs/dsh.log</string>
+  <key>StandardErrorPath</key><string>/Users/genesis/Library/Logs/dsh.err</string>
 </dict>
 </plist>
 ```
 
+Node is named explicitly as the program, with `dsh` as its first argument, and
+`PATH` is set in `EnvironmentVariables`. launchd does not read `.zprofile`, so
+a plist that just says `dsh` finds nothing — and a Node installed under
+`~/.local` is not on the default `PATH` either.
+
 ```sh
-launchctl load ~/Library/LaunchAgents/team.genesis.dsh.plist
+plutil -lint ~/Library/LaunchAgents/team.genesis.dsh.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/team.genesis.dsh.plist
 ```
 
-Then stop the Mac from sleeping, or the timer stops with it:
+`bootstrap`/`bootout`, not `load`/`unload` — the latter still works but is
+deprecated and reports failures less clearly. Kill the process once and watch
+it come back; `KeepAlive` that has never been tested is a guess:
+
+```sh
+kill -9 $(pgrep -f 'dsh web'); sleep 3
+curl -s localhost:3080/swarm-api/stats     # answers again within a couple of seconds
+```
+
+### Sleep — the one step still outstanding
 
 ```sh
 sudo pmset -a sleep 0 disablesleep 1
 ```
 
-Both timers are wall-clock aware in different ways, and the difference matters
-on a machine that occasionally goes down. Collection runs on an interval, so a
-restart restarts its clock. The daily episode runs at a *time*, and a run
-missed while the machine was off is caught up when it comes back — but only
-within six hours, so booting at noon does not produce the 07:00 episode. Set a
-time that is inside the window you expect the machine to be up.
+This needs an administrator password and has NOT been run. `pmset -g` currently
+reports `sleep 0 (sleep prevented by Claude)`, which is an *assertion held by a
+running application*, not a setting: if that application quits, the machine
+becomes free to sleep again, and both timers stop with it. Everything else here
+survives a reboot; this does not survive an app quitting.
 
 ## Checking it actually works
 
