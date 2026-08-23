@@ -38,7 +38,7 @@ if you happen to have one.
 Two steps, and the second one is easy to miss.
 
 ```sh
-dsh plugin --profile web add @genesis-agents/dsh-agents-swarm
+dsh plugin --profile web add @ai4gensteam/dsh-agents-swarm
 ```
 
 That is `pnpm add` in your profile directory — it puts the plugin in
@@ -52,7 +52,7 @@ to the bundle list in `~/.dsh/profiles/web/package.json`:
       "bundles": [
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
-        "@genesis-agents/dsh-agents-swarm"
+        "@ai4gensteam/dsh-agents-swarm"
       ]
     }
   }
