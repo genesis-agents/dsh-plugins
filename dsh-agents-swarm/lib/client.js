@@ -259,6 +259,66 @@ window.__ModuleLoader__.load({
 		//#endregion
 
 		/**
+		* The byline row: who published this, who wrote it, how long it takes.
+		*
+		* Reading time is characters over 1000 a minute, which is what the
+		* reference uses. Words per minute would be the usual measure, but the
+		* library holds Chinese as well as English and a "word" is not a unit
+		* those two share — characters are.
+		* @param row - the stored resource.
+		* @param reader - the extracted article.
+		* @param zh - whether the interface is Chinese.
+		* @returns the parts, in order, without separators.
+		*/
+		function bylineParts(row, reader, zh) {
+			const parts = [];
+			// The publication first, then the author. The library derives its
+			// "source" from the first author or the hostname, so on a post with a
+			// named author that slot holds the person and the masthead is lost
+			// entirely — the page's own `og:site_name` is the one a reader knows.
+			const site = typeof reader?.siteName === "string" ? reader.siteName.trim() : "";
+			const source = site !== "" ? site : sourceNameOf(row);
+			if (source !== "") parts.push(source);
+			// Readability finds a byline on maybe half of pages; the row carries
+			// one from the feed for most of the rest. Losing the author because
+			// the extractor happened not to find it would be a step backwards
+			// from what the card already showed.
+			const extracted = typeof reader?.byline === "string" ? reader.byline.trim() : "";
+			const authors = Array.isArray(row.authors) ? row.authors : [];
+			const stored = typeof authors[0]?.name === "string" ? authors[0].name.trim() : "";
+			const byline = extracted !== "" ? extracted : stored;
+			if (byline !== "" && byline !== source) parts.push(byline);
+			const text = typeof reader?.text === "string" ? reader.text : "";
+			if (text.length > 0) {
+				const minutes = Math.max(1, Math.ceil(text.length / 1000));
+				parts.push(zh ? `约 ${minutes} 分钟读完` : `${minutes} min read`);
+			}
+			if (typeof row.publishedAt === "string" && row.publishedAt !== "") parts.push(formatDate(row.publishedAt));
+			return parts;
+		}
+
+		/**
+		* The lead paragraph shown above the divider.
+		*
+		* Readability's own excerpt first — it is drawn from the page's
+		* description meta and describes THIS article — then whatever summary
+		* the library already holds. Skipped when it merely repeats the opening
+		* of the body, which would make the reader read the same sentence twice.
+		* @param row - the stored resource.
+		* @param reader - the extracted article.
+		* @returns the lead text, or an empty string.
+		*/
+		function articleLead(row, reader) {
+			const excerpt = typeof reader?.excerpt === "string" ? reader.excerpt.trim() : "";
+			const lead = excerpt !== "" ? excerpt : summaryOf(row);
+			if (lead === "") return "";
+			const body = typeof reader?.text === "string" ? reader.text.trim() : "";
+			const head = lead.slice(0, 60);
+			if (head !== "" && body.slice(0, 200).includes(head)) return "";
+			return lead;
+		}
+
+		/**
 		* The text this row already carries, for when its document cannot be
 		* reached. Not a substitute for the article, but better than a page
 		* that says only that something went wrong.
@@ -803,11 +863,29 @@ window.__ModuleLoader__.load({
 		const MD_HEADING_SIZES = { 1: "17px", 2: "15px", 3: "14px", 4: "13px" };
 
 		/**
+		* Typography for a read, as opposed to a chat answer.
+		*
+		* One renderer serves both, and they want opposite things: an answer in a
+		* 400px panel wants to be compact, an article wants to be comfortable.
+		* The article numbers match the reference measured directly from its
+		* reader — 18px on 1.75, paragraphs 20px apart, headings in Georgia.
+		* Its serif is a system stack, not a downloaded face, so this costs
+		* nothing and cannot fail to load.
+		*/
+		const ARTICLE_SERIF = 'Georgia, "Times New Roman", "Songti SC", "SimSun", serif';
+		const ARTICLE_BLOCK = { margin: "0 0 20px", lineHeight: "1.75" };
+		const ARTICLE_HEADING_SIZES = { 1: "24px", 2: "20px", 3: "18px", 4: "17px" };
+
+		/**
 		* Render a Markdown document as React nodes.
 		* @param source - the raw answer text.
+		* @param variant - `"chat"` for a panel answer, `"article"` for a read.
 		* @returns an array of block elements.
 		*/
-		function renderMarkdown(source) {
+		function renderMarkdown(source, variant = "chat") {
+			const article = variant === "article";
+			const block = article ? ARTICLE_BLOCK : MD_BLOCK;
+			const headingSizes = article ? ARTICLE_HEADING_SIZES : MD_HEADING_SIZES;
 			const lines = String(source ?? "").split("\n");
 			const blocks = [];
 			let paragraph = [];
@@ -819,7 +897,7 @@ window.__ModuleLoader__.load({
 				if (paragraph.length === 0) return;
 				const text = paragraph.join(" ");
 				blocks.push(jsx("p", {
-					style: { ...MD_BLOCK, color: "var(--dsw-alias-label-secondary)" },
+					style: { ...block, color: article ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)" },
 					children: renderInline(text, `p${key}`)
 				}, `p${key++}`));
 				paragraph = [];
@@ -827,11 +905,11 @@ window.__ModuleLoader__.load({
 			const flushList = () => {
 				if (list === null) return;
 				const items = list.items.map((item, at) => jsx("li", {
-					style: { margin: "0 0 5px" },
+					style: article ? { margin: "0 0 8px", lineHeight: "1.7" } : { margin: "0 0 5px" },
 					children: renderInline(item, `l${key}-${at}`)
 				}, `l${key}-${at}`));
 				blocks.push(jsx(list.ordered ? "ol" : "ul", {
-					style: { ...MD_BLOCK, paddingLeft: "20px", color: "var(--dsw-alias-label-secondary)" },
+					style: { ...block, paddingLeft: "24px", color: article ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)" },
 					children: items
 				}, `list${key++}`));
 				list = null;
@@ -877,10 +955,11 @@ window.__ModuleLoader__.load({
 					const level = heading[1].length;
 					blocks.push(jsx(`h${level}`, {
 						style: {
-							margin: blocks.length === 0 ? "0 0 8px" : "14px 0 8px",
-							fontSize: MD_HEADING_SIZES[level] ?? "13px",
-							fontWeight: 650,
-							lineHeight: "22px",
+							margin: blocks.length === 0 ? "0 0 8px" : article ? "32px 0 12px" : "14px 0 8px",
+							fontSize: (headingSizes[level] ?? (article ? "17px" : "13px")),
+							fontWeight: article ? 700 : 650,
+							lineHeight: article ? "1.3" : "22px",
+							...(article && level <= 2 ? { fontFamily: ARTICLE_SERIF } : {}),
 							color: "var(--dsw-alias-label-primary)"
 						},
 						children: renderInline(heading[2], `h${key}`)
@@ -2077,7 +2156,7 @@ window.__ModuleLoader__.load({
 								? jsx("div", { style: NOTE_STYLE, children: zh ? "提取正文中…" : "Extracting article…" })
 								: jsx("div", {
 									style: { flex: 1, minHeight: 0, overflowY: "auto", padding: "4px 2px" },
-									children: jsx("article", {
+									children: jsxs("article", {
 										// A measure cap keeps prose readable, but pinned to
 										// the left it leaves a field of white beside the
 										// text when the reading column is collapsed —
@@ -2085,20 +2164,62 @@ window.__ModuleLoader__.load({
 										// Centring balances the margins, and the wider
 										// cap spends some of the reclaimed width on the
 										// text itself.
+										// A px measure, not a ch one: `ch` is the width of "0" and varies
+										// by face, so a ch cap silently changes meaning when the font
+										// does. The reference caps the column at 720px and lands around
+										// 68-75 characters a line, on 18px/1.75 — measured from its own
+										// reader. Ours was 14px on 24px, and those four pixels are most
+										// of why theirs reads better.
 										style: {
-											maxWidth: wide ? "104ch" : "88ch",
+											maxWidth: wide ? "860px" : "720px",
 											margin: "0 auto",
-											fontSize: "14px", lineHeight: "24px"
+											padding: "8px 24px 40px",
+											boxSizing: "border-box",
+											fontSize: "18px", lineHeight: "1.75",
+											color: "var(--dsw-alias-label-primary)"
 										},
-										// Readability hands back structure; rendering it as Markdown
-										// keeps the headings, lists, and links the article had.
-										// The degraded fallback has no markdown, only rough text.
-										children: reader.markdown !== "" && reader.markdown !== undefined
-											? renderMarkdown(reader.markdown)
-											: jsx("p", {
-												style: { margin: 0, whiteSpace: "pre-wrap", color: "var(--dsw-alias-label-secondary)" },
-												children: reader.text
-											})
+										children: [
+											// An article opens with its own title. The header row above
+											// truncates to fit beside the controls; here it has room.
+											jsxs("header", {
+												style: { marginBottom: "24px" },
+												children: [
+													jsx("h1", {
+														style: {
+															margin: "0 0 12px", fontFamily: ARTICLE_SERIF,
+															fontSize: "30px", fontWeight: 700, lineHeight: "1.375",
+															letterSpacing: "-0.025em", color: "var(--dsw-alias-label-primary)"
+														},
+														children: typeof reader.title === "string" && reader.title !== "" ? reader.title : row.title
+													}),
+													jsx("div", {
+														style: {
+															display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px",
+															fontSize: "14px", lineHeight: "20px", color: "var(--dsw-alias-label-secondary)"
+														},
+														children: bylineParts(row, reader, zh).flatMap((part, at) => (at === 0
+															? [jsx("span", { style: { fontWeight: 500 }, children: part }, `by${at}`)]
+															: [jsx("span", { children: "·" }, `dot${at}`), jsx("span", { children: part }, `by${at}`)]))
+													}),
+													articleLead(row, reader) === "" ? null : jsx("p", {
+														style: {
+															margin: "16px 0 0", paddingLeft: "16px",
+															borderLeft: `4px solid ${hue(kind)}`,
+															fontSize: "16px", fontStyle: "italic", lineHeight: "1.625",
+															color: "var(--dsw-alias-label-secondary)"
+														},
+														children: articleLead(row, reader)
+													}),
+													jsx("div", { style: { marginTop: "24px", borderBottom: "1px solid var(--dsw-alias-border-l2)" } })
+												]
+											}, "head"),
+											// Readability hands back structure; rendering it as Markdown
+											// keeps the headings, lists, and links the article had.
+											// The degraded fallback has no markdown, only rough text.
+											typeof reader.markdown === "string" && reader.markdown !== ""
+												? jsx("div", { children: renderMarkdown(reader.markdown, "article") }, "body")
+												: jsx("p", { style: { margin: 0, whiteSpace: "pre-wrap" }, children: reader.text }, "body")
+										]
 									})
 								})
 				]

@@ -129,6 +129,15 @@ export async function readArticle(html, url) {
   return {
     title: article.title ?? "",
     byline: article.byline ?? "",
+    // The publication, which Readability reads from `og:site_name`. The
+    // library's own idea of a source is the first author or the hostname,
+    // and neither is the masthead a reader recognises.
+    siteName: article.siteName ?? "",
+    // Readability's excerpt is the page's own description meta where there is
+    // one, and its opening otherwise. The reader shows it as a lead, which is
+    // what the reference does — and worth being clear about: it is the
+    // publisher's own line, not anything a model wrote.
+    excerpt: article.excerpt ?? "",
     markdown,
     text: (article.textContent ?? "").replace(BLANK_RUN, "\n\n").trim(),
   };
