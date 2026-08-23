@@ -1,7 +1,45 @@
-# dsh-web-search-serper
+# dsh-web-search
 
-Web search for the DSH web capability seam (`ctx.web`), over interchangeable
-backends: **Serper**, **Tavily**, and **Brave Search**.
+Web search for the DeepSeek Harness web capability seam (`ctx.web`), over
+interchangeable backends: **Serper**, **Tavily**, and **Brave Search**.
+
+The directory is still called `dsh-web-search-serper`, from when Serper was the
+only backend. The package is not: a name promising one provider while routing
+to three is a name that lies to whoever reads their dependency list.
+
+## Install
+
+Two steps, and the second one is easy to miss.
+
+```sh
+dsh plugin --profile web add @ai4gensteam/dsh-web-search
+```
+
+That is `pnpm add` in your profile directory — it installs the plugin and
+**does not enable it**. Nothing happens until it is in the bundle list in
+`~/.dsh/profiles/web/package.json`:
+
+```json
+{
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "@ai4gensteam/dsh-web-search"
+      ]
+    }
+  }
+}
+```
+
+Then start the harness and open **Settings → 搜索 / Search** to paste a key.
+Without one it registers, reports itself unconfigured, and every search fails
+with a message saying which key is missing — which is the honest behaviour, but
+it is not search.
+
+Any one backend is enough. Serper and Brave both have free tiers; Tavily is
+included because its answers carry short summaries some models use well.
 
 This is a **third-party plugin**. It imports nothing from the harness — every
 capability it needs is reached through `ctx` at runtime, which is what the seams
