@@ -175,21 +175,33 @@ export function createHandler(ctx, read, namespace) {
         sendJson(res, 200, { success: false, error: `no API key (looked in settings and $${text(own.apiKeyEnv) ?? backend.keyEnv})` });
         return;
       }
+      // Testing the ACTIVE backend goes through `ctx.web.search()` — the same
+      // entry point the model's `web_search` tool uses. That is the only way
+      // to prove the seam actually routes here: a test that called the backend
+      // directly would pass just as happily while `searchProvider` still named
+      // somebody else, which is precisely the failure worth catching.
+      //
+      // A non-active backend cannot be reached that way, because the seam runs
+      // one provider. Those fall back to the shared search function — the same
+      // code the provider calls, one layer in.
+      const isActive = backend.id === (text(section.active) ?? DEFAULT_BACKEND_ID);
+      const web = typeof ctx.get === "function" ? ctx.get("web") : undefined;
+      const throughSeam = isActive && web !== undefined && typeof web.search === "function";
       try {
-        // The same function a real search runs, not a parallel implementation
-        // that could pass while the real path fails.
         const started = Date.now();
-        const result = await searchWith(
-          backend,
-          {
-            apiKey,
-            baseURL: text(own.baseURL) ?? backend.defaultBaseURL,
-            ...text(own.country) !== undefined ? { country: text(own.country) } : {},
-            ...text(own.locale) !== undefined ? { locale: text(own.locale) } : {},
-            numResults: 3,
-          },
-          { query: "deepseek harness", maxResults: 3 },
-        );
+        const result = throughSeam
+          ? await web.search({ query: "deepseek harness", maxResults: 3 })
+          : await searchWith(
+            backend,
+            {
+              apiKey,
+              baseURL: text(own.baseURL) ?? backend.defaultBaseURL,
+              ...text(own.country) !== undefined ? { country: text(own.country) } : {},
+              ...text(own.locale) !== undefined ? { locale: text(own.locale) } : {},
+              numResults: 3,
+            },
+            { query: "deepseek harness", maxResults: 3 },
+          );
         sendJson(res, 200, {
           success: true,
           data: {
@@ -197,10 +209,12 @@ export function createHandler(ctx, read, namespace) {
             sample: result.sources[0]?.title ?? result.sources[0]?.url ?? "",
             answer: result.content ?? "",
             ms: Date.now() - started,
+            // Say which path ran. "It worked" means two different things here.
+            via: throughSeam ? "seam" : "backend",
           },
         });
       } catch (cause) {
-        sendJson(res, 200, { success: false, error: String(cause?.message ?? cause) });
+        sendJson(res, 200, { success: false, error: String(cause?.message ?? cause), via: throughSeam ? "seam" : "backend" });
       }
       return;
     }

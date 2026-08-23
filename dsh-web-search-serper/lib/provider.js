@@ -151,7 +151,7 @@ export class MultiSearchProvider {
     const apiKey = options.apiKey.length > 0 ? options.apiKey : await options.resolveApiKey?.() ?? "";
     if (apiKey === "") {
       throw new SearchError(
-        `${backend.label} has no API key: set ${backend.keyEnv}, or enter one under Settings → Web search`,
+        `${backend.label} has no API key: set ${backend.keyEnv}, or enter one under Settings → Search`,
         "WEB_PROVIDER_ERROR",
       );
     }

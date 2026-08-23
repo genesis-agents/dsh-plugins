@@ -286,7 +286,7 @@ window.__ModuleLoader__.load({
 			return jsxs("div", {
 				style: { padding: "4px 4px 32px", maxWidth: "680px" },
 				children: [
-					jsx("h3", { style: { ...HEADING, marginTop: "8px" }, children: zh ? "网页搜索" : "Web search" }),
+					jsx("h3", { style: { ...HEADING, marginTop: "8px" }, children: zh ? "搜索" : "Search" }),
 					jsx("p", {
 						style: HINT,
 						children: zh
@@ -323,7 +323,9 @@ window.__ModuleLoader__.load({
 				name: "settings.section",
 				id: "web-search",
 				order: 61,
-				label: () => (isChinese() ? "网页搜索" : "Web search"),
+				// Short, like every sibling in that column. The others are 模型 /
+				// 插件 / 信源; a two-word label reads as a different kind of thing.
+				label: () => (isChinese() ? "搜索" : "Search"),
 			}, WebSearchSettings));
 		}
 
