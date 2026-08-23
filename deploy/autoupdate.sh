@@ -18,6 +18,7 @@
 # minutes would collect nothing while reporting itself as collecting hourly.
 set -uo pipefail
 
+# Overridable so the same script can watch a checkout somewhere else.
 REPO="${1:-$HOME/engineering/dsh-plugins}"
 SERVICE="${2:-team.genesis.dsh}"
 LOG="${LOG:-$HOME/Library/Logs/dsh-autoupdate.log}"
