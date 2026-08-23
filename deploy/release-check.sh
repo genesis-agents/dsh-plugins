@@ -64,10 +64,30 @@ cat > "$DSH_HOME/profiles/web/package.json" <<JSON
 JSON
 
 echo "installing from the registry into $DSH_HOME"
-# --prefer-online, because npm resolves against a cached packument and a
-# version published minutes ago is not in it yet: the version endpoint
-# answers 200 while `npm install` reports "no matching version found". A
-# release check that fails on its own cache checks nothing.
+
+# Wait for the registry to actually serve these versions to npm.
+#
+# Not the same thing as the version being published. `npm publish` returns,
+# https://registry.npmjs.org/<pkg>/<version> answers 200, and `npm install`
+# still says "no matching version found" -- because install resolves against
+# the PACKUMENT, the document listing every version, and that is rebuilt a
+# little later. --prefer-online revalidates the local copy but cannot conjure
+# a version the registry has not listed yet. So the gate is npm's own view.
+wait_for() {
+  for _ in $(seq 1 30); do
+    npm view "$1@$2" version --prefer-online >/dev/null 2>&1 && return 0
+    sleep 10
+  done
+  return 1
+}
+for spec in "@ai4gensteam/dsh-agents-swarm $SWARM_VERSION" "@ai4gensteam/dsh-web-search $SEARCH_VERSION"; do
+  set -- $spec
+  case "$2" in latest) continue ;; esac
+  wait_for "$1" "$2" || { bad "$1@$2 never became installable"; exit 1; }
+done
+
+# --prefer-online for the install itself as well: a packument cached minutes
+# ago is exactly the state this whole dance is about.
 ( cd "$DSH_HOME/profiles/web" && npm install --silent --prefer-online ) >/dev/null 2>&1 \
   && ok "installed" || { bad "npm install failed"; exit 1; }
 
