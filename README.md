@@ -9,7 +9,7 @@ One directory per plugin; each is a self-contained package with its own
 |---|---|
 | `dsh-brand-mine` | Genesis honeycomb mark, the `Genesis Harness` wordmark, and a `deepseek` origin badge, in the sidebar and conversation Hero brand slots |
 | `dsh-agents-swarm` | The Agents sidebar entry, its page, and the local source library behind it |
-| `dsh-web-search-serper` | A Serper-backed search provider for the `ctx.web` seam, for deployments with no DeepSeek key |
+| `dsh-web-search-serper` | Web search for the `ctx.web` seam over interchangeable backends (Serper, Tavily, Brave), with a settings page |
 | `dsh-agent-presets` | Agent presets kept in git, published into the writable preset root at boot |
 
 ## Install locally

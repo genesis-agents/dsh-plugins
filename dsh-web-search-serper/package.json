@@ -1,7 +1,7 @@
 {
   "name": "dsh-web-search-serper",
-  "description": "Serper-backed web search provider for the DSH web capability seam (ctx.web)",
-  "version": "0.1.0",
+  "description": "Web search for the DSH ctx.web seam over interchangeable backends (Serper, Tavily, Brave)",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "main": "lib/index.js",

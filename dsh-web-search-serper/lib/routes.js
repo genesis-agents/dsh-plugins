@@ -1,18 +1,22 @@
 /**
  * The HTTP face of the settings page.
  *
- * The browser half cannot reach the settings service directly, so the Host
- * half exposes the one namespace this plugin owns and nothing else.
+ * The browser half cannot reach the settings service, so the Host half exposes
+ * the one namespace this plugin owns and nothing else.
  *
- * The key is WRITE-ONLY across the wire: a GET reports whether one is stored
- * and where it would come from, never its value, and a field the page did not
+ * Keys are WRITE-ONLY across the wire: a GET reports whether each backend has
+ * one and where it comes from, never its value, and a field the page did not
  * touch is not sent back — so saving a country code cannot silently clear a
- * secret. That asymmetry is the whole reason this is a hand-written route
- * rather than a generic settings passthrough.
+ * secret. That asymmetry is why this is a hand-written route rather than a
+ * generic settings passthrough.
  */
 
+import { BACKENDS, backendById, DEFAULT_BACKEND_ID } from "./backends.js";
+import { searchWith } from "./provider.js";
+import { resolveApiKey } from "./settings.js";
+
 /** Route prefix this plugin owns on the dsh web server. */
-export const ROUTE_PREFIX = "/serper-api";
+export const ROUTE_PREFIX = "/web-search-api";
 
 /** Send one JSON response. */
 function sendJson(res, status, body) {
@@ -47,39 +51,48 @@ function text(value) {
 
 /**
  * Build the request handler.
- * @param ctx - the plugin context, for the settings service.
+ * @param ctx - the plugin context, for the settings and credential services.
  * @param read - reads the currently authoritative section.
  * @param namespace - the settings namespace this plugin owns.
- * @param defaultEnv - env var consulted when the section names none.
  * @returns an HTTP handler.
  */
-export function createHandler(ctx, read, namespace, defaultEnv) {
+export function createHandler(ctx, read, namespace) {
   const settings = () => (typeof ctx.get === "function" ? ctx.get("settings") : undefined);
+
+  /** One backend's row for the table. */
+  const describe = (backend, section) => {
+    const own = section.backends?.[backend.id] ?? {};
+    const keyEnv = text(own.apiKeyEnv) ?? backend.keyEnv;
+    return {
+      id: backend.id,
+      label: backend.label,
+      docs: backend.docs,
+      note: backend.note,
+      keyEnv,
+      // Three states, not two: saved here, present in the environment, or
+      // absent. "Configured" alone would leave an operator guessing why a
+      // search still fails.
+      savedKey: text(own.apiKey) !== undefined,
+      envKey: text(process.env[keyEnv]) !== undefined,
+      baseURL: text(own.baseURL) ?? backend.defaultBaseURL,
+      country: own.country ?? "",
+      locale: own.locale ?? "",
+      numResults: typeof own.numResults === "number" ? own.numResults : null,
+    };
+  };
 
   return async function handle(req, res) {
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname.slice(ROUTE_PREFIX.length) || "/";
 
     if (req.method === "GET" && path === "/config") {
-      const config = read();
-      const keyEnv = text(config.apiKeyEnv) ?? defaultEnv;
-      // Three ways a key can be present, and the page has to be able to tell
-      // them apart: one saved here, one in the environment, or none at all.
-      // "Configured" without saying which would leave an operator guessing why
-      // a search still fails.
-      const savedKey = text(config.apiKey) !== undefined;
-      const envKey = text(process.env[keyEnv]) !== undefined;
+      const section = read();
       sendJson(res, 200, {
         success: true,
         data: {
-          keyEnv,
-          savedKey,
-          envKey,
-          baseURL: config.baseURL ?? "",
-          country: config.country ?? "",
-          locale: config.locale ?? "",
-          numResults: config.numResults ?? null,
+          active: text(section.active) ?? DEFAULT_BACKEND_ID,
           writable: settings() !== undefined,
+          backends: BACKENDS.map((backend) => describe(backend, section)),
         },
       });
       return;
@@ -100,17 +113,32 @@ export function createHandler(ctx, read, namespace, defaultEnv) {
       }
 
       const patch = {};
-      // An absent field means "leave it alone"; an empty string means "clear
-      // it". Collapsing those two would make every save of any field a reset
-      // of the ones the page did not show.
-      if (typeof body.apiKey === "string") patch.apiKey = body.apiKey.trim();
-      if (typeof body.apiKeyEnv === "string") patch.apiKeyEnv = body.apiKeyEnv.trim() || defaultEnv;
-      if (typeof body.baseURL === "string") patch.baseURL = body.baseURL.trim();
-      if (typeof body.country === "string") patch.country = body.country.trim();
-      if (typeof body.locale === "string") patch.locale = body.locale.trim();
-      if (body.numResults === null) patch.numResults = undefined;
-      else if (typeof body.numResults === "number" && Number.isInteger(body.numResults) && body.numResults > 0) {
-        patch.numResults = body.numResults;
+      if (typeof body.active === "string") {
+        if (backendById(body.active) === undefined) {
+          sendJson(res, 400, { success: false, error: `unknown backend: ${body.active}` });
+          return;
+        }
+        patch.active = body.active;
+      }
+      if (typeof body.backend === "string") {
+        const backend = backendById(body.backend);
+        if (backend === undefined) {
+          sendJson(res, 400, { success: false, error: `unknown backend: ${body.backend}` });
+          return;
+        }
+        const own = {};
+        // An absent field means "leave it alone"; an empty string means "clear
+        // it". Collapsing those two would make every save of any field a reset
+        // of the ones the page did not show.
+        if (typeof body.apiKey === "string") own.apiKey = body.apiKey.trim();
+        if (typeof body.baseURL === "string") own.baseURL = body.baseURL.trim();
+        if (typeof body.country === "string") own.country = body.country.trim();
+        if (typeof body.locale === "string") own.locale = body.locale.trim();
+        if (body.numResults === null) own.numResults = undefined;
+        else if (typeof body.numResults === "number" && Number.isInteger(body.numResults) && body.numResults > 0) {
+          own.numResults = body.numResults;
+        }
+        if (Object.keys(own).length > 0) patch.backends = { [backend.id]: own };
       }
       if (Object.keys(patch).length === 0) {
         sendJson(res, 400, { success: false, error: "nothing to update" });
@@ -118,6 +146,8 @@ export function createHandler(ctx, read, namespace, defaultEnv) {
       }
 
       try {
+        // `update` deep-merges into the user section, so a patch naming one
+        // backend leaves the others' keys untouched.
         await service.update(namespace, patch);
         sendJson(res, 200, { success: true, data: { updated: Object.keys(patch) } });
       } catch (cause) {
@@ -127,19 +157,47 @@ export function createHandler(ctx, read, namespace, defaultEnv) {
     }
 
     if (req.method === "POST" && path === "/test") {
-      // A key that saves and still does not work is the failure this page
-      // exists to prevent, so it can be exercised from here rather than by
-      // asking the model a question and reading the wreckage.
-      const provider = read.provider?.();
-      if (provider === undefined) {
-        sendJson(res, 503, { success: false, error: "provider unavailable" });
+      let body;
+      try {
+        body = await readJson(req);
+      } catch {
+        body = {};
+      }
+      const section = read();
+      const backend = backendById(text(body.backend) ?? text(section.active) ?? DEFAULT_BACKEND_ID);
+      if (backend === undefined) {
+        sendJson(res, 200, { success: false, error: "unknown backend" });
+        return;
+      }
+      const own = section.backends?.[backend.id] ?? {};
+      const apiKey = await resolveApiKey(ctx, backend, own);
+      if (apiKey === "") {
+        sendJson(res, 200, { success: false, error: `no API key (looked in settings and $${text(own.apiKeyEnv) ?? backend.keyEnv})` });
         return;
       }
       try {
-        const result = await provider.search({ query: "deepseek harness", maxResults: 3 });
+        // The same function a real search runs, not a parallel implementation
+        // that could pass while the real path fails.
+        const started = Date.now();
+        const result = await searchWith(
+          backend,
+          {
+            apiKey,
+            baseURL: text(own.baseURL) ?? backend.defaultBaseURL,
+            ...text(own.country) !== undefined ? { country: text(own.country) } : {},
+            ...text(own.locale) !== undefined ? { locale: text(own.locale) } : {},
+            numResults: 3,
+          },
+          { query: "deepseek harness", maxResults: 3 },
+        );
         sendJson(res, 200, {
           success: true,
-          data: { sources: result.sources.length, sample: result.sources[0]?.title ?? "", answer: result.content ?? "" },
+          data: {
+            sources: result.sources.length,
+            sample: result.sources[0]?.title ?? result.sources[0]?.url ?? "",
+            answer: result.content ?? "",
+            ms: Date.now() - started,
+          },
         });
       } catch (cause) {
         sendJson(res, 200, { success: false, error: String(cause?.message ?? cause) });
