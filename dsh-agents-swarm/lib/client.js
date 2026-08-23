@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 		* both is how "deployed but apparently absent" becomes legible instead
 		* of costing an afternoon.
 		*/
-		const CLIENT_VERSION = "0.2.1";
+		const CLIENT_VERSION = "0.2.2";
 
 		//#region locale + mark
 		/**
@@ -5015,48 +5015,48 @@ window.__ModuleLoader__.load({
 		* whether one is stored, never its value, and an untouched field is not
 		* sent back, so saving a feed cannot silently clear a secret.
 		*/
-		/**
-		* Which versions are actually running, on both sides.
-		*
-		* One line when they agree, a warning when they do not. The mismatch is
-		* not hypothetical: with the library on another machine, the page comes
-		* from here and the routes come from there, and a `git pull` missed on
-		* the far machine presents as a feature that does not exist. Three times
-		* in one afternoon, each time diagnosed by reading the wrong code first.
-		* @param zh - whether to write Chinese.
-		*/
-		/**
-		* The version answer, fetched once and shared.
-		*
-		* Two places show it — the panel header and the settings page — and both
-		* mount and unmount freely. Fetching per consumer would put two requests
-		* across the network for one label every time the page is opened.
-		* @returns `{ host, failed }`, both null until the answer arrives.
-		*/
 		let versionAnswer = null;
+		let versionAt = 0;
 		let versionPending = null;
+
+		/**
+		* How long a version answer is worth reusing.
+		*
+		* Cached at all so the header badge and the settings line share one
+		* request rather than each asking the far machine for a label. Cached
+		* only briefly because the answer CHANGES: a page left open across a
+		* deploy kept reporting the version from before it, which showed as a
+		* mismatch warning about a machine that had already been updated. A
+		* cache with no expiry is not a cache, it is a snapshot.
+		*/
+		const VERSION_TTL_MS = 30_000;
+
+		/**
+		* The version answer, fetched at most once per {@link VERSION_TTL_MS}.
+		* @returns `{ host, failed }`, both null until an answer arrives.
+		*/
 		function useHostVersion() {
 			const [host, setHost] = useState(() => versionAnswer);
 			const [failed, setFailed] = useState("");
 
 			useEffect(() => {
-				if (versionAnswer !== null) return;
 				let live = true;
+				if (versionAnswer !== null && Date.now() - versionAt < VERSION_TTL_MS) {
+					setHost(versionAnswer);
+					return;
+				}
 				versionPending ??= fetch(`${apiBase()}/version`)
 					.then((response) => response.json())
 					.then((payload) => {
 						if (payload?.success !== true) throw new Error(payload?.error ?? "no version");
 						versionAnswer = payload.data;
+						versionAt = Date.now();
 						return payload.data;
-					});
+					})
+					.finally(() => { versionPending = null; });
 				versionPending
 					.then((data) => { if (live) setHost(data); })
-					.catch((cause) => {
-						// Cleared so a later mount retries: the far machine being
-						// down when the page opened is not a permanent verdict.
-						versionPending = null;
-						if (live) setFailed(String(cause?.message ?? cause));
-					});
+					.catch((cause) => { if (live) setFailed(String(cause?.message ?? cause)); });
 				return () => { live = false; };
 			}, []);
 
@@ -5064,93 +5064,56 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		* What the two halves disagree about, in one word.
+		* Which build is running, in as few words as it takes.
 		* @param host - the `/version` payload, or null.
-		* @returns `{ serving, agree, proxied, reason }`.
+		* @returns `{ label, release }`.
 		*/
 		function versionVerdict(host) {
 			const proxied = host?.library === "remote";
-			const number = proxied ? host?.remoteVersion : host?.version;
-			const label = (proxied ? host?.remoteLabel : host?.label) ?? number;
+			// The machine that serves the routes is the one whose build matters.
 			const channel = proxied ? host?.remoteChannel : host?.channel;
-
-			// The alarm fires on the VERSION NUMBER, which is the only thing both
-			// sides can state. The page has no commit to compare — it is a plain
-			// file with no build step — so comparing its bare number against a
-			// checkout's `0.1.0+abc1234` label mismatches every single time. The
-			// first version of this did exactly that and cried wolf on two
-			// machines that were byte-identical, which is as useless as no alarm
-			// and worse than none: it teaches you to ignore the badge.
-			//
-			// Agreement on the number is therefore reported as agreement, and
-			// whether it is CONCLUSIVE is reported separately. A release earns
-			// the plain claim; a checkout can be anywhere between this release
-			// and the next while still calling itself this one.
+			const number = proxied ? host?.remoteVersion : host?.version;
 			return {
-				proxied,
-				channel,
-				label,
-				serving: label,
-				agree: host !== null && number != null && number === CLIENT_VERSION,
-				exact: channel === "release",
-				reason: host?.remoteError ?? null,
+				label: number ?? CLIENT_VERSION,
+				release: channel === "release",
 			};
 		}
 
 		/**
-		* The header badge: quiet when the halves agree, loud when they do not.
+		* The header badge: the version, and whether it is a release.
+		*
+		* Nothing else. It used to explain the difference between two machines
+		* and name the command to reconcile them, which is a deployment system
+		* wearing a badge — and a disagreement between the two halves is not
+		* something to report to a reader, it is something to prevent.
 		* @param zh - whether to write Chinese.
 		*/
 		function VersionBadge({ zh }) {
 			const { host } = useHostVersion();
-			const { agree, serving, proxied, reason, exact } = versionVerdict(host);
-			const bad = host !== null && !agree;
+			const { label, release } = versionVerdict(host);
 			return jsx("span", {
-				title: host === null
-					? ""
-					: bad
-					? (zh
-						? `界面 v${CLIENT_VERSION}，服务端 ${serving ?? reason ?? "未知"}${proxied ? `（${new URL(host.remote).host}）` : ""}`
-						: `page v${CLIENT_VERSION}, host ${serving ?? reason ?? "unknown"}${proxied ? ` (${new URL(host.remote).host})` : ""}`)
-					: exact
-					? (zh ? `界面与服务端同为发布版 v${CLIENT_VERSION}` : `page and host both on release v${CLIENT_VERSION}`)
-					: (zh
-						? `服务端是工作副本 ${serving}；界面 v${CLIENT_VERSION}。同一版本号可以对应不同代码。`
-						: `the host is a checkout at ${serving}; page is v${CLIENT_VERSION}. One version number covers many commits.`),
 				style: {
 					marginLeft: "8px", padding: "1px 7px", borderRadius: "999px",
-					fontSize: "11px", fontWeight: bad ? 600 : 400,
-					fontVariantNumeric: "tabular-nums", cursor: "default",
-					background: bad ? "rgba(220,38,38,0.1)" : "var(--dsw-alias-interactive-bg-hover)",
-					color: bad ? "rgb(220,38,38)" : "var(--dsw-alias-label-tertiary)"
+					fontSize: "11px", fontVariantNumeric: "tabular-nums", cursor: "default",
+					background: "var(--dsw-alias-interactive-bg-hover)",
+					color: "var(--dsw-alias-label-tertiary)"
 				},
-				children: bad
-					? (zh ? `v${CLIENT_VERSION} · 版本不一致` : `v${CLIENT_VERSION} · mismatch`)
-					: host === null
-					? `v${CLIENT_VERSION}`
-					// "release" earns the plain number. A checkout says so, because
-					// its code can be anywhere between this release and the next.
-					: exact
-					? `v${CLIENT_VERSION}`
-					: (zh ? `v${CLIENT_VERSION} · 开发版` : `v${CLIENT_VERSION} · dev`)
+				children: release || host === null ? `v${label}` : `v${label}-dev`
 			});
 		}
 
+		/**
+		* The same fact, with room for the node version beside it.
+		* @param zh - whether to write Chinese.
+		*/
 		function VersionLine({ zh }) {
-			const { host, failed } = useHostVersion();
-			// Compared against whichever machine actually serves the routes. When
-			// proxying, the local half always matches itself — comparing those
-			// two would be a check that can never fail, which is worse than no
-			// check because it looks like one.
-			const { agree, serving, proxied, reason, exact } = versionVerdict(host);
-
+			const { host } = useHostVersion();
+			const { label, release } = versionVerdict(host);
 			return jsxs("div", {
 				style: {
-					display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap",
-					padding: "9px 12px", marginBottom: "18px",
-					border: `1px solid ${agree || host === null ? "var(--dsw-alias-border-l1)" : "rgba(220,38,38,0.4)"}`,
-					borderRadius: "10px",
-					background: agree || host === null ? "transparent" : "rgba(220,38,38,0.05)",
+					display: "flex", alignItems: "center", gap: "10px",
+					padding: "8px 12px", marginBottom: "18px",
+					border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "10px",
 					fontSize: "11px", color: "var(--dsw-alias-label-secondary)",
 					fontVariantNumeric: "tabular-nums"
 				},
@@ -5159,36 +5122,11 @@ window.__ModuleLoader__.load({
 						style: { fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
 						children: zh ? "智能体" : "Agents"
 					}),
-					jsx("span", { children: `v${CLIENT_VERSION}` }),
-					host === null
-						? jsx("span", { children: failed === "" ? (zh ? "· 读取服务端…" : "· reading host…") : (zh ? `· 服务端无响应：${failed}` : `· host unreachable: ${failed}`) })
-						: proxied && serving == null
-						? jsx("span", {
-							style: { color: "rgb(220,38,38)", fontWeight: 600 },
-							children: zh
-								? `· ${new URL(host.remote).host} ${reason === "older than this route" ? "版本比这个功能还旧，需要 git pull" : `版本读不到：${reason ?? "未知"}`}`
-								: `· ${new URL(host.remote).host} ${reason === "older than this route" ? "is older than this feature; it needs a git pull" : `did not report a version: ${reason ?? "unknown"}`}`
-						})
-						: agree
-						? jsx("span", {
-							children: [
-								proxied
-									? (zh ? `· ${new URL(host.remote).host}` : `· ${new URL(host.remote).host}`)
-									: (zh ? "· 本机服务端" : "· served locally"),
-								exact
-									? (zh ? " · 发布版" : " · release")
-									: (zh ? ` · 工作副本 ${serving}` : ` · checkout ${serving}`)
-							].join("")
-						})
-						// Loud, because the whole point is that this is otherwise
-						// invisible: everything works, and one side is stale.
-						: jsxs("span", {
-							style: { color: "rgb(220,38,38)", fontWeight: 600 },
-							children: [
-								zh ? `· 服务端是 v${serving}，版本不一致` : `· the host serves v${serving} — mismatch`,
-								proxied ? (zh ? `（${new URL(host.remote).host} 需要 git pull）` : ` (${new URL(host.remote).host} needs a git pull)`) : ""
-							]
-						}),
+					jsx("span", {
+						children: release || host === null
+							? (zh ? `v${label} 发布版` : `v${label} release`)
+							: (zh ? `v${label} 开发版` : `v${label} dev`)
+					}),
 					jsx("span", { style: { flex: 1 } }),
 					host === null ? null : jsx("span", { children: `node ${host.node}` })
 				]
