@@ -33,6 +33,33 @@ the plugin without selecting it would leave the shipped provider in charge, so
 the two go together; remove the `web` entry from `cordis.patch.yml` to keep the
 provider installed but unselected.
 
+## Where to configure it
+
+Three places, in the order the plugin reads them:
+
+1. `~/.dsh/settings.yaml` — the settings document, which the Settings dialog's
+   **打开配置文件 / Open config file** button opens:
+
+   ```yaml
+   web-search-serper:
+     apiKeyEnv: SERPER_API_KEY
+     country: cn
+   ```
+
+2. The environment: `SERPER_API_KEY` (or whatever `apiKeyEnv` names).
+3. The profile's `cordis.patch.yml`, as the composition layer under both.
+
+There is **no card for it on Settings → Plugins**, and that is not a gap in
+this plugin: that page renders a curated subset. Thirteen namespaces are
+registered on this deployment and three get a card — `shell`, `agent-loop`,
+and `web-search-deepseek`. Registering the namespace is what makes the section
+readable and writable through the settings API and the document; a card is a
+separate, first-party decision.
+
+The key itself is declared `role('secret')`, so it is stripped from every wire
+descriptor and reported only as `{path: ["apiKey"], set: false|true}`. Prefer
+`apiKeyEnv` regardless: a key in a config file is a key in a backup.
+
 ## Config
 
 | Key | Default | Meaning |

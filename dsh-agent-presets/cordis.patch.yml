@@ -1,0 +1,9 @@
+# dsh-agent-presets bundle patch: inserts the preset-sync row into the roster.
+# Applied as a profile bundle layer (the `dsh.bundle.patch` manifest field).
+#
+# The row is a bare plugin by package name: the node half runs in the host
+# process and copies this package's preset directories into
+# `<dshHome>/.agent-presets` at startup. There is no browser half.
+- insert:
+    - id: agent-presets-mine
+      name: 'dsh-agent-presets'

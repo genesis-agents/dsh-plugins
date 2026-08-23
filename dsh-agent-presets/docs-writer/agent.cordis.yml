@@ -1,0 +1,94 @@
+# The `docs-writer` agent preset: a documentation and research composition.
+#
+# The point of this preset is that capability comes from the COMPOSITION, not
+# from prompt text. There is no `dsh-tool-bash` / `dsh-tool-pwsh` row, so no
+# shell tool is ever registered into this agent's catalog — the model cannot
+# run a command because none exists to call, not because the persona asked it
+# not to. Everything else a writing task needs is present: file read/edit,
+# code search, web search, a todo list, and the ability to ask the operator.
+#
+# This file is an AGENT-PLANE composition. The roster mounts it ONCE under a
+# standing scope; every session naming this preset joins by scope parentage.
+# Host concerns — the tool registry itself, the sandbox and approval stack,
+# persistence, and the model route — stay in the host composition and must not
+# be redeclared here.
+#
+# Adapted from the shipped `standard` preset.
+
+# ── identity ────────────────────────────────────────────────────────────────
+
+# `{{model}}` and `{{cwd}}` resolve from this agent's own route and workspace.
+# `complete` is left false so global identity and tool guidance still assemble
+# around this text, unlike the `minimal` preset's fixed prompt.
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: >-
+      You are a documentation and research agent powered by the {{model}} model.
+      Your working directory is {{cwd}}.
+      Prefer reading the source over guessing, cite the file and line you relied
+      on, and keep prose concrete. You have no shell: gather evidence through
+      file reads and searches.
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+
+# ── filesystem ──────────────────────────────────────────────────────────────
+
+# Both register into the host `tools` registry and provide nothing, so they
+# need no realm. The `fs` service and its policy stay in the host, which is
+# what keeps writes inside the workspace sandbox.
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# ── context length ──────────────────────────────────────────────────────────
+
+# A research session accumulates long tool results, so compaction is present.
+# Each row publishes a service and therefore MUST sit inside a group carrying
+# an `isolate` realm: without one it would publish into the process-global root
+# realm, where another preset registering the same name collides.
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024
+
+# ── remaining model-facing rows ─────────────────────────────────────────────
+
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+# The `web` service and its search provider stay in the host composition; only
+# the model-facing tool is per-session. `fetch: false` matches the shipped
+# presets: search results come back, arbitrary URL fetching does not.
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: false
+    searchTimeoutMs: 60000

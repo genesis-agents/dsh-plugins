@@ -1,6 +1,6 @@
 {
-  "name": "dsh-web-search-serper",
-  "description": "Serper-backed web search provider for the DSH web capability seam (ctx.web)",
+  "name": "dsh-agent-presets",
+  "description": "Agent presets kept under version control, published into the writable preset root at boot",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,8 +16,5 @@
       "patch": "./cordis.patch.yml"
     }
   },
-  "license": "MIT",
-  "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.1"
-  }
+  "license": "MIT"
 }

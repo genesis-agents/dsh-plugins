@@ -1,0 +1,3 @@
+name: 文档模式
+description: 面向文档与调研的 Agent：可读写文件、检索代码与网页、维护待办，但组合里没有 Shell。
+order: 10
