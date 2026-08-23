@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 		* both is how "deployed but apparently absent" becomes legible instead
 		* of costing an afternoon.
 		*/
-		const CLIENT_VERSION = "0.1.0";
+		const CLIENT_VERSION = "0.2.0";
 
 		//#region locale + mark
 		/**
@@ -5070,11 +5070,29 @@ window.__ModuleLoader__.load({
 		*/
 		function versionVerdict(host) {
 			const proxied = host?.library === "remote";
-			const serving = proxied ? host?.remoteVersion : host?.version;
+			const number = proxied ? host?.remoteVersion : host?.version;
+			const label = (proxied ? host?.remoteLabel : host?.label) ?? number;
+			const channel = proxied ? host?.remoteChannel : host?.channel;
+
+			// The alarm fires on the VERSION NUMBER, which is the only thing both
+			// sides can state. The page has no commit to compare — it is a plain
+			// file with no build step — so comparing its bare number against a
+			// checkout's `0.1.0+abc1234` label mismatches every single time. The
+			// first version of this did exactly that and cried wolf on two
+			// machines that were byte-identical, which is as useless as no alarm
+			// and worse than none: it teaches you to ignore the badge.
+			//
+			// Agreement on the number is therefore reported as agreement, and
+			// whether it is CONCLUSIVE is reported separately. A release earns
+			// the plain claim; a checkout can be anywhere between this release
+			// and the next while still calling itself this one.
 			return {
 				proxied,
-				serving,
-				agree: host !== null && serving != null && serving === CLIENT_VERSION,
+				channel,
+				label,
+				serving: label,
+				agree: host !== null && number != null && number === CLIENT_VERSION,
+				exact: channel === "release",
 				reason: host?.remoteError ?? null,
 			};
 		}
@@ -5085,7 +5103,7 @@ window.__ModuleLoader__.load({
 		*/
 		function VersionBadge({ zh }) {
 			const { host } = useHostVersion();
-			const { agree, serving, proxied, reason } = versionVerdict(host);
+			const { agree, serving, proxied, reason, exact } = versionVerdict(host);
 			const bad = host !== null && !agree;
 			return jsx("span", {
 				title: host === null
@@ -5094,7 +5112,11 @@ window.__ModuleLoader__.load({
 					? (zh
 						? `界面 v${CLIENT_VERSION}，服务端 ${serving ?? reason ?? "未知"}${proxied ? `（${new URL(host.remote).host}）` : ""}`
 						: `page v${CLIENT_VERSION}, host ${serving ?? reason ?? "unknown"}${proxied ? ` (${new URL(host.remote).host})` : ""}`)
-					: (zh ? `界面与服务端同为 v${CLIENT_VERSION}` : `page and host both v${CLIENT_VERSION}`),
+					: exact
+					? (zh ? `界面与服务端同为发布版 v${CLIENT_VERSION}` : `page and host both on release v${CLIENT_VERSION}`)
+					: (zh
+						? `服务端是工作副本 ${serving}；界面 v${CLIENT_VERSION}。同一版本号可以对应不同代码。`
+						: `the host is a checkout at ${serving}; page is v${CLIENT_VERSION}. One version number covers many commits.`),
 				style: {
 					marginLeft: "8px", padding: "1px 7px", borderRadius: "999px",
 					fontSize: "11px", fontWeight: bad ? 600 : 400,
@@ -5104,7 +5126,13 @@ window.__ModuleLoader__.load({
 				},
 				children: bad
 					? (zh ? `v${CLIENT_VERSION} · 版本不一致` : `v${CLIENT_VERSION} · mismatch`)
-					: `v${CLIENT_VERSION}`
+					: host === null
+					? `v${CLIENT_VERSION}`
+					// "release" earns the plain number. A checkout says so, because
+					// its code can be anywhere between this release and the next.
+					: exact
+					? `v${CLIENT_VERSION}`
+					: (zh ? `v${CLIENT_VERSION} · 开发版` : `v${CLIENT_VERSION} · dev`)
 			});
 		}
 
@@ -5143,9 +5171,14 @@ window.__ModuleLoader__.load({
 						})
 						: agree
 						? jsx("span", {
-							children: proxied
-								? (zh ? `· ${new URL(host.remote).host} 同版本` : `· ${new URL(host.remote).host} matches`)
-								: (zh ? "· 本机服务端" : "· served locally")
+							children: [
+								proxied
+									? (zh ? `· ${new URL(host.remote).host}` : `· ${new URL(host.remote).host}`)
+									: (zh ? "· 本机服务端" : "· served locally"),
+								exact
+									? (zh ? " · 发布版" : " · release")
+									: (zh ? ` · 工作副本 ${serving}` : ` · checkout ${serving}`)
+							].join("")
 						})
 						// Loud, because the whole point is that this is otherwise
 						// invisible: everything works, and one side is stale.

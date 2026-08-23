@@ -25,7 +25,7 @@
  * are the collector.
  */
 
-import { PLUGIN_VERSION } from "./version.js";
+import { PLUGIN_CHANNEL, PLUGIN_VERSION, versionLabel } from "./version.js";
 
 /** Headers that belong to one hop and must not be forwarded. */
 const HOP_BY_HOP = new Set([
@@ -81,6 +81,8 @@ export function createProxyHandler(remote, logger, prefix = "/swarm-api") {
     // page asking for them. So both are named.
     if (req.method === "GET" && suffix === "/version") {
       let remoteVersion = null;
+      let remoteLabel = null;
+      let remoteChannel = null;
       let remoteError = null;
       try {
         // Short, and non-fatal. This is a label on a settings page; a slow far
@@ -94,6 +96,10 @@ export function createProxyHandler(remote, logger, prefix = "/swarm-api") {
         } else {
           const payload = await probe.json();
           remoteVersion = payload?.data?.version ?? null;
+          // The label carries the commit for a checkout, which is the only
+          // thing that separates two machines both claiming 0.1.0.
+          remoteLabel = payload?.data?.label ?? remoteVersion;
+          remoteChannel = payload?.data?.channel ?? null;
           if (remoteVersion === null) remoteError = "answered without a version";
         }
       } catch (cause) {
@@ -103,10 +109,14 @@ export function createProxyHandler(remote, logger, prefix = "/swarm-api") {
         success: true,
         data: {
           version: PLUGIN_VERSION,
+          channel: PLUGIN_CHANNEL,
+          label: versionLabel(),
           node: process.versions.node,
           library: "remote",
           remote,
           remoteVersion,
+          remoteLabel,
+          remoteChannel,
           remoteError,
         },
       });

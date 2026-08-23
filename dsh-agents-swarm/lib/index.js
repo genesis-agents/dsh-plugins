@@ -27,7 +27,7 @@ import { enrichThumbnails, imageForPage, ENRICHABLE_TYPES, DEFAULT_ENRICH_LIMIT 
 import { createPublishRoutes } from "./publish-routes.js";
 import { PUBLISH_DEFAULTS, readPublishConfig, startPublishTimer } from "./publish-schedule.js";
 import { createProxyHandler } from "./remote.js";
-import { PLUGIN_VERSION } from "./version.js";
+import { PLUGIN_CHANNEL, PLUGIN_COMMIT, PLUGIN_DIR, PLUGIN_VERSION, versionLabel } from "./version.js";
 import { DOCUMENT_FORMATS } from "./documents.js";
 import { LIBRARY_ENV, mediaDirs, resolveLibrary, writeLibraryPointer } from "./library.js";
 
@@ -784,6 +784,15 @@ export function createHandler(store, logger, chat) {
         success: true,
         data: {
           version: PLUGIN_VERSION,
+          // A release and a checkout both say 0.1.0 while being different
+          // code — the number is bumped at release and everything between two
+          // releases shares it. The channel is what distinguishes them.
+          channel: PLUGIN_CHANNEL,
+          commit: PLUGIN_COMMIT,
+          label: versionLabel(),
+          // Reported so the channel verdict can be checked rather than
+          // trusted: it is inferred from this path.
+          dir: PLUGIN_DIR,
           node: process.versions.node,
           // Whether this host owns the library or forwards to one. A proxy
           // answers this route itself, so a mismatch is legible from the page.

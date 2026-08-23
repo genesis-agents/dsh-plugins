@@ -14,6 +14,7 @@
 import { BACKENDS, backendById, DEFAULT_BACKEND_ID } from "./backends.js";
 import { searchWith } from "./provider.js";
 import { resolveApiKey } from "./settings.js";
+import { PLUGIN_CHANNEL, PLUGIN_COMMIT, PLUGIN_DIR, PLUGIN_VERSION, versionLabel } from "./version.js";
 
 /** Route prefix this plugin owns on the dsh web server. */
 export const ROUTE_PREFIX = "/web-search-api";
@@ -84,6 +85,24 @@ export function createHandler(ctx, read, namespace) {
   return async function handle(req, res) {
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname.slice(ROUTE_PREFIX.length) || "/";
+
+    // What this copy is. A release and a checkout both say the same number —
+    // it is bumped at release and every commit between two releases shares it
+    // — so the channel is reported beside it.
+    if (req.method === "GET" && path === "/version") {
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          version: PLUGIN_VERSION,
+          channel: PLUGIN_CHANNEL,
+          commit: PLUGIN_COMMIT,
+          label: versionLabel(),
+          dir: PLUGIN_DIR,
+          node: process.versions.node,
+        },
+      });
+      return true;
+    }
 
     if (req.method === "GET" && path === "/config") {
       const section = read();
