@@ -480,6 +480,48 @@ settings it depends on. Collection history
 also lives in the database (last 30 runs) and is rendered in the settings page,
 because `ctx.logger` output does not reach this harness's stdout.
 
+### Deploying
+
+The box updates itself every five minutes; nobody pulls by hand.
+
+```
+git push                      ->  autoupdate.sh on the box, within 5 min
+                                    fast-forward (or rewind, if main was rewritten)
+                                    setup.sh          reconcile the profile
+                                    kickstart         restart the service
+                                    wait 60s          does it answer?
+                                      yes  ->  done
+                                      no   ->  rewind to the previous revision,
+                                               reconcile, restart, and exit non-zero
+```
+
+Two of those steps exist because their absence took the box down.
+
+**`setup.sh` runs on every update.** Pulling is not deploying. A commit renamed
+both plugins under an npm scope; the checkout followed and the profile did not,
+so the Loader looked for `@ai4gensteam/dsh-web-search`, found the old name, and
+the harness exited on boot. `setup.sh` is idempotent, and it *merges* — the box
+carries two plugins this repo does not own (`dsh-brand-mine` and
+`@linxin666/dsh-liangshen`) and they survive it. It recognises its own entries
+by the directory they link to as well as by name, which is what lets a rename
+land on a machine that still has the old one.
+
+**A revision that does not answer gets rewound.** The previous one was serving
+a minute ago; a box up on yesterday's code is worth more than one down on
+today's. The run still exits non-zero, because the update did fail.
+
+`autoupdate.sh` re-execs itself when a pull changes it. bash reads a script from
+disk by byte offset as it runs, so replacing the file underneath a running shell
+does not reload it — it keeps reading, at the old offset, out of the new bytes.
+That produced a run that pulled with one version and deployed with the version
+it had just overwritten.
+
+### Releasing to npm
+
+`deploy/release-check.sh <swarm-version> <search-version>` installs the
+published versions into a throwaway `DSH_HOME` and boots a real harness on
+them. Nothing cheaper is sufficient — see the last row of §9.
+
 ### Tests
 
 ```sh
@@ -511,6 +553,9 @@ The most valuable thing in this document. Each of these has actually happened.
 | Library serves fine, translation fails | `.credentials.yaml` not moved — `settings.yaml` names the provider but not its key |
 | Over-reported date comparisons | `datetime('now')` renders with a space, stored ISO uses `T`, and `'T' > ' '` |
 | Feed lists episodes, none download | Enclosures hardcoded `http://` behind a TLS-terminating proxy |
+| Published package cannot be mounted | `npm pack`, install, import and its own tests all pass — none of them asks a harness to *mount* it, which is the only thing a consumer does |
+| Box down after a clean pull | A rename needs a profile change; the update path only touched the checkout |
+| `npm install` says a just-published version does not exist | Install resolves against the packument, which is rebuilt after the version URL starts answering |
 
 A pattern runs through these: **the check that passes is not the check that
 matters.** A route answering 200, an install exiting 0, a plugin reporting
