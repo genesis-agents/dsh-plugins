@@ -483,7 +483,7 @@ because `ctx.logger` output does not reach this harness's stdout.
 ### Tests
 
 ```sh
-cd dsh-agents-swarm && npm test        # 13 tests, node --test
+cd dsh-agents-swarm && npm test        # 25 tests, node --test
 ```
 
 They cover the scheduling logic specifically — date math, the catch-up window,

@@ -123,3 +123,32 @@ surfaced in the browser as *"Failed to load plugins"*.
 The lesson is not that the supervisor needed a fourth round. It is that putting
 a whole UI on the wire to reach a database was the wrong shape, and no amount
 of supervision fixes a wrong shape.
+
+## Releasing
+
+Three steps, and the third is the one that matters.
+
+```sh
+# 1. bump both halves — a test fails if they disagree
+#    dsh-agents-swarm/package.json  and  lib/client.js's CLIENT_VERSION
+cd dsh-agents-swarm && npm test && npm publish --access public
+
+# 2. let the box pick it up (five minutes, or force it)
+ssh box 'cd ~/engineering/dsh-plugins && bash deploy/autoupdate.sh'
+
+# 3. verify what was published, not what was committed
+./release-check.sh 0.3.2 0.3.2
+```
+
+Step 3 installs the published versions into a throwaway `DSH_HOME` and boots a
+real harness on them. Everything cheaper than that has been passed by a package
+nobody could mount: `npm pack` was clean, the install was clean, importing the
+package worked, and its own tests passed inside the installed copy — because
+all of those reach for the package directly, and a consumer never does. The
+harness resolves the `name` in `cordis.patch.yml`, and the page registers the
+`id` in `client.js`. Both were stale, and only a boot said so.
+
+Give the registry a minute. A version published seconds ago answers on its own
+URL while `npm install` still reports "no matching version found", because npm
+resolves against a cached packument; `release-check.sh` passes `--prefer-online`
+for exactly that reason.

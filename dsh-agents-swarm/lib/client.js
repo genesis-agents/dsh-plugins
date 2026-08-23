@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 		* both is how "deployed but apparently absent" becomes legible instead
 		* of costing an afternoon.
 		*/
-		const CLIENT_VERSION = "0.3.1";
+		const CLIENT_VERSION = "0.3.2";
 
 		//#region locale + mark
 		/**
@@ -584,6 +584,23 @@ window.__ModuleLoader__.load({
 		const LEDE_STYLE = {
 			margin: "0 0 16px", maxWidth: "62ch", fontSize: "14px", lineHeight: "22px",
 			color: "var(--dsw-alias-label-secondary)"
+		};
+		/**
+		* The marker on a stage that is designed but not built.
+		*
+		* These three tabs used to render "no insight extracted yet", which is
+		* what a working feature with no data says. Nobody could tell the
+		* difference from the outside, so the honest reading was the wrong one:
+		* you wait for output that is not coming. Said plainly instead, and said
+		* on the tab as well as inside it, so it costs a glance rather than a
+		* click.
+		*/
+		const SOON_STYLE = {
+			marginLeft: "6px", padding: "0 5px", borderRadius: "4px",
+			border: "1px solid var(--dsw-alias-border-l2)",
+			color: "var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary))",
+			fontSize: "10px", lineHeight: "15px", fontWeight: 500,
+			letterSpacing: "0.02em", whiteSpace: "nowrap"
 		};
 		const NOTE_STYLE = {
 			display: "flex", alignItems: "center", justifyContent: "center",
@@ -4780,19 +4797,22 @@ window.__ModuleLoader__.load({
 				id: "insights", en: "Insights", zh: "洞察",
 				ledeEn: "Claims the swarm extracted from those sources, with provenance.",
 				ledeZh: "蜂群从信源中提炼出的结论，附出处。",
-				emptyEn: "No insight extracted yet.", emptyZh: "暂无洞察产出。"
+				soon: true,
+				emptyEn: "Extraction is not built yet.", emptyZh: "提炼尚未实现。"
 			},
 			{
 				id: "research", en: "Research", zh: "研究",
 				ledeEn: "Deep-dive tasks opened against an insight, and their findings.",
 				ledeZh: "针对某条洞察展开的深度调研任务及其发现。",
-				emptyEn: "No research task open.", emptyZh: "暂无进行中的研究任务。"
+				soon: true,
+				emptyEn: "Research tasks are not built yet.", emptyZh: "调研任务尚未实现。"
 			},
 			{
 				id: "simulation", en: "Simulation", zh: "推演",
 				ledeEn: "Scenarios played forward from the research, with their assumptions stated.",
 				ledeZh: "基于研究结论向前推演的情景，并显式列出所依赖的假设。",
-				emptyEn: "No scenario built yet.", emptyZh: "尚未建立推演情景。"
+				soon: true,
+				emptyEn: "Scenarios are not built yet.", emptyZh: "情景推演尚未实现。"
 			},
 			{
 				id: "publish", en: "Publish", zh: "发布",
@@ -4974,7 +4994,10 @@ window.__ModuleLoader__.load({
 							onClick: () => { setTab(candidate.id); },
 							children: [
 								jsx(TabIcon, { id: candidate.id }),
-								jsx("span", { children: zh ? candidate.zh : candidate.en })
+								jsx("span", { children: zh ? candidate.zh : candidate.en }),
+								candidate.soon
+									? jsx("span", { style: SOON_STYLE, children: zh ? "待建" : "planned" })
+									: null
 							]
 						}, candidate.id))
 					}),
