@@ -1,11 +1,13 @@
 # Running everything on the Mac mini
 
-**Done.** This describes a migration that was carried out, on
-`genesiss-mac-mini` (macOS 26.3.1, Apple Silicon, 16 GB), reached over
-Tailscale at `100.92.251.1` as user `genesis`. Where the first draft of this
-guide guessed wrong, the step now says what actually worked and what the wrong
-version looked like — those are the parts worth reading if you do it again on
-another machine.
+**Done.** This describes a migration that was carried out, on a Mac mini
+(macOS 26.3.1, Apple Silicon, 16 GB) reached over Tailscale. Where the first
+draft of this guide guessed wrong, the step now says what actually worked and
+what the wrong version looked like — those are the parts worth reading if you
+do it again on another machine.
+
+The box is written as `$BOX` throughout, and the account on it as `$USER`.
+Substitute your own; `tailscale status` prints both.
 
 ## Why move at all
 
@@ -185,9 +187,8 @@ with `nohup`.
 
 ## Reaching it
 
-**`https://genesiss-mac-mini.taild38208.ts.net`** — from any device signed
-into the tailnet. No tunnel, no key, no per-machine setup. A new laptop needs
-only Tailscale.
+**`https://$BOX`** — from any device signed into the tailnet. No tunnel, no
+key, no per-machine setup. A new laptop needs only Tailscale.
 
 That is `tailscale serve`, which publishes the port to the tailnet *only*:
 
@@ -200,8 +201,8 @@ tailscale serve --https=443 off           # to withdraw it
 Two things have to be true for this to work, and both are already done:
 
 - **The harness must trust the hostname.** The browser's origin is no longer
-  loopback, so the `/api` trust fence rejects it. `--trusted-host
-  genesiss-mac-mini.taild38208.ts.net` is in the launchd plist.
+  loopback, so the `/api` trust fence rejects it. `--trusted-host $BOX` is
+  in the launchd plist.
 - **The feed must know it is behind TLS.** Tailscale Serve terminates HTTPS and
   speaks plain http to the process. The RSS enclosures used to hardcode
   `http://`, which pointed every episode at a port nothing listens on — the
@@ -212,7 +213,7 @@ Verify both at once, since a feed that lists episodes proves nothing about
 whether they play:
 
 ```sh
-curl -s https://genesiss-mac-mini.taild38208.ts.net/swarm-api/publish/feed.xml   | grep -oE '<enclosure url="[^"]+"' | head -1        # must be https://
+curl -s https://$BOX/swarm-api/publish/feed.xml   | grep -oE '<enclosure url="[^"]+"' | head -1        # must be https://
 ```
 
 ### Know what this exposes
@@ -224,7 +225,7 @@ the LAN or the internet, but it is broader than loopback. If that is not the
 trade you want, `tailscale serve --https=443 off` and use a tunnel instead:
 
 ```sh
-ssh -N -L 3080:127.0.0.1:3080 genesis@100.92.251.1
+ssh -N -L 3080:127.0.0.1:3080 $USER@$BOX
 ```
 
 The tunnel is per-machine and dies with its shell — it is the right tool for an

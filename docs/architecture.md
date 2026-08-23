@@ -4,8 +4,8 @@ What this repository is, where every piece runs, and which parts are safe to
 replace. Written to be maintained: each section says what is true today and
 what would have to change to make it false.
 
-Status as of 2026-08-23. The library and both timers run on `genesiss-mac-mini`
-(macOS 26.3.1, Apple Silicon, 16 GB); the Windows workstation runs its own
+Status as of 2026-08-23. The library and both timers run on an always-on Mac
+mini (macOS 26.3.1, Apple Silicon, 16 GB); the Windows workstation runs its own
 harness and proxies `/swarm-api` to it over Tailscale. Section 2 says what runs
 where and why.
 
