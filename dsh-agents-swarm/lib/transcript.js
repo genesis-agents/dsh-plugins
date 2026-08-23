@@ -339,3 +339,72 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
   }
   throw new Error(failures.join("; "));
 }
+
+/** Fields the watch page exposes inside `ytInitialPlayerResponse`. */
+const DETAIL_KEYS = ["shortDescription", "lengthSeconds", "author", "viewCount", "publishDate"];
+
+/**
+ * Read one JSON string field out of a page's embedded script data.
+ *
+ * Scanned character by character rather than matched with a regular
+ * expression. The pattern needed to respect JSON escaping carries four
+ * backslashes, and every layer between here and the file — shell, heredoc,
+ * tool encoding — has eaten one at some point; the last attempt shipped
+ * `[^"\]` and the panel rendered `Unterminated character class` where the
+ * description should have been. A scanner has nothing to escape.
+ * @param source - the document text.
+ * @param key - the field name.
+ * @returns the decoded string, or undefined when the field is absent.
+ */
+export function readJsonStringField(source, key) {
+  const marker = `"${key}":"`;
+  const start = source.indexOf(marker);
+  if (start === -1) return undefined;
+  const from = start + marker.length;
+  let at = from;
+  while (at < source.length) {
+    const character = source[at];
+    // A backslash escapes whatever follows it, including a quote.
+    if (character === "\\") {
+      at += 2;
+      continue;
+    }
+    if (character === '"') break;
+    at += 1;
+  }
+  if (at >= source.length) return undefined;
+  try {
+    // Re-quoting the raw slice lets JSON decode the escapes it already carries.
+    return JSON.parse(`"${source.slice(from, at)}"`);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Read a video's own description and metadata from its watch page.
+ *
+ * The page is already fetched for caption tracks, and it carries the
+ * description the uploader wrote — which a `Resource` row from a feed does not
+ * have, leaving both the card and the assistant with nothing but a title.
+ * @param videoId - the video id.
+ * @returns `{ description, lengthSeconds, author, viewCount, publishDate }`.
+ */
+export async function fetchVideoDetails(videoId) {
+  const page = await fetch(`https://www.youtube.com/watch?v=${videoId}`, { headers: PAGE_HEADERS });
+  if (!page.ok) throw new Error(`watch page: HTTP ${page.status}`);
+  const html = await page.text();
+  const found = {};
+  for (const key of DETAIL_KEYS) {
+    const value = readJsonStringField(html, key);
+    if (value !== undefined) found[key] = value;
+  }
+  if (found.shortDescription === undefined) throw new Error("the watch page carries no description");
+  return {
+    description: found.shortDescription,
+    lengthSeconds: Number(found.lengthSeconds ?? 0),
+    author: found.author ?? "",
+    viewCount: Number(found.viewCount ?? 0),
+    publishDate: found.publishDate ?? "",
+  };
+}

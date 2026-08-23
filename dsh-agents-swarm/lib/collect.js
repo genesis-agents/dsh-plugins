@@ -125,6 +125,19 @@ export async function collectFeed({ url, type = "BLOG", sourceType }) {
   return parseFeed(await response.text(), { type, sourceType: sourceType ?? new URL(url).hostname.replace(/^www\./, "") });
 }
 
+/** arXiv landing page, as its paper. */
+const ARXIV_ABS = /^https?:\/\/(?:www\.)?arxiv\.org\/abs\/(.+)$/i;
+
+/**
+ * The PDF an arXiv abstract page stands for.
+ * @param url - a source URL.
+ * @returns the PDF URL, or an empty string when the URL is not an arXiv page.
+ */
+export function arxivPdfUrl(url) {
+  const match = ARXIV_ABS.exec(String(url ?? ""));
+  return match === null ? "" : `https://arxiv.org/pdf/${match[1]}`;
+}
+
 /**
  * Fetch recent arXiv submissions for a query.
  *
@@ -138,7 +151,15 @@ export async function collectArxiv({ query = "cat:cs.AI", max = 50 } = {}) {
     + `&sortBy=submittedDate&sortOrder=descending&max_results=${Math.max(1, Math.min(200, max))}`;
   const response = await fetch(url, { headers: { accept: "application/atom+xml" } });
   if (!response.ok) throw new Error(`arxiv: HTTP ${response.status}`);
-  return parseFeed(await response.text(), { type: "PAPER", sourceType: "arxiv" });
+  const rows = parseFeed(await response.text(), { type: "PAPER", sourceType: "arxiv" });
+  // arXiv publishes the landing page as the entry link; the paper itself lives
+  // at the matching `/pdf/` path. Recording it here keeps a reader from opening
+  // the abstract listing and taking it for the paper.
+  for (const row of rows) {
+    const derived = arxivPdfUrl(row.sourceUrl);
+    if (derived !== "") row.pdfUrl = derived;
+  }
+  return rows;
 }
 
 /**

@@ -78,6 +78,62 @@ const HORIZONTAL_SPACE = /[^\S\r\n]+/g;
 /** Three or more consecutive line breaks. */
 const BLANK_RUN = /\n{3,}/g;
 
+/**
+ * Extract an article the way a reader mode does, and hand it back as Markdown.
+ *
+ * The first pass here stripped tags with regular expressions, and it showed:
+ * "Skip to Main Content" and the site's nav survived into the article, the
+ * title appeared three times, and every heading, list, and code block
+ * flattened into indistinguishable paragraphs.
+ *
+ * Readability is the algorithm that solves precisely that — it scores blocks
+ * by text density and link ratio to find the article body and discard the
+ * chrome — and it is what the reference uses (`@mozilla/readability` with
+ * `jsdom` and `turndown`). Using the real thing rather than approximating it
+ * is the whole point: the failure mode of an approximation is silent, and the
+ * reader cannot tell a mangled article from a badly written one.
+ *
+ * Turndown then converts the extracted DOM to Markdown, so structure survives
+ * to the page, where the same renderer that formats an assistant's answer
+ * formats the article.
+ * @param html - the document body.
+ * @param url - the document's own URL, which Readability needs to resolve links.
+ * @returns `{ title, byline, markdown, text }`.
+ */
+export async function readArticle(html, url) {
+  const { JSDOM } = await import("jsdom");
+  const { Readability } = await import("@mozilla/readability");
+  const TurndownService = (await import("turndown")).default;
+
+  const dom = new JSDOM(html, { url });
+  const article = new Readability(dom.window.document).parse();
+  if (article === null || typeof article.content !== "string" || article.content.trim() === "") {
+    throw new Error("no readable article could be extracted from this page");
+  }
+  const turndown = new TurndownService({
+    headingStyle: "atx",
+    codeBlockStyle: "fenced",
+    bulletListMarker: "-",
+  });
+  // An image carries nothing a reader can use here and would only leave a
+  // broken box, since the page cannot load third-party assets.
+  turndown.addRule("dropImages", { filter: ["img", "picture", "figure"], replacement: () => "" });
+  // An icon-only link loses its icon with the images and would arrive as a
+  // bare `[](url)`, which is what a "listen to this article" button left
+  // sitting at the top of the first extracted article.
+  turndown.addRule("dropEmptyLinks", {
+    filter: (node) => node.nodeName === "A" && (node.textContent ?? "").trim() === "",
+    replacement: () => "",
+  });
+  const markdown = turndown.turndown(article.content).replace(BLANK_RUN, "\n\n").trim();
+  return {
+    title: article.title ?? "",
+    byline: article.byline ?? "",
+    markdown,
+    text: (article.textContent ?? "").replace(BLANK_RUN, "\n\n").trim(),
+  };
+}
+
 /** Block-level tags whose boundaries should become paragraph breaks. */
 const BLOCK_TAGS ="address|article|aside|blockquote|div|figcaption|figure|footer|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tr|ul";
 
@@ -146,9 +202,27 @@ export function decodeHtmlEntities(text) {
  * @param row - a stored `Resource`.
  * @returns `'youtube' | 'pdf' | 'html' | 'none'`.
  */
+/**
+ * The PDF an abstract page stands for, where that mapping is deterministic.
+ *
+ * arXiv publishes `/abs/<id>` as the landing page and `/pdf/<id>` as the paper,
+ * and 84% of the papers in this library arrived as `/abs/` with no `pdfUrl` —
+ * so treating them as ordinary web pages opened arXiv's abstract listing and
+ * called it the paper. The reference never hits this because its own collector
+ * fills `pdfUrl`; rows that arrived without one still need the mapping.
+ * @param row - a stored `Resource`.
+ * @returns the derived PDF URL, or an empty string when none is implied.
+ */
+export function derivedPdfUrl(row) {
+  const sourceUrl = typeof row?.sourceUrl === "string" ? row.sourceUrl : "";
+  const match = /^https?:\/\/(?:www\.)?arxiv\.org\/abs\/(.+)$/i.exec(sourceUrl);
+  return match === null ? "" : `https://arxiv.org/pdf/${match[1]}`;
+}
+
 export function displayModeOf(row) {
   const sourceUrl = typeof row?.sourceUrl === "string" ? row.sourceUrl : "";
-  const pdfUrl = typeof row?.pdfUrl === "string" ? row.pdfUrl : "";
+  const stored = typeof row?.pdfUrl === "string" ? row.pdfUrl : "";
+  const pdfUrl = stored !== "" ? stored : derivedPdfUrl(row);
   if (row?.type === "YOUTUBE" || row?.type === "YOUTUBE_VIDEO") return "youtube";
   if (sourceUrl.includes("/html/") || pdfUrl.includes("/html/")) return sourceUrl === "" ? "none" : "html";
   const looksPdf = (url) => {
@@ -172,6 +246,11 @@ export function displayModeOf(row) {
  * @returns the document URL, or an empty string when there is none.
  */
 export function documentUrlOf(row) {
-  if (displayModeOf(row) === "pdf" && typeof row.pdfUrl === "string" && row.pdfUrl !== "") return row.pdfUrl;
+  if (displayModeOf(row) === "pdf") {
+    const stored = typeof row?.pdfUrl === "string" ? row.pdfUrl : "";
+    if (stored !== "") return stored;
+    const derived = derivedPdfUrl(row);
+    if (derived !== "") return derived;
+  }
   return typeof row?.sourceUrl === "string" ? row.sourceUrl : "";
 }

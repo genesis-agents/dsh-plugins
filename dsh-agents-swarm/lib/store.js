@@ -77,12 +77,25 @@ CREATE TABLE IF NOT EXISTS transcripts (
   fetched_at  TEXT NOT NULL
 ) STRICT;
 
--- AI-derived chapter markers for a video. Cached because deriving them costs a
--- model call over the whole transcript.
-CREATE TABLE IF NOT EXISTS key_moments (
-  resource_id TEXT PRIMARY KEY,
-  moments     TEXT NOT NULL,
-  created_at  TEXT NOT NULL
+-- Translated transcript blocks, one row per block per target language.
+--
+-- The language is part of the key. The reference keys its cache on the video
+-- alone and stores the target language beside it as a plain column, so asking
+-- for a second language silently discards the first one's work. Paying for a
+-- translation twice because the key was too narrow is not a trade-off worth
+-- inheriting.
+--
+-- Keyed on the block's start time rather than its ordinal: the merge that
+-- turns cues into reading blocks can change with the merge rules, and an
+-- ordinal would then point at the wrong line, whereas a timestamp still names
+-- the same moment in the recording.
+CREATE TABLE IF NOT EXISTS transcript_translations (
+  resource_id TEXT NOT NULL,
+  target_lang TEXT NOT NULL,
+  block_start REAL NOT NULL,
+  text        TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  PRIMARY KEY (resource_id, target_lang, block_start)
 ) STRICT;
 
 -- Reader's own notes against a source, optionally pinned to a timestamp.
@@ -172,6 +185,12 @@ export class SourceStore {
     if (!columns.some((column) => column.name === "cues")) {
       this.db.exec("ALTER TABLE transcripts ADD COLUMN cues TEXT");
     }
+    // `key_moments` backed a panel that was removed: the reference's own key
+    // moments are hardcoded placeholders, and the video description turned out
+    // to be the thing worth showing instead. Dropping it here rather than
+    // leaving a table nothing writes to — an empty table with no reader is a
+    // standing invitation to wonder what it was for.
+    this.db.exec("DROP TABLE IF EXISTS key_moments");
     if (stamped === 0) this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   }
 
@@ -388,25 +407,48 @@ export class SourceStore {
   }
 
   /**
-   * Read cached key moments.
+   * Read every cached translation for one video in one language.
    * @param resourceId - the video's resource id.
-   * @returns the stored moments, or undefined when none were derived yet.
+   * @param targetLang - the target language code.
+   * @returns `[{ start, text }]` ordered by position in the recording.
    */
-  getKeyMoments(resourceId) {
-    const row = this.db.prepare("SELECT moments FROM key_moments WHERE resource_id = ?").get(resourceId);
-    return row === undefined ? undefined : parseJson(row.moments, undefined);
+  getTranslations(resourceId, targetLang) {
+    return this.db.prepare(`
+      SELECT block_start AS start, text FROM transcript_translations
+      WHERE resource_id = ? AND target_lang = ?
+      ORDER BY block_start
+    `).all(resourceId, targetLang);
   }
 
   /**
-   * Cache derived key moments.
+   * Store translated blocks, replacing any row for the same block.
+   *
+   * Written in one transaction so a batch that fails midway leaves no partial
+   * row set behind — a half-written batch would read as "already translated"
+   * on the next pass and the gap would never be filled.
    * @param resourceId - the video's resource id.
-   * @param moments - `[{ at, title, summary }]`.
+   * @param targetLang - the target language code.
+   * @param rows - `[{ start, text }]` for the blocks just translated.
    */
-  putKeyMoments(resourceId, moments) {
-    this.db.prepare(`
-      INSERT INTO key_moments (resource_id, moments, created_at) VALUES (?,?,?)
-      ON CONFLICT(resource_id) DO UPDATE SET moments = excluded.moments, created_at = excluded.created_at
-    `).run(resourceId, JSON.stringify(moments), new Date().toISOString());
+  putTranslations(resourceId, targetLang, rows) {
+    const now = new Date().toISOString();
+    const statement = this.db.prepare(`
+      INSERT INTO transcript_translations (resource_id, target_lang, block_start, text, created_at)
+      VALUES (?,?,?,?,?)
+      ON CONFLICT(resource_id, target_lang, block_start) DO UPDATE SET
+        text = excluded.text, created_at = excluded.created_at
+    `);
+    this.db.exec("BEGIN");
+    try {
+      for (const row of rows) {
+        if (typeof row?.start !== "number" || typeof row?.text !== "string" || row.text === "") continue;
+        statement.run(resourceId, targetLang, row.start, row.text, now);
+      }
+      this.db.exec("COMMIT");
+    } catch (cause) {
+      this.db.exec("ROLLBACK");
+      throw cause;
+    }
   }
 
   /**

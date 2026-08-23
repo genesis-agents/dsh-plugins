@@ -19,8 +19,9 @@ import { isAbsolute, join } from "node:path";
 import { SourceStore, RESOURCE_TYPES } from "./store.js";
 import { COLLECTORS, runCollector } from "./collect.js";
 import { registerLibraryTool } from "./tool.js";
-import { resolveTranscript, listCaptionTracks, transcriptFromXml } from "./transcript.js";
-import { admissibleUrl, fetchDocument, readableText, displayModeOf, documentUrlOf } from "./proxy.js";
+import { resolveTranscript, listCaptionTracks, transcriptFromXml, fetchVideoDetails } from "./transcript.js";
+import { translateBatch, isSupportedLanguage, BATCH_SIZE, TARGET_LANGUAGES } from "./translate.js";
+import { admissibleUrl, fetchDocument, readableText, readArticle, displayModeOf, documentUrlOf } from "./proxy.js";
 
 /** Route prefix this plugin owns on the dsh web server. */
 const ROUTE_PREFIX = "/swarm-api";
@@ -537,57 +538,6 @@ export function createChat(ctx) {
   };
 }
 
-/** Cues sampled into the key-moment prompt; enough for shape, bounded for cost. */
-const MOMENT_SAMPLE = 160;
-
-/**
- * Derive chapter markers from a transcript with the routed model.
- *
- * The prompt asks for JSON and the parse is defensive: a model that wraps its
- * answer in prose or a fence still yields moments, and one that returns
- * something unusable raises rather than storing nonsense the panel would then
- * present as analysis.
- * @param chat - the streaming chat entry point.
- * @param cues - the transcript's timed segments.
- * @returns `[{ at, title, summary }]` ordered by time.
- */
-export async function deriveKeyMoments(chat, cues) {
-  const step = Math.max(1, Math.ceil(cues.length / MOMENT_SAMPLE));
-  const sampled = cues
-    .filter((_, index) => index % step === 0)
-    .map((cue) => `[${Math.round(cue.start)}] ${cue.text}`)
-    .join("\n");
-  const prompt = [
-    "Below is a timed transcript. Each line starts with its offset in seconds.",
-    "Identify five to eight moments where the subject genuinely changes.",
-    'Answer with JSON only: {"moments":[{"at":<seconds>,"title":"...","summary":"..."}]}.',
-    "Titles and summaries must be in the transcript's own language and must describe what is actually said — never a generic chapter name.",
-    "",
-    sampled,
-  ].join("\n");
-
-  let answer = "";
-  for await (const piece of chat({ prompt, context: "" })) {
-    if (piece.error !== undefined) throw new Error(piece.error);
-    answer += piece.text;
-  }
-  const start = answer.indexOf("{");
-  const end = answer.lastIndexOf("}");
-  if (start === -1 || end <= start) throw new Error("the model returned no JSON object");
-  const parsed = JSON.parse(answer.slice(start, end + 1));
-  const moments = Array.isArray(parsed?.moments) ? parsed.moments : [];
-  const cleaned = moments
-    .map((moment) => ({
-      at: Number(moment?.at),
-      title: String(moment?.title ?? "").trim(),
-      summary: String(moment?.summary ?? "").trim(),
-    }))
-    .filter((moment) => Number.isFinite(moment.at) && moment.at >= 0 && moment.title !== "")
-    .sort((left, right) => left.at - right.at);
-  if (cleaned.length === 0) throw new Error("the model returned no usable moment");
-  return cleaned;
-}
-
 /**
  * Stream one chat response as Server-Sent Events.
  *
@@ -724,7 +674,13 @@ export function createHandler(store, logger, chat) {
         if (url !== "" && admissibleUrl(url) !== undefined) {
           try {
             const fetched = await fetchDocument(url);
-            if (fetched.status < 400) extras.article = readableText(fetched.body.toString("utf8")).text;
+            if (fetched.status < 400) {
+              try {
+                extras.article = (await readArticle(fetched.body.toString("utf8"), url)).text;
+              } catch {
+                extras.article = readableText(fetched.body.toString("utf8")).text;
+              }
+            }
           } catch {
             // An unreachable page is not fatal: the model still gets the row's
             // own fields, and the answer says what it could not see.
@@ -815,19 +771,16 @@ export function createHandler(store, logger, chat) {
       return;
     }
 
-    // ── key moments ─────────────────────────────────────────────────────
+    // ── video description ───────────────────────────────────────────────
     //
-    // Derived from the video's own transcript by the harness's model. The
-    // upstream ships five fixed English titles dropped at 10/30/50/70/90% of
-    // the timeline — its own code calls them mock and says real analysis is
-    // future work — so copying that panel faithfully would mean copying
-    // placeholders onto Chinese podcasts. A transcript is already cached here,
-    // and a model is already routed, so the panel says what the video says.
-    if (req.method === "POST" && path === "/key-moments") {
-      if (chat === undefined) {
-        sendJson(res, 503, { success: false, error: "no model routed" });
-        return;
-      }
+    // A row collected from a feed carries a title and nothing else, so the
+    // detail page had nothing to say about a video and the assistant had
+    // nothing to read. The uploader's own description is on the watch page the
+    // caption lookup already fetches, and it is written back into the row's
+    // `abstract` — the column is empty for every video — so the card, the
+    // reader, and the model all gain it at once instead of it living in a
+    // side-table only this page knows about.
+    if (req.method === "POST" && path === "/video-info") {
       let body;
       try {
         body = await readJson(req);
@@ -840,22 +793,20 @@ export function createHandler(store, logger, chat) {
         sendJson(res, 404, { success: false, error: "no such resource" });
         return;
       }
-      if (body.refresh !== true) {
-        const cached = store.getKeyMoments(row.id);
-        if (cached !== undefined) {
-          sendJson(res, 200, { success: true, data: { moments: cached, via: "cache" } });
-          return;
-        }
+      const stale = typeof row.abstract === "string" && row.abstract.trim() !== "";
+      if (stale && body.refresh !== true) {
+        sendJson(res, 200, { success: true, data: { description: row.abstract, via: "stored" } });
+        return;
       }
-      const transcript = store.getTranscript(row.id);
-      if (transcript === undefined || !Array.isArray(transcript.cues) || transcript.cues.length === 0) {
-        sendJson(res, 409, { success: false, error: "fetch the transcript first: key moments are derived from it" });
+      const videoId = videoIdOf(row.sourceUrl);
+      if (videoId === undefined) {
+        sendJson(res, 400, { success: false, error: "not a YouTube source" });
         return;
       }
       try {
-        const moments = await deriveKeyMoments(chat, transcript.cues);
-        store.putKeyMoments(row.id, moments);
-        sendJson(res, 200, { success: true, data: { moments, via: "model" } });
+        const details = await fetchVideoDetails(videoId);
+        store.put({ ...row, abstract: details.description });
+        sendJson(res, 200, { success: true, data: { ...details, via: "watch-page" } });
       } catch (cause) {
         sendJson(res, 502, { success: false, error: String(cause?.message ?? cause) });
       }
@@ -910,12 +861,20 @@ export function createHandler(store, logger, chat) {
           return;
         }
         if (path === "/proxy/reader") {
-          const article = readableText(document.body.toString("utf8"));
-          if (article.text.length < 200) {
-            sendJson(res, 422, { success: false, error: "no readable article could be extracted from this page" });
-            return;
+          try {
+            const article = await readArticle(document.body.toString("utf8"), target.toString());
+            sendJson(res, 200, { success: true, data: article });
+          } catch (cause) {
+            // The tag-stripping reader is kept as the fallback: Readability
+            // declines a page that is a listing rather than an article, and
+            // rough text still beats an empty panel.
+            const rough = readableText(document.body.toString("utf8"));
+            if (rough.text.length < 200) {
+              sendJson(res, 422, { success: false, error: String(cause?.message ?? cause) });
+              return;
+            }
+            sendJson(res, 200, { success: true, data: { ...rough, markdown: "", degraded: true } });
           }
-          sendJson(res, 200, { success: true, data: article });
           return;
         }
         res.writeHead(200, {
@@ -972,6 +931,65 @@ export function createHandler(store, logger, chat) {
         sendJson(res, 200, { success: true, data: { language: parsed.language, text: parsed.text, cues: parsed.cues ?? [], via: "browser" } });
       } catch (cause) {
         sendJson(res, 400, { success: false, error: String(cause?.message ?? cause) });
+      }
+      return;
+    }
+
+    // ── transcript translation ──────────────────────────────────────────
+    if (req.method === "GET" && path === "/transcript/translation") {
+      const resourceId = query.get("resourceId") ?? "";
+      const lang = query.get("lang") ?? "";
+      if (!isSupportedLanguage(lang)) {
+        sendJson(res, 400, { success: false, error: `unsupported target language: ${lang}` });
+        return;
+      }
+      sendJson(res, 200, {
+        success: true,
+        data: { lang, rows: store.getTranslations(resourceId, lang) },
+      });
+      return;
+    }
+
+    if (req.method === "POST" && path === "/transcript/translate") {
+      if (chat === undefined) {
+        sendJson(res, 503, { success: false, error: "no model routed" });
+        return;
+      }
+      let body;
+      try {
+        body = await readJson(req, 1024 * 1024);
+      } catch (cause) {
+        sendJson(res, 400, { success: false, error: String(cause?.message ?? cause) });
+        return;
+      }
+      const row = typeof body.resourceId === "string" ? store.get(body.resourceId) : undefined;
+      if (row === undefined) {
+        sendJson(res, 404, { success: false, error: "no such resource" });
+        return;
+      }
+      const lang = String(body.lang ?? "");
+      if (!isSupportedLanguage(lang)) {
+        sendJson(res, 400, { success: false, error: `unsupported target language: ${lang}` });
+        return;
+      }
+      const blocks = Array.isArray(body.blocks) ? body.blocks : [];
+      const batch = blocks
+        .filter((entry) => typeof entry?.start === "number" && typeof entry?.text === "string" && entry.text.trim() !== "")
+        .slice(0, BATCH_SIZE)
+        .map((entry, index) => ({ index, start: entry.start, text: entry.text.trim() }));
+      if (batch.length === 0) {
+        sendJson(res, 400, { success: false, error: "no blocks to translate" });
+        return;
+      }
+      try {
+        const rows = await translateBatch(chat, batch, lang);
+        // Persisted per batch rather than at the end of the run: a reader who
+        // closes the panel mid-way keeps what was already paid for, and the
+        // next pass asks only for what is still missing.
+        store.putTranslations(row.id, lang, rows);
+        sendJson(res, 200, { success: true, data: { lang, rows, requested: batch.length } });
+      } catch (cause) {
+        sendJson(res, 502, { success: false, error: String(cause?.message ?? cause) });
       }
       return;
     }

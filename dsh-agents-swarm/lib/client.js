@@ -11,6 +11,7 @@ window.__ModuleLoader__.load({
 		const useCallback = react.useCallback;
 		const useEffect = react.useEffect;
 		const useLayoutEffect = react.useLayoutEffect;
+		const useMemo = react.useMemo;
 		const useRef = react.useRef;
 		const useState = react.useState;
 		const useSyncExternalStore = react.useSyncExternalStore;
@@ -276,7 +277,18 @@ window.__ModuleLoader__.load({
 			padding: "0 32px", borderBottom: "1px solid var(--dsw-alias-border-l2)"
 		};
 		const BODY_STYLE = { flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 32px 32px" };
+		/** The detail view scrolls inside its own panes, so the body must not. */
+		// No horizontal padding: the sources tab scrolls inside this box, and any
+		// padding here insets the scrollbar from the window edge. The two views
+		// underneath carry their own side padding instead.
+		const READER_BODY_STYLE = { flex: 1, minHeight: 0, overflow: "hidden", padding: "12px 0 16px" };
+		/**
+		* The feed reads as a column, so it is capped. The detail view is a
+		* two-pane reader and must use the whole frame — capping it left a band
+		* of dead space down the right of the page.
+		*/
 		const CONTENT_STYLE = { maxWidth: "1080px" };
+		const WIDE_STYLE = { maxWidth: "none" };
 		const LEDE_STYLE = {
 			margin: "0 0 16px", maxWidth: "62ch", fontSize: "14px", lineHeight: "22px",
 			color: "var(--dsw-alias-label-secondary)"
@@ -312,16 +324,33 @@ window.__ModuleLoader__.load({
 			display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", margin: "12px 0 18px"
 		};
 		/**
-		* Card surface. An outline alone reads as a table row rather than a card,
-		* so the row gets its own fill, a lifted shadow, and a hover state — the
-		* three things that make a feed read as a stack of objects.
+		* Card surface. A card should read as a sheet lying above the page, and
+		* that is a job for shadow, not for an outline: `--dsw-alias-border-l2`
+		* resolves to `#0000001a`, a black hairline, so every row was drawn as a
+		* box first and a card second.
+		*
+		* `l1` (`#0000000a`) keeps the top edge defined where a downward shadow
+		* cannot reach, without asserting itself as a frame.
 		*/
 		const CARD_STYLE = {
 			display: "flex", gap: "16px", padding: "16px", marginBottom: "14px",
-			border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "14px",
+			border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "14px",
 			background: "var(--dsw-specific-menu)",
 			boxShadow: "var(--dsw-shadow-lv1)",
-			transition: "box-shadow 140ms ease, transform 140ms ease"
+			transition: "box-shadow 160ms ease, transform 160ms ease"
+		};
+
+		/**
+		* Hover: the sheet rises. `lv2` cannot express that — its total ink
+		* (`#00000005` + `#0000000a`) is LIGHTER than `lv1`'s `#0000000d`, so
+		* using it made the card settle while a coloured border appeared, which
+		* is why the hover read as a frame switching on rather than a lift.
+		* `lv3` is the elevation token, and the border stays where it was.
+		*/
+		const CARD_HOVER_STYLE = {
+			...CARD_STYLE,
+			boxShadow: "var(--dsw-shadow-lv3)",
+			transform: "translateY(-2px)"
 		};
 		const META_STYLE = {
 			display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap",
@@ -372,9 +401,7 @@ window.__ModuleLoader__.load({
 			return jsxs("article", {
 				onMouseEnter: () => { setHover(true); },
 				onMouseLeave: () => { setHover(false); },
-				style: hover
-					? { ...CARD_STYLE, boxShadow: "var(--dsw-shadow-lv2)", transform: "translateY(-1px)", borderColor: hue(kind, 0.35) }
-					: CARD_STYLE,
+				style: hover ? CARD_HOVER_STYLE : CARD_STYLE,
 				children: [
 					jsx("button", {
 						type: "button",
@@ -438,7 +465,7 @@ window.__ModuleLoader__.load({
 								},
 								children: description.text
 							}),
-							jsx("div", { style: { height: "1px", background: "var(--dsw-alias-border-l2)", margin: "6px 0 2px" } }),
+							jsx("div", { style: { height: "1px", background: "var(--dsw-alias-border-l1)", margin: "6px 0 2px" } }),
 							jsxs("div", {
 								style: ACTIONS_STYLE,
 								children: [
@@ -456,19 +483,26 @@ window.__ModuleLoader__.load({
 
 		//#region document mode
 		/**
-		 * Decide how a source should be presented, mirroring the upstream's
-		 * `getResourceDisplayMode`.
+		 * The PDF an abstract page stands for, where that mapping is deterministic.
 		 *
-		 * The order matters and is the upstream's: YouTube first, because a watch URL
-		 * can carry `.pdf` in a query string; an explicit `/html/` path next, because
-		 * a mirror of a paper serves HTML from a PDF-looking id; then the PDF shapes,
-		 * including the extensionless `/pdf` endpoints that arXiv and OpenReview use.
+		 * arXiv publishes `/abs/<id>` as the landing page and `/pdf/<id>` as the paper,
+		 * and 84% of the papers in this library arrived as `/abs/` with no `pdfUrl` —
+		 * so treating them as ordinary web pages opened arXiv's abstract listing and
+		 * called it the paper. The reference never hits this because its own collector
+		 * fills `pdfUrl`; rows that arrived without one still need the mapping.
 		 * @param row - a stored `Resource`.
-		 * @returns `'youtube' | 'pdf' | 'html' | 'none'`.
+		 * @returns the derived PDF URL, or an empty string when none is implied.
 		 */
+		function derivedPdfUrl(row) {
+		  const sourceUrl = typeof row?.sourceUrl === "string" ? row.sourceUrl : "";
+		  const match = /^https?:\/\/(?:www\.)?arxiv\.org\/abs\/(.+)$/i.exec(sourceUrl);
+		  return match === null ? "" : `https://arxiv.org/pdf/${match[1]}`;
+		}
+
 		function displayModeOf(row) {
 		  const sourceUrl = typeof row?.sourceUrl === "string" ? row.sourceUrl : "";
-		  const pdfUrl = typeof row?.pdfUrl === "string" ? row.pdfUrl : "";
+		  const stored = typeof row?.pdfUrl === "string" ? row.pdfUrl : "";
+		  const pdfUrl = stored !== "" ? stored : derivedPdfUrl(row);
 		  if (row?.type === "YOUTUBE" || row?.type === "YOUTUBE_VIDEO") return "youtube";
 		  if (sourceUrl.includes("/html/") || pdfUrl.includes("/html/")) return sourceUrl === "" ? "none" : "html";
 		  const looksPdf = (url) => {
@@ -492,7 +526,12 @@ window.__ModuleLoader__.load({
 		 * @returns the document URL, or an empty string when there is none.
 		 */
 		function documentUrlOf(row) {
-		  if (displayModeOf(row) === "pdf" && typeof row.pdfUrl === "string" && row.pdfUrl !== "") return row.pdfUrl;
+		  if (displayModeOf(row) === "pdf") {
+		    const stored = typeof row?.pdfUrl === "string" ? row.pdfUrl : "";
+		    if (stored !== "") return stored;
+		    const derived = derivedPdfUrl(row);
+		    if (derived !== "") return derived;
+		  }
 		  return typeof row?.sourceUrl === "string" ? row.sourceUrl : "";
 		}
 
@@ -775,6 +814,179 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 
+		//#region transcript export
+		/**
+		* Transcript export.
+		*
+		* The reference exports a PDF, rendered server-side through Chromium
+		* (`youtube-subtitles-<id>.pdf`). That needs a renderer this package does
+		* not carry, and for captions it is also the least useful shape: a PDF
+		* cannot be loaded by a player, diffed, or fed to another tool. So the
+		* formats here are the ones a transcript is actually wanted in — SRT and
+		* WebVTT load straight into a player, Markdown and plain text go into
+		* notes and prompts — and the whole thing is produced in the page, since
+		* the cues are already here.
+		*
+		* The reference's own options carry over: timestamps can be dropped, and
+		* the video's identity can be included as a header.
+		*/
+		const EXPORT_FORMATS = [
+			{ id: "txt", label: "TXT", extension: "txt", mime: "text/plain" },
+			{ id: "md", label: "Markdown", extension: "md", mime: "text/markdown" },
+			{ id: "srt", label: "SRT", extension: "srt", mime: "application/x-subrip" },
+			{ id: "vtt", label: "WebVTT", extension: "vtt", mime: "text/vtt" }
+		];
+
+		/** `hh:mm:ss,mmm` for SRT and `hh:mm:ss.mmm` for WebVTT. */
+		function stampFor(seconds, separator) {
+			const total = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+			const hours = Math.floor(total / 3600);
+			const minutes = Math.floor((total % 3600) / 60);
+			const rest = Math.floor(total % 60);
+			const millis = Math.round((total - Math.floor(total)) * 1000);
+			return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}${separator}${String(millis).padStart(3, "0")}`;
+		}
+
+		/**
+		* Build the export body.
+		*
+		* Subtitle formats carry the ORIGINAL cues: a player needs each cue's own
+		* start and end, and the sentence blocks the reader shows would drift out
+		* of sync. The prose formats use the merged blocks, because that is what
+		* reads as text.
+		* @param options - `{ format, cues, blocks, row, withTimestamps, withHeader }`.
+		* @returns the file body.
+		*/
+		function buildExport({ format, cues, blocks, row, withTimestamps, withHeader }) {
+			if (format === "srt" || format === "vtt") {
+				const separator = format === "srt" ? "," : ".";
+				const body = cues.map((cue, index) => {
+					const start = stampFor(cue.start, separator);
+					const end = stampFor(cue.start + (cue.duration || 2), separator);
+					const head = format === "srt" ? `${index + 1}\n` : "";
+					return `${head}${start} --> ${end}\n${cue.text}`;
+				}).join("\n\n");
+				return format === "vtt" ? `WEBVTT\n\n${body}\n` : `${body}\n`;
+			}
+
+			const lines = [];
+			if (withHeader) {
+				if (format === "md") {
+					lines.push(`# ${row.title}`, "", `- ${zhLabelSource()}: ${row.sourceUrl}`);
+					if (typeof row.publishedAt === "string" && row.publishedAt !== "") lines.push(`- ${zhLabelDate()}: ${formatDate(row.publishedAt)}`);
+					lines.push("");
+				} else {
+					lines.push(row.title, row.sourceUrl, "");
+				}
+			}
+			for (const block of blocks) {
+				const stamp = withTimestamps ? `[${formatTime(block.start)}] ` : "";
+				lines.push(format === "md" ? `${stamp}${block.text}` : `${stamp}${block.text}`, "");
+			}
+			return `${lines.join("\n").trimEnd()}\n`;
+		}
+
+		/** Locale-following labels for the export header. */
+		function zhLabelSource() { return isChinese() ? "来源" : "Source"; }
+		function zhLabelDate() { return isChinese() ? "发布" : "Published"; }
+
+		/**
+		* Hand the built file to the browser.
+		* @param name - file name including extension.
+		* @param mime - content type.
+		* @param body - file body.
+		*/
+		function downloadFile(name, mime, body) {
+			const url = URL.createObjectURL(new Blob([body], { type: `${mime};charset=utf-8` }));
+			const link = document.createElement("a");
+			link.href = url;
+			link.download = name;
+			document.body.appendChild(link);
+			link.click();
+			link.remove();
+			// Revoked on the next turn so the navigation has started.
+			setTimeout(() => { URL.revokeObjectURL(url); }, 1000);
+		}
+
+		/** Export controls shown above the transcript. */
+		function ExportMenu({ row, kind, zh, cues, blocks }) {
+			const [open, setOpen] = useState(false);
+			const [withTimestamps, setWithTimestamps] = useState(true);
+			const [withHeader, setWithHeader] = useState(true);
+			const rootRef = useRef(null);
+
+			useEffect(() => {
+				if (!open) return;
+				const onPointerDown = (event) => {
+					if (rootRef.current !== null && !rootRef.current.contains(event.target)) setOpen(false);
+				};
+				document.addEventListener("pointerdown", onPointerDown, true);
+				return () => { document.removeEventListener("pointerdown", onPointerDown, true); };
+			}, [open]);
+
+			const run = useCallback((format) => {
+				const entry = EXPORT_FORMATS.find((candidate) => candidate.id === format);
+				const body = buildExport({ format, cues, blocks, row, withTimestamps, withHeader });
+				const stem = String(row.title).replace(/[\\/:*?"<>|]+/g, " ").trim().slice(0, 60) || "transcript";
+				downloadFile(`${stem}.${entry.extension}`, entry.mime, body);
+				setOpen(false);
+			}, [cues, blocks, row, withTimestamps, withHeader]);
+
+			return jsxs("div", {
+				ref: rootRef,
+				style: { position: "relative" },
+				children: [
+					jsx("button", {
+						type: "button",
+						"aria-expanded": open,
+						style: { ...controlStyle(), height: "24px", padding: "0 8px", fontSize: "11px" },
+						onClick: () => { setOpen((value) => !value); },
+						children: zh ? "导出" : "Export"
+					}),
+					!open ? null : jsxs("div", {
+						style: {
+							position: "absolute", right: 0, top: "28px", zIndex: 5, width: "230px",
+							padding: "10px", borderRadius: "10px",
+							border: "1px solid var(--dsw-alias-border-l2)",
+							background: "var(--dsw-specific-menu)", boxShadow: "var(--dsw-shadow-lv3)"
+						},
+						children: [
+							jsxs("label", {
+								style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)", cursor: "pointer" },
+								children: [
+									jsx("input", { type: "checkbox", checked: withTimestamps, onChange: (event) => { setWithTimestamps(event.target.checked); } }),
+									jsx("span", { children: zh ? "包含时间戳" : "Include timestamps" })
+								]
+							}),
+							jsxs("label", {
+								style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)", cursor: "pointer" },
+								children: [
+									jsx("input", { type: "checkbox", checked: withHeader, onChange: (event) => { setWithHeader(event.target.checked); } }),
+									jsx("span", { children: zh ? "包含标题与链接" : "Include title and link" })
+								]
+							}),
+							jsx("div", {
+								style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" },
+								children: EXPORT_FORMATS.map((entry) => jsx("button", {
+									type: "button",
+									style: { ...controlStyle(), height: "28px", fontSize: "12px", color: hue(kind) },
+									onClick: () => { run(entry.id); },
+									children: entry.label
+								}, entry.id))
+							}),
+							jsx("p", {
+								style: { margin: "10px 0 0", fontSize: "11px", lineHeight: "16px", color: "var(--dsw-alias-label-tertiary)" },
+								children: zh
+									? "SRT / WebVTT 按原始时轴导出，可直接载入播放器；TXT / Markdown 按语义块导出，便于阅读与引用。"
+									: "SRT and WebVTT carry the original cue timings and load into a player; TXT and Markdown carry the reading blocks."
+							})
+						]
+					})
+				]
+			});
+		}
+		//#endregion
+
 		//#region detail + assistant
 		/** Quick actions the assistant offers, matching the upstream's three. */
 		const QUICK_ACTIONS = [
@@ -836,10 +1048,41 @@ window.__ModuleLoader__.load({
 		* tokens and a tint of the kind's own colour instead: this shell has a
 		* dark mode, and a literal white row would go blind in it.
 		*/
+		/**
+		* Target languages offered for a transcript, mirroring the Host's own
+		* list. The Host validates the code it is sent, so a stale entry here
+		* fails with a message rather than translating into the wrong language.
+		*/
+		const TARGET_LANGUAGES = [
+			{ code: "zh-Hans", label: "中文（简体）" },
+			{ code: "zh-Hant", label: "中文（繁體）" },
+			{ code: "en", label: "English" },
+			{ code: "ja", label: "日本語" },
+			{ code: "ko", label: "한국어" }
+		];
+
+		/** Blocks per translation request; must not exceed the Host's own cap. */
+		const TRANSLATE_BATCH = 20;
+
 		function TranscriptPanel({ row, kind, zh, currentTime, onSeek }) {
 			const [state, setState] = useState({ status: "idle" });
 			const activeRef = useRef(null);
 			const [follow, setFollow] = useState(true);
+			// "" means off. Holding the language here rather than a boolean is
+			// what lets a second language be requested without discarding the
+			// first: both are cached under their own key.
+			const [target, setTarget] = useState("");
+			const [translated, setTranslated] = useState(new Map());
+			const [translating, setTranslating] = useState({ done: 0, total: 0, error: "" });
+			// Bumped to re-run the translation pass over whatever is still
+			// missing. A batch the model fluffed writes nothing, so a retry asks
+			// only for the gap rather than paying for the whole transcript again.
+			const [retryTick, setRetryTick] = useState(0);
+			// Read, never depended on: the playback position changes several
+			// times a second, and listing it as a dependency would restart the
+			// translation run on every tick.
+			const positionRef = useRef(0);
+			positionRef.current = currentTime;
 
 			useEffect(() => { setState({ status: "idle" }); }, [row.id]);
 
@@ -911,8 +1154,100 @@ window.__ModuleLoader__.load({
 			// the text already there rather than behind a button.
 			useEffect(() => { void load(false); }, [load]);
 
-			const blocks = state.status === "ready" ? mergeBySentence(state.cues ?? []) : [];
+			// Memoised on the cues, not recomputed per render: the blocks are the
+			// dependency of the translation run, and a fresh array each render
+			// would restart it every time the playback position ticked.
+			const blocks = useMemo(
+				() => (state.status === "ready" ? mergeBySentence(state.cues ?? []) : []),
+				[state.status, state.cues]
+			);
 			const active = activeBlockIndex(blocks, currentTime);
+
+			// Switching video or language starts from that language's own cache.
+			useEffect(() => {
+				setTranslated(new Map());
+				setTranslating({ done: 0, total: 0, error: "" });
+			}, [row.id, target]);
+
+			useEffect(() => {
+				if (target === "" || blocks.length === 0) return;
+				let live = true;
+
+				const run = async () => {
+					const known = new Map();
+					try {
+						const cached = await fetch(`${apiBase()}/transcript/translation?resourceId=${encodeURIComponent(row.id)}&lang=${encodeURIComponent(target)}`);
+						const payload = await cached.json();
+						if (payload?.success === true) {
+							for (const entry of payload.data.rows) known.set(entry.start, entry.text);
+						}
+					} catch {
+						// A cache that cannot be read is not a reason to refuse to
+						// translate; it only means nothing is skipped.
+					}
+					if (!live) return;
+					if (known.size > 0) setTranslated(new Map(known));
+
+					const missing = blocks.filter((block) => !known.has(block.start));
+					if (missing.length === 0) {
+						setTranslating({ done: 0, total: 0, error: "" });
+						return;
+					}
+					// Nearest to where the reader is looking first, so the wait
+					// starts at their position rather than at the top of what may
+					// be a two-hour recording.
+					const from = positionRef.current;
+					const ordered = [...missing].sort((a, b) => Math.abs(a.start - from) - Math.abs(b.start - from));
+					const batches = [];
+					for (let at = 0; at < ordered.length; at += TRANSLATE_BATCH) {
+						batches.push(ordered.slice(at, at + TRANSLATE_BATCH).sort((a, b) => a.start - b.start));
+					}
+
+					let done = 0;
+					setTranslating({ done: 0, total: ordered.length, error: "" });
+					for (const batch of batches) {
+						if (!live) return;
+						try {
+							const response = await fetch(`${apiBase()}/transcript/translate`, {
+								method: "POST",
+								headers: { "content-type": "application/json" },
+								body: JSON.stringify({
+									resourceId: row.id,
+									lang: target,
+									blocks: batch.map((block) => ({ start: block.start, text: block.text }))
+								})
+							});
+							const payload = await response.json();
+							if (!live) return;
+							if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
+							setTranslated((previous) => {
+								const next = new Map(previous);
+								for (const entry of payload.data.rows) next.set(entry.start, entry.text);
+								return next;
+							});
+						} catch (cause) {
+							if (!live) return;
+							// Report and keep going. One failed batch is a gap in
+							// the middle of the transcript, not a reason to leave
+							// the rest of it untranslated — and the gap is retried
+							// the next time translation is switched on, because
+							// nothing was written for it.
+							setTranslating((previous) => ({ ...previous, error: String(cause?.message ?? cause) }));
+						}
+						done += batch.length;
+						setTranslating((previous) => ({ ...previous, done }));
+					}
+				};
+
+				void run();
+				return () => { live = false; };
+			}, [row.id, target, blocks, retryTick]);
+
+			// What is still missing after a pass, which is what the reader
+			// actually needs to know — the raw model error says nothing about
+			// how much of the transcript it cost.
+			const untranslated = target === "" ? 0 : blocks.reduce((count, block) => count + (translated.has(block.start) ? 0 : 1), 0);
+			const running = translating.total > 0 && translating.done < translating.total;
 
 			useEffect(() => {
 				if (!follow) return;
@@ -968,29 +1303,77 @@ window.__ModuleLoader__.load({
 				style: { display: "flex", flexDirection: "column", minHeight: 0, height: "100%" },
 				children: [
 					jsxs("div", {
+						// Two rows, not one. Six controls plus a status line do not
+						// fit across a 400px panel: the status was the flexible
+						// item, so it absorbed every shortfall and read as
+						// "zh-Hans · cach…". Giving it its own row means the text
+						// that says what is happening is never the thing that gets
+						// clipped to say it.
 						style: {
-							flex: "none", display: "flex", alignItems: "center", gap: "10px",
+							flex: "none", display: "flex", flexDirection: "column", gap: "6px",
 							padding: "8px 12px", borderBottom: "1px solid var(--dsw-alias-border-l2)",
 							fontSize: "11px", color: "var(--dsw-alias-label-tertiary)"
 						},
 						children: [
-							jsx("span", { style: { flex: 1 }, children: `${state.language} · ${state.via} · ${blocks.length} ${zh ? "段" : "blocks"}` }),
-							jsxs("label", {
-								style: { display: "inline-flex", alignItems: "center", gap: "6px", cursor: "pointer" },
+							jsxs("span", {
+								style: { minWidth: 0, display: "flex", alignItems: "center", gap: "6px", overflow: "hidden" },
 								children: [
-									jsx("input", {
-										type: "checkbox",
-										checked: follow,
-										onChange: (event) => { setFollow(event.target.checked); }
+									jsx("span", {
+										style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+										title: translating.error === "" ? undefined : translating.error,
+										children: running
+											? (zh ? `翻译中 ${translating.done}/${translating.total}` : `Translating ${translating.done}/${translating.total}`)
+											: untranslated > 0
+												? (zh ? `${untranslated} 段未译` : `${untranslated} blocks untranslated`)
+												: `${state.language} · ${state.via} · ${blocks.length} ${zh ? "段" : "blocks"}`
 									}),
-									jsx("span", { children: zh ? "跟随播放" : "Follow" })
+									running || untranslated === 0 ? null : jsx("button", {
+										type: "button",
+										style: { ...controlStyle(), height: "20px", padding: "0 6px", fontSize: "11px", color: hue(kind) },
+										onClick: () => { setRetryTick((tick) => tick + 1); },
+										children: zh ? "重译" : "Retry"
+									})
 								]
 							}),
-							jsx("button", {
-								type: "button",
-								style: { ...controlStyle(), height: "24px", padding: "0 8px", fontSize: "11px" },
-								onClick: () => { void load(true); },
-								children: zh ? "重取" : "Refetch"
+							jsxs("div", {
+								style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" },
+								children: [
+									jsxs("label", {
+										style: { display: "inline-flex", alignItems: "center", gap: "6px", cursor: "pointer" },
+										children: [
+											jsx("input", {
+												type: "checkbox",
+												checked: follow,
+												onChange: (event) => { setFollow(event.target.checked); }
+											}),
+											jsx("span", { children: zh ? "跟随播放" : "Follow" })
+										]
+									}),
+									jsxs("label", {
+										style: { display: "inline-flex", alignItems: "center", gap: "6px" },
+										children: [
+											jsx("span", { children: zh ? "翻译" : "Translate" }),
+											jsx("select", {
+												value: target,
+												"aria-label": zh ? "字幕翻译语言" : "Transcript translation language",
+												onChange: (event) => { setTarget(event.target.value); },
+												style: { ...controlStyle(), height: "24px", padding: "0 4px", fontSize: "11px" },
+												children: [
+													jsx("option", { value: "", children: zh ? "关闭" : "Off" }, "off"),
+													...TARGET_LANGUAGES.map((entry) => jsx("option", { value: entry.code, children: entry.label }, entry.code))
+												]
+											})
+										]
+									}),
+									jsx("span", { style: { flex: 1 } }, "spacer"),
+									jsx(ExportMenu, { row, kind, zh, cues: state.cues ?? [], blocks }),
+									jsx("button", {
+										type: "button",
+										style: { ...controlStyle(), height: "24px", padding: "0 8px", fontSize: "11px" },
+										onClick: () => { void load(true); },
+										children: zh ? "重取" : "Refetch"
+									})
+								]
 							})
 						]
 					}),
@@ -1027,13 +1410,31 @@ window.__ModuleLoader__.load({
 											},
 											children: formatTime(block.start)
 										}),
-										jsx("div", {
-											style: {
-												flex: 1, minWidth: 0, lineHeight: "21px",
-												fontWeight: isActive ? 500 : 400,
-												color: isActive ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)"
-											},
-											children: block.text
+										jsxs("div", {
+											style: { flex: 1, minWidth: 0 },
+											children: [
+												jsx("div", {
+													style: {
+														lineHeight: "21px",
+														fontWeight: isActive ? 500 : 400,
+														color: isActive ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)"
+													},
+													children: block.text
+												}),
+												// The translation reads under its source, in the
+												// kind's own colour so the two are never mistaken
+												// for one another. A block still in the queue
+												// renders nothing rather than a placeholder line:
+												// a column of "翻译中…" is noise, and the progress
+												// count in the header already says work is running.
+												target === "" || !translated.has(block.start) ? null : jsx("div", {
+													style: {
+														marginTop: "4px", lineHeight: "21px",
+														color: hue(kind, 0.9)
+													},
+													children: translated.get(block.start)
+												})
+											]
 										})
 									]
 								})
@@ -1203,111 +1604,109 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		* Chapter markers derived from the video's own transcript.
+		* The uploader's own description of a video.
 		*
-		* The reference ships this panel filled with five fixed English titles
-		* dropped at 10/30/50/70/90% of the timeline — its own code labels them
-		* mock and defers real analysis. Copying it faithfully would put
-		* "Introduction & Overview" on a Chinese podcast about token economics,
-		* so the markers here are derived by the routed model from the cached
-		* transcript and cached beside it.
+		* Replaces the chapter-marker panel that used to sit here. A row
+		* collected from a feed carries a title and nothing else, so what a video
+		* is about was the missing thing on this page — derived chapter markers
+		* were answering a question nobody had asked yet.
 		*/
-		function KeyMoments({ row, kind, zh, onSeek }) {
-			const [state, setState] = useState({ status: "idle", moments: [] });
+		function VideoDescription({ row, kind, zh }) {
+			const [state, setState] = useState({ status: "idle", text: row.abstract ?? "" });
+			const [expanded, setExpanded] = useState(false);
 
-			useEffect(() => { setState({ status: "idle", moments: [] }); }, [row.id]);
+			useEffect(() => {
+				setState({ status: "idle", text: row.abstract ?? "" });
+				setExpanded(false);
+			}, [row.id, row.abstract]);
 
-			const derive = useCallback(async (refresh) => {
+			const load = useCallback(async (refresh) => {
 				setState((prev) => ({ ...prev, status: "loading" }));
 				try {
-					const response = await fetch(`${apiBase()}/key-moments`, {
+					const response = await fetch(`${apiBase()}/video-info`, {
 						method: "POST",
 						headers: { "content-type": "application/json" },
 						body: JSON.stringify({ resourceId: row.id, refresh })
 					});
 					const payload = await response.json();
 					if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
-					setState({ status: "ready", moments: payload.data.moments, via: payload.data.via });
+					setState({ status: "ready", text: payload.data.description, meta: payload.data });
 				} catch (cause) {
-					setState({ status: "error", moments: [], error: String(cause?.message ?? cause) });
+					setState((prev) => ({ ...prev, status: "error", error: String(cause?.message ?? cause) }));
 				}
 			}, [row.id]);
 
+			// A description already stored costs nothing to show; only a missing
+			// one reaches out to the watch page, and it does so on its own.
+			useEffect(() => {
+				if ((row.abstract ?? "").trim() === "") void load(false);
+			}, [row.abstract, load]);
+
+			const text = state.text ?? "";
+			const long = text.length > 320;
+			const shown = long && !expanded ? `${text.slice(0, 320)}…` : text;
+			const meta = state.meta;
+
 			return jsxs("section", {
 				style: {
-					marginTop: "16px", border: "1px solid var(--dsw-alias-border-l2)",
+					marginTop: "16px", boxSizing: "border-box",
+					border: "1px solid var(--dsw-alias-border-l1)",
 					borderRadius: "14px", background: "var(--dsw-specific-menu)",
-					boxShadow: "var(--dsw-shadow-lv1)", overflow: "hidden"
+					boxShadow: "var(--dsw-shadow-lv1)", padding: "14px 16px"
 				},
 				children: [
-					jsxs("header", {
-						style: {
-							display: "flex", alignItems: "center", gap: "10px", padding: "12px 14px",
-							borderBottom: state.moments.length === 0 ? "none" : "1px solid var(--dsw-alias-border-l2)"
-						},
+					jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: text === "" ? 0 : "10px" },
 						children: [
 							jsx("span", {
 								style: { fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
-								children: zh ? "关键时刻" : "Key moments"
+								children: zh ? "视频介绍" : "About this video"
 							}),
-							jsx("span", {
+							meta === undefined ? jsx("span", { style: { flex: 1 } }) : jsx("span", {
 								style: { flex: 1, fontSize: "11px", color: "var(--dsw-alias-label-tertiary)" },
-								children: state.moments.length === 0 ? "" : `${state.moments.length} ${zh ? "个重点" : "moments"}`
+								children: [
+									meta.lengthSeconds > 0 ? formatTime(meta.lengthSeconds) : "",
+									meta.viewCount > 0 ? `${meta.viewCount.toLocaleString()} ${zh ? "次观看" : "views"}` : ""
+								].filter((part) => part !== "").join(" · ")
 							}),
 							jsx("button", {
 								type: "button",
 								disabled: state.status === "loading",
 								style: { ...controlStyle(), height: "26px", padding: "0 10px", fontSize: "11px" },
-								onClick: () => { void derive(state.status === "ready"); },
-								children: state.status === "loading"
-									? (zh ? "分析中…" : "Analysing…")
-									: state.status === "ready" ? (zh ? "重新分析" : "Re-derive") : (zh ? "从字幕生成" : "Derive")
+								onClick: () => { void load(true); },
+								children: state.status === "loading" ? (zh ? "获取中…" : "Fetching…") : (zh ? "刷新" : "Refresh")
 							})
 						]
 					}),
-					state.status === "error" ? jsx("p", {
-						style: { margin: 0, padding: "12px 14px", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-tertiary)" },
-						children: state.error
-					}) : null,
-					state.moments.length === 0 && state.status !== "error" ? jsx("p", {
-						style: { margin: 0, padding: "12px 14px", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-tertiary)" },
-						children: zh
-							? "由模型从字幕中识别话题切换点，先获取字幕再生成。"
-							: "The model reads the cached transcript and marks where the subject changes. Fetch the transcript first."
-					}) : null,
-					...state.moments.map((moment, index) => jsxs("button", {
-						type: "button",
-						onClick: () => { onSeek?.(moment.at); },
-						style: {
-							display: "flex", alignItems: "flex-start", gap: "12px", width: "100%",
-							padding: "12px 14px", border: "none", background: "transparent",
-							borderTop: index === 0 ? "none" : "1px solid var(--dsw-alias-border-l2)",
-							font: "inherit", textAlign: "left", cursor: "pointer"
-						},
-						children: [
-							jsx("span", {
-								style: {
-									flex: "none", padding: "2px 8px", borderRadius: "6px",
-									background: hue(kind, 0.1), color: hue(kind),
-									fontSize: "11px", fontWeight: 600, fontVariantNumeric: "tabular-nums"
-								},
-								children: formatTime(moment.at)
-							}),
-							jsxs("span", {
-								style: { flex: 1, minWidth: 0 },
-								children: [
-									jsx("span", {
-										style: { display: "block", fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
-										children: moment.title
-									}),
-									moment.summary === "" ? null : jsx("span", {
-										style: { display: "block", marginTop: "3px", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
-										children: moment.summary
-									})
-								]
-							})
-						]
-					}, `moment-${index}`))
+					text === ""
+						? jsx("p", {
+							style: { margin: 0, fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-tertiary)" },
+							children: state.status === "error"
+								? state.error
+								: state.status === "loading"
+									? (zh ? "正在从视频页读取简介…" : "Reading the description from the watch page…")
+									: (zh ? "该视频没有简介。" : "This video carries no description.")
+						})
+						: jsxs("div", {
+							children: [
+								jsx("p", {
+									style: {
+										margin: 0, fontSize: "13px", lineHeight: "21px", whiteSpace: "pre-wrap",
+										color: "var(--dsw-alias-label-secondary)"
+									},
+									children: shown
+								}),
+								long ? jsx("button", {
+									type: "button",
+									onClick: () => { setExpanded((value) => !value); },
+									style: {
+										appearance: "none", border: "none", background: "transparent", padding: "8px 0 0",
+										font: "inherit", fontSize: "12px", color: hue(kind), cursor: "pointer"
+									},
+									children: expanded ? (zh ? "收起" : "Show less") : (zh ? "展开全部" : "Show more")
+								}) : null
+							]
+						})
 				]
 			});
 		}
@@ -1425,7 +1824,7 @@ window.__ModuleLoader__.load({
 		* article can be read either as its own page or as extracted text, and a
 		* source with neither shows its link.
 		*/
-		function DocumentView({ row, kind, zh }) {
+		function DocumentView({ row, kind, zh, wide }) {
 			const mode = displayModeOf(row);
 			const url = documentUrlOf(row);
 			const [blobUrl, setBlobUrl] = useState("");
@@ -1476,8 +1875,9 @@ window.__ModuleLoader__.load({
 			}
 
 			const frame = {
-				width: "100%", height: "100%", border: "1px solid var(--dsw-alias-border-l2)",
-				borderRadius: "12px", background: "var(--dsw-specific-menu)"
+				width: "100%", height: "100%", border: "1px solid var(--dsw-alias-border-l1)",
+				borderRadius: "12px", boxShadow: "var(--dsw-shadow-lv1)",
+				background: "var(--dsw-specific-menu)"
 			};
 
 			return jsxs("div", {
@@ -1530,12 +1930,28 @@ window.__ModuleLoader__.load({
 								? jsx("div", { style: NOTE_STYLE, children: zh ? "提取正文中…" : "Extracting article…" })
 								: jsx("div", {
 									style: { flex: 1, minHeight: 0, overflowY: "auto", padding: "4px 2px" },
-									children: jsx("p", {
+									children: jsx("article", {
+										// A measure cap keeps prose readable, but pinned to
+										// the left it leaves a field of white beside the
+										// text when the reading column is collapsed —
+										// which reads as broken rather than deliberate.
+										// Centring balances the margins, and the wider
+										// cap spends some of the reclaimed width on the
+										// text itself.
 										style: {
-											margin: 0, maxWidth: "72ch", fontSize: "14px", lineHeight: "24px",
-											whiteSpace: "pre-wrap", color: "var(--dsw-alias-label-secondary)"
+											maxWidth: wide ? "104ch" : "88ch",
+											margin: "0 auto",
+											fontSize: "14px", lineHeight: "24px"
 										},
-										children: reader.text
+										// Readability hands back structure; rendering it as Markdown
+										// keeps the headings, lists, and links the article had.
+										// The degraded fallback has no markdown, only rough text.
+										children: reader.markdown !== "" && reader.markdown !== undefined
+											? renderMarkdown(reader.markdown)
+											: jsx("p", {
+												style: { margin: 0, whiteSpace: "pre-wrap", color: "var(--dsw-alias-label-secondary)" },
+												children: reader.text
+											})
 									})
 								})
 				]
@@ -1563,6 +1979,7 @@ window.__ModuleLoader__.load({
 			const videoId = youTubeVideoId(row.sourceUrl);
 			const isVideo = videoId !== undefined;
 			const [tab, setTab] = useState(isVideo ? "transcript" : "chat");
+			const [collapsed, setCollapsed] = useState(false);
 			const [currentTime, setCurrentTime] = useState(0);
 			const playerRef = useRef(null);
 			const frameRef = useRef(null);
@@ -1585,8 +2002,10 @@ window.__ModuleLoader__.load({
 
 			useEffect(() => {
 				if (!isVideo) return;
+				let heard = false;
 				const onMessage = (event) => {
 					if (typeof event.data !== "string" || !event.origin.includes("youtube.com")) return;
+					heard = true;
 					try {
 						const parsed = JSON.parse(event.data);
 						const seconds = parsed?.info?.currentTime;
@@ -1596,18 +2015,37 @@ window.__ModuleLoader__.load({
 					}
 				};
 				window.addEventListener("message", onMessage);
-				// The player only reports state on change, so the position is
-				// polled while the panel is open.
-				const timer = setInterval(() => { command("getCurrentTime"); }, 1000);
-				frameRef.current?.contentWindow?.postMessage(
-					JSON.stringify({ event: "listening", id: "swarm-player" }),
-					"https://www.youtube.com"
-				);
+
+				// The handshake only registers if it lands AFTER the player
+				// script inside the frame is running, and nothing on this side
+				// says when that is — the frame's `load` fires for the document,
+				// not for the player. Posting once at mount always arrived too
+				// early, so the frame stayed silent for the whole session and
+				// the transcript had no position to follow.
+				//
+				// Retrying until the frame answers is the fix. Once it does,
+				// YouTube pushes `infoDelivery` on its own several times a
+				// second while playing, so there is nothing left to poll —
+				// which is just as well, because `getCurrentTime` sent as a
+				// command is write-only and never replies.
+				const hello = () => {
+					frameRef.current?.contentWindow?.postMessage(
+						JSON.stringify({ event: "listening", id: "swarm-player", channel: "widget" }),
+						"https://www.youtube.com"
+					);
+				};
+				hello();
+				let attempts = 0;
+				const handshake = setInterval(() => {
+					attempts += 1;
+					if (heard || attempts > 40) clearInterval(handshake);
+					else hello();
+				}, 500);
 				return () => {
 					window.removeEventListener("message", onMessage);
-					clearInterval(timer);
+					clearInterval(handshake);
 				};
-			}, [isVideo, command, row.id]);
+			}, [isVideo, row.id]);
 
 			const seek = useCallback((seconds) => {
 				command("seekTo", [seconds, true]);
@@ -1621,57 +2059,76 @@ window.__ModuleLoader__.load({
 			const activeTabs = isVideo ? READER_TABS : READER_TABS.filter((entry) => entry.id !== "transcript");
 
 			return jsxs("div", {
-				style: { display: "flex", gap: "20px", height: "calc(100vh - 190px)", minHeight: 0 },
+				// Fills whatever the page body leaves rather than guessing at it.
+				// The guess was `calc(100vh - 190px)`, and it was 98px short of
+				// the space actually available — a hardcoded subtraction cannot
+				// track a header whose height it does not measure.
+				style: { display: "flex", gap: "20px", height: "100%", minHeight: 0, padding: "0 24px", boxSizing: "border-box" },
 				children: [
 					// ── the source itself ────────────────────────────────────
 					jsxs("div", {
-						style: { flex: "1 1 52%", minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0, overflowY: "auto" },
+						style: {
+							// `1 1 auto` here resolves the basis from content, so a long
+							// title or a wide table let this column bid for space and
+							// squeezed the panel below its own width — the panel
+							// measured 282px against the 400px it was given. A zero
+							// basis makes it take exactly the remainder.
+							flex: "1 1 0%", minWidth: 0, display: "flex", flexDirection: "column",
+							minHeight: 0, overflowY: "auto", overflowX: "hidden"
+						},
 						children: [
 							jsxs("div", {
-								style: { flex: "none", display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px" },
+								// One row, not three stacked blocks. Back, kind, title,
+								// provenance, and the outbound link were costing 140px
+								// of height above the document — on a paper that is a
+								// third of a page of reading, spent on chrome. The
+								// title truncates and keeps its full text in `title`.
+								style: {
+									flex: "none", display: "flex", alignItems: "baseline",
+									gap: "10px", marginBottom: "10px", minWidth: 0
+								},
 								children: [
 									jsx("button", {
 										type: "button",
-										style: controlStyle(),
+										style: { ...controlStyle(), flex: "none", height: "28px", padding: "0 10px", fontSize: "12px" },
 										onClick: onBack,
-										children: zh ? "← 返回列表" : "← Back to list"
+										children: zh ? "← 返回" : "← Back"
 									}),
 									jsx("span", {
 										style: {
-											padding: "2px 10px", borderRadius: "999px",
+											flex: "none", padding: "2px 10px", borderRadius: "999px",
 											background: hue(kind, 0.1), color: hue(kind),
 											fontSize: "12px", fontWeight: 500
 										},
 										children: zh ? kind.zh : kind.en
 									}),
+									jsx("h1", {
+										title: row.title,
+										style: {
+											flex: 1, minWidth: 0, margin: 0,
+											fontSize: "16px", lineHeight: "24px", fontWeight: 650,
+											color: "var(--dsw-alias-label-primary)",
+											overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+										},
+										children: row.title
+									}),
+									jsx("span", {
+										style: { flex: "none", fontSize: "11px", color: "var(--dsw-alias-label-tertiary)" },
+										children: [formatDate(row.publishedAt), sourceNameOf(row)].filter((part) => part !== "").join(" · ")
+									}),
 									jsx("a", {
 										href: row.sourceUrl, target: "_blank", rel: "noreferrer noopener",
-										style: { marginLeft: "auto", fontSize: "12px", color: hue(kind), textDecoration: "none" },
+										style: { flex: "none", fontSize: "12px", color: hue(kind), textDecoration: "none" },
 										children: zh ? "打开原文 ↗" : "Open original ↗"
 									})
-								]
-							}),
-							jsx("h1", {
-								style: {
-									flex: "none", margin: "0 0 8px", fontSize: "19px", lineHeight: "27px",
-									fontWeight: 650, color: "var(--dsw-alias-label-primary)"
-								},
-								children: row.title
-							}),
-							jsxs("div", {
-								style: { ...META_STYLE, flex: "none", marginBottom: "14px" },
-								children: [
-									jsx("span", { children: formatDate(row.publishedAt) }),
-									jsx("span", { children: sourceNameOf(row) }),
-									jsx("span", { children: "↑ " + (row.upvoteCount ?? 0) })
 								]
 							}),
 							isVideo
 								? jsx("div", {
 									style: {
 										flex: "none", position: "relative", width: "100%", aspectRatio: "16 / 9",
-										borderRadius: "12px", overflow: "hidden",
-										border: "1px solid var(--dsw-alias-border-l2)"
+										boxSizing: "border-box", borderRadius: "12px", overflow: "hidden",
+										border: "1px solid var(--dsw-alias-border-l1)"
 									},
 									children: jsx("iframe", {
 										ref: frameRef,
@@ -1683,16 +2140,54 @@ window.__ModuleLoader__.load({
 										style: { position: "absolute", inset: 0, width: "100%", height: "100%", border: "none" }
 									})
 								})
-								: jsx("div", { style: { flex: 1, minHeight: 0 }, children: jsx(DocumentView, { row, kind, zh }) }),
-							isVideo ? jsx(KeyMoments, { row, kind, zh, onSeek: seek }) : null
+								: jsx("div", { style: { flex: 1, minHeight: 0 }, children: jsx(DocumentView, { row, kind, zh, wide: collapsed }) }),
+							isVideo ? jsx(VideoDescription, { row, kind, zh }) : null
 						]
 					}),
 
 					// ── the reading column ───────────────────────────────────
-					jsxs("aside", {
+					// Collapsed, the column becomes a rail carrying only the way
+					// back: a reader who wants the document full-width should not
+					// have to lose the transcript's scroll position or the
+					// conversation to get it, so the panes are hidden rather
+					// than unmounted.
+					collapsed ? jsx("aside", {
 						style: {
-							flex: "1 1 48%", minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0,
-							border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "14px",
+							flex: "none", width: "44px", display: "flex", flexDirection: "column",
+							alignItems: "center", padding: "10px 0",
+							border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "14px",
+							boxShadow: "var(--dsw-shadow-lv1)",
+							background: "var(--dsw-specific-menu)"
+						},
+						children: jsx("button", {
+							type: "button",
+							title: zh ? "展开阅读栏" : "Expand the reading column",
+							"aria-label": zh ? "展开阅读栏" : "Expand the reading column",
+							"aria-expanded": false,
+							onClick: () => { setCollapsed(false); },
+							style: {
+								appearance: "none", border: "none", borderRadius: "8px",
+								background: hue(kind, 0.1), color: hue(kind),
+								padding: "10px 4px", font: "inherit", fontSize: "12px", cursor: "pointer",
+								writingMode: "vertical-rl", letterSpacing: "0.08em"
+							},
+							children: `⟨⟨ ${activeTabs.map((entry) => (zh ? entry.zh : entry.en)).join(" · ")}`
+						})
+					}) : jsxs("aside", {
+						style: {
+							// A percentage split gave the panel half the row, which is
+							// more than a transcript or a chat thread can use — the
+							// document was reading in 650px while 600px of it went to
+							// a column of short lines. A capped share keeps the panel
+							// usable on a laptop and stops it from claiming width it
+							// has no content for on a wide screen.
+							flex: "0 0 auto", width: "min(32%, 400px)", minWidth: "260px",
+							display: "flex", flexDirection: "column", minHeight: 0,
+							// A hairline this faint cannot hold a panel's edge on its
+							// own against a white page, so the panel gets the same
+							// resting elevation as a card.
+							border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "14px",
+							boxShadow: "var(--dsw-shadow-lv1)",
 							background: "var(--dsw-specific-menu)", overflow: "hidden"
 						},
 						children: [
@@ -1702,20 +2197,40 @@ window.__ModuleLoader__.load({
 									padding: "8px", borderBottom: "1px solid var(--dsw-alias-border-l2)"
 								},
 								role: "tablist",
-								children: activeTabs.map((entry) => jsx("button", {
-									type: "button",
-									role: "tab",
-									"aria-selected": entry.id === tab,
-									onClick: () => { setTab(entry.id); },
-									style: {
-										appearance: "none", border: "none", borderRadius: "8px",
-										padding: "7px 14px", font: "inherit", fontSize: "13px", cursor: "pointer",
-										fontWeight: entry.id === tab ? 600 : 400,
-										background: entry.id === tab ? hue(kind, 0.12) : "transparent",
-										color: entry.id === tab ? hue(kind) : "var(--dsw-alias-label-secondary)"
-									},
-									children: zh ? entry.zh : entry.en
-								}, entry.id))
+								children: [
+									...activeTabs.map((entry) => jsx("button", {
+										type: "button",
+										role: "tab",
+										"aria-selected": entry.id === tab,
+										onClick: () => { setTab(entry.id); },
+										style: {
+											appearance: "none", border: "none", borderRadius: "8px",
+											padding: "7px 14px", font: "inherit", fontSize: "13px", cursor: "pointer",
+											fontWeight: entry.id === tab ? 600 : 400,
+											background: entry.id === tab ? hue(kind, 0.12) : "transparent",
+											color: entry.id === tab ? hue(kind) : "var(--dsw-alias-label-secondary)"
+										},
+										children: zh ? entry.zh : entry.en
+									}, entry.id)),
+									jsx("span", { style: { flex: 1 } }, "spacer"),
+									// Carries a border and a word. The first attempt was a
+									// 28px chevron in the faintest label colour, and it
+									// could only be found by reading the accessibility
+									// tree — a control nobody sees is not a feature.
+									jsx("button", {
+										type: "button",
+										title: zh ? "折叠阅读栏，让正文占满" : "Collapse the reading column and widen the document",
+										"aria-label": zh ? "折叠阅读栏" : "Collapse the reading column",
+										"aria-expanded": true,
+										onClick: () => { setCollapsed(true); },
+										style: {
+											...controlStyle(), height: "28px", padding: "0 10px",
+											display: "inline-flex", alignItems: "center", gap: "6px",
+											fontSize: "12px"
+										},
+										children: `⟩⟩ ${zh ? "折叠" : "Collapse"}`
+									}, "collapse")
+								]
 							}),
 							jsx("div", {
 								style: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" },
@@ -1839,7 +2354,15 @@ window.__ModuleLoader__.load({
 				return jsx(DetailView, { row: selected, kind, zh, onBack: () => { setSelected(null); } });
 			}
 
-			return jsxs("div", {
+			// The scrollbar belongs to the frame, not to the column of cards.
+			// `overflowY` sat on the box that also carried `maxWidth: 1080px`,
+			// so the bar was parked 1080px in with a band of dead page beside
+			// it. The scroller has to span the full width; the measure cap and
+			// the side padding both live one level deeper.
+			return jsx("div", {
+				style: { height: "100%", minHeight: 0, overflowY: "auto" },
+				children: jsxs("div", {
+				style: { ...CONTENT_STYLE, padding: "0 24px" },
 				children: [
 					jsx("input", {
 						type: "search",
@@ -1949,6 +2472,7 @@ window.__ModuleLoader__.load({
 						})
 						: null
 				]
+				})
 			});
 		}
 		//#endregion
@@ -2119,11 +2643,11 @@ window.__ModuleLoader__.load({
 						}, candidate.id))
 					}),
 					jsx("div", {
-						style: BODY_STYLE,
+						style: active.id === "sources" ? READER_BODY_STYLE : BODY_STYLE,
 						role: "tabpanel",
 						"aria-label": zh ? active.zh : active.en,
 						children: jsx("div", {
-							style: CONTENT_STYLE,
+							style: active.id === "sources" ? { ...WIDE_STYLE, height: "100%", minHeight: 0 } : CONTENT_STYLE,
 							children: active.id === "sources"
 								? jsx(ExploreTab, { zh })
 								: jsxs("div", {
@@ -2230,7 +2754,7 @@ window.__ModuleLoader__.load({
 			const hint = { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-tertiary)" };
 			const rowStyle = {
 				display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px",
-				border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "10px", marginBottom: "8px",
+				border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "10px", marginBottom: "8px",
 				background: "var(--dsw-specific-menu)"
 			};
 
@@ -2430,7 +2954,7 @@ window.__ModuleLoader__.load({
 		exports.__test__ = {
 			KINDS, SORTS, youTubeVideoId, thumbnailOf, hostOf, sourceNameOf,
 			authorLine, descriptionOf, formatDate, resourcesUrl, unwrapFeed,
-			renderMarkdown, mergeBySentence, formatTime, displayModeOf
+			renderMarkdown, mergeBySentence, formatTime, displayModeOf, buildExport, stampFor
 		};
 		return module.exports;
 	}
