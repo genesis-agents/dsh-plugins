@@ -1,0 +1,25 @@
+# dsh-web-search-serper bundle patch.
+#
+# Two things happen here, and they are separate on purpose:
+#
+#   1. The provider row is inserted. It registers into `ctx.web` and reports
+#      itself unavailable until a key is present, so inserting it is safe even
+#      before one is configured.
+#   2. The `web` row's `searchProvider` is pointed at `serper`. The shipped
+#      base bundle selects `deepseek-official`, which needs DEEPSEEK_API_KEY;
+#      on a profile running another model that key is absent and web search
+#      has no working provider at all. Naming the provider is what makes this
+#      plugin take effect rather than merely be present.
+#
+# To go back to the shipped provider, remove the `web` entry below — the
+# insert can stay, since an unselected provider costs nothing.
+
+- id: web
+  config:
+    searchProvider: serper
+
+- insert:
+    - id: web-search-serper
+      name: 'dsh-web-search-serper'
+      config:
+        apiKeyEnv: SERPER_API_KEY

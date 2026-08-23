@@ -8,7 +8,8 @@ One directory per plugin; each is a self-contained package with its own
 | Plugin | What it does |
 |---|---|
 | `dsh-brand-mine` | Genesis honeycomb mark, the `Genesis Harness` wordmark, and a `deepseek` origin badge, in the sidebar and conversation Hero brand slots |
-| `dsh-agents-swarm` | The Agents Swarm sidebar entry, its page, and the local source library behind it |
+| `dsh-agents-swarm` | The Agents sidebar entry, its page, and the local source library behind it |
+| `dsh-web-search-serper` | A Serper-backed search provider for the `ctx.web` seam, for deployments with no DeepSeek key |
 
 ## Install locally
 
