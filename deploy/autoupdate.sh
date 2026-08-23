@@ -94,7 +94,7 @@ say "updated $(git rev-parse --short "$BEFORE") -> $(git rev-parse --short "$REM
 # setup.sh is idempotent and merges what it does not own,
 # so running it on every update costs a few seconds and closes that gap.
 apply_profile() {
-  bash "$REPO/deploy/setup.sh" >>"$LOG" 2>&1 || say "setup.sh failed"
+  bash "$REPO/deploy/setup.sh" >>"$LOG" 2>&1
 }
 
 # Restart and wait for it to actually answer. Answering is the test, not
@@ -109,23 +109,38 @@ restart_and_wait() {
   return 1
 }
 
-apply_profile
-if restart_and_wait; then
-  say "restarted and answering"
-  exit 0
+# Both halves have to succeed. `apply_profile` used to log its own failure and
+# carry on, so a profile that could not be built still counted as a deployment
+# -- the restart then found the OLD code still installed, it answered, and the
+# run reported success while the update had not landed. That is the same shape
+# as every other bug in this file: a check that passes while the thing it is
+# checking is broken.
+if apply_profile; then
+  if restart_and_wait; then
+    say "restarted and answering"
+    exit 0
+  fi
+  REASON="did not answer in 60s"
+else
+  REASON="profile would not build"
 fi
 
 # Roll back. The previous revision was serving a minute ago, and a box that is
 # up on yesterday's code is worth more than one that is down on today's --
 # especially here, where nobody is watching and the only alternative was a
 # warning nobody read.
-say "WARNING $(git rev-parse --short "$REMOTE") did not answer in 60s; rolling back to $(git rev-parse --short "$BEFORE")"
+#
+# Transient failures land here too. A version published a minute ago is not
+# resolvable yet -- the registry rebuilds the document installs resolve against
+# a little after the version itself lands -- so the install fails, this rewinds,
+# and the tick five minutes later succeeds. Converging slowly is the right trade
+# against reporting a deployment that did not happen.
+say "WARNING $(git rev-parse --short "$REMOTE") $REASON; rolling back to $(git rev-parse --short "$BEFORE")"
 if ! git reset --hard --quiet "$BEFORE" 2>>"$LOG"; then
   say "FAILED rollback checkout; box is down on $(git rev-parse --short HEAD)"
   exit 1
 fi
-apply_profile
-if restart_and_wait; then
+if apply_profile && restart_and_wait; then
   # Deliberately still an error exit: the update failed and something should
   # say so, even though the box is serving again.
   say "rolled back to $(git rev-parse --short "$BEFORE") and answering"

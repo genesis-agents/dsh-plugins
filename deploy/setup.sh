@@ -234,6 +234,17 @@ for i in "${!NAMES[@]}"; do
              'const m = await import("./lib/version.js"); process.stdout.write(m.PLUGIN_CHANNEL)' 2>/dev/null || echo unknown )"
       [ "$CH" = release ] || [ "$CH" = unknown ] \
         || { echo "${NAMES[$i]} came from the registry but reports channel=$CH" >&2; exit 1; }
+      # And it has to be the version that was asked for. An install can succeed
+      # while resolving something older -- a stale packument lists yesterday's
+      # versions, and a lockfile happily pins one -- which leaves a box serving
+      # code from before the fix it was updated to get, reporting success.
+      GOT="$( cd "$path" && node -p "require('./package.json').version" 2>/dev/null || echo 0.0.0 )"
+      node -e '
+        const [got, want] = process.argv.slice(1).map((v) => v.split(".").map(Number));
+        const cmp = got[0] - want[0] || got[1] - want[1] || got[2] - want[2];
+        process.exit(cmp >= 0 ? 0 : 1);
+      ' "$GOT" "${VALUES[$i]#^}" \
+        || { echo "${NAMES[$i]}: asked for ${VALUES[$i]}, got $GOT" >&2; exit 1; }
       ;;
   esac
 done
