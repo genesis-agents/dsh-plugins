@@ -84,20 +84,39 @@ else
     *) bad "dsh-agents-swarm installed but NOT enabled" "add it to dsh.profile.bundles in $PROFILE/package.json" ;;
   esac
 
-  # Package names, which is how the profile installs them — the directory names
-  # differ and looking for those found nothing on a scoped install.
+  # Checked against what the profile ASKS for, not against one fixed shape.
+  # A release box installs from the registry and a development box links the
+  # checkout; both are correct, and a check that knows only about links called
+  # a perfectly good release install suspicious.
   for plugin in @ai4gensteam/dsh-agents-swarm @ai4gensteam/dsh-web-search dsh-agent-presets; do
     link="$PROFILE/node_modules/$plugin"
+    WANT="$(cd "$PROFILE" && node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).dependencies?.['$plugin'] ?? ''" 2>/dev/null)"
     [ -e "$link" ] || { warn "$plugin not installed" "optional unless you use it"; continue; }
-    if [ -L "$link" ]; then
-      ok "$plugin is a real link" "-> $(readlink "$link")"
-    elif [ -d "$link" ] && [ "$(uname -s)" != "Darwin" ] && [ "$(uname -s)" != "Linux" ]; then
-      # Windows junctions are directories to `test -L`, so this is not
-      # conclusive there; a stale COPY looks identical and is the actual hazard.
-      warn "$plugin is a directory (junction or copy?)" "if it runs stale code, it is a copy: rm it and re-run ./setup.sh"
-    else
-      bad "$plugin is a directory COPY, not a link" "it will run stale code while reporting itself enabled: rm -rf '$link' && ./setup.sh"
-    fi
+    case "$WANT" in
+      link:*|"")
+        if [ -L "$link" ]; then
+          ok "$plugin is linked to this checkout" "-> $(readlink "$link")"
+        elif [ -d "$link" ] && [ "$(uname -s)" != "Darwin" ] && [ "$(uname -s)" != "Linux" ]; then
+          # Windows junctions are directories to `test -L`, so this is not
+          # conclusive there; a stale COPY looks identical and is the hazard.
+          warn "$plugin is a directory (junction or copy?)" "if it runs stale code, it is a copy: rm it and re-run ./setup.sh"
+        else
+          bad "$plugin is a directory COPY, not a link" "it will run stale code while reporting itself enabled: rm -rf '$link' && ./setup.sh"
+        fi
+        ;;
+      *)
+        # The installed copy is asked what it is. `channel` is inferred from
+        # whether the code sits under node_modules, so it separates a real
+        # install from a link that a symlink test cannot tell apart on Windows.
+        GOT="$( cd "$link" && node --input-type=module -e \
+                'const m = await import("./lib/version.js"); process.stdout.write(m.PLUGIN_VERSION + " " + m.PLUGIN_CHANNEL)' 2>/dev/null )"
+        case "$GOT" in
+          *release) ok "$plugin ${GOT% *} from the registry" "profile asks for $WANT" ;;
+          "")       warn "$plugin will not say what it is" "expected an install matching $WANT" ;;
+          *)        bad "$plugin is ${GOT#* }, but the profile asks for $WANT" "a release box serving a development build: ./setup.sh --release" ;;
+        esac
+        ;;
+    esac
   done
 fi
 

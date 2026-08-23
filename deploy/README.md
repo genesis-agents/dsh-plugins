@@ -124,6 +124,27 @@ The lesson is not that the supervisor needed a fourth round. It is that putting
 a whole UI on the wire to reach a database was the wrong shape, and no amount
 of supervision fixes a wrong shape.
 
+## Which copy a machine runs
+
+```sh
+./setup.sh --release     # install from npm  -> the page says "release"
+./setup.sh --checkout    # link this tree    -> the page says "dev"
+```
+
+Remembered per profile in `<profile>/.plugin-source`, so the self-update — which
+runs `setup.sh` with no arguments after every pull — keeps whatever was set.
+Serving machines run `--release`; a `dev` profile linked to the checkout sits
+beside it for development:
+
+```sh
+./setup.sh --profile dev --checkout
+dsh --profile dev --no-open --port 3095     # --profile belongs to dsh, not dsh web
+```
+
+Switching modes rebuilds the profile's `node_modules` from scratch. pnpm reuses
+what it finds, and what it finds after a link is a symlink into the checkout —
+installing over it leaves a release profile still pointing at the working tree.
+
 ## Releasing
 
 Three steps, and the third is the one that matters.

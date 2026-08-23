@@ -480,6 +480,36 @@ settings it depends on. Collection history
 also lives in the database (last 30 runs) and is rendered in the settings page,
 because `ctx.logger` output does not reach this harness's stdout.
 
+### Which copy is running
+
+Two modes, one per profile, remembered in `<profile>/.plugin-source`:
+
+```sh
+./deploy/setup.sh --release     # install from npm  -> the page says "release"
+./deploy/setup.sh --checkout    # link this tree    -> the page says "dev"
+```
+
+The always-on box and the workstation's `web` profile both run `--release`,
+because the published package is the artifact everyone else gets and running
+anything else means the thing you tested is not the thing that is running. A
+`dev` profile linked to the checkout sits beside it for development:
+
+```sh
+./deploy/setup.sh --profile dev --checkout
+dsh --profile dev --no-open --port 3095
+```
+
+`--profile` belongs to `dsh`, not to `dsh web` — which is an alias for
+`--profile web` and refuses the parent flags outright.
+
+A release profile installs `^<the version the checkout names>`, so the bump
+commit is what moves a box. That fixes the order of a release: **publish to
+npm first, push the bump second.** The other way round, the box pulls a version
+the registry does not have yet, fails to install, and rolls back.
+
+Plugins marked `"private": true` stay linked in both modes; there is nothing
+on the registry to install.
+
 ### Deploying
 
 The box updates itself every five minutes; nobody pulls by hand.
