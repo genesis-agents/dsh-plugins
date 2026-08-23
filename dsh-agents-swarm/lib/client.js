@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 		* both is how "deployed but apparently absent" becomes legible instead
 		* of costing an afternoon.
 		*/
-		const CLIENT_VERSION = "0.2.0";
+		const CLIENT_VERSION = "0.2.1";
 
 		//#region locale + mark
 		/**
@@ -5142,7 +5142,7 @@ window.__ModuleLoader__.load({
 			// proxying, the local half always matches itself — comparing those
 			// two would be a check that can never fail, which is worse than no
 			// check because it looks like one.
-			const { agree, serving, proxied, reason } = versionVerdict(host);
+			const { agree, serving, proxied, reason, exact } = versionVerdict(host);
 
 			return jsxs("div", {
 				style: {
