@@ -59,11 +59,16 @@ PROFILE="$DSH_HOME/profiles/$PROFILE_NAME"
 # mode that defaulted instead of persisting would quietly demote the release
 # box to a development build five minutes after somebody set it.
 MODE_FILE="$DSH_HOME/swarm-plugin-source.txt"
+PREVIOUS_MODE=""
+# An `if`, not `[ -f ] && VAR=`, which returns non-zero on a machine that has
+# never run this and takes the whole script down under `set -e` -- on exactly
+# the first run, where there is nothing to diagnose from.
+if [ -f "$MODE_FILE" ]; then PREVIOUS_MODE="$(tr -d '[:space:]' < "$MODE_FILE")"; fi
 if [ -n "$MODE" ]; then
   mkdir -p "$DSH_HOME"
   printf '%s\n' "$MODE" > "$MODE_FILE"
-elif [ -f "$MODE_FILE" ]; then
-  MODE="$(tr -d '[:space:]' < "$MODE_FILE")"
+else
+  MODE="$PREVIOUS_MODE"
 fi
 case "$MODE" in release|checkout) ;; *) MODE=checkout ;; esac
 
@@ -119,6 +124,20 @@ done
 
 # ── the profile manifest ───────────────────────────────────────────────────
 mkdir -p "$PROFILE"
+
+# Changing mode starts the profile's node_modules over.
+#
+# pnpm reuses what it finds, and what it finds after a link is a symlink into
+# the checkout plus that checkout's own store. Installing over it made pnpm try
+# to import the linked package's dependencies as symlinks into the profile,
+# which on Windows needs a privilege it does not have -- ERR_PNPM_EPERM, after
+# which the profile still pointed at the checkout while the manifest said
+# registry. Deleting is cheap and mode changes are rare; leaving the old shape
+# behind is how a release box goes on serving a development build.
+if [ -n "$PREVIOUS_MODE" ] && [ "$PREVIOUS_MODE" != "$MODE" ] && [ -d "$PROFILE/node_modules" ]; then
+  say "mode changed: $PREVIOUS_MODE -> $MODE, rebuilding node_modules from scratch"
+  rm -rf "$PROFILE/node_modules" "$PROFILE/pnpm-lock.yaml"
+fi
 
 # Merged into what is already there, not regenerated over it. This repo is not
 # the only source of plugins on every machine: the always-on box carries two
