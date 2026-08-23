@@ -442,6 +442,21 @@ export class SourceStore {
   }
 
   /**
+   * How many rows were created at or after a moment.
+   *
+   * Compared as ISO text against ISO text. SQLite's own `datetime('now')`
+   * renders `YYYY-MM-DD HH:MM:SS` with a space where the stored values have a
+   * `T`, and `'T' > ' '`, so mixing the two makes every row stored today look
+   * newer than any such bound — a comparison that fails by over-reporting,
+   * silently.
+   * @param since - an ISO 8601 instant.
+   * @returns the count.
+   */
+  countCreatedSince(since) {
+    return this.db.prepare("SELECT COUNT(*) AS n FROM resources WHERE created_at >= ?").get(since).n;
+  }
+
+  /**
    * Rows whose page has not been looked at for an image yet.
    *
    * Ordered newest first, because a reader looks at the top of the feed and a

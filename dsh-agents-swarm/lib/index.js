@@ -245,12 +245,16 @@ const MIN_COLLECT_INTERVAL_MINUTES = 15;
  * @param logger - Cordis logger, or anything with `info`/`warn`.
  * @returns the per-collector results.
  */
-export async function collectOnce(store, logger) {
-  const config = readConfig(store);
-  const jobs = config.jobs.concat(config.feeds.map((feed) => ({ collector: "feed", options: feed })));
+/**
+ * Run a list of jobs, naming each in its result.
+ * @param store - the source library.
+ * @param jobs - `[{ collector, options }]`.
+ * @returns one result per job, successes and failures alike.
+ */
+async function runJobs(store, jobs) {
   const results = [];
   for (const job of jobs) {
-    // Name the job in the result, success or failure. A roster of 73 feeds
+    // Name the job in the result, success or failure. A roster of 72 feeds
     // reporting `{collector: "feed", error: "fetch failed"}` says a source is
     // broken without saying which, which is barely better than silence.
     const label = job.options?.name ?? job.options?.url ?? job.collector;
@@ -260,6 +264,15 @@ export async function collectOnce(store, logger) {
       results.push({ collector: job.collector, source: label, error: String(cause?.message ?? cause) });
     }
   }
+  return results;
+}
+
+export async function collectOnce(store, logger) {
+  const config = readConfig(store);
+  const jobs = config.jobs.concat(config.feeds.map((feed) => ({ collector: "feed", options: feed })));
+  const startedAt = new Date().toISOString();
+  const startedMs = Date.now();
+  const results = await runJobs(store, jobs);
   const written = results.reduce((sum, row) => sum + (row.written ?? 0), 0);
   logger?.info?.(`swarm: collected ${written} new row(s) from ${jobs.length} job(s)`);
   // A bounded enrichment pass rides along with each cycle. Bounded because it
@@ -267,12 +280,46 @@ export async function collectOnce(store, logger) {
   // schedule; riding along because a separate timer would be a second thing
   // to reason about for no benefit — the rows it works on are the ones the
   // run just wrote.
+  let thumbnails;
   try {
-    await enrichThumbnails(store, { logger });
+    thumbnails = await enrichThumbnails(store, { logger });
   } catch (cause) {
     logger?.warn?.(`swarm: thumbnail pass failed: ${String(cause?.message ?? cause)}`);
   }
+  recordCollection(store, {
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    seconds: Math.round((Date.now() - startedMs) / 1000),
+    jobs: jobs.length,
+    fetched: results.reduce((sum, row) => sum + (row.fetched ?? 0), 0),
+    written,
+    added: store.countCreatedSince(startedAt),
+    thumbnails,
+    failures: results
+      .filter((row) => row.error !== undefined)
+      .map((row) => ({ source: row.source, error: String(row.error).slice(0, 160) })),
+  });
   return results;
+}
+
+/** Runs kept in the log. Enough to see a pattern, small enough to stay a setting. */
+const COLLECTION_LOG_LIMIT = 30;
+
+/**
+ * Append one run to the collection log.
+ *
+ * Written to the store rather than only to `ctx.logger`, because the logger's
+ * output does not reach the process stdout in this harness — every run so far
+ * left no trace an operator could read, and diagnosing them meant inferring
+ * what happened from timestamps on the rows themselves. A log nobody can read
+ * is not a log.
+ * @param store - the source library.
+ * @param entry - the run summary.
+ */
+export function recordCollection(store, entry) {
+  const history = store.getSetting("collectionLog", []);
+  const next = [entry, ...(Array.isArray(history) ? history : [])].slice(0, COLLECTION_LOG_LIMIT);
+  store.setSetting("collectionLog", next);
 }
 
 /**
@@ -992,6 +1039,28 @@ export function createHandler(store, logger, chat) {
       return;
     }
 
+    // ── collection log ──────────────────────────────────────────────────
+    if (req.method === "GET" && path === "/collect/status") {
+      const log = store.getSetting("collectionLog", []);
+      const runs = Array.isArray(log) ? log : [];
+      const minutes = Number(readConfig(store).collectIntervalMinutes ?? 0);
+      const last = runs[0];
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          intervalMinutes: minutes,
+          // The timer counts from process start, not from the wall clock, so
+          // the next run is the last one plus the interval — not the top of
+          // the next hour.
+          nextExpectedAt: minutes > 0 && last !== undefined
+            ? new Date(Date.parse(last.startedAt) + minutes * 60_000).toISOString()
+            : null,
+          runs,
+        },
+      });
+      return;
+    }
+
     // ── image relay ─────────────────────────────────────────────────────
     //
     // A site that serves its own `og:image` will often refuse it when the
@@ -1196,22 +1265,13 @@ export function createHandler(store, logger, chat) {
         sendJson(res, 400, { success: false, error: String(cause?.message ?? cause) });
         return;
       }
-      const config = readConfig(store);
-      const feedJobs = config.feeds.map((feed) => ({ collector: "feed", options: feed }));
-      const requested = Array.isArray(body.jobs) && body.jobs.length > 0
-        ? body.jobs
-        : config.jobs.concat(feedJobs);
-      const results = [];
-      for (const job of requested) {
-        const label = job.options?.name ?? job.options?.url ?? job.collector;
-        try {
-          results.push({ ...await runCollector(store, job.collector, job.options ?? {}), source: label });
-        } catch (cause) {
-          results.push({ collector: job.collector, source: label, error: String(cause?.message ?? cause) });
-        }
-      }
-      const written = results.reduce((sum, row) => sum + (row.written ?? 0), 0);
-      logger?.info?.(`swarm: collected ${written} new row(s)`);
+      // The full run goes through `collectOnce`, the same path the timer
+      // takes. It had a second copy of the loop here, and the copies had
+      // already drifted: only one of them recorded the run, so pressing
+      // Collect left no entry in the log it was meant to fill.
+      const results = Array.isArray(body.jobs) && body.jobs.length > 0
+        ? await runJobs(store, body.jobs)
+        : await collectOnce(store, logger);
       sendJson(res, 200, { success: true, data: { results, total: store.count() } });
       return;
     }

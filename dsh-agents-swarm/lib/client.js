@@ -332,6 +332,22 @@ window.__ModuleLoader__.load({
 			return "";
 		}
 
+		/**
+		* An instant as local date and time, for a log line.
+		*
+		* `formatDate` shows the day only, which is right for a published date
+		* and useless for a run that happens hourly.
+		* @param iso - an ISO 8601 instant.
+		* @returns a short local timestamp, or an empty string.
+		*/
+		function formatStamp(iso) {
+			const at = Date.parse(iso);
+			if (Number.isNaN(at)) return "";
+			const when = new Date(at);
+			const pad = (value) => String(value).padStart(2, "0");
+			return `${pad(when.getMonth() + 1)}-${pad(when.getDate())} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
+		}
+
 		/** Host portion of a URL, without `www.`. */
 		function hostOf(url) {
 			try {
@@ -2954,6 +2970,10 @@ window.__ModuleLoader__.load({
 			const [keyDraft, setKeyDraft] = useState("");
 			const [feedUrl, setFeedUrl] = useState("");
 			const [feedType, setFeedType] = useState("BLOG");
+			const [status, setStatus] = useState(null);
+			// The settings page belongs to no one kind, so the log borrows a
+			// single accent for failures rather than tinting itself at random.
+			const alert = KINDS[0];
 
 			const reload = useCallback(async () => {
 				try {
@@ -2967,7 +2987,18 @@ window.__ModuleLoader__.load({
 				}
 			}, []);
 
-			useEffect(() => { void reload(); }, [reload]);
+			const loadStatus = useCallback(async () => {
+				try {
+					const response = await fetch(`${apiBase()}/collect/status`);
+					const payload = await response.json();
+					if (payload?.success === true) setStatus(payload.data);
+				} catch {
+					// The log is diagnostics; failing to read it must not take the
+					// settings page down with it.
+				}
+			}, []);
+
+			useEffect(() => { void reload(); void loadStatus(); }, [reload, loadStatus]);
 
 			const save = useCallback(async (patch, message) => {
 				setBusy(true);
@@ -3029,6 +3060,65 @@ window.__ModuleLoader__.load({
 			return jsxs("div", {
 				style: { padding: "4px 4px 32px", maxWidth: "720px" },
 				children: [
+					// ── collection log ────────────────────────────────────────
+					// What the scheduler has actually been doing. Until now the only
+					// record was `ctx.logger`, whose output does not reach this
+					// harness's stdout, so a run left no trace anyone could read and
+					// diagnosing one meant inferring it from timestamps on the rows.
+					jsx("h3", { style: { ...heading, marginTop: "8px" }, children: zh ? "采集记录" : "Collection log" }),
+					status === null ? jsx("p", { style: hint, children: zh ? "读取中…" : "Loading…" }) : jsxs("div", {
+						style: { marginBottom: "16px" },
+						children: [
+							jsx("p", {
+								style: hint,
+								children: status.intervalMinutes > 0
+									? (zh ? `每 ${status.intervalMinutes} 分钟自动采集一次。` : `Collecting every ${status.intervalMinutes} minutes.`)
+									: (zh ? "自动采集已关闭（间隔为 0）。" : "Automatic collection is off (interval is 0).")
+							}),
+							status.runs.length === 0
+								? jsx("div", { style: { ...rowStyle, color: "var(--dsw-alias-label-secondary)", fontSize: "12px" }, children: zh ? "服务启动后还没有跑过。" : "No run since this process started." })
+								: jsxs("div", {
+									children: status.runs.slice(0, 8).map((run, at) => jsxs("div", {
+										style: {
+											...rowStyle, alignItems: "flex-start", flexDirection: "column", gap: "4px",
+											borderColor: run.failures.length === 0 ? "var(--dsw-alias-border-l1)" : hue(alert, 0.45)
+										},
+										children: [
+											jsxs("div", {
+												style: { display: "flex", flexWrap: "wrap", gap: "10px", fontSize: "12px", width: "100%" },
+												children: [
+													jsx("span", { style: { fontWeight: 600, color: "var(--dsw-alias-label-primary)" }, children: formatStamp(run.startedAt) }),
+													jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: (zh ? "作业 " : "jobs ") + run.jobs }),
+													jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: (zh ? "抓取 " : "fetched ") + run.fetched }),
+													jsx("span", {
+														style: { color: run.added > 0 ? hue(alert) : "var(--dsw-alias-label-secondary)", fontWeight: run.added > 0 ? 600 : 400 },
+														children: (zh ? "新增 " : "added ") + run.added
+													}),
+													run.thumbnails === undefined || run.thumbnails === null ? null : jsx("span", {
+														style: { color: "var(--dsw-alias-label-secondary)" },
+														children: (zh ? "补图 " : "thumbnails ") + run.thumbnails.found + "/" + run.thumbnails.looked
+													}),
+													jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: run.seconds + "s" }),
+													jsx("span", { style: { flex: 1 } }, "spacer"),
+													jsx("span", {
+														style: { color: run.failures.length === 0 ? "var(--dsw-alias-label-secondary)" : hue(alert), fontWeight: run.failures.length === 0 ? 400 : 600 },
+														children: run.failures.length === 0 ? (zh ? "全部成功" : "all ok") : (zh ? `${run.failures.length} 个源失败` : `${run.failures.length} failed`)
+													})
+												]
+											}),
+											...run.failures.slice(0, 4).map((failure, index) => jsx("div", {
+												style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+												children: `${failure.source} — ${failure.error}`
+											}, `f${index}`))
+										]
+									}, `run${at}`))
+								}),
+							status.nextExpectedAt === null ? null : jsx("p", {
+								style: { ...hint, marginTop: "8px" },
+								children: (zh ? "下次预计 " : "Next expected ") + formatStamp(status.nextExpectedAt)
+							})
+						]
+					}),
 					// ── collectors ────────────────────────────────────────────
 					jsx("h3", { style: { ...heading, marginTop: "8px" }, children: zh ? "采集任务" : "Collectors" }),
 					jsx("p", {
