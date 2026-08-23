@@ -51,7 +51,7 @@ flowchart TB
     SUPA["Supadata<br/><i>transcript fallback</i>"]
   end
 
-  UI <-->|"SSH tunnel :3080"| HOST
+  UI <-->|"tailscale serve<br/>https · tailnet only"| HOST
   YT -->|transcript| HOST
   T1 --> FEEDS
   HOST --> MODEL
@@ -362,7 +362,10 @@ tail -f ~/Library/Logs/dsh.log ~/Library/Logs/dsh.err
 launchctl kickstart -k gui/$(id -u)/team.genesis.dsh    # restart
 ```
 
-`launchctl bootstrap` / `bootout`, not `load` / `unload`. Collection history
+`launchctl bootstrap` / `bootout`, not `load` / `unload`. The service is
+published to the tailnet with `tailscale serve --bg --https=443 3080`; see
+[`mac-mini.md`](./mac-mini.md#reaching-it) for what that exposes and the two
+settings it depends on. Collection history
 also lives in the database (last 30 runs) and is rendered in the settings page,
 because `ctx.logger` output does not reach this harness's stdout.
 
@@ -396,6 +399,7 @@ The most valuable thing in this document. Each of these has actually happened.
 | Install "succeeds", audio mute | npm and pnpm block native build scripts and report it as a **warning**, exiting 0 |
 | Library serves fine, translation fails | `.credentials.yaml` not moved — `settings.yaml` names the provider but not its key |
 | Over-reported date comparisons | `datetime('now')` renders with a space, stored ISO uses `T`, and `'T' > ' '` |
+| Feed lists episodes, none download | Enclosures hardcoded `http://` behind a TLS-terminating proxy |
 
 A pattern runs through these: **the check that passes is not the check that
 matters.** A route answering 200, an install exiting 0, a plugin reporting

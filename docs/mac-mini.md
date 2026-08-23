@@ -178,26 +178,57 @@ for `--profile web`, and passing both gives
 '--profile'`. Both errors go to the log, not the terminal, if you started it
 with `nohup`.
 
-## Reaching it from the Windows box
+## Reaching it
 
-Tailscale is installed on both. The Mac is `genesiss-mac-mini` /
-`100.92.251.1`. Tunnel the port rather than binding it:
+**`https://genesiss-mac-mini.taild38208.ts.net`** — from any device signed
+into the tailnet. No tunnel, no key, no per-machine setup. A new laptop needs
+only Tailscale.
+
+That is `tailscale serve`, which publishes the port to the tailnet *only*:
+
+```sh
+tailscale serve --bg --https=443 3080     # persists across reboots
+tailscale serve status
+tailscale serve --https=443 off           # to withdraw it
+```
+
+Two things have to be true for this to work, and both are already done:
+
+- **The harness must trust the hostname.** The browser's origin is no longer
+  loopback, so the `/api` trust fence rejects it. `--trusted-host
+  genesiss-mac-mini.taild38208.ts.net` is in the launchd plist.
+- **The feed must know it is behind TLS.** Tailscale Serve terminates HTTPS and
+  speaks plain http to the process. The RSS enclosures used to hardcode
+  `http://`, which pointed every episode at a port nothing listens on — the
+  feed parsed, listed everything, and downloaded nothing. It now reads
+  `x-forwarded-proto`.
+
+Verify both at once, since a feed that lists episodes proves nothing about
+whether they play:
+
+```sh
+curl -s https://genesiss-mac-mini.taild38208.ts.net/swarm-api/publish/feed.xml   | grep -oE '<enclosure url="[^"]+"' | head -1        # must be https://
+```
+
+### Know what this exposes
+
+Every device on the tailnet can now reach the harness, and this deployment runs
+the `danger-full-access` permission preset — an agent with a shell. Tailnet-only
+means devices you own and have authenticated, which is a different thing from
+the LAN or the internet, but it is broader than loopback. If that is not the
+trade you want, `tailscale serve --https=443 off` and use a tunnel instead:
 
 ```sh
 ssh -N -L 3080:127.0.0.1:3080 genesis@100.92.251.1
 ```
 
-Then open `http://127.0.0.1:3080` on Windows as before. The harness keeps
-listening only on loopback, the browser still sees a loopback origin, and the
-`/api` trust fence needs no exception. Because it goes over the tailnet, the
-same command works from outside the house.
+The tunnel is per-machine and dies with its shell — it is the right tool for an
+occasional connection from one trusted box, and the wrong one for "open it on
+my phone".
 
-`dsh web --host 0.0.0.0 --trusted-host ...` also works and needs no tunnel. It
-is mentioned here only to be dismissed. This deployment runs the
-`danger-full-access` permission preset, which is an agent with a shell; binding
-it to the network publishes that shell with nothing in front of it. A home
-network is not a safe room — it holds guests' phones and appliances that
-receive firmware from their vendors — and the tunnel costs one command.
+**Do not use `--host 0.0.0.0`.** That publishes the same shell to the whole
+home network, which holds guests' phones and appliances that receive firmware
+from their vendors.
 
 ## What a home machine changes, and what it does not
 
