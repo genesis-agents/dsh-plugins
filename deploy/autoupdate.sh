@@ -43,10 +43,19 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
 fi
 
 if ! git merge --ff-only --quiet "$REMOTE" 2>>"$LOG"; then
-  # Not fast-forwardable means the histories diverged — a force-push upstream,
-  # or a commit made here. Say so and stop rather than guessing.
-  say "cannot fast-forward from $(git rev-parse --short "$BEFORE") to $(git rev-parse --short "$REMOTE")"
-  exit 1
+  # Diverged rather than behind — upstream was rewritten, which happens every
+  # time a branch is squashed and force-pushed after being pushed once.
+  #
+  # On THIS machine that is not ambiguous. It never commits; its whole job is
+  # to be whatever origin/main is, and the working tree was checked clean two
+  # lines up. So it rewinds, loudly, because a hard reset is the one operation
+  # here that can destroy something and the log is the only place anybody would
+  # find out.
+  say "diverged from origin; resetting $(git rev-parse --short "$BEFORE") -> $(git rev-parse --short "$REMOTE")"
+  if ! git reset --hard --quiet "$REMOTE" 2>>"$LOG"; then
+    say "reset failed; leaving $(git rev-parse --short HEAD) in place"
+    exit 1
+  fi
 fi
 
 say "updated $(git rev-parse --short "$BEFORE") -> $(git rev-parse --short "$REMOTE")"
