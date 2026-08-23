@@ -27,6 +27,7 @@ import { enrichThumbnails, imageForPage, ENRICHABLE_TYPES, DEFAULT_ENRICH_LIMIT 
 import { createPublishRoutes } from "./publish-routes.js";
 import { PUBLISH_DEFAULTS, readPublishConfig, startPublishTimer } from "./publish-schedule.js";
 import { createProxyHandler } from "./remote.js";
+import { PLUGIN_VERSION } from "./version.js";
 import { DOCUMENT_FORMATS } from "./documents.js";
 import { LIBRARY_ENV, mediaDirs, resolveLibrary, writeLibraryPointer } from "./library.js";
 
@@ -771,6 +772,26 @@ export function createHandler(store, logger, chat) {
     const query = url.searchParams;
 
     if (path.startsWith("/publish/") && await publish(req, res, path)) return;
+
+    // ── what this host is running ───────────────────────────────────────
+    // Two halves of this plugin can be different versions: the page is served
+    // by the machine you opened, and `/swarm-api` may be proxied to another.
+    // They drifted three times in one afternoon of deployments here, each time
+    // presenting as a feature that was written, deployed, and apparently
+    // absent. Naming both versions is the cheapest possible fix.
+    if (req.method === "GET" && path === "/version") {
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          version: PLUGIN_VERSION,
+          node: process.versions.node,
+          // Whether this host owns the library or forwards to one. A proxy
+          // answers this route itself, so a mismatch is legible from the page.
+          library: "local",
+        },
+      });
+      return;
+    }
 
     // ── reads ───────────────────────────────────────────────────────────
     if (req.method === "GET" && path === "/resources") {

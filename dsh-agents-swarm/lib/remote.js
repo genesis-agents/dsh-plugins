@@ -25,6 +25,8 @@
  * are the collector.
  */
 
+import { PLUGIN_VERSION } from "./version.js";
+
 /** Headers that belong to one hop and must not be forwarded. */
 const HOP_BY_HOP = new Set([
   "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -68,6 +70,54 @@ export function createProxyHandler(remote, logger, prefix = "/swarm-api") {
     // and the proxy looks innocent because it faithfully relayed the 404.
     const raw = req.url ?? "/";
     const suffix = raw.startsWith(prefix) ? (raw.slice(prefix.length) || "/") : raw;
+
+    // Answered here AND asked of the far end, which is the whole point.
+    //
+    // Forwarding it would report the remote's version under both names.
+    // Answering it locally — the first version of this — reported the local
+    // version under both names, so the page compared this machine against
+    // itself and always agreed. Either way the one fact worth having is lost:
+    // whether the machine serving the routes is running the same code as the
+    // page asking for them. So both are named.
+    if (req.method === "GET" && suffix === "/version") {
+      let remoteVersion = null;
+      let remoteError = null;
+      try {
+        // Short, and non-fatal. This is a label on a settings page; a slow far
+        // end must not make the page that reports it slow too.
+        const probe = await fetch(`${remote}/version`, { signal: AbortSignal.timeout(6000) });
+        if (probe.status === 404) {
+          // The route itself is missing, which is not a failure to read a
+          // version — it is the version. That machine is older than this
+          // feature, and saying so names the fix.
+          remoteError = "older than this route";
+        } else {
+          const payload = await probe.json();
+          remoteVersion = payload?.data?.version ?? null;
+          if (remoteVersion === null) remoteError = "answered without a version";
+        }
+      } catch (cause) {
+        remoteError = String(cause?.message ?? cause);
+      }
+      const body = JSON.stringify({
+        success: true,
+        data: {
+          version: PLUGIN_VERSION,
+          node: process.versions.node,
+          library: "remote",
+          remote,
+          remoteVersion,
+          remoteError,
+        },
+      });
+      res.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "content-length": Buffer.byteLength(body),
+        "cache-control": "no-store",
+      });
+      res.end(body);
+      return;
+    }
     const target = `${remote}${suffix}`;
     const controller = new AbortController();
     const budget = isMedia(suffix) ? MEDIA_TIMEOUT_MS : TIMEOUT_MS;

@@ -63,6 +63,23 @@ window.__ModuleLoader__.load({
 			return /侧边栏|sidebar|collapse|expand/i.test(label);
 		}
 
+		/**
+		* The version of THIS half.
+		*
+		* Stated rather than read, because the browser half is a plain file
+		* served as-is — no build step, and no `package.json` to import at
+		* runtime. Which makes it exactly the kind of constant that drifts, so
+		* `tests/version.test.mjs` fails the moment it stops matching the
+		* manifest. A version string nobody checks is worse than none: it is a
+		* number people act on.
+		*
+		* It matters here more than in most plugins. The page is served by the
+		* machine you opened; `/swarm-api` may be proxied to another. Showing
+		* both is how "deployed but apparently absent" becomes legible instead
+		* of costing an afternoon.
+		*/
+		const CLIENT_VERSION = "0.1.0";
+
 		//#region locale + mark
 		/**
 		* Whether the document is presenting Chinese. The slot's `label` is
@@ -4924,7 +4941,14 @@ window.__ModuleLoader__.load({
 						style: HEADER_STYLE,
 						children: [
 							jsx(SwarmMark, { size: 18 }),
-							jsx("span", { style: { flex: 1 }, children: swarmLabel() }),
+							jsx("span", { style: { flex: "none" }, children: swarmLabel() }),
+							// Where you glance. The number is small and quiet until the
+							// two halves disagree, at which point it is the only thing
+							// on this row worth reading — a stale far machine otherwise
+							// presents as a feature that was written and deployed and
+							// is simply not there.
+							jsx(VersionBadge, { zh }),
+							jsx("span", { style: { flex: 1 } }),
 							jsx("button", {
 								type: "button",
 								"aria-label": zh ? "关闭" : "Close",
@@ -4991,6 +5015,153 @@ window.__ModuleLoader__.load({
 		* whether one is stored, never its value, and an untouched field is not
 		* sent back, so saving a feed cannot silently clear a secret.
 		*/
+		/**
+		* Which versions are actually running, on both sides.
+		*
+		* One line when they agree, a warning when they do not. The mismatch is
+		* not hypothetical: with the library on another machine, the page comes
+		* from here and the routes come from there, and a `git pull` missed on
+		* the far machine presents as a feature that does not exist. Three times
+		* in one afternoon, each time diagnosed by reading the wrong code first.
+		* @param zh - whether to write Chinese.
+		*/
+		/**
+		* The version answer, fetched once and shared.
+		*
+		* Two places show it — the panel header and the settings page — and both
+		* mount and unmount freely. Fetching per consumer would put two requests
+		* across the network for one label every time the page is opened.
+		* @returns `{ host, failed }`, both null until the answer arrives.
+		*/
+		let versionAnswer = null;
+		let versionPending = null;
+		function useHostVersion() {
+			const [host, setHost] = useState(() => versionAnswer);
+			const [failed, setFailed] = useState("");
+
+			useEffect(() => {
+				if (versionAnswer !== null) return;
+				let live = true;
+				versionPending ??= fetch(`${apiBase()}/version`)
+					.then((response) => response.json())
+					.then((payload) => {
+						if (payload?.success !== true) throw new Error(payload?.error ?? "no version");
+						versionAnswer = payload.data;
+						return payload.data;
+					});
+				versionPending
+					.then((data) => { if (live) setHost(data); })
+					.catch((cause) => {
+						// Cleared so a later mount retries: the far machine being
+						// down when the page opened is not a permanent verdict.
+						versionPending = null;
+						if (live) setFailed(String(cause?.message ?? cause));
+					});
+				return () => { live = false; };
+			}, []);
+
+			return { host, failed };
+		}
+
+		/**
+		* What the two halves disagree about, in one word.
+		* @param host - the `/version` payload, or null.
+		* @returns `{ serving, agree, proxied, reason }`.
+		*/
+		function versionVerdict(host) {
+			const proxied = host?.library === "remote";
+			const serving = proxied ? host?.remoteVersion : host?.version;
+			return {
+				proxied,
+				serving,
+				agree: host !== null && serving != null && serving === CLIENT_VERSION,
+				reason: host?.remoteError ?? null,
+			};
+		}
+
+		/**
+		* The header badge: quiet when the halves agree, loud when they do not.
+		* @param zh - whether to write Chinese.
+		*/
+		function VersionBadge({ zh }) {
+			const { host } = useHostVersion();
+			const { agree, serving, proxied, reason } = versionVerdict(host);
+			const bad = host !== null && !agree;
+			return jsx("span", {
+				title: host === null
+					? ""
+					: bad
+					? (zh
+						? `界面 v${CLIENT_VERSION}，服务端 ${serving ?? reason ?? "未知"}${proxied ? `（${new URL(host.remote).host}）` : ""}`
+						: `page v${CLIENT_VERSION}, host ${serving ?? reason ?? "unknown"}${proxied ? ` (${new URL(host.remote).host})` : ""}`)
+					: (zh ? `界面与服务端同为 v${CLIENT_VERSION}` : `page and host both v${CLIENT_VERSION}`),
+				style: {
+					marginLeft: "8px", padding: "1px 7px", borderRadius: "999px",
+					fontSize: "11px", fontWeight: bad ? 600 : 400,
+					fontVariantNumeric: "tabular-nums", cursor: "default",
+					background: bad ? "rgba(220,38,38,0.1)" : "var(--dsw-alias-interactive-bg-hover)",
+					color: bad ? "rgb(220,38,38)" : "var(--dsw-alias-label-tertiary)"
+				},
+				children: bad
+					? (zh ? `v${CLIENT_VERSION} · 版本不一致` : `v${CLIENT_VERSION} · mismatch`)
+					: `v${CLIENT_VERSION}`
+			});
+		}
+
+		function VersionLine({ zh }) {
+			const { host, failed } = useHostVersion();
+			// Compared against whichever machine actually serves the routes. When
+			// proxying, the local half always matches itself — comparing those
+			// two would be a check that can never fail, which is worse than no
+			// check because it looks like one.
+			const { agree, serving, proxied, reason } = versionVerdict(host);
+
+			return jsxs("div", {
+				style: {
+					display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap",
+					padding: "9px 12px", marginBottom: "18px",
+					border: `1px solid ${agree || host === null ? "var(--dsw-alias-border-l1)" : "rgba(220,38,38,0.4)"}`,
+					borderRadius: "10px",
+					background: agree || host === null ? "transparent" : "rgba(220,38,38,0.05)",
+					fontSize: "11px", color: "var(--dsw-alias-label-secondary)",
+					fontVariantNumeric: "tabular-nums"
+				},
+				children: [
+					jsx("span", {
+						style: { fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+						children: zh ? "智能体" : "Agents"
+					}),
+					jsx("span", { children: `v${CLIENT_VERSION}` }),
+					host === null
+						? jsx("span", { children: failed === "" ? (zh ? "· 读取服务端…" : "· reading host…") : (zh ? `· 服务端无响应：${failed}` : `· host unreachable: ${failed}`) })
+						: proxied && serving == null
+						? jsx("span", {
+							style: { color: "rgb(220,38,38)", fontWeight: 600 },
+							children: zh
+								? `· ${new URL(host.remote).host} ${reason === "older than this route" ? "版本比这个功能还旧，需要 git pull" : `版本读不到：${reason ?? "未知"}`}`
+								: `· ${new URL(host.remote).host} ${reason === "older than this route" ? "is older than this feature; it needs a git pull" : `did not report a version: ${reason ?? "unknown"}`}`
+						})
+						: agree
+						? jsx("span", {
+							children: proxied
+								? (zh ? `· ${new URL(host.remote).host} 同版本` : `· ${new URL(host.remote).host} matches`)
+								: (zh ? "· 本机服务端" : "· served locally")
+						})
+						// Loud, because the whole point is that this is otherwise
+						// invisible: everything works, and one side is stale.
+						: jsxs("span", {
+							style: { color: "rgb(220,38,38)", fontWeight: 600 },
+							children: [
+								zh ? `· 服务端是 v${serving}，版本不一致` : `· the host serves v${serving} — mismatch`,
+								proxied ? (zh ? `（${new URL(host.remote).host} 需要 git pull）` : ` (${new URL(host.remote).host} needs a git pull)`) : ""
+							]
+						}),
+					jsx("span", { style: { flex: 1 } }),
+					host === null ? null : jsx("span", { children: `node ${host.node}` })
+				]
+			});
+		}
+
 		function SourcesSettings() {
 			const zh = isChinese();
 			const [config, setConfig] = useState(null);
@@ -5090,6 +5261,7 @@ window.__ModuleLoader__.load({
 			return jsxs("div", {
 				style: { padding: "4px 4px 32px", maxWidth: "720px" },
 				children: [
+					jsx(VersionLine, { zh }),
 					// ── collection log ────────────────────────────────────────
 					// What the scheduler has actually been doing. Until now the only
 					// record was `ctx.logger`, whose output does not reach this
