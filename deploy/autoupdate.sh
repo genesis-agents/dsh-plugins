@@ -27,7 +27,18 @@ say() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG"; }
 
 cd "$REPO" 2>/dev/null || { say "no repository at $REPO"; exit 1; }
 
-BEFORE="$(git rev-parse HEAD 2>/dev/null)" || { say "not a git checkout"; exit 1; }
+# Checked rather than assumed. Under launchd the PATH is whatever the plist
+# says, which is not the PATH of the shell anybody tested this in -- and the
+# failure mode is not a crash: dependencies quietly fail to install and the
+# box restarts into a tree that no longer matches its lockfiles.
+for tool in git node pnpm; do
+  command -v "$tool" >/dev/null || { say "$tool is not on PATH ($PATH)"; exit 1; }
+done
+
+# The starting revision survives a re-exec (see below), because after one the
+# checkout has already moved and asking git again would report nothing to do.
+BEFORE="${DSH_AUTOUPDATE_BEFORE:-$(git rev-parse HEAD 2>/dev/null)}"
+[ -n "$BEFORE" ] || { say "not a git checkout"; exit 1; }
 
 # Fetch and fast-forward only. A merge or a rebase here could produce a state
 # nobody has ever tested, on a machine nobody is watching.
@@ -57,6 +68,18 @@ if ! git merge --ff-only --quiet "$REMOTE" 2>>"$LOG"; then
     say "reset failed; leaving $(git rev-parse --short HEAD) in place"
     exit 1
   fi
+fi
+
+# If this script changed in the pull, start the new one over.
+#
+# bash reads a script from disk by byte offset as it runs, so replacing the
+# file underneath a running shell does not reload it -- it keeps reading, at
+# the old offset, out of the new bytes. That produced a run that pulled with
+# one version and deployed with the version it had just replaced. The guard
+# variable makes this happen at most once.
+if [ "${DSH_AUTOUPDATE_BEFORE:-}" = "" ] && ! git diff --quiet "$BEFORE" HEAD -- deploy/autoupdate.sh; then
+  say "autoupdate.sh changed in this update; restarting with the new one"
+  DSH_AUTOUPDATE_BEFORE="$BEFORE" exec bash "$REPO/deploy/autoupdate.sh" "$REPO" "$SERVICE"
 fi
 
 say "updated $(git rev-parse --short "$BEFORE") -> $(git rev-parse --short "$REMOTE")"
