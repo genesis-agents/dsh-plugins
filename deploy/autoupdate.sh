@@ -97,13 +97,15 @@ apply_profile() {
   bash "$REPO/deploy/setup.sh" >>"$LOG" 2>&1
 }
 
+answers() { curl -fsS -m 2 "http://127.0.0.1:${DSH_PORT:-3080}/swarm-api/stats" >/dev/null 2>&1; }
+
 # Restart and wait for it to actually answer. Answering is the test, not
 # exiting zero: the harness starts, fails to mount a plugin, and stays up
 # serving a page with the feature missing.
 restart_and_wait() {
   launchctl kickstart -k "gui/$(id -u)/$SERVICE" >>"$LOG" 2>&1
   for _ in $(seq 1 60); do
-    curl -fsS -m 2 "http://127.0.0.1:${DSH_PORT:-3080}/swarm-api/stats" >/dev/null 2>&1 && return 0
+    answers && return 0
     sleep 1
   done
   return 1
@@ -146,5 +148,12 @@ if apply_profile && restart_and_wait; then
   say "rolled back to $(git rev-parse --short "$BEFORE") and answering"
   exit 1
 fi
-say "FAILED box is down on $(git rev-parse --short "$BEFORE") after rollback"
+# Asked rather than assumed. When the rollback fails at the profile step
+# nothing has been restarted, so the box is still serving whatever it had --
+# and saying it is down sends somebody to fix a machine that is working.
+if answers; then
+  say "FAILED could not deploy $(git rev-parse --short "$REMOTE") and could not rebuild $(git rev-parse --short "$BEFORE"); still serving what was already running"
+else
+  say "FAILED box is down on $(git rev-parse --short HEAD)"
+fi
 exit 1

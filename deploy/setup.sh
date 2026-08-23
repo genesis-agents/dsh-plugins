@@ -206,9 +206,13 @@ install_profile() {
       local ws="$PROFILE/pnpm-workspace.yaml"
       if [ -f "$ws" ] && grep -q 'set this to true or false' "$ws"; then
         say "denied build scripts: $(grep -oE '^  [^:]+: set this to true or false' "$ws" | sed 's/^  //; s/:.*//' | tr '\n' ' ')"
-        # sed -i on this file only, and only on the placeholder line pnpm just
-        # wrote. Anything already answered keeps its answer.
-        sed -i 's/: set this to true or false$/: false/' "$ws"
+        # Through a temp file rather than `sed -i`: BSD sed, which is what
+        # macOS ships, reads the next argument as a backup suffix and fails on
+        # the expression instead -- so the in-place form works on the machine
+        # it was written on and breaks on the box it was written for. Only the
+        # placeholder line pnpm just wrote is touched; anything already
+        # answered keeps its answer.
+        sed 's/: set this to true or false$/: false/' "$ws" > "$ws.new" && mv "$ws.new" "$ws"
       fi
       ( cd "$PROFILE" && pnpm install --silent ) && return 0
       ;;
