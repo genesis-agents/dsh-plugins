@@ -26,6 +26,7 @@ import { sourceFeeds } from "./sources.js";
 import { enrichThumbnails, imageForPage, ENRICHABLE_TYPES, DEFAULT_ENRICH_LIMIT } from "./enrich.js";
 import { createPublishRoutes } from "./publish-routes.js";
 import { PUBLISH_DEFAULTS, readPublishConfig, startPublishTimer } from "./publish-schedule.js";
+import { createProxyHandler, remoteFromEnv } from "./remote.js";
 
 /** Route prefix this plugin owns on the dsh web server. */
 const ROUTE_PREFIX = "/swarm-api";
@@ -1364,6 +1365,22 @@ export const inject = ["webServer", "llm", "agentDefaultModel", "tools"];
  * @param ctx - Cordis context carrying the web server service.
  */
 export function apply(ctx) {
+  // Proxy mode short-circuits everything below. Deliberately first and
+  // deliberately total: a machine serving someone else's library must not open
+  // a database of its own, and must not run the timers. Two collectors would
+  // fetch all 72 feeds twice into two diverging libraries.
+  const remote = remoteFromEnv();
+  if (remote !== undefined) {
+    ctx.logger?.info?.(`swarm: proxying the source library from ${remote}`);
+    const disposeProxy = ctx.webServer.register({
+      kind: "prefix",
+      path: ROUTE_PREFIX,
+      handler: createProxyHandler(remote, ctx.logger, ROUTE_PREFIX),
+    });
+    ctx.on("dispose", disposeProxy);
+    return;
+  }
+
   const path = storePath();
   const store = new SourceStore(path);
   ctx.logger?.info?.(`swarm: source library at ${path} (${store.count()} rows)`);

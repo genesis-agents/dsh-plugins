@@ -3325,8 +3325,18 @@ window.__ModuleLoader__.load({
 							border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "12px",
 							background: "var(--dsw-specific-menu)"
 						},
+						// "No sources" and "could not read the sources" are different
+						// answers and must not share a message. With the library on
+						// another machine an unreachable one would otherwise render
+						// as an empty category — a wrong answer that looks like a
+						// fact about the library rather than a failure to read it.
 						children: rows.length === 0
-							? jsx("div", { style: { padding: "16px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" }, children: zh ? "这一类暂时没有信源。" : "No sources of this kind yet." })
+							? jsx("div", {
+								style: { padding: "16px", fontSize: "12px", color: error === "" ? "var(--dsw-alias-label-secondary)" : "rgb(220,38,38)" },
+								children: error === ""
+									? (zh ? "这一类暂时没有信源。" : "No sources of this kind yet.")
+									: (zh ? `读取信源失败：${error}` : `Could not read the sources: ${error}`)
+							})
 							: jsxs("div", {
 								children: rows.map((row) => jsxs("label", {
 									style: {

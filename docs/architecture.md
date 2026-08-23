@@ -4,10 +4,10 @@ What this repository is, where every piece runs, and which parts are safe to
 replace. Written to be maintained: each section says what is true today and
 what would have to change to make it false.
 
-Status as of 2026-08-23. Everything runs on `genesiss-mac-mini` (macOS 26.3.1,
-Apple Silicon, 16 GB), reached over Tailscale; the Windows workstation
-contributes a browser and an SSH tunnel and nothing else. Section 2 says why
-that is the wrong split and what replaces it.
+Status as of 2026-08-23. The library and both timers run on `genesiss-mac-mini`
+(macOS 26.3.1, Apple Silicon, 16 GB); the Windows workstation runs its own
+harness and proxies `/swarm-api` to it over Tailscale. Section 2 says what runs
+where and why.
 
 ---
 
@@ -24,15 +24,17 @@ UI slot registry, a model route, and an HTTP server to hang routes off.
 
 ```mermaid
 flowchart TB
-  subgraph browser["Browser — wherever you open it"]
-    direction LR
-    UI["Agents panel<br/>信源 · 发布"]
-    YT["YouTube timedtext<br/><i>carries your own session</i>"]
+  subgraph win["Windows workstation — where you work"]
+    direction TB
+    BROWSER["Browser<br/><i>127.0.0.1:3080 · loopback</i>"]
+    WHOST["dsh host<br/><i>page · bundles · settings · agent shell</i>"]
+    PROXY["swarm plugin<br/><i>proxy mode: no DB, no timers</i>"]
+    BROWSER --> WHOST --> PROXY
   end
 
-  subgraph mac["Mac mini — always on, home network, UTC-4"]
+  subgraph mac["Always-on box — headless"]
     direction TB
-    HOST["dsh host process<br/><i>launchd · KeepAlive</i>"]
+    HOST["dsh host<br/><i>launchd · KeepAlive</i>"]
     T1(["collection timer<br/>hourly"])
     T2(["publish timer<br/>daily 07:00"])
     DB[("SQLite<br/>20,696 rows · 80 MB")]
@@ -50,16 +52,14 @@ flowchart TB
     MODEL["model API<br/><i>translation · scripts</i>"]
     TTS["Edge read-aloud<br/><i>free, keyless</i>"]
     SEARCH["Serper / Tavily / Brave"]
-    SUPA["Supadata<br/><i>transcript fallback</i>"]
   end
 
-  UI <-->|"tailscale serve<br/>https · tailnet only"| HOST
-  YT -->|transcript| HOST
+  PROXY -->|"/swarm-api/* over tailnet<br/><i>library data only</i>"| HOST
+  BROWSER -->|"YouTube transcript<br/><i>your own session</i>"| HOST
   T1 --> FEEDS
   HOST --> MODEL
   HOST --> TTS
   HOST --> SEARCH
-  HOST --> SUPA
   T2 -->|RSS| PODCAST["Podcast app"]
 ```
 
@@ -98,25 +98,39 @@ the machine you work at and the machine that stays on are not the same machine.
 | Search — Serper / Tavily / Brave | **Mac** → external | Same |
 | YouTube transcript fetch | **Browser** | Carries the viewer's own YouTube session, the only reason it works; indifferent to where the host lives |
 | Playback, reading, everything you look at | **Browser** | Wherever you opened it |
-| **Nothing** | **Windows** | See below — this is the current problem, not the design |
+| The page, its bundles, the settings panel | **Windows** | Served from loopback, so it never crosses the network and the loopback-pinned API stays reachable |
+| Workspace, agent shell, file edits, git | **Windows** | The agent works on `D:\engineering\...`; the box's checkout is a copy the timers run, synced through GitHub |
+| `/swarm-api/*` | **Windows → Mac** | Proxied, so the browser stays same-origin |
 
-### What Windows contributes today
+### Why the proxy, and not the browser talking to the Mac
 
-A browser and an SSH tunnel. That is all. The harness that was running there is
-stopped, its copy of the library at `D:\engineering\dsh-db\` is a
-point-in-time snapshot from the migration and goes stale immediately, and every
-byte of the UI — the page, its plugin bundles, its fonts — is pulled through
-the tunnel from the Mac.
+A page served from the Mac would put the browser on a non-loopback origin, and
+the harness pins fifteen methods — the whole settings and credentials plane
+plus native dialogs — to loopback on purpose. `--trusted-host` does not unlock
+them: that flag is a DNS-rebinding fence and says so in its own source. Fetching
+cross-origin would also need CORS the host does not serve.
 
-That is a bad arrangement and it shows. Measured server-to-server over the
-tailnet, the Mac answers in 40 ms and delivers a 1.5 MB episode in 123 ms
-(~12 MB/s). The same 11 KB plugin bundle through the SSH tunnel timed out
-repeatedly and surfaced in the browser as *"Failed to load plugins"*. The
-network was never slow; one long-lived forwarded TCP session was.
+Proxying sidesteps both. The browser talks to `127.0.0.1` exactly as it always
+did, the client half needed no change at all, and the network hop happens
+between two servers where it is fast:
 
-The fix is not a better tunnel. It is to stop putting the UI on the wire at
-all: run a harness on Windows too, serve the page from loopback, and let only
-the library data cross the network — server to server, where it is fast.
+```
+stats               40 ms
+20 resources        55 ms   (17 KB)
+1.5 MB episode     123 ms   (~12 MB/s)
+```
+
+The predecessor — an SSH tunnel carrying the whole UI — is gone. It failed
+repeatedly, always looking like the service was down: an ssh session can lose
+its far end and keep running, so the process stays alive, the port stays bound,
+and every request hangs. The same 11 KB plugin bundle that takes 60 ms
+server-to-server timed out through it and reached the browser as *"Failed to
+load plugins"*. `deploy/README.md` keeps the full account.
+
+**Which machine owns the library is configured, not detected.** Setting
+`DSH_SWARM_REMOTE` makes a machine a viewer; leaving it unset makes it the
+collector. Nothing guesses, because two collectors would fetch all 72 feeds
+twice into two diverging libraries and publish two podcasts.
 
 ### Do you need a Mac?
 
