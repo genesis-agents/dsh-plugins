@@ -326,17 +326,47 @@ export function recordCollection(store, entry) {
  */
 export function startCollectionTimer(store, logger) {
   let timer;
+  let catchUp;
   const configured = Number(readConfig(store).collectIntervalMinutes ?? DEFAULT_COLLECT_INTERVAL_MINUTES);
   if (!Number.isFinite(configured) || configured <= 0) return () => {};
   const minutes = Math.max(MIN_COLLECT_INTERVAL_MINUTES, configured);
   logger?.info?.(`swarm: collecting every ${minutes} minute(s)`);
-  timer = setInterval(() => {
+
+  const run = () => {
     void collectOnce(store, logger).catch((cause) => {
       logger?.warn?.(`swarm: collection run failed: ${String(cause?.message ?? cause)}`);
     });
-  }, minutes * 60_000);
+  };
+
+  // The interval counts from process start, so every restart pushes the next
+  // run a full hour out. A box that restarts often therefore collects rarely,
+  // and nothing says so — the status page reports an interval that is
+  // configured and a last run that is old, and the two look unrelated. Over
+  // one afternoon of deployments here the feeds went six hours untouched while
+  // the timer reported itself as running every sixty minutes.
+  //
+  // So the clock is the RECORDED last run, not this process's uptime.
+  const runs = store.getSetting("collectionLog", []);
+  const last = Array.isArray(runs) && runs.length > 0 ? Date.parse(runs[0]?.startedAt ?? "") : Number.NaN;
+  const dueIn = Number.isFinite(last)
+    ? Math.max(0, last + minutes * 60_000 - Date.now())
+    : 0;
+
+  if (dueIn <= 0) {
+    // Not immediately: booting is already the busiest moment, and the plugin
+    // tree, the database, and the routes all want the first seconds more than
+    // a fetch of 72 feeds does.
+    logger?.info?.("swarm: last collection is older than the interval; catching up shortly");
+    catchUp = setTimeout(run, 30_000);
+    catchUp.unref?.();
+  }
+
+  timer = setInterval(run, minutes * 60_000);
   timer.unref?.();
-  return () => { clearInterval(timer); };
+  return () => {
+    clearInterval(timer);
+    if (catchUp !== undefined) clearTimeout(catchUp);
+  };
 }
 
 /** Language preference used when the deployment configures none. */
