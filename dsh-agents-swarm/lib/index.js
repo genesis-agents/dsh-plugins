@@ -23,6 +23,7 @@ import { resolveTranscript, listCaptionTracks, transcriptFromXml, fetchVideoDeta
 import { translateBatch, isSupportedLanguage, BATCH_SIZE, TARGET_LANGUAGES } from "./translate.js";
 import { admissibleUrl, fetchDocument, readableText, readArticle, displayModeOf, documentUrlOf } from "./proxy.js";
 import { sourceFeeds } from "./sources.js";
+import { enrichThumbnails, imageForPage, ENRICHABLE_TYPES, DEFAULT_ENRICH_LIMIT } from "./enrich.js";
 
 /** Route prefix this plugin owns on the dsh web server. */
 const ROUTE_PREFIX = "/swarm-api";
@@ -261,6 +262,16 @@ export async function collectOnce(store, logger) {
   }
   const written = results.reduce((sum, row) => sum + (row.written ?? 0), 0);
   logger?.info?.(`swarm: collected ${written} new row(s) from ${jobs.length} job(s)`);
+  // A bounded enrichment pass rides along with each cycle. Bounded because it
+  // costs one request per row against sites that had nothing to do with our
+  // schedule; riding along because a separate timer would be a second thing
+  // to reason about for no benefit — the rows it works on are the ones the
+  // run just wrote.
+  try {
+    await enrichThumbnails(store, { logger });
+  } catch (cause) {
+    logger?.warn?.(`swarm: thumbnail pass failed: ${String(cause?.message ?? cause)}`);
+  }
   return results;
 }
 
@@ -977,6 +988,108 @@ export function createHandler(store, logger, chat) {
         sendJson(res, 200, { success: true, data: { language: parsed.language, text: parsed.text, cues: parsed.cues ?? [], via: "browser" } });
       } catch (cause) {
         sendJson(res, 400, { success: false, error: String(cause?.message ?? cause) });
+      }
+      return;
+    }
+
+    // ── image relay ─────────────────────────────────────────────────────
+    //
+    // A site that serves its own `og:image` will often refuse it when the
+    // request comes from another page — Microsoft Research answered 403 to a
+    // direct fetch of the very image its own page advertises. Fetching it
+    // server-side carries no page origin to refuse, so the picture arrives.
+    // The page only comes here after the direct load has failed, so a site
+    // that permits hotlinking is never routed through here.
+    if (req.method === "GET" && path === "/proxy/image") {
+      const target = admissibleUrl(query.get("url") ?? "");
+      if (target === undefined) {
+        sendJson(res, 400, { success: false, error: "unusable image URL" });
+        return;
+      }
+      try {
+        const upstream = await fetchDocument(target.toString());
+        if (upstream.status >= 400 || !upstream.contentType.startsWith("image/")) {
+          // 404 rather than a placeholder pixel: the page's own error handler
+          // has to fire so the type icon can take over. A 200 with a 1×1
+          // transparent PNG is what the reference used to return, and it
+          // silently broke every fallback it had.
+          sendJson(res, 404, { success: false, error: "not an image" });
+          return;
+        }
+        res.writeHead(200, {
+          "content-type": upstream.contentType,
+          "content-length": upstream.body.byteLength,
+          "cache-control": "public, max-age=86400",
+        });
+        res.end(upstream.body);
+      } catch (cause) {
+        sendJson(res, 502, { success: false, error: String(cause?.message ?? cause) });
+      }
+      return;
+    }
+
+    // ── thumbnail for one row, on demand ────────────────────────────────
+    //
+    // The page asks for this when a card it is about to show has no image.
+    // Doing it on demand is what makes the cost proportional to what is
+    // actually looked at: a library of twenty thousand rows would otherwise
+    // mean twenty thousand requests to other people's sites for images nobody
+    // ever sees. The answer is stored, so a row is paid for once.
+    if (req.method === "GET" && path === "/thumbnail-for") {
+      const row = store.get(query.get("resourceId") ?? "");
+      if (row === undefined) {
+        sendJson(res, 404, { success: false, error: "no such resource" });
+        return;
+      }
+      const existing = typeof row.thumbnailUrl === "string" ? row.thumbnailUrl : "";
+      if (existing !== "") {
+        sendJson(res, 200, { success: true, data: { url: existing, via: "stored" } });
+        return;
+      }
+      if (!ENRICHABLE_TYPES.includes(row.type)) {
+        // Papers and videos are deliberately not scraped: see enrich.js.
+        sendJson(res, 200, { success: true, data: { url: "", via: "skipped" } });
+        return;
+      }
+      if (store.thumbnailChecked(row.id)) {
+        // Already looked at, and there was nothing. Fetching again would ask
+        // the same site the same question and get the same answer.
+        sendJson(res, 200, { success: true, data: { url: "", via: "checked" } });
+        return;
+      }
+      try {
+        const found = await imageForPage(row.sourceUrl);
+        const shared = found !== "" && store.countThumbnailUse(found) >= 2;
+        store.markThumbnailChecked(row.id, shared ? "" : found);
+        sendJson(res, 200, {
+          success: true,
+          data: { url: shared ? "" : found, via: shared ? "site-wide" : found === "" ? "none" : "page" },
+        });
+      } catch (cause) {
+        sendJson(res, 502, { success: false, error: String(cause?.message ?? cause) });
+      }
+      return;
+    }
+
+    // ── thumbnail backfill ──────────────────────────────────────────────
+    //
+    // Resumable by construction: every row looked at is marked, so calling
+    // this repeatedly walks the backlog rather than repeating the front of it.
+    // `limit` is per call so a caller decides how much of the outside world to
+    // bother in one go.
+    if (req.method === "POST" && path === "/enrich-thumbnails") {
+      let body = {};
+      try {
+        body = await readJson(req);
+      } catch {
+        // An empty body is a valid request for the default batch.
+      }
+      const requested = Number(body.limit);
+      const limit = Number.isFinite(requested) && requested > 0 ? Math.min(2000, Math.floor(requested)) : DEFAULT_ENRICH_LIMIT;
+      try {
+        sendJson(res, 200, { success: true, data: await enrichThumbnails(store, { limit, logger }) });
+      } catch (cause) {
+        sendJson(res, 500, { success: false, error: String(cause?.message ?? cause) });
       }
       return;
     }

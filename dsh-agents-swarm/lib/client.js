@@ -184,6 +184,94 @@ window.__ModuleLoader__.load({
 			return videoId === undefined ? undefined : `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
 		}
 
+		//#region on-demand thumbnails
+		/**
+		* Thumbnails already resolved this session, keyed by resource id.
+		*
+		* Module-level rather than component state: a card unmounts and remounts
+		* as the feed is filtered and scrolled, and without this every remount
+		* would ask again for something already answered. An empty string is a
+		* remembered NO — the Host has recorded that the page carries no image,
+		* and asking again would only repeat that.
+		*/
+		const thumbnailCache = new Map();
+
+		/** Requests in flight, so two cards for one row make one request. */
+		const thumbnailPending = new Map();
+
+		/**
+		* Simultaneous thumbnail lookups.
+		*
+		* Each one is a request the Host makes to somebody else's site, so a feed
+		* of twenty cards must not become twenty simultaneous fetches. Three is
+		* what the reference settled on and it is the right order of magnitude:
+		* enough that a screenful fills quickly, few enough to stay polite.
+		*/
+		const THUMBNAIL_CONCURRENCY = 3;
+		let thumbnailActive = 0;
+		const thumbnailQueue = [];
+
+		/** Start the next queued lookup if there is room. */
+		function pumpThumbnails() {
+			while (thumbnailActive < THUMBNAIL_CONCURRENCY && thumbnailQueue.length > 0) {
+				const task = thumbnailQueue.shift();
+				thumbnailActive += 1;
+				task().finally(() => {
+					thumbnailActive -= 1;
+					pumpThumbnails();
+				});
+			}
+		}
+
+		/**
+		* Ask the Host for a row's thumbnail, once.
+		* @param id - the resource id.
+		* @returns the image URL, or an empty string when there is none.
+		*/
+		function requestThumbnail(id) {
+			if (thumbnailCache.has(id)) return Promise.resolve(thumbnailCache.get(id));
+			const inFlight = thumbnailPending.get(id);
+			if (inFlight !== undefined) return inFlight;
+			const promise = new Promise((resolve) => {
+				thumbnailQueue.push(async () => {
+					let url = "";
+					try {
+						const response = await fetch(`${apiBase()}/thumbnail-for?resourceId=${encodeURIComponent(id)}`);
+						const payload = await response.json();
+						if (payload?.success === true) url = payload.data.url ?? "";
+					} catch {
+						// A lookup that fails is not cached, so scrolling back
+						// later tries again — unlike a page that genuinely has no
+						// image, which the Host records so it is asked once.
+						thumbnailPending.delete(id);
+						resolve("");
+						return;
+					}
+					thumbnailCache.set(id, url);
+					thumbnailPending.delete(id);
+					resolve(url);
+				});
+				pumpThumbnails();
+			});
+			thumbnailPending.set(id, promise);
+			return promise;
+		}
+		//#endregion
+
+		/**
+		* The text this row already carries, for when its document cannot be
+		* reached. Not a substitute for the article, but better than a page
+		* that says only that something went wrong.
+		* @param row - a stored `Resource`.
+		* @returns the summary, or an empty string.
+		*/
+		function summaryOf(row) {
+			for (const field of [row.aiSummary, row.abstract]) {
+				if (typeof field === "string" && field.trim() !== "") return field.trim();
+			}
+			return "";
+		}
+
 		/** Host portion of a URL, without `www.`. */
 		function hostOf(url) {
 			try {
@@ -297,7 +385,7 @@ window.__ModuleLoader__.load({
 			display: "flex", alignItems: "center", justifyContent: "center",
 			minHeight: "140px", padding: "24px",
 			border: "1px dashed var(--dsw-alias-border-l2)", borderRadius: "10px",
-			color: "var(--dsw-alias-label-tertiary)", fontSize: "13px", textAlign: "center"
+			color: "var(--dsw-alias-label-secondary)", fontSize: "13px", textAlign: "center"
 		};
 
 		/** Tab styling; the active tab carries the underline, matching the session view ring. */
@@ -352,13 +440,18 @@ window.__ModuleLoader__.load({
 			boxShadow: "var(--dsw-shadow-lv3)",
 			transform: "translateY(-2px)"
 		};
+		// `label-tertiary` resolves to rgb(129,133,140) — 3.71:1 on white, under
+		// the 4.5:1 that normal-size text needs, and it was carrying the dates,
+		// sources, and counts at 11-12px across 101 places. `label-secondary`
+		// is 5.8:1. Hierarchy still reads: size and weight separate these rows
+		// from the title without asking the reader to squint.
 		const META_STYLE = {
 			display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap",
-			fontSize: "12px", color: "var(--dsw-alias-label-tertiary)"
+			fontSize: "12px", color: "var(--dsw-alias-label-secondary)"
 		};
 		const ACTIONS_STYLE = {
 			display: "flex", alignItems: "center", gap: "18px",
-			fontSize: "12px", color: "var(--dsw-alias-label-tertiary)"
+			fontSize: "12px", color: "var(--dsw-alias-label-secondary)"
 		};
 
 		/**
@@ -392,7 +485,20 @@ window.__ModuleLoader__.load({
 		/** One feed row, mapping `Resource` onto the reference card's slots. */
 		function ResourceCard({ row, kind, zh, onOpen }) {
 			const [hover, setHover] = useState(false);
-			const thumbnail = thumbnailOf(row);
+			const stored = thumbnailOf(row);
+			// Only rows that arrive without one are looked up, and only while
+			// the card is mounted — which is to say, only for what is on screen.
+			const [fetched, setFetched] = useState(() => (stored === undefined ? thumbnailCache.get(row.id) ?? "" : ""));
+			useEffect(() => {
+				if (stored !== undefined) return;
+				let live = true;
+				void requestThumbnail(row.id).then((url) => { if (live) setFetched(url); });
+				return () => { live = false; };
+			}, [row.id, stored]);
+			const thumbnail = stored ?? (fetched === "" ? undefined : fetched);
+			// Two strikes: the direct URL, then the relay.
+			const [relayed, setRelayed] = useState(false);
+			const [broken, setBroken] = useState(false);
 			const description = descriptionOf(row, zh);
 			const sourceName = sourceNameOf(row);
 			const categories = Array.isArray(row.categories) ? row.categories.slice(0, 2) : [];
@@ -414,12 +520,18 @@ window.__ModuleLoader__.load({
 							background: hue(kind, 0.08), color: hue(kind), border: "none", padding: 0,
 							fontSize: "16px", fontWeight: 600, cursor: "pointer"
 						},
-						children: thumbnail === undefined
+						children: thumbnail === undefined || broken
 							? sourceName.slice(0, 2)
 							: jsx("img", {
-								src: thumbnail,
+								// One retry through the Host, then the initials. Sites
+								// commonly advertise an `og:image` they then refuse to
+								// hand to another page — Microsoft Research answers 403
+								// for the very image its own page names. The relay has
+								// no page origin to be refused for.
+								src: relayed ? `${apiBase()}/proxy/image?url=${encodeURIComponent(thumbnail)}` : thumbnail,
 								alt: "",
 								loading: "lazy",
+								onError: () => { if (relayed) setBroken(true); else setRelayed(true); },
 								style: { width: "100%", height: "100%", objectFit: "cover" }
 							})
 					}),
@@ -975,7 +1087,7 @@ window.__ModuleLoader__.load({
 								}, entry.id))
 							}),
 							jsx("p", {
-								style: { margin: "10px 0 0", fontSize: "11px", lineHeight: "16px", color: "var(--dsw-alias-label-tertiary)" },
+								style: { margin: "10px 0 0", fontSize: "11px", lineHeight: "16px", color: "var(--dsw-alias-label-secondary)" },
 								children: zh
 									? "SRT / WebVTT 按原始时轴导出，可直接载入播放器；TXT / Markdown 按语义块导出，便于阅读与引用。"
 									: "SRT and WebVTT carry the original cue timings and load into a player; TXT and Markdown carry the reading blocks."
@@ -1312,7 +1424,7 @@ window.__ModuleLoader__.load({
 						style: {
 							flex: "none", display: "flex", flexDirection: "column", gap: "6px",
 							padding: "8px 12px", borderBottom: "1px solid var(--dsw-alias-border-l2)",
-							fontSize: "11px", color: "var(--dsw-alias-label-tertiary)"
+							fontSize: "11px", color: "var(--dsw-alias-label-secondary)"
 						},
 						children: [
 							jsxs("span", {
@@ -1406,7 +1518,7 @@ window.__ModuleLoader__.load({
 										jsx("span", {
 											style: {
 												flex: "none", fontSize: "11px", fontWeight: 500, lineHeight: "21px",
-												color: isActive ? hue(kind) : "var(--dsw-alias-label-tertiary)"
+												color: isActive ? hue(kind) : "var(--dsw-alias-label-secondary)"
 											},
 											children: formatTime(block.start)
 										}),
@@ -1533,7 +1645,7 @@ window.__ModuleLoader__.load({
 						children: [
 							messages.length === 0
 								? jsx("p", {
-									style: { margin: 0, fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-tertiary)" },
+									style: { margin: 0, fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-secondary)" },
 									children: zh
 										? "针对这条信源提问，或用上方的快捷操作。回答只依据本条信源的内容。"
 										: "Ask about this source, or use a quick action. Answers are grounded in this source only."
@@ -1559,7 +1671,7 @@ window.__ModuleLoader__.load({
 								return jsx("div", {
 									style: { marginBottom: "16px", fontSize: "13px", color: "var(--dsw-alias-label-secondary)" },
 									children: pending
-										? jsx("span", { style: { color: "var(--dsw-alias-label-tertiary)" }, children: zh ? "思考中…" : "Thinking…" })
+										? jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: zh ? "思考中…" : "Thinking…" })
 										: renderMarkdown(message.text)
 								}, String(index));
 							}),
@@ -1663,7 +1775,7 @@ window.__ModuleLoader__.load({
 								children: zh ? "视频介绍" : "About this video"
 							}),
 							meta === undefined ? jsx("span", { style: { flex: 1 } }) : jsx("span", {
-								style: { flex: 1, fontSize: "11px", color: "var(--dsw-alias-label-tertiary)" },
+								style: { flex: 1, fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
 								children: [
 									meta.lengthSeconds > 0 ? formatTime(meta.lengthSeconds) : "",
 									meta.viewCount > 0 ? `${meta.viewCount.toLocaleString()} ${zh ? "次观看" : "views"}` : ""
@@ -1680,7 +1792,7 @@ window.__ModuleLoader__.load({
 					}),
 					text === ""
 						? jsx("p", {
-							style: { margin: 0, fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-tertiary)" },
+							style: { margin: 0, fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
 							children: state.status === "error"
 								? state.error
 								: state.status === "loading"
@@ -1744,7 +1856,7 @@ window.__ModuleLoader__.load({
 						style: { flex: 1, minHeight: 0, overflowY: "auto", padding: "12px" },
 						children: notes.length === 0
 							? jsx("p", {
-								style: { margin: 0, fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-tertiary)" },
+								style: { margin: 0, fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-secondary)" },
 								children: zh ? "还没有笔记。记下的内容存在本地信源库里，跟着这条信源走。" : "No notes yet. What you write is stored in the local library beside this source."
 							})
 							: notes.map((note) => jsxs("article", {
@@ -1754,7 +1866,7 @@ window.__ModuleLoader__.load({
 								},
 								children: [
 									jsxs("div", {
-										style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary)" },
+										style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
 										children: [
 											note.atSeconds === null ? null : jsx("span", { children: formatTime(note.atSeconds) }),
 											jsx("span", { style: { flex: 1 }, children: formatDate(note.createdAt) }),
@@ -1795,7 +1907,7 @@ window.__ModuleLoader__.load({
 								style: { display: "flex", alignItems: "center", gap: "10px", marginTop: "8px" },
 								children: [
 									jsxs("label", {
-										style: { display: "inline-flex", alignItems: "center", gap: "6px", flex: 1, fontSize: "11px", color: "var(--dsw-alias-label-tertiary)", cursor: "pointer" },
+										style: { display: "inline-flex", alignItems: "center", gap: "6px", flex: 1, fontSize: "11px", color: "var(--dsw-alias-label-secondary)", cursor: "pointer" },
 										children: [
 											jsx("input", { type: "checkbox", checked: pin, onChange: (event) => { setPin(event.target.checked); } }),
 											jsx("span", { children: zh ? `记录时间点 ${formatTime(currentTime)}` : `Pin at ${formatTime(currentTime)}` })
@@ -1900,17 +2012,52 @@ window.__ModuleLoader__.load({
 							})
 						]
 					}),
+					// A refusal is not a blank page. Measured across 40 random rows,
+					// nothing else in the library refuses a server-side fetch — the
+					// sites that do are consultancies behind a bot check, and their
+					// own browser opens them fine. So this state has one job: say
+					// plainly what happened, hand over the abstract we already hold
+					// so the visit is not wasted, and make opening the original the
+					// obvious next move. It fills the pane because a short box above
+					// a screen of white reads as a broken layout.
 					error !== "" ? jsxs("div", {
-						style: NOTE_STYLE,
+						style: {
+							flex: 1, minHeight: 0, display: "flex", flexDirection: "column",
+							alignItems: "center", justifyContent: "center", gap: "14px",
+							padding: "32px", textAlign: "center",
+							border: "1px dashed var(--dsw-alias-border-l2)", borderRadius: "12px"
+						},
 						children: [
-							jsxs("div", {
+							jsx("div", {
+								style: { fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+								children: zh ? "该站点拒绝了抓取" : "This site refused the fetch"
+							}),
+							jsx("div", {
+								style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)", maxWidth: "52ch" },
+								children: (zh ? "在你自己的浏览器里通常可以正常打开。" : "It usually opens normally in your own browser. ") + error
+							}),
+							jsx("a", {
+								href: url, target: "_blank", rel: "noreferrer noopener",
+								style: {
+									display: "inline-flex", alignItems: "center", height: "32px", padding: "0 16px",
+									borderRadius: "8px", border: "1px solid " + hue(kind, 0.45),
+									background: hue(kind, 0.1), color: hue(kind),
+									fontSize: "13px", fontWeight: 500, textDecoration: "none"
+								},
+								children: zh ? "在浏览器中打开原文 ↗" : "Open the original ↗"
+							}),
+							summaryOf(row) === "" ? null : jsxs("div", {
+								style: {
+									marginTop: "8px", paddingTop: "16px", maxWidth: "72ch", textAlign: "left",
+									borderTop: "1px solid var(--dsw-alias-border-l1)",
+									fontSize: "13px", lineHeight: "21px", color: "var(--dsw-alias-label-secondary)"
+								},
 								children: [
-									jsx("div", { children: (zh ? "无法打开该文档：" : "Could not open this document: ") + error }),
-									jsx("a", {
-										href: url, target: "_blank", rel: "noreferrer noopener",
-										style: { display: "inline-block", marginTop: "10px", color: hue(kind), fontSize: "12px" },
-										children: zh ? "在浏览器中打开原文 ↗" : "Open the original ↗"
-									})
+									jsx("div", {
+										style: { marginBottom: "6px", fontSize: "11px", fontWeight: 600, color: "var(--dsw-alias-label-secondary)" },
+										children: zh ? "库中已有的摘要" : "The summary already in the library"
+									}),
+									jsx("div", { children: summaryOf(row) })
 								]
 							})
 						]
@@ -2113,7 +2260,7 @@ window.__ModuleLoader__.load({
 										children: row.title
 									}),
 									jsx("span", {
-										style: { flex: "none", fontSize: "11px", color: "var(--dsw-alias-label-tertiary)" },
+										style: { flex: "none", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
 										children: [formatDate(row.publishedAt), sourceNameOf(row)].filter((part) => part !== "").join(" · ")
 									}),
 									jsx("a", {
@@ -2423,7 +2570,7 @@ window.__ModuleLoader__.load({
 								children: [
 									jsx("div", { children: zh ? "本地信源库中该类别为空。" : "The local library holds no source of this kind." }),
 									jsx("div", {
-										style: { marginTop: "6px", fontSize: "12px", color: "var(--dsw-alias-label-tertiary)" },
+										style: { marginTop: "6px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
 										children: zh
 											? "可从云端导入一批做种，之后由蜂群自行采集。"
 											: "Seed a batch from the upstream, then let the swarm collect on its own."
@@ -2442,13 +2589,13 @@ window.__ModuleLoader__.load({
 						})
 						: null,
 					seedReport === "" ? null : jsx("div", {
-						style: { margin: "10px 0", fontSize: "12px", color: "var(--dsw-alias-label-tertiary)" },
+						style: { margin: "10px 0", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
 						children: seedReport
 					}),
 					rows.length === 0 ? null : jsxs("div", {
 						children: [
 							jsx("div", {
-								style: { margin: "0 0 10px", fontSize: "12px", color: "var(--dsw-alias-label-tertiary)" },
+								style: { margin: "0 0 10px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
 								children: (zh ? "共 " : "") + total + (zh ? " 条" : " results")
 							}),
 							...rows.map((row, index) => jsx(ResourceCard, { row, kind, zh, onOpen: setSelected }, row.id ?? String(index)))
@@ -2467,7 +2614,7 @@ window.__ModuleLoader__.load({
 						: null,
 					status === "loading-more"
 						? jsx("div", {
-							style: { textAlign: "center", padding: "8px", fontSize: "12px", color: "var(--dsw-alias-label-tertiary)" },
+							style: { textAlign: "center", padding: "8px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
 							children: zh ? "加载中…" : "Loading…"
 						})
 						: null
@@ -2746,12 +2893,12 @@ window.__ModuleLoader__.load({
 			}, [zh]);
 
 			if (config === null) {
-				return jsx("div", { style: { padding: "20px", color: "var(--dsw-alias-label-tertiary)", fontSize: "13px" },
+				return jsx("div", { style: { padding: "20px", color: "var(--dsw-alias-label-secondary)", fontSize: "13px" },
 					children: error === "" ? (zh ? "加载中…" : "Loading…") : error });
 			}
 
 			const heading = { margin: "24px 0 8px", fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" };
-			const hint = { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-tertiary)" };
+			const hint = { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" };
 			const rowStyle = {
 				display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px",
 				border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "10px", marginBottom: "8px",
@@ -2774,7 +2921,7 @@ window.__ModuleLoader__.load({
 						children: jsxs("span", {
 							style: { flex: 1, fontSize: "13px", color: "var(--dsw-alias-label-primary)" },
 							children: [job.collector, jsx("span", {
-								style: { marginLeft: "8px", fontSize: "12px", color: "var(--dsw-alias-label-tertiary)" },
+								style: { marginLeft: "8px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
 								children: JSON.stringify(job.options ?? {})
 							}, "opt")]
 						})
@@ -2909,7 +3056,7 @@ window.__ModuleLoader__.load({
 						]
 					}),
 					error === "" ? null : jsx("p", {
-						style: { marginTop: "14px", fontSize: "12px", color: "var(--dsw-alias-label-tertiary)" },
+						style: { marginTop: "14px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
 						children: error
 					})
 				]

@@ -154,6 +154,26 @@ function parseJson(text, fallback) {
   }
 }
 
+/**
+ * Rehydrate a stored row, letting columns win over the snapshot.
+ *
+ * `raw` is what the source handed us at collection time and is kept so a
+ * column can be backfilled later without re-fetching. But it is a SNAPSHOT:
+ * anything written to a column afterwards — a thumbnail found by looking at
+ * the page — is invisible if the row is served from `raw` alone. That is
+ * exactly what happened: every enriched image was stored correctly and never
+ * reached the page, because reads went through `raw`.
+ * @param row - `{ raw, ...columns }` from a SELECT.
+ * @returns the resource, with column values layered on top.
+ */
+function withColumns(row) {
+  const base = parseJson(row.raw, {});
+  const thumbnail = row.thumbnail_url;
+  if (typeof thumbnail === "string" && thumbnail !== "") base.thumbnailUrl = thumbnail;
+  else if (thumbnail === null) delete base.thumbnailUrl;
+  return base;
+}
+
 /** Coerce a possibly-decimal-string score to a number, or null. */
 function numberOrNull(value) {
   if (value === undefined || value === null || value === "") return null;
@@ -184,6 +204,15 @@ export class SourceStore {
     const columns = this.db.prepare("PRAGMA table_info(transcripts)").all();
     if (!columns.some((column) => column.name === "cues")) {
       this.db.exec("ALTER TABLE transcripts ADD COLUMN cues TEXT");
+    }
+    // `thumbnail_checked_at` records that a row's page was looked at, whether
+    // or not an image came back. Without it a row whose page simply has no
+    // image is re-fetched on every pass, forever — which is what the reference
+    // does: it never persists a negative, so its only memory of a failure is a
+    // Map in one browser tab.
+    const resourceColumns = this.db.prepare("PRAGMA table_info(resources)").all();
+    if (!resourceColumns.some((column) => column.name === "thumbnail_checked_at")) {
+      this.db.exec("ALTER TABLE resources ADD COLUMN thumbnail_checked_at TEXT");
     }
     // `key_moments` backed a panel that was removed: the reference's own key
     // moments are hardcoded placeholders, and the video description turned out
@@ -243,7 +272,13 @@ export class SourceStore {
       ON CONFLICT(id) DO UPDATE SET
         type = excluded.type, title = excluded.title, abstract = excluded.abstract,
         ai_summary = excluded.ai_summary, source_url = excluded.source_url,
-        thumbnail_url = excluded.thumbnail_url, authors = excluded.authors,
+        -- COALESCE, not overwrite: a thumbnail found by looking at the page is
+        -- worth more than the nothing the feed carries, and the hourly
+        -- collection re-writes every row it still sees. Plain assignment would
+        -- erase the enrichment on the next cycle, so the work would be redone
+        -- forever and the image would flicker in and out of the feed.
+        thumbnail_url = COALESCE(excluded.thumbnail_url, resources.thumbnail_url),
+        authors = excluded.authors,
         categories = excluded.categories, published_at = excluded.published_at,
         quality_score = excluded.quality_score, trending_score = excluded.trending_score,
         upvote_count = excluded.upvote_count, comment_count = excluded.comment_count,
@@ -318,10 +353,10 @@ export class SourceStore {
     const limit = Math.max(1, Math.min(100, Number(take) || 20));
     const offset = Math.max(0, Number(skip) || 0);
     const rows = this.db.prepare(
-      `SELECT raw FROM resources ${clause} ORDER BY ${order} IS NULL, ${order} DESC LIMIT ? OFFSET ?`,
+      `SELECT raw, thumbnail_url FROM resources ${clause} ORDER BY ${order} IS NULL, ${order} DESC LIMIT ? OFFSET ?`,
     ).all(...params, limit, offset);
     return {
-      rows: rows.map((row) => parseJson(row.raw, {})),
+      rows: rows.map(withColumns),
       total,
       hasMore: offset + rows.length < total,
     };
@@ -333,8 +368,8 @@ export class SourceStore {
    * @returns the stored row, or undefined.
    */
   get(id) {
-    const row = this.db.prepare("SELECT raw FROM resources WHERE id = ?").get(id);
-    return row === undefined ? undefined : parseJson(row.raw, undefined);
+    const row = this.db.prepare("SELECT raw, thumbnail_url FROM resources WHERE id = ?").get(id);
+    return row === undefined ? undefined : withColumns(row);
   }
 
   /**
@@ -404,6 +439,72 @@ export class SourceStore {
         language = excluded.language, text = excluded.text,
         cues = excluded.cues, fetched_at = excluded.fetched_at
     `).run(resourceId, language, text, JSON.stringify(cues), new Date().toISOString());
+  }
+
+  /**
+   * Rows whose page has not been looked at for an image yet.
+   *
+   * Ordered newest first, because a reader looks at the top of the feed and a
+   * backfill that starts at the oldest row spends its whole budget where
+   * nobody is looking.
+   * @param limit - how many to return.
+   * @param types - resource types to consider.
+   * @returns `[{ id, sourceUrl }]`.
+   */
+  rowsNeedingThumbnail(limit, types) {
+    const placeholders = types.map(() => "?").join(",");
+    return this.db.prepare(`
+      SELECT id, source_url AS sourceUrl FROM resources
+      WHERE (thumbnail_url IS NULL OR thumbnail_url = '')
+        AND thumbnail_checked_at IS NULL
+        AND source_url LIKE 'http%'
+        AND type IN (${placeholders})
+      ORDER BY published_at DESC
+      LIMIT ?
+    `).all(...types, limit);
+  }
+
+  /**
+   * Whether this row's page has already been looked at for an image.
+   *
+   * The point of recording a negative is that it survives the session. Without
+   * consulting it, a page that genuinely has no image is re-fetched every time
+   * its card appears in a fresh tab — which is the reference's behaviour, its
+   * only memory of a failure being a Map in one browser.
+   * @param id - the resource id.
+   * @returns true when the page has been checked.
+   */
+  thumbnailChecked(id) {
+    const row = this.db.prepare("SELECT thumbnail_checked_at FROM resources WHERE id = ?").get(id);
+    return row !== undefined && row.thumbnail_checked_at !== null;
+  }
+
+  /**
+   * Record the outcome of looking at one row's page.
+   * @param id - the resource id.
+   * @param url - the image found, or an empty string for none.
+   */
+  markThumbnailChecked(id, url) {
+    const now = new Date().toISOString();
+    if (typeof url === "string" && url !== "") {
+      this.db.prepare("UPDATE resources SET thumbnail_url = ?, thumbnail_checked_at = ? WHERE id = ?").run(url, now, id);
+      return;
+    }
+    this.db.prepare("UPDATE resources SET thumbnail_checked_at = ? WHERE id = ?").run(now, id);
+  }
+
+  /**
+   * How many rows already carry this exact image.
+   *
+   * A site that serves one image for every page — arXiv answers every paper
+   * with its own logo — is only detectable by noticing the repetition. Naming
+   * such sites in a blocklist, which is what the reference does, only ever
+   * covers the ones already discovered.
+   * @param url - a candidate image URL.
+   * @returns the count of rows holding it.
+   */
+  countThumbnailUse(url) {
+    return this.db.prepare("SELECT COUNT(*) AS n FROM resources WHERE thumbnail_url = ?").get(url).n;
   }
 
   /**
