@@ -19,7 +19,8 @@
  */
 
 import { SerperSearchProvider, SERPER_DEFAULT_BASE_URL } from "./provider.js";
-import { installSettings, resolveApiKey, DEFAULT_API_KEY_ENV } from "./settings.js";
+import { installSettings, resolveApiKey, DEFAULT_API_KEY_ENV, SETTINGS_NAMESPACE } from "./settings.js";
+import { createHandler, ROUTE_PREFIX } from "./routes.js";
 
 export {
   SERPER_DEFAULT_BASE_URL,
@@ -36,7 +37,7 @@ export { Config, SETTINGS_NAMESPACE, DEFAULT_API_KEY_ENV, installSettings, resol
 export const name = "web-search-serper";
 
 /** The seam this provider registers into. */
-export const inject = ["web"];
+export const inject = ["web", "webServer"];
 
 /** A non-empty trimmed string, or undefined. */
 function text(value) {
@@ -84,7 +85,17 @@ export function apply(ctx, config = {}) {
     ctx.logger?.warn?.(`serper: settings unavailable, using composition config only: ${String(cause?.message ?? cause)}`);
     current = () => config;
   }
-  ctx.web.registerSearchProvider(new SerperSearchProvider(() => optionsFrom(ctx, current())));
+  const provider = new SerperSearchProvider(() => optionsFrom(ctx, current()));
+  ctx.web.registerSearchProvider(provider);
+
+  // The configuration page. The shipped Plugins tab renders a curated set of
+  // first-party namespaces, so a third-party provider that registered only a
+  // settings namespace would be configurable in a YAML file and nowhere a
+  // person would look. Its own section, and a route to serve it, is what makes
+  // the key enterable at all.
+  const readForRoutes = () => current();
+  readForRoutes.provider = () => provider;
+  ctx.webServer.register({ kind: "api", path: ROUTE_PREFIX, handler: createHandler(ctx, readForRoutes, SETTINGS_NAMESPACE, DEFAULT_API_KEY_ENV) });
 
   // Say which state it started in. A search that later reports a missing key
   // is otherwise a puzzle with two indistinguishable causes — no key, or no

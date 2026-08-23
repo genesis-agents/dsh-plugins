@@ -49,12 +49,15 @@ Three places, in the order the plugin reads them:
 2. The environment: `SERPER_API_KEY` (or whatever `apiKeyEnv` names).
 3. The profile's `cordis.patch.yml`, as the composition layer under both.
 
-There is **no card for it on Settings → Plugins**, and that is not a gap in
-this plugin: that page renders a curated subset. Thirteen namespaces are
-registered on this deployment and three get a card — `shell`, `agent-loop`,
-and `web-search-deepseek`. Registering the namespace is what makes the section
-readable and writable through the settings API and the document; a card is a
-separate, first-party decision.
+The plugin also brings **its own page**: Settings → 网页搜索 / Web search, with
+a key field, a state line, and a Test search button.
+
+It has to bring one. Settings → Plugins renders a hand-picked set of
+first-party namespaces — thirteen are registered on this deployment and three
+get a card — so a third-party provider that registered only a namespace would
+be configurable in a YAML file and nowhere a person would look. Registering
+into `settings.section` sidesteps that: it is a `list` slot, so the page is
+added beside Models and the rest rather than shadowing any of them.
 
 The key itself is declared `role('secret')`, so it is stripped from every wire
 descriptor and reported only as `{path: ["apiKey"], set: false|true}`. Prefer
