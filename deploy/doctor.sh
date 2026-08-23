@@ -179,8 +179,13 @@ if [ -d "$SWARM/node_modules/msedge-tts" ]; then
 fi
 
 if [ -f "$SWARM/tests/library.test.mjs" ]; then
-  T="$(cd "$SWARM" && node --test tests/*.test.mjs 2>&1 | grep -aE '^. (pass|fail)' | tr '\n' ' ')"
+  # Extracted without anchoring on the leading glyph. `node --test` prefixes its
+  # summary with U+2139, and `^.` matches one BYTE rather than one character in
+  # a C locale -- so an anchored pattern silently matches nothing on macOS and
+  # reported a passing suite as failing. Found by running this on both machines.
+  T="$(cd "$SWARM" && node --test tests/*.test.mjs 2>&1 | grep -aoE '(pass|fail) [0-9]+' | tr '\n' ' ')"
   case "$T" in
+    "")         bad "could not read the test result" "run it directly: cd $SWARM && npm test" ;;
     *"fail 0"*) ok "plugin tests pass" "$T" ;;
     *)          bad "plugin tests failing" "$T — run: cd $SWARM && npm test" ;;
   esac
