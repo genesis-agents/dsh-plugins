@@ -249,10 +249,14 @@ export async function collectOnce(store, logger) {
   const jobs = config.jobs.concat(config.feeds.map((feed) => ({ collector: "feed", options: feed })));
   const results = [];
   for (const job of jobs) {
+    // Name the job in the result, success or failure. A roster of 73 feeds
+    // reporting `{collector: "feed", error: "fetch failed"}` says a source is
+    // broken without saying which, which is barely better than silence.
+    const label = job.options?.name ?? job.options?.url ?? job.collector;
     try {
-      results.push(await runCollector(store, job.collector, job.options ?? {}));
+      results.push({ ...await runCollector(store, job.collector, job.options ?? {}), source: label });
     } catch (cause) {
-      results.push({ collector: job.collector, error: String(cause?.message ?? cause) });
+      results.push({ collector: job.collector, source: label, error: String(cause?.message ?? cause) });
     }
   }
   const written = results.reduce((sum, row) => sum + (row.written ?? 0), 0);
@@ -307,7 +311,7 @@ export function videoIdOf(url) {
  * Version stamp for the shipped roster. Bumping it re-installs the roster over
  * whatever is stored.
  */
-const ROSTER_VERSION = 1;
+const ROSTER_VERSION = 2;
 
 /**
  * Install the shipped source roster the first time, and never again.
@@ -1086,10 +1090,11 @@ export function createHandler(store, logger, chat) {
         : config.jobs.concat(feedJobs);
       const results = [];
       for (const job of requested) {
+        const label = job.options?.name ?? job.options?.url ?? job.collector;
         try {
-          results.push(await runCollector(store, job.collector, job.options ?? {}));
+          results.push({ ...await runCollector(store, job.collector, job.options ?? {}), source: label });
         } catch (cause) {
-          results.push({ collector: job.collector, error: String(cause?.message ?? cause) });
+          results.push({ collector: job.collector, source: label, error: String(cause?.message ?? cause) });
         }
       }
       const written = results.reduce((sum, row) => sum + (row.written ?? 0), 0);

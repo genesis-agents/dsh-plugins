@@ -83,8 +83,11 @@ export const SOURCES = [
   { type: "REPORT", name: "Sequoia", url: "https://www.sequoiacap.com/feed/" },
 
   // ── news ──────────────────────────────────────────────────────────────
+  // Hacker News is not here: the dedicated `hackernews` collector reads the
+  // Firebase API, which supports a points threshold the feed cannot express,
+  // and news.ycombinator.com/rss refuses connections once a run has fetched it
+  // a few times.
   { type: "NEWS", name: "Ars Technica", url: "https://feeds.arstechnica.com/arstechnica/index" },
-  { type: "NEWS", name: "Hacker News", url: "https://news.ycombinator.com/rss" },
   { type: "NEWS", name: "TechCrunch", url: "https://techcrunch.com/feed/" },
   { type: "NEWS", name: "The Verge", url: "https://www.theverge.com/rss/index.xml" },
   { type: "NEWS", name: "Wired", url: "https://www.wired.com/feed/rss" },

@@ -68,6 +68,74 @@ function itemLink(block) {
 }
 
 /**
+ * Whether a video URL is a Short.
+ *
+ * A channel's feed mixes Shorts in with its real uploads, and they dominate:
+ * 14 of the 15 entries in one podcast's feed were Shorts. They are clips, not
+ * sources — no transcript worth reading, nothing to cite — so a library that
+ * keeps them buries the material it exists to hold.
+ *
+ * The reference excludes any video under fifteen minutes, which also catches
+ * short ordinary uploads, but it pays for a separate lookup per video to learn
+ * the duration; the feed does not carry one. The URL form is what is available
+ * for free and it is exact for the case that actually matters.
+ * @param url - the item's link.
+ * @returns true when the URL names a Short.
+ */
+export function isShortFormVideo(url) {
+  return /^https?:\/\/(?:www\.)?youtube\.com\/shorts\//i.test(String(url));
+}
+
+/**
+ * The item's author name.
+ *
+ * Atom's `<author>` is a CONTAINER holding `<name>` and `<uri>`, not a text
+ * node. Reading it as text and stripping the inner tags glues the two
+ * together, which is how every YouTube row came to be credited to
+ * "Lenny's Podcast https://www.youtube.com/channel/UC6t1...". RSS's `<author>`
+ * really is a text node, so both shapes have to be handled rather than one
+ * replaced by the other.
+ * @param block - one item or entry block.
+ * @returns the author's name, or an empty string.
+ */
+export function itemAuthor(block) {
+  const creator = tagText(block, "dc:creator");
+  if (creator !== "") return plainText(creator);
+  const author = /<author(?:\s[^>]*)?>([\s\S]*?)<\/author>/i.exec(block);
+  if (author !== null) {
+    const name = tagText(author[1], "name");
+    return plainText(name === "" ? author[1] : name);
+  }
+  return plainText(tagText(block, "name"));
+}
+
+/**
+ * An image the feed itself supplies.
+ *
+ * Most feeds carry none — measured across OpenAI, AWS, and TechCrunch, whose
+ * items have no image element at all even though their pages have an
+ * `og:image`. YouTube's feed does carry one, and taking it costs nothing, so
+ * the ones that offer an image are no longer thrown away.
+ * @param block - one item or entry block.
+ * @param baseUrl - the feed's URL, for resolving a relative image path.
+ * @returns an absolute image URL, or an empty string.
+ */
+export function itemThumbnail(block, baseUrl) {
+  const patterns = [
+    /<media:thumbnail[^>]*\burl=["']([^"']+)["']/i,
+    /<media:content[^>]*\btype=["']image\/[^"']*["'][^>]*\burl=["']([^"']+)["']/i,
+    /<media:content[^>]*\burl=["']([^"']+)["'][^>]*\btype=["']image\/[^"']*["']/i,
+    /<enclosure[^>]*\btype=["']image\/[^"']*["'][^>]*\burl=["']([^"']+)["']/i,
+    /<enclosure[^>]*\burl=["']([^"']+)["'][^>]*\btype=["']image\/[^"']*["']/i,
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(block);
+    if (match !== null) return absoluteLink(decodeEntities(match[1]), baseUrl);
+  }
+  return "";
+}
+
+/**
  * Resolve an item's link against the feed it came from.
  *
  * A `<link>` is allowed to be relative, and some feeds use that — Stanford AI
@@ -120,14 +188,17 @@ export function parseFeed(xml, { type = "BLOG", sourceType, baseUrl } = {}) {
     const url = absoluteLink(itemLink(block), baseUrl);
     const title = plainText(tagText(block, "title"));
     if (url === "" || title === "") continue;
-    const summary = plainText(tagText(block, "description", "summary", "content"));
-    const author = plainText(tagText(block, "dc:creator", "author", "name"));
+    if (isShortFormVideo(url)) continue;
+    const summary = plainText(tagText(block, "description", "summary", "content", "media:description"));
+    const author = itemAuthor(block);
+    const thumbnail = itemThumbnail(block, baseUrl);
     rows.push({
       id: stableId(url),
       type,
       title,
       abstract: summary === "" ? null : summary.slice(0, 4000),
       sourceUrl: url,
+      thumbnailUrl: thumbnail === "" ? undefined : thumbnail,
       publishedAt: isoDate(tagText(block, "pubDate", "published", "updated", "dc:date")),
       authors: author === "" ? [] : [{ name: author }],
       categories: [],
