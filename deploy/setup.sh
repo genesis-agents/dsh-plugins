@@ -18,13 +18,32 @@ set -euo pipefail
 
 LIBRARY="${1:-}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Under Git Bash, `pwd` gives /d/engineering/... which pnpm on Windows cannot
+# resolve -- the manifest is written, pnpm reports success, and the link is
+# simply absent. cygpath turns it into a path the platform's own tools accept.
+if command -v cygpath >/dev/null 2>&1; then REPO="$(cygpath -m "$REPO")"; fi
 DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 PROFILE="$DSH_HOME/profiles/web"
 
 # The bundle order is not cosmetic: patches apply in list order, so a bundle
 # placed before the one it customizes is overwritten by it. Kept here, in git,
 # so it is one decision rather than one per machine.
+#
+# Directory and package name are read separately because they differ. The
+# profile links a DIRECTORY, but every other reference — the dependency key,
+# the bundle list, the `name` in each plugin's cordis.patch.yml — is the
+# PACKAGE name, which is what the Loader resolves. Linking under the directory
+# name produced a profile that worked here and could never work from npm.
 PLUGINS=(dsh-agents-swarm dsh-web-search-serper dsh-agent-presets)
+
+# The package name a directory publishes under.
+#
+# Read from INSIDE the directory. Passing an absolute path breaks under Git
+# Bash, whose /d/engineering/... is not a path Node on Windows can open -- the
+# same trap that once made doctor.sh report a perfectly good profile as broken.
+package_name() {
+  ( cd "$REPO/$1" && node -p "require('./package.json').name" )
+}
 
 say() { printf '  %s\n' "$*"; }
 
@@ -48,17 +67,20 @@ done
 
 # ── the profile manifest ───────────────────────────────────────────────────
 mkdir -p "$PROFILE"
+NAMES=()
+for plugin in "${PLUGINS[@]}"; do NAMES+=("$(package_name "$plugin")"); done
+
 {
   printf '{\n  "name": "dsh-profile-web",\n  "private": true,\n  "dependencies": {\n'
   for i in "${!PLUGINS[@]}"; do
     comma=","; [ "$i" -eq $(( ${#PLUGINS[@]} - 1 )) ] && comma=""
-    printf '    "%s": "link:%s/%s"%s\n' "${PLUGINS[$i]}" "$REPO" "${PLUGINS[$i]}" "$comma"
+    printf '    "%s": "link:%s/%s"%s\n' "${NAMES[$i]}" "$REPO" "${PLUGINS[$i]}" "$comma"
   done
   printf '  },\n  "dsh": {\n    "profile": {\n      "bundles": [\n'
   printf '        "@deepseek-ai/dsh-base",\n        "@deepseek-ai/dsh-web-app",\n'
   for i in "${!PLUGINS[@]}"; do
     comma=","; [ "$i" -eq $(( ${#PLUGINS[@]} - 1 )) ] && comma=""
-    printf '        "%s"%s\n' "${PLUGINS[$i]}" "$comma"
+    printf '        "%s"%s\n' "${NAMES[$i]}" "$comma"
   done
   printf '      ]\n    }\n  }\n}\n'
 } > "$PROFILE/package.json"
@@ -72,8 +94,8 @@ say "wrote profile manifest"
 # silently copies, and the result is a plugin frozen at the moment it was
 # created: it loads, reports itself enabled, and runs stale code. Checked here
 # rather than discovered an hour later.
-for plugin in "${PLUGINS[@]}"; do
-  link="$PROFILE/node_modules/$plugin"
+for name in "${NAMES[@]}"; do
+  link="$PROFILE/node_modules/$name"
   [ -e "$link" ] || { echo "missing: $link" >&2; exit 1; }
   [ -L "$link" ] || [ -d "$link" ] || { echo "not linked: $link" >&2; exit 1; }
 done

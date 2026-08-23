@@ -14,7 +14,7 @@
  * any of them.
  */
 window.__ModuleLoader__.load({
-	id: "dsh-web-search-serper",
+	id: "@ai4gensteam/dsh-web-search",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;

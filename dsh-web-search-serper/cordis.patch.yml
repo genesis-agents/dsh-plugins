@@ -1,25 +1,16 @@
 # dsh-web-search bundle patch.
 #
-# Two things, separate on purpose:
+# Two rows. The first points `ctx.web` at this provider by id — the seam reads
+# that id once when the service is constructed, so it is composition config
+# rather than a setting. The second inserts the plugin itself.
 #
-#   1. The provider row is inserted. It registers ONE provider into `ctx.web`
-#      that routes to whichever backend the settings page selects, and reports
-#      itself unavailable until a key is present — safe to insert before one is
-#      configured.
-#   2. The `web` row's `searchProvider` is pointed at it. The shipped base
-#      bundle selects `deepseek-official`, which needs DEEPSEEK_API_KEY; on a
-#      profile running another model that key is absent and web search has no
-#      working provider at all. Naming the provider is what makes this plugin
-#      take effect rather than merely be present.
-#
-# `ctx.web` reads the selected id once, at construction, which is why switching
-# BETWEEN backends is a settings write handled inside the provider rather than
-# a change here.
-
+# `name` is the module specifier the Loader imports, so it is the PACKAGE's
+# name, not the directory's. The directory kept `-serper` from when Serper was
+# the only backend; the package did not, and a mismatch here fails at mount
+# with "cannot find package" after installing perfectly.
 - id: web
   config:
     searchProvider: multi
-
 - insert:
     - id: web-search
-      name: 'dsh-web-search-serper'
+      name: '@ai4gensteam/dsh-web-search'

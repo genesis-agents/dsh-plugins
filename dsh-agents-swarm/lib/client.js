@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-	id: "dsh-agents-swarm",
+	id: "@ai4gensteam/dsh-agents-swarm",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;
@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 		* both is how "deployed but apparently absent" becomes legible instead
 		* of costing an afternoon.
 		*/
-		const CLIENT_VERSION = "0.3.0";
+		const CLIENT_VERSION = "0.3.1";
 
 		//#region locale + mark
 		/**

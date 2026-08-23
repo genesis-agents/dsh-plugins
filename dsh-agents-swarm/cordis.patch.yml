@@ -3,6 +3,13 @@
 #
 # The row carries a browser half (exports "./client"); the node half is an
 # empty Loader seat.
+#
+# `name` is the module specifier the Loader imports, so it has to be the
+# package's real name. It was the unscoped `dsh-agents-swarm`, which packaged,
+# installed, and imported fine in every check that reached for the package
+# directly — and could never be MOUNTED, because the harness resolves this
+# string and nothing else. A published package that only loads when linked
+# under its old directory name is a published package that works for nobody.
 - insert:
     - id: agents-swarm
-      name: 'dsh-agents-swarm'
+      name: '@ai4gensteam/dsh-agents-swarm'

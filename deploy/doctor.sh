@@ -84,7 +84,9 @@ else
     *) bad "dsh-agents-swarm installed but NOT enabled" "add it to dsh.profile.bundles in $PROFILE/package.json" ;;
   esac
 
-  for plugin in dsh-agents-swarm dsh-web-search-serper dsh-agent-presets; do
+  # Package names, which is how the profile installs them — the directory names
+  # differ and looking for those found nothing on a scoped install.
+  for plugin in @ai4gensteam/dsh-agents-swarm @ai4gensteam/dsh-web-search dsh-agent-presets; do
     link="$PROFILE/node_modules/$plugin"
     [ -e "$link" ] || { warn "$plugin not installed" "optional unless you use it"; continue; }
     if [ -L "$link" ]; then
