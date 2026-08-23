@@ -294,10 +294,17 @@ export async function saveEpisode({ audio, title, script, sourceIds, voices } = 
  * @param env - process environment.
  * @returns the records.
  */
-export function listEpisodes(env = process.env) {
-  return readIndex(env)
+export function listEpisodes({ take, skip = 0 } = {}, env = process.env) {
+  const all = readIndex(env)
     .slice()
     .sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
+  const from = Math.max(0, Number(skip) || 0);
+  // A page, and the total alongside it. A daily schedule produces 365 episodes
+  // a year and the index holds every one of them; handing the browser all of
+  // it to display the newest five is the wrong shape long before the list on
+  // screen becomes one.
+  const size = Number.isFinite(Number(take)) ? Math.max(1, Math.min(200, Number(take))) : all.length;
+  return { episodes: all.slice(from, from + size), total: all.length, hasMore: from + size < all.length };
 }
 
 /**

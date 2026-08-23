@@ -200,7 +200,11 @@ export function createPublishRoutes({ store, chat, logger, sendJson, readJson })
 
     // ── the episodes ─────────────────────────────────────────────────────
     if (req.method === "GET" && path === "/publish/episodes") {
-      sendJson(res, 200, { success: true, data: { episodes: await listEpisodes() } });
+      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
+      sendJson(res, 200, {
+        success: true,
+        data: listEpisodes({ take: params.get("take") ?? undefined, skip: params.get("skip") ?? undefined }),
+      });
       return true;
     }
 
@@ -258,7 +262,7 @@ export function createPublishRoutes({ store, chat, logger, sendJson, readJson })
 
     // ── the feed ─────────────────────────────────────────────────────────
     if (req.method === "GET" && path === "/publish/feed.xml") {
-      const episodes = await listEpisodes();
+      const { episodes } = listEpisodes();
       // The feed has to name absolute URLs, and the host that will be typed
       // into a podcast client is not knowable from here — it is whatever
       // reached us. Trusting the Host header is right for a feed served to

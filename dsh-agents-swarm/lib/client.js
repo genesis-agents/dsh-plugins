@@ -646,7 +646,7 @@ window.__ModuleLoader__.load({
 
 		//#region explore card
 		/** One feed row, mapping `Resource` onto the reference card's slots. */
-		function ResourceCard({ row, kind, zh, onOpen, picked, onPick }) {
+		function ResourceCard({ row, kind, zh, onOpen }) {
 			const [hover, setHover] = useState(false);
 			const stored = thumbnailOf(row);
 			// Only rows that arrive without one are looked up, and only while
@@ -670,44 +670,8 @@ window.__ModuleLoader__.load({
 			return jsxs("article", {
 				onMouseEnter: () => { setHover(true); },
 				onMouseLeave: () => { setHover(false); },
-				style: {
-					...(hover ? CARD_HOVER_STYLE : CARD_STYLE),
-					position: "relative",
-					// A ring rather than a filled state: the card is still a
-					// thing you read, and a selected row that changes background
-					// starts competing with the thumbnail beside it.
-					...(picked === true ? { boxShadow: `0 0 0 2px ${hue(kind, 0.55)}, var(--dsw-shadow-lv1)` } : {})
-				},
+				style: hover ? CARD_HOVER_STYLE : CARD_STYLE,
 				children: [
-					// Hidden until wanted. Selection is a mode most visits never
-					// enter, and a checkbox on every card in a reading list is
-					// clutter charged to everyone for the sake of a few.
-					onPick === undefined ? null : jsx("button", {
-						type: "button",
-						"aria-pressed": picked === true,
-						"aria-label": zh ? "选入播客" : "Add to episode",
-						title: zh ? "选入播客" : "Add to episode",
-						onClick: (event) => { event.stopPropagation(); onPick(row); },
-						style: {
-							position: "absolute", top: "10px", right: "10px", zIndex: 1,
-							width: "22px", height: "22px", borderRadius: "50%",
-							display: "inline-flex", alignItems: "center", justifyContent: "center",
-							cursor: "pointer", padding: 0, lineHeight: 0,
-							border: picked === true ? "none" : "1.5px solid var(--dsw-alias-border-l2)",
-							background: picked === true ? hue(kind) : "var(--dsw-specific-menu)",
-							color: picked === true ? "#fff" : "var(--dsw-alias-label-tertiary)",
-							opacity: picked === true || hover ? 1 : 0,
-							transition: "opacity 140ms ease, background 140ms ease"
-						},
-						children: jsx("svg", {
-							width: 12, height: 12, viewBox: "0 0 24 24", fill: "none",
-							stroke: "currentColor", strokeWidth: 2.6, strokeLinecap: "round", strokeLinejoin: "round",
-							"aria-hidden": "true",
-							children: picked === true
-								? jsx("path", { d: "M5 12.5 L10 17.5 L19 7" })
-								: jsx("path", { d: "M12 5v14M5 12h14" })
-						})
-					}),
 					jsx("button", {
 						type: "button",
 						onClick: () => { onOpen(row); },
@@ -2854,7 +2818,7 @@ window.__ModuleLoader__.load({
 
 		//#region explore tab
 		/** The 信源 tab: search, kind filter, sort, and the paged resource feed. */
-		function ExploreTab({ zh, picked, onPick, onGoPublish }) {
+		function ExploreTab({ zh }) {
 			const [kindId, setKindId] = useState(KINDS[0].id);
 			const [sortBy, setSortBy] = useState(SORTS[0].id);
 			const [draft, setDraft] = useState("");
@@ -2864,11 +2828,7 @@ window.__ModuleLoader__.load({
 			const [hasMore, setHasMore] = useState(false);
 			const [status, setStatus] = useState("loading");
 			const [error, setError] = useState("");
-			// The accent follows the selection rather than a chip row that no
-			// longer exists: one kind picked tints the tab with it, a mix stays
-			// neutral rather than claiming to be whichever came first.
-			const kinds = new Set([...(picked?.values() ?? [])].map((row) => row.type));
-			const kind = (kinds.size === 1 ? KINDS.find((candidate) => candidate.type === [...kinds][0]) : undefined) ?? KINDS[5] ?? KINDS[0];
+			const kind = KINDS.find((candidate) => candidate.id === kindId) ?? KINDS[0];
 			// list | detail, switched in place so the frame never changes.
 			const [selected, setSelected] = useState(null);
 			const [seeding, setSeeding] = useState(false);
@@ -3059,41 +3019,7 @@ window.__ModuleLoader__.load({
 								style: { margin: "0 0 10px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
 								children: (zh ? "共 " : "") + total + (zh ? " 条" : " results")
 							}),
-							// The selection's own line, in the tab where selecting
-							// happens. It appears only once something is picked, so
-							// the reading view stays a reading view until you ask it
-							// to be something else.
-							picked === undefined || picked.size === 0 ? null : jsxs("div", {
-								style: {
-									display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap",
-									padding: "10px 14px", margin: "0 0 12px",
-									border: `1px solid ${hue(kind, 0.3)}`, borderRadius: "12px",
-									background: hue(kind, 0.05)
-								},
-								children: [
-									jsx("span", {
-										style: { fontSize: "12px", fontWeight: 600, color: hue(kind) },
-										children: zh ? `已选 ${picked.size} 条` : `${picked.size} selected`
-									}),
-									jsx("span", {
-										style: { flex: 1, minWidth: "80px", fontSize: "11px", color: "var(--dsw-alias-label-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-										children: [...picked.values()].map((row) => row.title).join(" · ")
-									}),
-									jsx("button", {
-										type: "button",
-										style: { ...controlStyle(), height: "26px", fontSize: "11px" },
-										onClick: () => { for (const row of [...picked.values()]) onPick(row); },
-										children: zh ? "清空" : "Clear"
-									}),
-									jsx("button", {
-										type: "button",
-										style: { ...controlStyle(), height: "26px", fontSize: "11px", color: hue(kind), borderColor: hue(kind, 0.45) },
-										onClick: () => { onGoPublish?.(); },
-										children: zh ? "去生成播客 →" : "Make an episode →"
-									})
-								]
-							}),
-							...rows.map((row, index) => jsx(ResourceCard, { row, kind, zh, onOpen: setSelected, picked: picked?.has(row.id) === true, onPick }, row.id ?? String(index)))
+							...rows.map((row, index) => jsx(ResourceCard, { row, kind, zh, onOpen: setSelected }, row.id ?? String(index)))
 						]
 					}),
 					hasMore && status === "ready"
@@ -3219,45 +3145,61 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		* An episode player.
+		* One episode: its row, and its player when it is the open one.
 		*
-		* Hand-built rather than `<audio controls>`, which is browser chrome:
-		* it arrives at the platform's own size, in the platform's own colours,
-		* with a three-dot menu offering downloads and playback speed, and it
-		* looked like a foreign object dropped into the page — the single most
-		* out-of-place thing in this tab.
+		* Row and player are the same component because they share a control.
+		* Split apart, the open episode grew TWO play buttons — one in the row
+		* that selected it, one in the player below that started it — which is
+		* not a layout problem but a model problem: the audio has one state and
+		* was being offered two handles.
 		*
 		* The element is still an `<audio>`, kept out of sight. It does the
 		* buffering, the ranged fetches, and the codec work; only its face is
-		* replaced.
-		* @param src - the episode's audio URL.
-		* @param seconds - the duration already recorded for this episode.
-		* @param accent - `r,g,b` for the progress fill.
+		* replaced. `<audio controls>` arrives at the platform's own size, in
+		* the platform's colours, with a three-dot menu offering downloads and
+		* playback speed — browser chrome dropped into a designed page.
+		* @param episode - the stored record.
+		* @param open - whether this is the episode being listened to.
+		* @param accent - `r,g,b` for the fill.
+		* @param zh - whether to write Chinese.
+		* @param onOpen - make this the open one.
+		* @param onDelete - forget it.
+		* @param last - suppresses the divider on the final row.
 		*/
-		function EpisodePlayer({ src, seconds, accent }) {
+		function EpisodeRow({ episode, open, accent, zh, onOpen, onDelete, last }) {
 			const audioRef = useRef(null);
 			const [playing, setPlaying] = useState(false);
 			const [at, setAt] = useState(0);
-			// Seeded from the episode record rather than starting at zero. With
+			// Seeded from the record rather than starting at zero. With
 			// `preload="none"` the element knows no duration until playback
-			// begins, so a ten-minute episode sat there reading 0:00 / 0:00 —
-			// directly contradicting the "10 分钟" printed one line above it and
-			// looking exactly like a player that had failed to load.
-			const [total, setTotal] = useState(Number.isFinite(seconds) ? seconds : 0);
-			const [failed, setFailed] = useState("");
+			// begins, so a ten-minute episode read "0:00 / 0:00" beside the
+			// "10:28" printed on its own row — which looks exactly like a
+			// player that failed to load.
+			const [total, setTotal] = useState(Number.isFinite(episode.durationSeconds) ? episode.durationSeconds : 0);
+			const [failed, setFailed] = useState(false);
+
+			// Opening another episode stops this one. Two shows talking at once
+			// is never what a click on a different title meant.
+			useEffect(() => {
+				if (open) return;
+				const audio = audioRef.current;
+				if (audio !== null && !audio.paused) audio.pause();
+				setPlaying(false);
+			}, [open]);
 
 			const toggle = useCallback(() => {
+				if (!open) { onOpen(); return; }
 				const audio = audioRef.current;
 				if (audio === null) return;
 				if (audio.paused) {
-					// A rejected play() is the usual autoplay-policy refusal and
-					// must not surface as a broken episode.
+					// A rejected play() is the usual autoplay refusal and must
+					// not surface as a broken episode.
 					void audio.play().then(() => { setPlaying(true); }).catch(() => { setPlaying(false); });
 				} else {
 					audio.pause();
 					setPlaying(false);
 				}
-			}, []);
+			}, [open, onOpen]);
 
 			const seek = useCallback((event) => {
 				const audio = audioRef.current;
@@ -3269,55 +3211,101 @@ window.__ModuleLoader__.load({
 			}, []);
 
 			const progress = total > 0 ? Math.min(1, at / total) : 0;
-			const tint = accent ?? "15,17,21";
 
 			return jsxs("div", {
-				style: { display: "flex", alignItems: "center", gap: "12px" },
+				style: {
+					borderBottom: last ? "none" : "1px solid var(--dsw-alias-border-l1)",
+					background: open ? `rgba(${accent}, 0.035)` : "transparent",
+					transition: "background 140ms ease"
+				},
 				children: [
 					jsx("audio", {
 						ref: audioRef,
-						src,
+						src: `${apiBase()}/publish/episodes/${encodeURIComponent(episode.id)}/audio`,
 						preload: "none",
 						style: { display: "none" },
-						// The element's own duration wins once it has one: the
-						// recorded value is an encoder estimate and can be a
-						// second or two out.
 						onLoadedMetadata: (event) => {
+							// The element's own duration wins once it has one: the
+							// recorded value is an encoder estimate, out by a second
+							// or two.
 							const measured = event.currentTarget.duration;
 							if (Number.isFinite(measured) && measured > 0) setTotal(measured);
 						},
 						onTimeUpdate: (event) => { setAt(event.currentTarget.currentTime); },
 						onEnded: () => { setPlaying(false); setAt(0); },
-						onError: () => { setFailed("audio"); setPlaying(false); }
+						onError: () => { setFailed(true); setPlaying(false); }
 					}),
-					jsx("button", {
-						type: "button",
-						"aria-label": playing ? "Pause" : "Play",
-						disabled: failed !== "",
-						onClick: toggle,
-						style: {
-							flex: "none", width: "34px", height: "34px", borderRadius: "50%",
-							border: "none", cursor: failed === "" ? "pointer" : "not-allowed",
-							display: "inline-flex", alignItems: "center", justifyContent: "center",
-							background: `rgba(${tint}, 0.1)`, color: `rgb(${tint})`,
-							transition: "background 140ms ease"
-						},
-						children: jsx("svg", {
-							width: 14, height: 14, viewBox: "0 0 24 24", fill: "currentColor", "aria-hidden": "true",
-							children: playing
-								? jsx("path", { d: "M7 5h3.6v14H7zM13.4 5H17v14h-3.6z" })
-								: jsx("path", { d: "M8 5.2v13.6L19 12z" })
-						})
-					}),
-					failed !== "" ? jsx("span", {
-						style: { flex: 1, fontSize: "12px", color: "rgb(220,38,38)" },
-						children: "音频无法加载"
-					}) : jsxs("div", {
-						style: { flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: "10px" },
+					jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: "12px", padding: open ? "13px 15px 9px" : "11px 15px" },
 						children: [
-							jsx("div", {
+							jsx("button", {
+								type: "button",
+								"aria-label": playing ? (zh ? "暂停" : "Pause") : (zh ? "播放" : "Play"),
+								disabled: failed,
+								onClick: toggle,
+								style: {
+									flex: "none", width: "30px", height: "30px", borderRadius: "50%",
+									border: "none", cursor: failed ? "not-allowed" : "pointer", padding: 0, lineHeight: 0,
+									display: "inline-flex", alignItems: "center", justifyContent: "center",
+									background: open ? `rgb(${accent})` : `rgba(${accent}, 0.1)`,
+									color: open ? "#fff" : `rgb(${accent})`,
+									transition: "background 140ms ease"
+								},
+								children: jsx("svg", {
+									width: 12, height: 12, viewBox: "0 0 24 24", fill: "currentColor", "aria-hidden": "true",
+									children: playing
+										? jsx("path", { d: "M7 5h3.6v14H7zM13.4 5H17v14h-3.6z" })
+										: jsx("path", { d: "M8 5.2v13.6L19 12z" })
+								})
+							}),
+							jsx("button", {
+								type: "button",
+								onClick: () => { onOpen(); },
+								style: {
+									flex: 1, minWidth: 0, textAlign: "left", appearance: "none",
+									border: "none", background: "transparent", padding: 0, cursor: "pointer",
+									font: "inherit", fontSize: "13px", fontWeight: open ? 600 : 400,
+									lineHeight: "19px", color: "var(--dsw-alias-label-primary)",
+									// Truncated in the list, wrapped when open: the row
+									// being listened to is worth two lines, the forty
+									// below it are not.
+									...(open ? {} : { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" })
+								},
+								children: episode.title
+							}),
+							jsx("span", {
+								style: {
+									flex: "none", fontSize: "11px", fontVariantNumeric: "tabular-nums",
+									color: "var(--dsw-alias-label-secondary)"
+								},
+								children: `${clock(episode.durationSeconds)} · ${formatStamp(episode.createdAt)}`
+							}),
+							jsx("button", {
+								type: "button",
+								"aria-label": zh ? "删除" : "Delete",
+								title: zh ? "删除" : "Delete",
+								onClick: () => { onDelete(); },
+								style: {
+									flex: "none", appearance: "none", border: "none", background: "transparent",
+									padding: "2px", cursor: "pointer", lineHeight: 0, color: "var(--dsw-alias-label-tertiary)"
+								},
+								children: jsx("svg", {
+									width: 13, height: 13, viewBox: "0 0 24 24", fill: "none",
+									stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", "aria-hidden": "true",
+									children: jsx("path", { d: "M5 7h14M10 7V5h4v2M9 7v11M15 7v11M6 7l1 13h10l1-13" })
+								})
+							})
+						]
+					}),
+					!open ? null : jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: "11px", padding: "0 15px 14px 57px" },
+						children: [
+							failed ? jsx("span", {
+								style: { flex: 1, fontSize: "12px", color: "rgb(220,38,38)" },
+								children: zh ? "音频无法加载" : "This audio would not load"
+							}) : jsx("div", {
 								role: "slider",
-								"aria-label": "Seek",
+								"aria-label": zh ? "进度" : "Seek",
 								"aria-valuenow": Math.round(progress * 100),
 								tabIndex: 0,
 								onClick: seek,
@@ -3328,7 +3316,7 @@ window.__ModuleLoader__.load({
 								children: jsx("div", {
 									style: {
 										position: "absolute", inset: "0 auto 0 0", width: `${progress * 100}%`,
-										borderRadius: "2px", background: `rgb(${tint})`
+										borderRadius: "2px", background: `rgb(${accent})`
 									}
 								})
 							}),
@@ -3345,13 +3333,213 @@ window.__ModuleLoader__.load({
 			});
 		}
 
-		function PublishTab({ zh, picked, onPick, onGoSources }) {
+		/**
+		* Episodes fetched at a time.
+		*
+		* A daily schedule makes 365 a year and keeps every one; the newest
+		* handful is what anybody looks at. The rest are one request away, and
+		* the feed still carries all of them — which is where a back catalogue
+		* actually belongs: a podcast client is built to hold hundreds and this
+		* panel is not.
+		*/
+		const EPISODE_PAGE = 6;
+
+		/** The − and + of a stepper: same weight, same box, no platform spinner. */
+		const STEPPER_BUTTON = {
+			appearance: "none", border: "none", background: "transparent",
+			width: "28px", height: "28px", cursor: "pointer", font: "inherit",
+			fontSize: "14px", lineHeight: 1, color: "var(--dsw-alias-label-secondary)"
+		};
+
+		/**
+		* The display name for a stored type.
+		* @param type - the stored resource type.
+		* @param zh - whether to write Chinese.
+		* @returns the label, or the raw type when it is one this panel does not chip.
+		*/
+		function kindLabel(type, zh) {
+			const found = KINDS.find((candidate) => candidate.type === type);
+			return found === undefined ? String(type ?? '') : (zh ? found.zh : found.en);
+		}
+
+		/** How many search hits the add-a-source field offers at once. */
+		const SUGGEST_LIMIT = 8;
+
+		/**
+		* Adding sources to an episode: a field you search, not a library you browse.
+		*
+		* Two earlier attempts were wrong in opposite directions. The first put
+		* a checkbox list here — the library rendered a second time, worse, with
+		* no search and no filters over twenty thousand rows. The second moved
+		* selection into the 信源 tab, taxing a reading surface with a mode most
+		* visits never enter. Both shared a premise that turns out to be false:
+		* that choosing sources requires BROWSING them.
+		*
+		* It does not. By the time you are making a specific episode you already
+		* know roughly what belongs in it, so the interaction is the one for
+		* attaching a file — type, recognize, add — and the list that matters is
+		* the short one you have built, not the long one you searched. That also
+		* happens to be the only shape indifferent to how large the library gets.
+		* @param zh - whether to write Chinese.
+		* @param picked - the current selection, keyed by resource id.
+		* @param onPick - toggles one row.
+		* @param accent - `r,g,b` for the highlight.
+		*/
+		function SourceField({ zh, picked, onPick, accent }) {
+			const [term, setTerm] = useState("");
+			const [query, setQuery] = useState("");
+			const [matches, setMatches] = useState([]);
+			const [busy, setBusy] = useState(false);
+			const [failed, setFailed] = useState("");
+			const [focused, setFocused] = useState(false);
+
+			// Debounced: typing a phrase should be one query against this table,
+			// not one per keystroke.
+			useEffect(() => {
+				const timer = setTimeout(() => { setQuery(term.trim()); }, 240);
+				return () => { clearTimeout(timer); };
+			}, [term]);
+
+			useEffect(() => {
+				if (query === "") { setMatches([]); setFailed(""); return; }
+				let live = true;
+				setBusy(true);
+				fetch(`${apiBase()}/resources?take=${SUGGEST_LIMIT}&skip=0&sortBy=publishedAt&search=${encodeURIComponent(query)}`)
+					.then((response) => response.json())
+					.then((payload) => {
+						if (!live) return;
+						if (payload?.success !== true) throw new Error(payload?.error ?? "search failed");
+						setMatches(unwrapFeed(payload).rows);
+						setFailed("");
+					})
+					.catch((cause) => {
+						if (!live) return;
+						setMatches([]);
+						// "Nothing matched" and "could not search" are different
+						// answers. With the library on another machine the second
+						// one is not hypothetical, and showing it as the first
+						// would be a wrong statement about the library.
+						setFailed(String(cause?.message ?? cause));
+					})
+					.finally(() => { if (live) setBusy(false); });
+				return () => { live = false; };
+			}, [query]);
+
+			const add = useCallback((row) => {
+				onPick(row);
+				setTerm("");
+				setMatches([]);
+			}, [onPick]);
+
+			const open = focused && (query !== "" || busy);
+
+			return jsxs("div", {
+				style: { position: "relative" },
+				children: [
+					jsx("input", {
+						type: "search",
+						value: term,
+						placeholder: zh ? "输入标题搜索，点一下加入这一集…" : "Search by title, click to add…",
+						onChange: (event) => { setTerm(event.target.value); },
+						onFocus: () => { setFocused(true); },
+						// Delayed, or the blur fires before the click on a result
+						// lands and the list disappears out from under the cursor.
+						onBlur: () => { setTimeout(() => { setFocused(false); }, 160); },
+						style: { ...SEARCH_STYLE, height: "38px", fontSize: "13px" }
+					}),
+
+					!open ? null : jsx("div", {
+						style: {
+							position: "absolute", top: "42px", left: 0, right: 0, zIndex: 3,
+							border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "12px",
+							background: "var(--dsw-specific-menu)", boxShadow: "var(--dsw-shadow-lv3)",
+							maxHeight: "290px", overflowY: "auto", overflowX: "hidden"
+						},
+						children: failed !== ""
+							? jsx("div", { style: { padding: "14px", fontSize: "12px", color: "rgb(220,38,38)" }, children: (zh ? "搜索失败：" : "Search failed: ") + failed })
+							: busy && matches.length === 0
+							? jsx("div", { style: { padding: "14px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" }, children: zh ? "搜索中…" : "Searching…" })
+							: matches.length === 0
+							? jsx("div", { style: { padding: "14px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" }, children: zh ? "没有匹配的信源。" : "Nothing matches." })
+							: jsxs("div", {
+								children: matches.map((row, at) => {
+									const already = picked.has(row.id);
+									return jsxs("button", {
+										type: "button",
+										disabled: already,
+										onClick: () => { add(row); },
+										style: {
+											display: "flex", width: "100%", alignItems: "flex-start", gap: "10px",
+											padding: "10px 13px", textAlign: "left", appearance: "none",
+											border: "none", borderBottom: at === matches.length - 1 ? "none" : "1px solid var(--dsw-alias-border-l1)",
+											background: "transparent", font: "inherit", fontSize: "12px",
+											cursor: already ? "default" : "pointer", opacity: already ? 0.45 : 1
+										},
+										children: [
+											jsx("span", {
+												style: {
+													flex: "none", marginTop: "1px", fontSize: "11px", fontWeight: 600,
+													color: already ? "var(--dsw-alias-label-tertiary)" : `rgb(${accent})`
+												},
+												children: already ? "✓" : "＋"
+											}),
+											jsxs("span", {
+												style: { flex: 1, minWidth: 0 },
+												children: [
+													jsx("span", {
+														style: { display: "block", color: "var(--dsw-alias-label-primary)", lineHeight: "18px" },
+														children: row.title
+													}),
+													jsx("span", {
+														style: { display: "block", marginTop: "2px", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+														children: `${kindLabel(row.type, zh)} · ${sourceNameOf(row)} · ${formatDate(row.publishedAt)}`
+													})
+												]
+											})
+										]
+									}, row.id);
+								})
+							})
+					})
+				]
+			});
+		}
+
+		function PublishTab({ zh }) {
+			// Local, because only this tab selects and only this tab spends it.
+			// It lived on the page for one iteration, when the plan was to pick
+			// in 信源; that plan taxed a reading surface with a mode most visits
+			// never enter, and the state has no reason to outlive this tab.
+			const [picked, setPicked] = useState(() => new Map());
+			const togglePick = useCallback((row) => {
+				setPicked((previous) => {
+					const next = new Map(previous);
+					// The row, not just its id: this tab has to name what you
+					// chose, and re-fetching rows it was handed a moment ago
+					// would be a request for data already in hand.
+					if (next.has(row.id)) next.delete(row.id);
+					else next.set(row.id, row);
+					return next;
+				});
+			}, []);
 			const [minutes, setMinutes] = useState(6);
 			const [script, setScript] = useState(null);
 			const [voices, setVoices] = useState(null);
 			const [hosts, setHosts] = useState(null);
 			const [job, setJob] = useState(null);
 			const [episodes, setEpisodes] = useState([]);
+			const [episodeTotal, setEpisodeTotal] = useState(0);
+			// Which episode is open. Undefined means "the newest", so the tab
+			// always lands on something playable rather than on a list of
+			// closed rows.
+			const [activeId, setActiveId] = useState(undefined);
+			// The make-an-episode flow, closed by default: the standing order
+			// covers the ordinary day, and three construction steps permanently
+			// open put the machinery in front of the output.
+			const [making, setMaking] = useState(false);
+			// The schedule's fields, likewise. It is a setting you touch twice
+			// a year and read every day.
+			const [tuning, setTuning] = useState(false);
 			const [schedule, setSchedule] = useState(null);
 			const [watchUntil, setWatchUntil] = useState(0);
 			const [busy, setBusy] = useState(false);
@@ -3365,11 +3553,14 @@ window.__ModuleLoader__.load({
 				?? KINDS.find((candidate) => candidate.id === "news")
 				?? KINDS[0];
 
-			const loadEpisodes = useCallback(async () => {
+			const loadEpisodes = useCallback(async (take = EPISODE_PAGE) => {
 				try {
-					const response = await fetch(`${apiBase()}/publish/episodes`);
+					const response = await fetch(`${apiBase()}/publish/episodes?take=${take}`);
 					const payload = await response.json();
-					if (payload?.success === true) setEpisodes(payload.data.episodes);
+					if (payload?.success === true) {
+						setEpisodes(payload.data.episodes);
+						setEpisodeTotal(payload.data.total ?? payload.data.episodes.length);
+					}
 				} catch {
 					// The list is a convenience; failing to read it must not
 					// stop someone from making the next episode.
@@ -3530,65 +3721,67 @@ window.__ModuleLoader__.load({
 			const feedUrl = `${window.location.origin}/swarm-api/publish/feed.xml`;
 			const running = job !== null && job.state === "running";
 			const accent = kind.hue;
-			// One card shape for every block on this tab. They used to differ
-			// slightly from each other and from the source cards, which is the
-			// kind of drift nobody points at and everybody feels.
+			const armed = schedule !== null && schedule.publishAt !== "";
 			const CARD = {
 				border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "12px",
 				background: "var(--dsw-specific-menu)", boxShadow: "var(--dsw-shadow-lv1)"
 			};
 			const FIELD_LABEL = { fontSize: "12px", color: "var(--dsw-alias-label-secondary)", whiteSpace: "nowrap" };
 			const NUM_INPUT = { ...SEARCH_STYLE, width: "56px", height: "30px", fontSize: "12px", textAlign: "center", fontVariantNumeric: "tabular-nums" };
+			const active = episodes.find((episode) => episode.id === activeId) ?? episodes[0];
 
 			return jsxs("div", {
-				style: { paddingBottom: "12px" },
+				style: { paddingBottom: "14px" },
 				children: [
-					jsx("p", {
-						style: LEDE_STYLE,
-						children: zh
-							? "把选中的信源讲成一段双人对话，并汇成可订阅的播客。"
-							: "Selected sources spoken as a two-host conversation, and the feed they publish to."
-					}),
-
 					// ── the standing order ───────────────────────────────────
-					// First, and outside the numbered steps, because it is not a
-					// step: it is the whole tab running without anyone here. The
-					// numbered flow below is the fallback for when you want a
-					// specific episode, not the main event.
+					// One line when it is doing its job, because that is the
+					// state it is in almost always. The fields only matter on
+					// the day you set them, and a form permanently open for a
+					// setting you touch twice a year is a form in the way.
 					schedule === null ? null : jsxs("div", {
-						style: { ...CARD, padding: "14px 16px", marginBottom: "22px" },
+						style: { ...CARD, padding: "13px 16px", marginBottom: "24px" },
 						children: [
 							jsxs("div", {
-								style: { display: "flex", alignItems: "center", gap: "9px", marginBottom: "12px" },
+								style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" },
 								children: [
 									jsx("span", {
 										style: {
 											flex: "none", width: "7px", height: "7px", borderRadius: "50%",
-											// The dot is the whole on/off read. A schedule with no
-											// time set looked identical to one that was armed.
-											background: schedule.publishAt === "" ? "var(--dsw-alias-border-l2)" : `rgb(${accent})`
+											background: armed ? `rgb(${accent})` : "var(--dsw-alias-border-l2)"
 										}
 									}),
-									jsx("h3", {
-										style: { margin: 0, fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
-										children: zh ? "自动发布" : "On a schedule"
+									jsx("span", {
+										style: { fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+										children: armed
+											? (zh ? `每天 ${schedule.publishAt} 自动生成一集` : `An episode every day at ${schedule.publishAt}`)
+											: (zh ? "自动发布已关闭" : "No standing order")
 									}),
-									jsx("span", { style: { flex: 1 } }),
+									jsx("span", { style: { flex: 1, minWidth: "8px" } }),
 									jsx("button", {
 										type: "button",
 										disabled: busy || watchUntil !== 0,
-										style: { ...controlStyle(), height: "28px", fontSize: "12px" },
+										style: { ...controlStyle(), height: "27px", fontSize: "12px" },
 										onClick: () => { void runNow(); },
 										children: watchUntil !== 0 ? (zh ? "生成中…" : "Running…") : (zh ? "立即生成" : "Run now")
+									}),
+									jsx("button", {
+										type: "button",
+										"aria-expanded": tuning,
+										style: { ...controlStyle(), height: "27px", fontSize: "12px" },
+										onClick: () => { setTuning((previous) => !previous); },
+										children: tuning ? (zh ? "收起" : "Done") : (zh ? "设置" : "Settings")
 									})
 								]
 							}),
-							// Fields on one row with their own labels, rather than
-							// inputs wedged into a sentence. "每天 [07:00] 取最新
-							// [8] 条，讲 [8] 分钟" read as prose with holes in it,
-							// and the eye could not find the controls.
-							jsxs("div", {
-								style: { display: "flex", alignItems: "flex-end", gap: "18px", flexWrap: "wrap" },
+							jsx("div", {
+								style: { marginTop: "8px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+								children: scheduleNote(schedule, zh)
+							}),
+							!tuning ? null : jsxs("div", {
+								style: {
+									display: "flex", alignItems: "flex-end", gap: "18px", flexWrap: "wrap",
+									marginTop: "13px", paddingTop: "13px", borderTop: "1px solid var(--dsw-alias-border-l1)"
+								},
 								children: [
 									jsxs("label", {
 										style: { display: "flex", flexDirection: "column", gap: "5px" },
@@ -3628,290 +3821,333 @@ window.__ModuleLoader__.load({
 										]
 									})
 								]
-							}),
-							jsx("div", {
-								style: {
-									marginTop: "12px", paddingTop: "11px", fontSize: "11px", lineHeight: "17px",
-									color: "var(--dsw-alias-label-secondary)",
-									borderTop: "1px solid var(--dsw-alias-border-l1)"
-								},
-								children: scheduleNote(schedule, zh)
 							})
 						]
 					}),
 
-					// ── 1 · what you picked in 信源 ──────────────────────────
-					// Not a source browser. The 信源 tab is the browser — it has
-					// the search, the kinds, the thumbnails, and the paging that
-					// twenty thousand rows require. This shows what you chose
-					// there and nothing else.
-					jsx(StepHeading, {
-						step: 1, accent,
-						title: zh ? "已选信源" : "Chosen sources",
-						hint: chosen === 0 ? "" : (zh ? `${chosen} 条` : `${chosen} source${chosen === 1 ? "" : "s"}`)
-					}),
-
-					chosen === 0
-						? jsxs("div", {
-							style: { ...CARD, padding: "20px", marginBottom: "22px", display: "flex", alignItems: "center", gap: "14px", flexWrap: "wrap" },
-							children: [
-								jsx("span", {
-									style: { flex: 1, minWidth: "180px", fontSize: "12px", lineHeight: "19px", color: "var(--dsw-alias-label-secondary)" },
-									children: zh
-										? "还没有选。到「信源」里翻一翻，把卡片右上角的 + 点上，选中的就会出现在这里。"
-										: "Nothing chosen yet. Browse in Sources and use the + on any card; what you pick lands here."
-								}),
-								jsx("button", {
-									type: "button",
-									style: { ...controlStyle(), height: "30px", color: `rgb(${accent})`, borderColor: `rgba(${accent}, 0.45)` },
-									onClick: () => { onGoSources?.(); },
-									children: zh ? "去信源挑选 →" : "Go to Sources →"
-								})
-							]
-						})
-						: jsxs("div", {
-							style: { ...CARD, marginBottom: "22px", overflow: "hidden" },
-							children: [...picked.values()].map((row, at) => jsxs("div", {
-								style: {
-									display: "flex", alignItems: "flex-start", gap: "11px", padding: "11px 14px",
-									borderBottom: at === picked.size - 1 ? "none" : "1px solid var(--dsw-alias-border-l1)",
-									fontSize: "12px"
-								},
-								children: [
-									jsx("span", {
-										style: {
-											flex: "none", marginTop: "1px", fontSize: "11px", fontWeight: 600,
-											fontVariantNumeric: "tabular-nums", width: "16px",
-											color: "var(--dsw-alias-label-tertiary)"
-										},
-										children: String(at + 1)
-									}),
-									jsxs("span", {
-										style: { flex: 1, minWidth: 0 },
-										children: [
-											jsx("span", { style: { color: "var(--dsw-alias-label-primary)", lineHeight: "18px" }, children: row.title }),
-											jsx("span", {
-												style: { display: "block", marginTop: "3px", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
-												children: `${sourceNameOf(row)} · ${formatDate(row.publishedAt)}`
-											})
-										]
-									}),
-									// Removing here writes through the same setter the
-									// cards use, so the + on the card in 信源 flips
-									// back with it. One selection, two places to see it.
-									jsx("button", {
-										type: "button",
-										"aria-label": zh ? "移出" : "Remove",
-										title: zh ? "移出" : "Remove",
-										onClick: () => { onPick?.(row); },
-										style: {
-											flex: "none", appearance: "none", border: "none", background: "transparent",
-											padding: "2px", cursor: "pointer", lineHeight: 0,
-											color: "var(--dsw-alias-label-tertiary)"
-										},
-										children: jsx("svg", {
-											width: 13, height: 13, viewBox: "0 0 24 24", fill: "none",
-											stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round",
-											"aria-hidden": "true",
-											children: jsx("path", { d: "M6 6l12 12M18 6L6 18" })
-										})
-									})
-								]
-							}, row.id))
-						}),
-
-					// ── 2 · the script ───────────────────────────────────────
-					jsx(StepHeading, {
-						step: 2, accent,
-						title: zh ? "生成对话稿" : "Write the script",
-						hint: script === null ? "" : (zh
-							? `${script.turns.length} 轮 · ${script.chars} 字 · 约 ${script.estimatedMinutes} 分钟`
-							: `${script.turns.length} turns · ${script.chars} chars · ~${script.estimatedMinutes} min`)
-					}),
-
+					// ── the episodes ─────────────────────────────────────────
+					// The output, above the machinery that makes it. Somebody
+					// opening this tab is far more often here to listen than to
+					// produce, and the previous layout made them scroll past
+					// three construction steps to reach what already exists.
 					jsxs("div", {
-						style: { ...CARD, padding: "12px 14px", marginBottom: script === null ? "22px" : "10px", display: "flex", alignItems: "flex-end", gap: "16px", flexWrap: "wrap" },
+						style: { display: "flex", alignItems: "center", gap: "10px", margin: "0 0 12px" },
 						children: [
-							jsxs("label", {
-								style: { display: "flex", flexDirection: "column", gap: "5px" },
-								children: [
-									jsx("span", { style: FIELD_LABEL, children: zh ? "目标时长（分钟）" : "Target length (min)" }),
-									jsx("input", {
-										type: "number", min: 2, max: 20, value: minutes,
-										onChange: (event) => { setMinutes(Math.max(2, Math.min(20, Number(event.target.value) || 6))); },
-										style: NUM_INPUT
-									})
-								]
+							jsx("h3", {
+								style: { margin: 0, fontSize: "14px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+								children: zh ? "节目" : "Episodes"
 							}),
+							episodeTotal === 0 ? null : jsx("span", {
+								style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)", fontVariantNumeric: "tabular-nums" },
+								children: zh ? `${episodeTotal} 集` : `${episodeTotal}`
+							}),
+							jsx("span", { style: { flex: 1 } }),
 							jsx("button", {
 								type: "button",
-								disabled: busy || running || chosen === 0,
+								"aria-expanded": making,
 								style: {
-									...controlStyle(), height: "30px",
-									opacity: chosen === 0 ? 0.5 : 1,
-									color: `rgb(${accent})`, borderColor: `rgba(${accent}, 0.45)`
+									...controlStyle(), height: "28px", fontSize: "12px",
+									color: making ? "var(--dsw-alias-label-secondary)" : `rgb(${accent})`,
+									borderColor: making ? undefined : `rgba(${accent}, 0.45)`
 								},
-								onClick: () => { void writeScript(); },
-								children: busy && script === null ? (zh ? "写稿中…" : "Writing…") : (zh ? "生成对话稿" : "Write the script")
-							}),
-							chosen !== 0 ? null : jsx("span", {
-								style: { ...FIELD_LABEL, alignSelf: "center" },
-								children: zh ? "先选几条信源" : "Choose some sources first"
+								onClick: () => { setMaking((previous) => !previous); },
+								children: making ? (zh ? "取消" : "Cancel") : (zh ? "＋ 新建一集" : "＋ New episode")
 							})
 						]
 					}),
 
-					script === null ? null : jsxs("div", {
-						style: { ...CARD, marginBottom: "22px", overflow: "hidden" },
+					// ── making one, on demand ────────────────────────────────
+					// Behind a button because it is the exception. The standing
+					// order covers the ordinary case; this is for the day you
+					// want a specific episode about specific things.
+					!making ? null : jsxs("div", {
+						style: {
+							...CARD, padding: "16px", marginBottom: "20px",
+							borderColor: `rgba(${accent}, 0.35)`
+						},
 						children: [
-							jsxs("div", {
-								style: {
-									display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap",
-									padding: "12px 14px", borderBottom: "1px solid var(--dsw-alias-border-l1)"
-								},
+							jsx(StepHeading, {
+								step: 1, accent,
+								title: zh ? "选择信源" : "Choose the sources",
+								hint: chosen === 0 ? "" : (zh ? `已选 ${chosen} 条` : `${chosen} selected`)
+							}),
+
+							jsx(SourceField, { zh, picked, onPick: togglePick, accent }),
+
+							// Listed apart from the picker on purpose: a row picked
+							// under one kind vanishes from the list the moment you
+							// filter elsewhere, and a selection you cannot see is a
+							// selection you cannot trust.
+							chosen === 0 ? null : jsxs("div", {
+								style: { ...CARD, marginTop: "12px", overflow: "hidden", boxShadow: "none" },
 								children: [
-									jsx("span", { style: { flex: 1, minWidth: "140px", fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" }, children: script.title }),
-									voices === null || hosts === null ? null : jsxs("span", {
-										style: { display: "flex", gap: "6px" },
+									jsxs("div", {
+										style: {
+											display: "flex", alignItems: "center", gap: "10px",
+											padding: "9px 13px", borderBottom: "1px solid var(--dsw-alias-border-l1)",
+											background: `rgba(${accent}, 0.05)`
+										},
 										children: [
-											jsx("select", {
-												value: hosts.a,
-												"aria-label": zh ? "主持人 A 的声音" : "Host A voice",
-												onChange: (event) => { setHosts((previous) => ({ ...previous, a: event.target.value })); },
-												style: { ...controlStyle(), height: "28px", fontSize: "11px", padding: "0 6px" },
-												children: voices.map((voice) => jsx("option", { value: voice.id, children: `A · ${voice.label}` }, voice.id))
+											jsx("span", {
+												style: { flex: 1, fontSize: "12px", fontWeight: 600, color: `rgb(${accent})` },
+												children: zh ? `这一集要讲的 ${chosen} 条` : `${chosen} source${chosen === 1 ? "" : "s"} in this episode`
 											}),
-											jsx("select", {
-												value: hosts.b,
-												"aria-label": zh ? "主持人 B 的声音" : "Host B voice",
-												onChange: (event) => { setHosts((previous) => ({ ...previous, b: event.target.value })); },
-												style: { ...controlStyle(), height: "28px", fontSize: "11px", padding: "0 6px" },
-												children: voices.map((voice) => jsx("option", { value: voice.id, children: `B · ${voice.label}` }, voice.id))
+											jsx("button", {
+												type: "button",
+												style: { ...controlStyle(), height: "24px", fontSize: "11px" },
+												onClick: () => { setPicked(new Map()); },
+												children: zh ? "清空" : "Clear"
+											})
+										]
+									}),
+									...[...picked.values()].map((row, at) => jsxs("div", {
+										style: {
+											display: "flex", alignItems: "flex-start", gap: "10px", padding: "9px 13px",
+											borderBottom: at === picked.size - 1 ? "none" : "1px solid var(--dsw-alias-border-l1)",
+											fontSize: "12px"
+										},
+										children: [
+											jsx("span", {
+												style: {
+													flex: "none", marginTop: "1px", width: "15px", fontSize: "11px", fontWeight: 600,
+													fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-tertiary)"
+												},
+												children: String(at + 1)
+											}),
+											jsxs("span", {
+												style: { flex: 1, minWidth: 0 },
+												children: [
+													jsx("span", { style: { color: "var(--dsw-alias-label-primary)", lineHeight: "18px" }, children: row.title }),
+													jsx("span", {
+														style: { display: "block", marginTop: "2px", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+														children: `${sourceNameOf(row)} · ${formatDate(row.publishedAt)}`
+													})
+												]
+											}),
+											jsx("button", {
+												type: "button",
+												"aria-label": zh ? "移出" : "Remove",
+												onClick: () => { togglePick(row); },
+												style: {
+													flex: "none", appearance: "none", border: "none", background: "transparent",
+													padding: "2px", cursor: "pointer", lineHeight: 0, color: "var(--dsw-alias-label-tertiary)"
+												},
+												children: jsx("svg", {
+													width: 12, height: 12, viewBox: "0 0 24 24", fill: "none",
+													stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", "aria-hidden": "true",
+													children: jsx("path", { d: "M6 6l12 12M18 6L6 18" })
+												})
+											})
+										]
+									}, row.id))
+								]
+							}),
+
+							jsx("div", { style: { height: "20px" } }),
+
+							jsx(StepHeading, {
+								step: 2, accent,
+								title: zh ? "生成对话稿" : "Write the script",
+								hint: script === null ? "" : (zh
+									? `${script.turns.length} 轮 · ${script.chars} 字 · 约 ${script.estimatedMinutes} 分钟`
+									: `${script.turns.length} turns · ${script.chars} chars · ~${script.estimatedMinutes} min`)
+							}),
+
+							// One baseline, not a stacked label over a small box with
+							// a button and a hint each floating at their own height.
+							// A stepper rather than a bare number field: the value
+							// has a narrow useful range, the spinner arrows a plain
+							// `number` input draws are tiny and platform-specific,
+							// and this is a dial, not a quantity you type.
+							jsxs("div", {
+								style: { display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap", marginBottom: script === null ? 0 : "14px" },
+								children: [
+									jsx("span", { style: FIELD_LABEL, children: zh ? "目标时长" : "Target length" }),
+									jsxs("div", {
+										style: {
+											display: "inline-flex", alignItems: "center", height: "30px",
+											border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "8px", overflow: "hidden"
+										},
+										children: [
+											jsx("button", {
+												type: "button",
+												"aria-label": zh ? "减少一分钟" : "One minute less",
+												disabled: minutes <= 2,
+												onClick: () => { setMinutes((previous) => Math.max(2, previous - 1)); },
+												style: { ...STEPPER_BUTTON, opacity: minutes <= 2 ? 0.35 : 1 },
+												children: "−"
+											}),
+											jsx("span", {
+												style: {
+													minWidth: "58px", textAlign: "center", fontSize: "12px",
+													fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-primary)"
+												},
+												children: zh ? `${minutes} 分钟` : `${minutes} min`
+											}),
+											jsx("button", {
+												type: "button",
+												"aria-label": zh ? "增加一分钟" : "One minute more",
+												disabled: minutes >= 20,
+												onClick: () => { setMinutes((previous) => Math.min(20, previous + 1)); },
+												style: { ...STEPPER_BUTTON, opacity: minutes >= 20 ? 0.35 : 1 },
+												children: "+"
 											})
 										]
 									}),
 									jsx("button", {
 										type: "button",
-										disabled: busy || running,
-										style: { ...controlStyle(), height: "28px", fontSize: "12px", color: `rgb(${accent})`, borderColor: `rgba(${accent}, 0.45)` },
-										onClick: () => { void render(); },
-										children: running
-											? (zh ? `合成中 ${job.done}/${job.total}` : `Rendering ${job.done}/${job.total}`)
-											: (zh ? "合成音频" : "Render audio")
+										disabled: busy || running || chosen === 0,
+										style: {
+											...controlStyle(), height: "30px",
+											opacity: chosen === 0 ? 0.5 : 1,
+											color: `rgb(${accent})`, borderColor: `rgba(${accent}, 0.45)`
+										},
+										onClick: () => { void writeScript(); },
+										children: busy && script === null ? (zh ? "写稿中…" : "Writing…") : (zh ? "生成对话稿" : "Write the script")
+									}),
+									chosen !== 0 ? null : jsx("span", {
+										style: { ...FIELD_LABEL, fontSize: "11px" },
+										children: zh ? "先加几条信源" : "Add some sources first"
 									})
 								]
 							}),
-							// The progress of a render belongs where the render was
-							// started, not in a corner. Forty synthesis round trips
-							// is long enough that a page with no visible progress
-							// reads as a page that has hung.
-							!running ? null : jsx("div", {
-								style: { height: "3px", background: "var(--dsw-alias-border-l2)" },
-								children: jsx("div", {
-									style: {
-										height: "100%", width: `${job.total > 0 ? (job.done / job.total) * 100 : 0}%`,
-										background: `rgb(${accent})`, transition: "width 240ms ease"
-									}
-								})
-							}),
-							jsx("div", {
-								style: { maxHeight: "280px", overflowY: "auto", padding: "12px 14px" },
-								children: script.turns.map((turn, at) => jsxs("div", {
-									style: { display: "flex", gap: "10px", marginBottom: "10px", fontSize: "12px", lineHeight: "19px" },
-									children: [
-										jsx("span", {
+
+							script === null ? null : jsxs("div", {
+								style: { ...CARD, overflow: "hidden", boxShadow: "none" },
+								children: [
+									jsxs("div", {
+										style: {
+											display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap",
+											padding: "11px 13px", borderBottom: "1px solid var(--dsw-alias-border-l1)"
+										},
+										children: [
+											jsx("span", { style: { flex: 1, minWidth: "140px", fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" }, children: script.title }),
+											voices === null || hosts === null ? null : jsxs("span", {
+												style: { display: "flex", gap: "6px" },
+												children: [
+													jsx("select", {
+														value: hosts.a,
+														"aria-label": zh ? "主持人 A 的声音" : "Host A voice",
+														onChange: (event) => { setHosts((previous) => ({ ...previous, a: event.target.value })); },
+														style: { ...controlStyle(), height: "27px", fontSize: "11px", padding: "0 6px" },
+														children: voices.map((voice) => jsx("option", { value: voice.id, children: `A · ${voice.label}` }, voice.id))
+													}),
+													jsx("select", {
+														value: hosts.b,
+														"aria-label": zh ? "主持人 B 的声音" : "Host B voice",
+														onChange: (event) => { setHosts((previous) => ({ ...previous, b: event.target.value })); },
+														style: { ...controlStyle(), height: "27px", fontSize: "11px", padding: "0 6px" },
+														children: voices.map((voice) => jsx("option", { value: voice.id, children: `B · ${voice.label}` }, voice.id))
+													})
+												]
+											}),
+											jsx("button", {
+												type: "button",
+												disabled: busy || running,
+												style: { ...controlStyle(), height: "27px", fontSize: "12px", color: `rgb(${accent})`, borderColor: `rgba(${accent}, 0.45)` },
+												onClick: () => { void render(); },
+												children: running
+													? (zh ? `合成中 ${job.done}/${job.total}` : `Rendering ${job.done}/${job.total}`)
+													: (zh ? "合成音频" : "Render audio")
+											})
+										]
+									}),
+									// Progress where the render was started. Forty
+									// synthesis round trips is long enough that a page
+									// showing nothing reads as a page that has hung.
+									!running ? null : jsx("div", {
+										style: { height: "3px", background: "var(--dsw-alias-border-l2)" },
+										children: jsx("div", {
 											style: {
-												flex: "none", width: "19px", height: "19px", borderRadius: "50%",
-												display: "inline-flex", alignItems: "center", justifyContent: "center",
-												fontSize: "10px", fontWeight: 600,
-												background: turn.speaker === "a" ? `rgba(${accent}, 0.12)` : "var(--dsw-alias-interactive-bg-hover)",
-												color: turn.speaker === "a" ? `rgb(${accent})` : "var(--dsw-alias-label-secondary)"
-											},
-											children: turn.speaker.toUpperCase()
-										}),
-										jsx("span", { style: { flex: 1, minWidth: 0, color: "var(--dsw-alias-label-primary)" }, children: turn.text })
-									]
-								}, `t${at}`))
-							})
+												height: "100%", width: `${job.total > 0 ? (job.done / job.total) * 100 : 0}%`,
+												background: `rgb(${accent})`, transition: "width 240ms ease"
+											}
+										})
+									}),
+									jsx("div", {
+										style: { maxHeight: "260px", overflowY: "auto", padding: "11px 13px" },
+										children: script.turns.map((turn, at) => jsxs("div", {
+											style: { display: "flex", gap: "10px", marginBottom: "9px", fontSize: "12px", lineHeight: "19px" },
+											children: [
+												jsx("span", {
+													style: {
+														flex: "none", width: "18px", height: "18px", borderRadius: "50%",
+														display: "inline-flex", alignItems: "center", justifyContent: "center",
+														fontSize: "10px", fontWeight: 600,
+														background: turn.speaker === "a" ? `rgba(${accent}, 0.12)` : "var(--dsw-alias-interactive-bg-hover)",
+														color: turn.speaker === "a" ? `rgb(${accent})` : "var(--dsw-alias-label-secondary)"
+													},
+													children: turn.speaker.toUpperCase()
+												}),
+												jsx("span", { style: { flex: 1, minWidth: 0, color: "var(--dsw-alias-label-primary)" }, children: turn.text })
+											]
+										}, `t${at}`))
+									})
+								]
+							}),
+
+							job !== null && job.state === "error" ? jsx("div", {
+								style: { ...NOTE_STYLE, minHeight: 0, padding: "10px 13px", marginTop: "12px", color: "rgb(220,38,38)" },
+								children: (zh ? "合成失败：" : "Render failed: ") + job.error
+							}) : null
 						]
 					}),
 
-					job !== null && job.state === "error" ? jsx("div", {
-						style: { ...NOTE_STYLE, minHeight: 0, padding: "11px 14px", marginBottom: "18px", color: "rgb(220,38,38)" },
-						children: (zh ? "合成失败：" : "Render failed: ") + job.error
-					}) : null,
-
-					// ── 3 · what came out ────────────────────────────────────
-					jsx(StepHeading, {
-						step: 3, accent,
-						title: zh ? "已发布" : "Published",
-						hint: episodes.length === 0 ? "" : (zh ? `${episodes.length} 集` : `${episodes.length} episode${episodes.length === 1 ? "" : "s"}`)
-					}),
-
+					// ── the list ─────────────────────────────────────────────
+					// One episode open with a player, the rest as dense rows.
+					// This is how a podcast app is shaped, and for the same
+					// reason: a back catalogue is scanned by title and date, and
+					// a stack of full-height cards stops working at about the
+					// second screenful. A daily schedule reaches that in a week.
 					episodes.length === 0
-						? jsx("div", { style: { ...CARD, padding: "18px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" }, children: zh ? "还没有生成过节目。" : "No episode yet." })
+						? jsx("div", {
+							style: { ...CARD, padding: "22px", fontSize: "12px", lineHeight: "19px", color: "var(--dsw-alias-label-secondary)" },
+							children: armed
+								? (zh ? `还没有节目。第一集会在明天 ${schedule.publishAt} 自动生成，或者现在按「新建一集」做一集。` : `No episodes yet. The first one arrives tomorrow at ${schedule.publishAt}, or make one now with “New episode”.`)
+								: (zh ? "还没有节目。按「新建一集」做一集，或者在上面设一个每天的时间。" : "No episodes yet. Make one with “New episode”, or set a daily time above.")
+						})
 						: jsxs("div", {
 							children: [
-								...episodes.map((episode) => jsxs("div", {
-									style: { ...CARD, padding: "13px 15px", marginBottom: "10px" },
-									children: [
-										jsxs("div", {
-											style: { display: "flex", alignItems: "baseline", gap: "10px", marginBottom: "11px" },
-											children: [
-												jsx("span", {
-													style: { flex: 1, minWidth: 0, fontSize: "13px", fontWeight: 600, lineHeight: "19px", color: "var(--dsw-alias-label-primary)" },
-													children: episode.title
-												}),
-												jsx("span", {
-													style: { flex: "none", fontSize: "11px", color: "var(--dsw-alias-label-secondary)", fontVariantNumeric: "tabular-nums" },
-													children: `${Math.round(episode.durationSeconds / 60)} ${zh ? "分钟" : "min"} · ${formatStamp(episode.createdAt)}`
-												}),
-												// Quiet until wanted: a delete button at full
-												// contrast beside every title competes with the
-												// titles, and this is a list you read.
-												jsx("button", {
-													type: "button",
-													title: zh ? "删除" : "Delete",
-													"aria-label": zh ? "删除" : "Delete",
-													onClick: () => { void remove(episode.id); },
-													style: {
-														flex: "none", appearance: "none", border: "none", background: "transparent",
-														padding: "2px", cursor: "pointer", lineHeight: 0,
-														color: "var(--dsw-alias-label-tertiary)"
-													},
-													children: jsx("svg", {
-														width: 13, height: 13, viewBox: "0 0 24 24", fill: "none",
-														stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round",
-														"aria-hidden": "true",
-														children: jsx("path", { d: "M5 7h14M10 7V5h4v2M9 7v11M15 7v11M6 7l1 13h10l1-13" })
-													})
-												})
-											]
-										}),
-										jsx(EpisodePlayer, {
-											src: `${apiBase()}/publish/episodes/${encodeURIComponent(episode.id)}/audio`,
-											seconds: episode.durationSeconds,
-											accent
-										})
-									]
-								}, episode.id)),
-								// The feed URL is the point of the RSS: an episode that
-								// only plays in this tab is a file, and one a podcast
-								// client subscribes to is a habit. Placed after the
-								// episodes because it is what you do once, not per row.
+								jsx("div", {
+									style: { ...CARD, overflow: "hidden" },
+									children: episodes.map((episode, at) => jsx(EpisodeRow, {
+										episode,
+										open: active !== undefined && episode.id === active.id,
+										accent, zh,
+										onOpen: () => { setActiveId(episode.id); },
+										onDelete: () => { void remove(episode.id); },
+										last: at === episodes.length - 1
+									}, episode.id))
+								}),
+
+								episodes.length >= episodeTotal ? null : jsx("div", {
+									style: { display: "flex", justifyContent: "center", padding: "12px 0 2px" },
+									children: jsx("button", {
+										type: "button",
+										style: { ...controlStyle(), height: "28px", fontSize: "12px" },
+										onClick: () => { void loadEpisodes(episodes.length + EPISODE_PAGE); },
+										children: zh
+											? `再显示 ${Math.min(EPISODE_PAGE, episodeTotal - episodes.length)} 集`
+											: `Show ${Math.min(EPISODE_PAGE, episodeTotal - episodes.length)} more`
+									})
+								}),
+
+								// The feed is where a back catalogue actually belongs:
+								// a podcast client is built to hold hundreds of
+								// episodes and this panel is not, so the last thing
+								// on the page is the way out of it.
 								jsxs("div", {
 									style: {
 										display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap",
-										marginTop: "14px", padding: "11px 14px",
+										marginTop: "16px", padding: "11px 14px",
 										border: "1px dashed var(--dsw-alias-border-l2)", borderRadius: "12px"
 									},
 									children: [
 										jsx("span", { style: FIELD_LABEL, children: zh ? "在播客 App 里订阅：" : "Subscribe in a podcast app:" }),
 										jsx("code", {
 											style: {
-												flex: 1, minWidth: "180px", fontSize: "11px", overflow: "hidden",
-												textOverflow: "ellipsis", whiteSpace: "nowrap",
-												color: "var(--dsw-alias-label-secondary)"
+												flex: 1, minWidth: "170px", fontSize: "11px", overflow: "hidden",
+												textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--dsw-alias-label-secondary)"
 											},
 											children: feedUrl
 										}),
@@ -4030,25 +4266,6 @@ window.__ModuleLoader__.load({
 			const open = useOpen();
 			const [tab, setTab] = useState(TABS[0].id);
 			const [left, setLeft] = useState(0);
-			// Selection lives here rather than in either tab, because it is made
-			// in one and spent in the other. 发布 used to render a second,
-			// worse source browser — a 250px checkbox list over the same rows
-			// the 信源 tab already shows with search, kinds, thumbnails, and
-			// paging. At twenty thousand rows that list is not a shortcut, it
-			// is the only view without the tools you need.
-			const [picked, setPicked] = useState(() => new Map());
-			const togglePick = useCallback((row) => {
-				setPicked((previous) => {
-					const next = new Map(previous);
-					// Keeping the row, not just its id: the publish tab has to
-					// name what you chose, and re-fetching rows it was just
-					// handed would be a request for data already in hand.
-					if (next.has(row.id)) next.delete(row.id);
-					else next.set(row.id, row);
-					return next;
-				});
-			}, []);
-
 			useLayoutEffect(() => {
 				if (!open) return;
 				const measure = () => { setLeft(centreColumnLeft()); };
@@ -4162,9 +4379,9 @@ window.__ModuleLoader__.load({
 						children: jsx("div", {
 							style: active.id === "sources" ? { ...WIDE_STYLE, height: "100%", minHeight: 0 } : CONTENT_STYLE,
 							children: active.id === "sources"
-								? jsx(ExploreTab, { zh, picked, onPick: togglePick, onGoPublish: () => { setTab("publish"); } })
+								? jsx(ExploreTab, { zh })
 								: active.id === "publish"
-								? jsx(PublishTab, { zh, picked, onPick: togglePick, onGoSources: () => { setTab("sources"); } })
+								? jsx(PublishTab, { zh })
 								: jsxs("div", {
 									children: [
 										jsx("p", { style: LEDE_STYLE, children: zh ? active.ledeZh : active.ledeEn }),
