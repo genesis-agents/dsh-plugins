@@ -264,7 +264,17 @@ export function createPublishRoutes({ store, chat, logger, sendJson, readJson })
       // reached us. Trusting the Host header is right for a feed served to
       // the person who asked for it, and wrong for anything with authority.
       const host = req.headers.host ?? "127.0.0.1:3080";
-      const origin = `http://${host}`;
+      // The scheme comes from the proxy, not from an assumption. Tailscale
+      // Serve — and any TLS terminator — speaks https to the client and plain
+      // http to us, so hardcoding `http://` here produced enclosure URLs
+      // pointing at a port nothing listens on. The feed still parsed and still
+      // listed every episode; they simply all failed to download, which a
+      // podcast client reports as a broken episode rather than as a wrong URL.
+      const forwarded = req.headers["x-forwarded-proto"];
+      const scheme = typeof forwarded === "string" && forwarded.trim() !== ""
+        ? forwarded.split(",")[0].trim()
+        : "http";
+      const origin = `${scheme}://${host}`;
       const xml = buildFeed(episodes, {
         baseUrl: origin,
         link: `${origin}/`,
