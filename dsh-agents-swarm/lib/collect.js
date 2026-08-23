@@ -41,11 +41,42 @@ function decodeEntities(text) {
     .replace(/&amp;/g, "&");
 }
 
-/** Strip tags and collapse whitespace, for a summary field. */
+/** Strip tags and collapse whitespace, for a title or a name. */
 function plainText(html) {
   return decodeEntities(String(html))
     .replace(/<[^>]*>/g, " ")
     .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Horizontal whitespace only — never a line break. */
+const HORIZONTAL_SPACE = /[^\S\r\n]+/g;
+
+/** Three or more consecutive line breaks. */
+const BLANK_RUN = /\n{3,}/g;
+
+/**
+ * Strip tags but keep the line structure, for a description.
+ *
+ * A video's description is not a sentence, it is a document: chapter markers,
+ * a numbered list of what the episode covers, sections of links. Collapsing
+ * `\s+` to a single space — which is what a title wants — destroys all of it
+ * and leaves a wall of text where the timestamps are no longer even findable.
+ * Every line still gets its own horizontal whitespace collapsed, so the shape
+ * survives without the ragged indentation.
+ * @param html - the raw field.
+ * @returns the text, with its line breaks intact.
+ */
+function blockText(html) {
+  return decodeEntities(String(html))
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<[^>]*>/g, " ")
+    .replace(HORIZONTAL_SPACE, " ")
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .replace(BLANK_RUN, "\n\n")
     .trim();
 }
 
@@ -189,7 +220,7 @@ export function parseFeed(xml, { type = "BLOG", sourceType, baseUrl } = {}) {
     const title = plainText(tagText(block, "title"));
     if (url === "" || title === "") continue;
     if (isShortFormVideo(url)) continue;
-    const summary = plainText(tagText(block, "description", "summary", "content", "media:description"));
+    const summary = blockText(tagText(block, "description", "summary", "content", "media:description"));
     const author = itemAuthor(block);
     const thumbnail = itemThumbnail(block, baseUrl);
     rows.push({

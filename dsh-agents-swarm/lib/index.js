@@ -1,5 +1,5 @@
 /**
- * Agents Swarm, Host half: the local source library and its HTTP face.
+ * Agents, Host half: the local source library and its HTTP face.
  *
  * The page reads THIS harness's own store, not a remote one. `/swarm-api`
  * answers from SQLite; the upstream is reachable only through the explicit
@@ -897,7 +897,14 @@ export function createHandler(store, logger, chat) {
         sendJson(res, 404, { success: false, error: "no such resource" });
         return;
       }
-      const stale = typeof row.abstract === "string" && row.abstract.trim() !== "";
+      const held = typeof row.abstract === "string" ? row.abstract.trim() : "";
+      // A long description with no line break in it was flattened on the way
+      // in — the feed parser used to collapse all whitespace, which destroyed
+      // the chapter index and every list. Those rows cannot heal on their own,
+      // because a stored description is exactly what stops this route from
+      // looking again, so recognising the damage is the only way back.
+      const flattened = held.length > 400 && !held.includes("\n");
+      const stale = held !== "" && !flattened;
       if (stale && body.refresh !== true) {
         sendJson(res, 200, { success: true, data: { description: row.abstract, via: "stored" } });
         return;

@@ -1,6 +1,6 @@
 {
   "name": "dsh-agents-swarm",
-  "description": "Agents Swarm entry in the DSH sidebar footer, with a tabbed panel",
+  "description": "Agents entry in the DSH sidebar footer, with a tabbed panel",
   "version": "0.1.0",
   "private": true,
   "type": "module",

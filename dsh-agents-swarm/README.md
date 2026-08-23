@@ -1,13 +1,13 @@
 # dsh-agents-swarm
 
-The Agents Swarm surface for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness):
+The Agents surface for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness):
 a sidebar entry, a full-frame page, and the local source library behind it.
 
 ## What it adds
 
 | Slot | Occupant |
 |---|---|
-| `sidebar.footer.action` | The Agents Swarm entry, beside Settings |
+| `sidebar.footer.action` | The Agents entry, beside Settings |
 | `shell.overlay` | The page, inset to the right of the sidebar so the navigation column stays |
 | `settings.section` | A Sources page inside the shell's own Settings panel |
 

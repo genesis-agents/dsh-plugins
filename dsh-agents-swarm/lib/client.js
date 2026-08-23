@@ -49,9 +49,15 @@ window.__ModuleLoader__.load({
 			return document.documentElement.lang.toLowerCase().startsWith("zh");
 		}
 
-		/** Entry label, resolved per projection. */
+		/**
+		* Entry label, resolved per projection.
+		*
+		* The slot id and the package name stay `agents-swarm`: they are the
+		* addresses other things register against, and renaming an address to
+		* match a label breaks the installation for a word nobody sees.
+		*/
 		function swarmLabel() {
-			return isChinese() ? "智能体蜂群" : "Agents Swarm";
+			return isChinese() ? "智能体" : "Agents";
 		}
 
 		/** The honeycomb-cell mark, sized for its host. */
@@ -1818,7 +1824,156 @@ window.__ModuleLoader__.load({
 		* is about was the missing thing on this page — derived chapter markers
 		* were answering a question nobody had asked yet.
 		*/
-		function VideoDescription({ row, kind, zh }) {
+		//#region video description structure
+		/**
+		* A timestamp as a video description writes one: `1:23`, `01:02:03`,
+		* optionally in brackets. Anchored per line, not global, because a URL
+		* can contain digits and colons too.
+		*/
+		const CHAPTER_LINE = /^[([]?((?:\d{1,2}:)?\d{1,2}:\d{2})[)\]]?\s*[-–—:.]?\s*(.+)$/;
+
+		/** The same, written inline: `(00:00) Introduction (02:49) Why ...`. */
+		const CHAPTER_INLINE = /[([]((?:\d{1,2}:)?\d{1,2}:\d{2})[)\]]\s*/g;
+
+		/** A bare URL. */
+		const BARE_URL = /https?:\/\/[^\s<>()[\]]+[^\s<>()[\].,;:!?'"]/g;
+
+		/** `*A section heading*`, which is what YouTube's editor emits for bold. */
+		const SECTION_LINE = /^\*(.+?)\*:?\s*$/;
+
+		/** `• item` or `- item`. */
+		const BULLET_LINE = /^[•·*\-–]\s+(.+)$/;
+
+		/** `1. item` or `1) item`. */
+		const NUMBER_LINE = /^(\d{1,2})[.)]\s+(.+)$/;
+
+		/** Seconds named by a `h:mm:ss` or `m:ss` stamp. */
+		function stampSeconds(stamp) {
+			const parts = String(stamp).split(":").map((part) => Number(part));
+			if (parts.some((part) => !Number.isFinite(part))) return -1;
+			return parts.reduce((total, part) => total * 60 + part, 0);
+		}
+
+		/**
+		* Turn a video description into blocks.
+		*
+		* A description is a document, not a paragraph: an opening, a numbered
+		* list of what the episode covers, a chapter index, and sections of
+		* links. It arrives as text with newlines and nothing else, so the
+		* structure has to be recognised rather than parsed. Every rule below is
+		* one an uploader actually uses; anything unrecognised stays a paragraph,
+		* so no line is ever dropped for failing to match.
+		*
+		* Chapters are the reason this is worth doing at all — the description is
+		* where a video keeps its table of contents, and the player is right
+		* there.
+		* @param text - the raw description.
+		* @returns `[{ kind, ... }]` blocks.
+		*/
+		function describeVideo(text) {
+			const lines = String(text ?? "").split("\n");
+			const blocks = [];
+			let paragraph = [];
+			let list = null;
+
+			const flushParagraph = () => {
+				if (paragraph.length === 0) return;
+				blocks.push({ kind: "paragraph", text: paragraph.join(" ") });
+				paragraph = [];
+			};
+			const flushList = () => {
+				if (list === null) return;
+				blocks.push(list);
+				list = null;
+			};
+			const flushAll = () => { flushParagraph(); flushList(); };
+
+			for (const raw of lines) {
+				const line = raw.trim();
+				if (line === "") { flushAll(); continue; }
+
+				const section = SECTION_LINE.exec(line);
+				if (section !== null) {
+					flushAll();
+					blocks.push({ kind: "section", text: section[1].trim() });
+					continue;
+				}
+
+				// A line that is only chapters — `(00:00) Intro (02:49) Why ...` —
+				// is how many uploaders write the whole index on one line.
+				const inline = [...line.matchAll(CHAPTER_INLINE)];
+				if (inline.length >= 2) {
+					flushAll();
+					const chapters = [];
+					for (let at = 0; at < inline.length; at += 1) {
+						const start = inline[at].index + inline[at][0].length;
+						const end = at + 1 < inline.length ? inline[at + 1].index : line.length;
+						const label = line.slice(start, end).trim();
+						if (label !== "") chapters.push({ at: stampSeconds(inline[at][1]), stamp: inline[at][1], label });
+					}
+					if (chapters.length > 0) { blocks.push({ kind: "chapters", chapters }); continue; }
+				}
+
+				const chapter = CHAPTER_LINE.exec(line);
+				if (chapter !== null && stampSeconds(chapter[1]) >= 0) {
+					flushParagraph();
+					if (list === null || list.kind !== "chapters") { flushList(); list = { kind: "chapters", chapters: [] }; }
+					list.chapters.push({ at: stampSeconds(chapter[1]), stamp: chapter[1], label: chapter[2].trim() });
+					continue;
+				}
+
+				const numbered = NUMBER_LINE.exec(line);
+				if (numbered !== null) {
+					flushParagraph();
+					if (list === null || list.kind !== "ordered") { flushList(); list = { kind: "ordered", items: [] }; }
+					list.items.push(numbered[2].trim());
+					continue;
+				}
+
+				const bullet = BULLET_LINE.exec(line);
+				if (bullet !== null) {
+					flushParagraph();
+					if (list === null || list.kind !== "bullets") { flushList(); list = { kind: "bullets", items: [] }; }
+					list.items.push(bullet[1].trim());
+					continue;
+				}
+
+				flushList();
+				paragraph.push(line);
+			}
+			flushAll();
+			return blocks;
+		}
+
+		/**
+		* Render one line, turning bare URLs into links.
+		* @param text - the line.
+		* @param key - a key prefix.
+		* @returns React children.
+		*/
+		function linkify(text, key) {
+			const source = String(text ?? "");
+			const nodes = [];
+			let at = 0;
+			let index = 0;
+			BARE_URL.lastIndex = 0;
+			for (;;) {
+				const match = BARE_URL.exec(source);
+				if (match === null) break;
+				if (match.index > at) nodes.push(source.slice(at, match.index));
+				nodes.push(jsx("a", {
+					href: match[0], target: "_blank", rel: "noreferrer noopener",
+					style: { color: "var(--dsw-alias-label-link)", wordBreak: "break-all" },
+					children: match[0].replace(/^https?:\/\/(?:www\.)?/, "")
+				}, `${key}u${index++}`));
+				at = match.index + match[0].length;
+			}
+			if (at < source.length) nodes.push(source.slice(at));
+			return nodes.length === 0 ? source : nodes;
+		}
+		//#endregion
+
+		function VideoDescription({ row, kind, zh, onSeek }) {
 			const [state, setState] = useState({ status: "idle", text: row.abstract ?? "" });
 			const [expanded, setExpanded] = useState(false);
 
@@ -1850,8 +2005,11 @@ window.__ModuleLoader__.load({
 			}, [row.abstract, load]);
 
 			const text = state.text ?? "";
-			const long = text.length > 320;
-			const shown = long && !expanded ? `${text.slice(0, 320)}…` : text;
+			const long = text.length > 700;
+			// Truncate on a line boundary. Cutting at a character count lands
+			// mid-chapter and leaves half a timestamp, which the parser then
+			// reads as prose.
+			const shown = long && !expanded ? text.slice(0, text.lastIndexOf("\n", 700) + 1 || 700) : text;
 			const meta = state.meta;
 
 			return jsxs("section", {
@@ -1896,12 +2054,57 @@ window.__ModuleLoader__.load({
 						})
 						: jsxs("div", {
 							children: [
-								jsx("p", {
-									style: {
-										margin: 0, fontSize: "13px", lineHeight: "21px", whiteSpace: "pre-wrap",
-										color: "var(--dsw-alias-label-secondary)"
-									},
-									children: shown
+								jsx("div", {
+									style: { fontSize: "13px", lineHeight: "21px", color: "var(--dsw-alias-label-secondary)" },
+									children: describeVideo(shown).map((piece, at) => {
+										if (piece.kind === "section") {
+											return jsx("div", {
+												style: {
+													margin: at === 0 ? "0 0 6px" : "14px 0 6px", fontSize: "12px",
+													fontWeight: 600, color: "var(--dsw-alias-label-primary)"
+												},
+												children: piece.text
+											}, `s${at}`);
+										}
+										if (piece.kind === "chapters") {
+											// The description is where a video keeps its table of
+											// contents, and the player is right beside it. A chapter
+											// that cannot be clicked is a timestamp you have to copy
+											// out by hand.
+											return jsx("div", {
+												style: { margin: "6px 0 10px", display: "flex", flexDirection: "column", gap: "1px" },
+												children: piece.chapters.map((chapter, index) => jsxs("button", {
+													type: "button",
+													onClick: () => { onSeek?.(chapter.at); },
+													title: zh ? `跳到 ${chapter.stamp}` : `Jump to ${chapter.stamp}`,
+													style: {
+														appearance: "none", display: "flex", gap: "10px", width: "100%",
+														padding: "3px 6px", border: "none", borderRadius: "6px",
+														background: "transparent", font: "inherit", fontSize: "12px",
+														textAlign: "left", cursor: onSeek === undefined ? "default" : "pointer",
+														color: "var(--dsw-alias-label-secondary)"
+													},
+													children: [
+														jsx("span", {
+															style: { flex: "none", minWidth: "44px", fontWeight: 500, color: hue(kind) },
+															children: chapter.stamp
+														}),
+														jsx("span", { style: { flex: 1, minWidth: 0 }, children: chapter.label })
+													]
+												}, `c${index}`))
+											}, `ch${at}`);
+										}
+										if (piece.kind === "ordered" || piece.kind === "bullets") {
+											return jsx(piece.kind === "ordered" ? "ol" : "ul", {
+												style: { margin: "6px 0 10px", paddingLeft: "22px" },
+												children: piece.items.map((item, index) => jsx("li", {
+													style: { margin: "0 0 4px" },
+													children: linkify(item, `l${at}-${index}-`)
+												}, `i${index}`))
+											}, `${piece.kind}${at}`);
+										}
+										return jsx("p", { style: { margin: "0 0 10px" }, children: linkify(piece.text, `p${at}-`) }, `p${at}`);
+									})
 								}),
 								long ? jsx("button", {
 									type: "button",
@@ -2425,7 +2628,7 @@ window.__ModuleLoader__.load({
 									})
 								})
 								: jsx("div", { style: { flex: 1, minHeight: 0 }, children: jsx(DocumentView, { row, kind, zh, wide: collapsed }) }),
-							isVideo ? jsx(VideoDescription, { row, kind, zh }) : null
+							isVideo ? jsx(VideoDescription, { row, kind, zh, onSeek: seek }) : null
 						]
 					}),
 
@@ -2797,7 +3000,7 @@ window.__ModuleLoader__.load({
 
 		//#region sidebar trigger
 		/**
-		* The Agents Swarm entry, always present in the sidebar foot. Geometry
+		* The Agents entry, always present in the sidebar foot. Geometry
 		* matches the Settings seat below it: a 36px row with no extra wrapper
 		* height, so the two entries sit at the same rhythm.
 		*/
@@ -2812,6 +3015,9 @@ window.__ModuleLoader__.load({
 					type: "button",
 					"aria-label": swarmLabel(),
 					"aria-pressed": open,
+					// Marks this as the toggle, so the page's click-away handler
+					// leaves it alone rather than closing what this is about to open.
+					"data-swarm-trigger": "true",
 					onClick: () => { setOpen(!openState); },
 					style: {
 						appearance: "none", border: "none",
@@ -2834,7 +3040,7 @@ window.__ModuleLoader__.load({
 
 		//#region overlay page
 		/**
-		* The Agents Swarm page.
+		* The Agents page.
 		*
 		* `conversation` — the centre column — is a `single` slot, so occupying
 		* it would REPLACE the whole conversation surface and take its declared
@@ -2877,6 +3083,31 @@ window.__ModuleLoader__.load({
 				const onKeyDown = (event) => { if (event.key === "Escape") setOpen(false); };
 				document.addEventListener("keydown", onKeyDown);
 				return () => { document.removeEventListener("keydown", onKeyDown); };
+			}, [open]);
+
+			// The page covers the conversation but deliberately leaves the
+			// sidebar reachable, and that combination had a trap in it: starting
+			// a new session put the new session BEHIND this page, so the click
+			// appeared to do nothing and there was no way to reach what had just
+			// been created.
+			//
+			// Any click in the shell around this page is a request for the shell
+			// — a new session, another workspace, settings — so the page steps
+			// aside for it. Capture phase, so the decision is made before the
+			// shell's own handler runs and the two do not race. The trigger in
+			// the footer is excluded: it owns the toggle, and closing here would
+			// fight its own re-open.
+			useLayoutEffect(() => {
+				if (!open) return;
+				const onPointerDown = (event) => {
+					const target = event.target;
+					if (!(target instanceof Element)) return;
+					if (target.closest("[data-swarm-left]") !== null) return;
+					if (target.closest("[data-swarm-trigger]") !== null) return;
+					setOpen(false);
+				};
+				document.addEventListener("pointerdown", onPointerDown, true);
+				return () => { document.removeEventListener("pointerdown", onPointerDown, true); };
 			}, [open]);
 
 			if (!open) return null;
