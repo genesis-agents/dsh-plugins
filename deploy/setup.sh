@@ -54,21 +54,34 @@ if command -v cygpath >/dev/null 2>&1; then REPO="$(cygpath -m "$REPO")"; fi
 DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 PROFILE="$DSH_HOME/profiles/$PROFILE_NAME"
 
-# The mode sticks to the machine, exactly like the library location below it.
-# The self-update runs this script with no arguments after every pull, so a
-# mode that defaulted instead of persisting would quietly demote the release
-# box to a development build five minutes after somebody set it.
-MODE_FILE="$DSH_HOME/swarm-plugin-source.txt"
+# The mode sticks to the PROFILE, beside the profile it describes. Per machine
+# would be wrong as soon as there are two: a workstation wants its `web`
+# profile on the published packages and a `dev` profile on the checkout at the
+# same time, and one file for both means setting up the second demotes the
+# first. The self-update runs this script with no arguments after every pull,
+# so a mode that defaulted rather than persisted would demote the release box
+# five minutes after somebody set it.
+MODE_FILE="$PROFILE/.plugin-source"
+LEGACY_MODE_FILE="$DSH_HOME/swarm-plugin-source.txt"
 PREVIOUS_MODE=""
 # An `if`, not `[ -f ] && VAR=`, which returns non-zero on a machine that has
 # never run this and takes the whole script down under `set -e` -- on exactly
 # the first run, where there is nothing to diagnose from.
-if [ -f "$MODE_FILE" ]; then PREVIOUS_MODE="$(tr -d '[:space:]' < "$MODE_FILE")"; fi
+if [ -f "$MODE_FILE" ]; then
+  PREVIOUS_MODE="$(tr -d '[:space:]' < "$MODE_FILE")"
+elif [ "$PROFILE_NAME" = web ] && [ -f "$LEGACY_MODE_FILE" ]; then
+  # Where this used to live, when it was one setting for the machine.
+  PREVIOUS_MODE="$(tr -d '[:space:]' < "$LEGACY_MODE_FILE")"
+fi
 if [ -n "$MODE" ]; then
-  mkdir -p "$DSH_HOME"
+  mkdir -p "$PROFILE"
   printf '%s\n' "$MODE" > "$MODE_FILE"
 else
   MODE="$PREVIOUS_MODE"
+  # Carry the old machine-wide answer into its new home, once.
+  if [ -n "$MODE" ] && [ ! -f "$MODE_FILE" ]; then
+    mkdir -p "$PROFILE"; printf '%s\n' "$MODE" > "$MODE_FILE"
+  fi
 fi
 case "$MODE" in release|checkout) ;; *) MODE=checkout ;; esac
 
@@ -293,7 +306,9 @@ echo "next:"
 if [ "$PROFILE_NAME" = web ]; then
   echo "  dsh web --no-open        # then open http://127.0.0.1:3080"
 else
-  echo "  dsh web --profile $PROFILE_NAME --no-open"
+  # `--profile` belongs to `dsh`, not to `dsh web`. The other order is
+  # accepted-looking and fails with "unknown option '--profile'".
+  echo "  dsh --profile $PROFILE_NAME web --no-open"
 fi
 case "$LIBRARY" in
   http://*|https://*) ;;
