@@ -26,7 +26,8 @@ import { sourceFeeds } from "./sources.js";
 import { enrichThumbnails, imageForPage, ENRICHABLE_TYPES, DEFAULT_ENRICH_LIMIT } from "./enrich.js";
 import { createPublishRoutes } from "./publish-routes.js";
 import { PUBLISH_DEFAULTS, readPublishConfig, startPublishTimer } from "./publish-schedule.js";
-import { createProxyHandler, remoteFromEnv } from "./remote.js";
+import { createProxyHandler } from "./remote.js";
+import { LIBRARY_ENV, mediaDirs, resolveLibrary, writeLibraryPointer } from "./library.js";
 
 /** Route prefix this plugin owns on the dsh web server. */
 const ROUTE_PREFIX = "/swarm-api";
@@ -74,44 +75,29 @@ export function resolveDshHome(env = process.env, home = homedir()) {
 }
 
 /**
- * Pointer file naming where the library lives.
- *
- * The database is not runtime state — it is the surviving copy of a corpus
- * migrated out of a service that is being retired — so it must not be buried
- * in `<dshHome>/storages` beside disposable caches, where a routine cleanup of
- * harness state would take it. The path is therefore a deliberate choice, and
- * the pointer keeps that choice across restarts without requiring an
- * environment variable to be set on every launch.
- */
-const LOCATION_POINTER = "swarm-library-location.txt";
-
-/**
  * Absolute path of the source library database.
  *
- * Resolution order: the `DSH_SWARM_DB` environment override, then the pointer
- * file written by whoever chose the location, then the harness home as a last
- * resort so a fresh install still works.
+ * Throws when the configuration names a remote: a caller asking for a local
+ * path on a machine that proxies has a bug, and answering with a plausible
+ * default would hide it behind an empty library.
  * @param env - process environment.
  * @returns the absolute database path.
  */
 export function storePath(env = process.env) {
-  const override = env.DSH_SWARM_DB;
-  if (typeof override === "string" && override.trim() !== "") return override.trim();
-  const pointer = join(resolveDshHome(env), LOCATION_POINTER);
-  if (existsSync(pointer)) {
-    const recorded = readFileSync(pointer, "utf8").trim();
-    if (recorded !== "" && isAbsolute(recorded)) return recorded;
+  const library = resolveLibrary(env, homedir());
+  if (library.kind !== "local") {
+    throw new Error(`no local library on this machine: ${LIBRARY_ENV} names ${library.base}`);
   }
-  return join(resolveDshHome(env), "storages", "swarm-sources.sqlite");
+  return library.path;
 }
 
 /**
  * Record where the library should live, for later launches.
- * @param path - absolute database path.
+ * @param value - an absolute path, or an http(s) URL to proxy.
  * @param env - process environment.
  */
-export function writeStorePointer(path, env = process.env) {
-  writeFileSync(join(resolveDshHome(env), LOCATION_POINTER), `${path}\n`, "utf8");
+export function writeStorePointer(value, env = process.env) {
+  writeLibraryPointer(value, env, homedir());
 }
 
 /**
@@ -121,7 +107,7 @@ export function writeStorePointer(path, env = process.env) {
  * @returns the absolute directory path.
  */
 export function thumbnailDir(env = process.env) {
-  return join(dirname(storePath(env)), "thumbnails");
+  return mediaDirs(storePath(env)).thumbnails;
 }
 
 /** Upstream origin for the seed action, without a trailing slash. */
@@ -1369,19 +1355,19 @@ export function apply(ctx) {
   // deliberately total: a machine serving someone else's library must not open
   // a database of its own, and must not run the timers. Two collectors would
   // fetch all 72 feeds twice into two diverging libraries.
-  const remote = remoteFromEnv();
-  if (remote !== undefined) {
-    ctx.logger?.info?.(`swarm: proxying the source library from ${remote}`);
+  const library = resolveLibrary(process.env, homedir());
+  if (library.kind === "remote") {
+    ctx.logger?.info?.(`swarm: proxying the source library from ${library.base}`);
     const disposeProxy = ctx.webServer.register({
       kind: "prefix",
       path: ROUTE_PREFIX,
-      handler: createProxyHandler(remote, ctx.logger, ROUTE_PREFIX),
+      handler: createProxyHandler(library.base, ctx.logger, ROUTE_PREFIX),
     });
     ctx.on("dispose", disposeProxy);
     return;
   }
 
-  const path = storePath();
+  const path = library.path;
   const store = new SourceStore(path);
   ctx.logger?.info?.(`swarm: source library at ${path} (${store.count()} rows)`);
   const dispose = ctx.webServer.register({

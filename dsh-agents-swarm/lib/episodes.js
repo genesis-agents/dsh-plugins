@@ -22,6 +22,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { storePath } from "./index.js";
+import { mediaDirs } from "./library.js";
 
 /**
  * Bitrate every episode is encoded at.
@@ -56,7 +57,7 @@ const SAFE_ID = /^[A-Za-z0-9_-]+$/;
  * @returns the absolute directory path.
  */
 export function episodeDir(env = process.env) {
-  return join(dirname(storePath(env)), "episodes");
+  return mediaDirs(storePath(env)).episodes;
 }
 
 /**

@@ -47,43 +47,6 @@ const MEDIA_TIMEOUT_MS = 180_000;
 /** Route prefixes whose bodies are large enough to deserve the longer budget. */
 const MEDIA_PATHS = ["/publish/episodes/", "/thumbnail/", "/proxy/image", "/proxy/pdf"];
 
-/**
- * Normalize a configured remote into an origin plus API prefix.
- *
- * Accepts what a person would actually paste — with or without the
- * `/swarm-api` suffix, with or without a trailing slash — because getting this
- * wrong produces 404s from a server that is working fine.
- * @param value - the configured remote.
- * @returns the base URL with no trailing slash, or undefined when unset.
- */
-export function normalizeRemote(value) {
-  const raw = typeof value === "string" ? value.trim() : "";
-  if (raw === "") return undefined;
-  let url;
-  try {
-    url = new URL(raw);
-  } catch {
-    return undefined;
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-  const path = url.pathname.replace(/\/+$/, "");
-  const base = path.endsWith("/swarm-api") ? path : `${path}/swarm-api`;
-  return `${url.origin}${base}`;
-}
-
-/**
- * Read the configured remote from the environment.
- *
- * Environment rather than the settings page, because the settings page is
- * served BY the thing being configured: a library you cannot reach is also a
- * library whose settings you cannot open to fix the address.
- * @param env - process environment.
- * @returns the normalized remote, or undefined.
- */
-export function remoteFromEnv(env = process.env) {
-  return normalizeRemote(env.DSH_SWARM_REMOTE);
-}
-
 /** Whether this request's body warrants the long timeout. */
 function isMedia(path) {
   return MEDIA_PATHS.some((prefix) => path.startsWith(prefix));
