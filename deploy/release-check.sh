@@ -119,13 +119,28 @@ else
   WANT="$(npm view @deepseek-ai/dsh version 2>/dev/null || echo latest)"
   HAVE="$( cd "$HARNESS_CACHE" 2>/dev/null && node -p "require('./node_modules/@deepseek-ai/dsh/package.json').version" 2>/dev/null || true )"
   if [ "$HAVE" != "$WANT" ]; then
-    echo "installing @deepseek-ai/dsh@$WANT into $HARNESS_CACHE (minutes, once per release of the harness)"
+    # Loud about the wait, because it is long. On a Windows filesystem this
+    # install has taken over fifteen minutes, and a caller who wraps this script
+    # in `timeout 580` -- as I did -- kills it partway and is left with an empty
+    # node_modules and a check that failed for a reason nothing printed.
+    echo "installing @deepseek-ai/dsh@$WANT into $HARNESS_CACHE"
+    echo "  first run only, and slow: the harness is a large tree. Do not interrupt."
     mkdir -p "$HARNESS_CACHE"
     printf '{"name":"dsh-release-check","private":true}\n' > "$HARNESS_CACHE/package.json"
     npm install --prefix "$HARNESS_CACHE" "@deepseek-ai/dsh@$WANT" \
       --no-audit --no-fund --prefer-online --loglevel=error >/dev/null 2>&1 \
       || { bad "could not install the published harness"; exit 1; }
     HAVE="$( cd "$HARNESS_CACHE" && node -p "require('./node_modules/@deepseek-ai/dsh/package.json').version" )"
+  fi
+  # Present is not the same as complete. An interrupted install leaves the
+  # manifest on disk with dependencies missing, so the version check passes and
+  # the boot dies on the first import. Asking node to resolve the entry point is
+  # what tells the two apart.
+  if ! ( cd "$HARNESS_CACHE" && node -e "require.resolve('@deepseek-ai/dsh/package.json'); require.resolve('js-yaml')" ) 2>/dev/null; then
+    echo "the cached harness is incomplete; reinstalling"
+    rm -rf "$HARNESS_CACHE/node_modules" "$HARNESS_CACHE/package-lock.json"
+    npm install --prefix "$HARNESS_CACHE" "@deepseek-ai/dsh@$WANT"       --no-audit --no-fund --prefer-online --loglevel=error >/dev/null 2>&1       || { bad "could not install the published harness"; exit 1; }
+    HAVE="$( cd "$HARNESS_CACHE" && node -p "require('./node_modules/@deepseek-ai/dsh/package.json').version" 2>/dev/null || true )"
   fi
   [ "$HAVE" = "$WANT" ] && ok "harness $HAVE, installed from npm" || bad "harness is $HAVE, wanted $WANT"
   echo "booting it on port $PORT"
@@ -144,8 +159,13 @@ done
 if curl -fsS -m 5 "http://127.0.0.1:$PORT/swarm-api/stats" >/dev/null 2>&1; then
   ok "harness booted and the library answers"
 else
-  # The boot log is the only place the loader's own error appears.
-  bad "harness did not come up" "$(grep -oE 'failed to (import|apply) loader entry[^\"]*' "$WORK/boot.log" | head -1)"
+  # Whatever the boot log's first error actually says, rather than one pattern.
+  # The pattern here matched loader failures only, so when the harness itself
+  # could not start -- a half-finished install missing js-yaml -- the report was
+  # "harness did not come up" with an empty reason, which is the least useful
+  # thing a check can say about a failure it is holding the cause of.
+  bad "harness did not come up" "$(grep -m1 -E '^(Error|[A-Za-z]*Error)' "$WORK/boot.log" || head -3 "$WORK/boot.log" | tr '
+' ' ')"
   exit 1
 fi
 

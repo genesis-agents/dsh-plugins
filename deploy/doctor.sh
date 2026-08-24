@@ -243,7 +243,11 @@ if curl -fsS -m 10 "http://127.0.0.1:$PORT/swarm-api/stats" >/dev/null 2>&1; the
       INTERVAL="$(curl -fsS -m 10 "http://127.0.0.1:$PORT/swarm-api/collect/status" 2>/dev/null | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).data.intervalMinutes' 2>/dev/null || echo '?')"
       [ "$INTERVAL" = "0" ] && warn "collection is off" "set an interval in Settings" || ok "collection every ${INTERVAL} minutes"
       AT="$(curl -fsS -m 10 "http://127.0.0.1:$PORT/swarm-api/publish/schedule" 2>/dev/null | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).data.publishAt || "off"' 2>/dev/null || echo '?')"
-      [ "$AT" = "off" ] && warn "no daily episode scheduled" "set a time in the Publish tab" || ok "daily episode at $AT"
+      # Off is a setting, not a symptom. There is exactly one way for the daily
+      # episode to be off -- somebody used the switch -- and warning about it
+      # every run means nagging a person about a decision they made on purpose,
+      # which is how the rest of this output stops being read.
+      [ "$AT" = "off" ] && ok "daily episode: off" "the switch on the Publish tab turns it on" || ok "daily episode at $AT"
       ;;
   esac
 else

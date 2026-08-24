@@ -179,7 +179,10 @@ harness resolves the `name` in `cordis.patch.yml`, and the page registers the
 
 The harness it boots comes from npm as well — `@deepseek-ai/dsh@latest`, cached
 under `~/.cache/dsh-release-check` and refreshed when the published version
-moves. It used to boot the checkout next door through `tsx`, which left the
+moves. **The first run is slow** — over fifteen minutes on a Windows
+filesystem, because the harness is a large tree. Do not wrap it in a timeout;
+an interrupted install leaves an empty `node_modules` and the next run fails at
+boot instead of at the install. It used to boot the checkout next door through `tsx`, which left the
 important word unverified: "can somebody else install this?" answered by a
 harness nobody else has, built from sources nobody else fetches. Pass
 `HARNESS=/path/to/deepseek-harness` to go back to the checkout while iterating;
