@@ -26,6 +26,9 @@ import { sourceFeeds } from "./sources.js";
 import { enrichThumbnails, imageForPage, ENRICHABLE_TYPES, DEFAULT_ENRICH_LIMIT } from "./enrich.js";
 import { createPublishRoutes } from "./publish-routes.js";
 import { PUBLISH_DEFAULTS, readPublishConfig, startPublishTimer } from "./publish-schedule.js";
+import { createInsightRoutes } from "./insight-routes.js";
+import { isInsightDue, readInsightConfig, runInsightPass } from "./insight-extract.js";
+import { openInsightStore } from "./insight-store.js";
 import { createProxyHandler } from "./remote.js";
 import { PLUGIN_CHANNEL, PLUGIN_COMMIT, PLUGIN_DIR, PLUGIN_VERSION, versionLabel } from "./version.js";
 import { DOCUMENT_FORMATS } from "./documents.js";
@@ -228,6 +231,16 @@ const DEFAULT_COLLECT_INTERVAL_MINUTES = 60;
 const MIN_COLLECT_INTERVAL_MINUTES = 15;
 
 /**
+ * Shortest insight interval accepted, zero aside.
+ *
+ * Zero-or-a-minimum rather than a plain range, mirroring the collection
+ * interval above: a five-minute pass would re-read the same watermark before
+ * the previous run had finished recording it, paying for the same clusters
+ * twice while reporting two successful runs.
+ */
+const MIN_INSIGHT_INTERVAL_MINUTES = 30;
+
+/**
  * Run every configured collector once, tolerating individual failures.
  *
  * A collector that throws must not stop the others: one dead feed is normal
@@ -321,22 +334,79 @@ export function recordCollection(store, entry) {
  * to a session's event log, which is the wrong lifetime for host-side intake
  * that must keep running with no session open. `unref` keeps the timer from
  * holding the process alive on shutdown.
+ *
+ * The 洞察 pass rides this same tick rather than owning a timer of its own.
+ * The rows it reads are the rows the collection just wrote, so a second
+ * interval would be a second thing to reason about and a race to lose: both
+ * would read `insightLastRun.watermark`, and whichever recorded its run second
+ * would move the watermark past rows the other had already skipped. Those rows
+ * are never read again, and nothing anywhere reports it.
  * @param store - the source library.
  * @param logger - Cordis logger.
+ * @param insightStore - the 洞察 store, or undefined to leave the pass unwired.
+ * @param chat - streaming chat entry point, or undefined when no model is routed.
  * @returns a disposer stopping the timer.
  */
-export function startCollectionTimer(store, logger) {
+export function startCollectionTimer(store, logger, insightStore, chat) {
   let timer;
   let catchUp;
   const configured = Number(readConfig(store).collectIntervalMinutes ?? DEFAULT_COLLECT_INTERVAL_MINUTES);
-  if (!Number.isFinite(configured) || configured <= 0) return () => {};
+  if (!Number.isFinite(configured) || configured <= 0) {
+    // Collection off turns the insight pass off with it, because the pass runs
+    // on this tick. Said out loud rather than left to be discovered: the
+    // alternative is a 洞察 tab that stays empty while its own interval is set
+    // and `/insights/status` reports a schedule nothing is honouring.
+    if (insightStore !== undefined && Number(readInsightConfig(store).insightIntervalMinutes) > 0) {
+      logger?.warn?.("swarm: collection is off, so the insight pass will not run either — it rides the collection tick");
+    }
+    return () => {};
+  }
   const minutes = Math.max(MIN_COLLECT_INTERVAL_MINUTES, configured);
   logger?.info?.(`swarm: collecting every ${minutes} minute(s)`);
 
+  /**
+   * Whether a pass started by this timer is still going.
+   *
+   * The guard `startPublishTimer` carries, for the same reason: a pass is up
+   * to twenty model calls over minutes and a collection run is itself slow, so
+   * two ticks overlap easily. Two overlapping passes read the same watermark,
+   * cluster the same rows, and pay twice for them — while both report success.
+   */
+  let insightRunning = false;
+
+  /** Run the 洞察 pass if it is armed, due, and not already running. */
+  const runInsights = async () => {
+    if (insightStore === undefined) return;
+    if (insightRunning) return;
+    // `insightIntervalMinutes` still decides whether this tick is due, so
+    // arming the pass stays a decision and zero still means off. It cannot
+    // make the pass run more often than collection does, though: 30 under an
+    // hourly collection is an hourly pass, not a half-hourly one.
+    if (!isInsightDue(readInsightConfig(store))) return;
+    insightRunning = true;
+    try {
+      // Never throws; it settles into a recorded result either way, which is
+      // what `/insights/status` reads.
+      await runInsightPass(store, insightStore, chat, logger, { markSkips: true });
+    } finally {
+      insightRunning = false;
+    }
+  };
+
   const run = () => {
-    void collectOnce(store, logger).catch((cause) => {
-      logger?.warn?.(`swarm: collection run failed: ${String(cause?.message ?? cause)}`);
-    });
+    void collectOnce(store, logger)
+      .catch((cause) => {
+        logger?.warn?.(`swarm: collection run failed: ${String(cause?.message ?? cause)}`);
+      })
+      // AFTER the collection settles, not beside it: the pass reads rows past
+      // its own watermark, and starting the two together would leave this
+      // run's rows for the next tick. A failed collection still gets a pass —
+      // a partial run writes rows, and a pass with nothing new to read skips
+      // for the price of one query.
+      .then(runInsights)
+      .catch((cause) => {
+        logger?.warn?.(`swarm: insight pass could not be started: ${String(cause?.message ?? cause)}`);
+      });
   };
 
   // The interval counts from process start, so every restart pushes the next
@@ -425,6 +495,7 @@ export function readConfig(store) {
     supadataKey: store.getSetting("supadataKey", ""),
     collectIntervalMinutes: store.getSetting("collectIntervalMinutes", DEFAULT_COLLECT_INTERVAL_MINUTES),
     ...readPublishConfig(store),
+    ...readInsightConfig(store),
   };
 }
 
@@ -484,7 +555,14 @@ export function writeConfig(store, patch) {
       }
     }
   }
-  for (const [key, low, high] of [["publishSources", 1, 20], ["publishMinutes", 2, 20], ["publishMinSources", 1, 20]]) {
+  for (const [key, low, high] of [
+    ["publishSources", 1, 20], ["publishMinutes", 2, 20], ["publishMinSources", 1, 20],
+    // 洞察. `insightIntervalMinutes` is deliberately absent: 0-or-at-least-30
+    // is not a range, and putting it here would accept 5.
+    ["insightMaxRows", 20, 600], ["insightMaxClusters", 1, 60], ["insightMaxReconcileCalls", 0, 40],
+    ["insightMinIndependent", 2, 5], ["insightWindowDays", 1, 30], ["insightDormantDays", 3, 120],
+    ["insightDuplicateBits", 0, 12],
+  ]) {
     if (patch[key] === undefined) continue;
     const value = Number(patch[key]);
     if (!Number.isFinite(value) || value < low || value > high) problems.push(`${key} must be between ${low} and ${high}`);
@@ -505,6 +583,43 @@ export function writeConfig(store, patch) {
   if (patch.publishChinese !== undefined && typeof patch.publishChinese !== "boolean") {
     problems.push("publishChinese must be true or false");
   }
+  // ── 洞察 ─────────────────────────────────────────────────────────────
+  // Checked rather than coerced, for `publishSources`' reason. A coerced value
+  // is a value nobody agreed to: `Number("thirty")` is NaN, and clamping it to
+  // a default would save the patch, answer `{saved: true}`, and run the pass
+  // on a schedule the page does not show.
+  if (patch.insightIntervalMinutes !== undefined) {
+    const minutes = Number(patch.insightIntervalMinutes);
+    if (!Number.isFinite(minutes) || minutes < 0 || minutes > 1440) {
+      problems.push("insightIntervalMinutes must be between 0 and 1440");
+    } else if (minutes > 0 && minutes < MIN_INSIGHT_INTERVAL_MINUTES) {
+      problems.push(`insightIntervalMinutes must be at least ${MIN_INSIGHT_INTERVAL_MINUTES}, or zero to turn the insight pass off`);
+    }
+  }
+  if (patch.insightResourceTypes !== undefined) {
+    // Member by member against RESOURCE_TYPES, exactly as publishKinds is: a
+    // mistyped type contributes nothing to every pass afterwards and throws
+    // nothing, so the tab simply stays emptier than it should for ever.
+    //
+    // These are RESOURCE types (NEWS, PAPER), not the claim kinds the tab
+    // filters by (launch, funding, …). Both vocabularies are plain strings and
+    // neither validates as the other, which is why this check names the list
+    // it accepts in the message.
+    if (!Array.isArray(patch.insightResourceTypes)) problems.push("insightResourceTypes must be an array");
+    else if (patch.insightResourceTypes.length === 0) {
+      // Rejected rather than stored: an empty list makes every pass skip with
+      // "too little material" while the settings page looks correctly filled
+      // in, which is a configuration that reports itself as working.
+      problems.push("insightResourceTypes must name at least one type, or the pass reads nothing");
+    } else {
+      for (const type of patch.insightResourceTypes) {
+        if (!RESOURCE_TYPES.includes(type)) problems.push(`insightResourceTypes must be drawn from ${RESOURCE_TYPES.join(", ")}`);
+      }
+    }
+  }
+  if (patch.insightChinese !== undefined && typeof patch.insightChinese !== "boolean") {
+    problems.push("insightChinese must be true or false");
+  }
   if (problems.length > 0) return problems;
   for (const key of [
     "feeds", "jobs", "transcriptLanguages", "supadataKey", "collectIntervalMinutes",
@@ -513,6 +628,13 @@ export function writeConfig(store, patch) {
     // believe today is already served.
     "publishAt", "publishKinds", "publishSources", "publishMinutes", "publishHosts", "publishMinSources",
     "publishArtifacts", "publishChinese",
+    // `insightLastRun` and `insightLastManualRun` are absent for the reason
+    // `publishLastRun` is, and it bites harder here: `insightLastRun` carries
+    // the watermark, so a page that could write it could tell the pass it had
+    // already read rows it never saw. Those rows are never offered again.
+    "insightIntervalMinutes", "insightResourceTypes", "insightMaxRows", "insightMaxClusters",
+    "insightMaxReconcileCalls", "insightMinIndependent", "insightWindowDays", "insightDormantDays",
+    "insightDuplicateBits", "insightChinese",
   ]) {
     if (patch[key] !== undefined) store.setSetting(key, patch[key]);
   }
@@ -765,6 +887,10 @@ export function createHandler(store, logger, chat) {
   // folding forty lines of job bookkeeping into this router would bury the
   // library routes it sits beside.
   const publish = createPublishRoutes({ store, chat, logger, sendJson, readJson });
+  // 洞察 sits beside it, same dependencies, same shape of answer. Building it
+  // here also runs its DDL here, so a broken statement fails while the plugin
+  // is loading rather than the first time somebody opens a tab.
+  const insight = createInsightRoutes({ store, chat, logger, sendJson, readJson });
 
   return async function handle(req, res) {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -772,6 +898,11 @@ export function createHandler(store, logger, chat) {
     const query = url.searchParams;
 
     if (path.startsWith("/publish/") && await publish(req, res, path)) return;
+    // Every insight route carries a second segment, because `"/insights"`
+    // does not start with `"/insights/"`: a bare route would 404 while the
+    // handler that answers it sat registered, loaded and never reached.
+    // Adding one later means widening this condition in the same commit.
+    if (path.startsWith("/insights/") && await insight(req, res, path)) return;
 
     // ── what this host is running ───────────────────────────────────────
     // Two halves of this plugin can be different versions: the page is served
@@ -1450,21 +1581,34 @@ export function apply(ctx) {
 
   const path = library.path;
   const store = new SourceStore(path);
-  ctx.logger?.info?.(`swarm: source library at ${path} (${store.count()} rows)`);
+  // The 洞察 tables are created here, over the library's own handle — one
+  // file, one connection, one WAL. Opened with the store rather than lazily on
+  // the first request so a DDL that cannot run is a stack trace at start-up
+  // rather than an empty tab a week later; `openInsightStore` memoises, so the
+  // routes below get this same instance.
+  const insightStore = openInsightStore(store);
+  const chat = createChat(ctx);
+  ctx.logger?.info?.(`swarm: source library at ${path} (${store.count()} rows, ${insightStore.count()} insight(s))`);
   const dispose = ctx.webServer.register({
     kind: "prefix",
     path: ROUTE_PREFIX,
-    handler: createHandler(store, ctx.logger, createChat(ctx)),
+    handler: createHandler(store, ctx.logger, chat),
   });
   // Agents reach the same library the page reads: one store, two faces.
   registerLibraryTool(ctx, store);
   // Before the timer: a first run with an empty roster would collect nothing
   // and log a success.
   ensureSourceRoster(store, ctx.logger);
-  const stopTimer = startCollectionTimer(store, ctx.logger);
-  const stopPublish = startPublishTimer(store, createChat(ctx), ctx.logger);
+  // The insight pass rides this timer; it has none of its own.
+  const stopTimer = startCollectionTimer(store, ctx.logger, insightStore, chat);
+  const stopPublish = startPublishTimer(store, chat, ctx.logger);
   ctx.on("dispose", () => {
     stopTimer();
+    // `stopPublish` was assigned and never called here, so the publish timer
+    // kept ticking against a closed database after dispose — a plugin that
+    // reports itself as gone while a job it owns wakes every minute to query a
+    // handle that is not there. Both timers stop before the store closes.
+    stopPublish();
     dispose();
     store.close();
   });

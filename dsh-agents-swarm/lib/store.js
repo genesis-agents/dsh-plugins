@@ -340,7 +340,7 @@ export class SourceStore {
    * @param options - `{ type, search, sortBy, take, skip }`.
    * @returns `{ rows, total, hasMore }` in the upstream's envelope shape.
    */
-  query({ type, search, sortBy, take = 20, skip = 0 } = {}) {
+  query({ type, search, sortBy, sortOrder, createdAfter, take = 20, skip = 0 } = {}) {
     const where = [];
     const params = [];
     if (typeof type === "string" && type !== "") {
@@ -352,13 +352,26 @@ export class SourceStore {
       const like = `%${search.trim()}%`;
       params.push(like, like, like);
     }
+    // A watermark filter in SQL rather than in the caller. The insight scan
+    // walks forward from the oldest unread row; filtering after the fact means
+    // paging through everything already read to find the first row that is not
+    // — which on a full library is the whole library, every pass.
+    if (typeof createdAfter === "string" && createdAfter !== "") {
+      where.push("created_at > ?");
+      params.push(createdAfter);
+    }
     const clause = where.length === 0 ? "" : `WHERE ${where.join(" AND ")}`;
     const order = SORTABLE[sortBy] ?? SORTABLE.publishedAt;
+    // Ascending is opt-in and everything else keeps newest-first. A reader
+    // looks at the top of a feed; only the insight drain wants the other end,
+    // and it wants it because taking the NEWEST rows and then watermarking
+    // past them makes every older row permanently invisible.
+    const direction = sortOrder === "asc" ? "ASC" : "DESC";
     const total = this.db.prepare(`SELECT COUNT(*) AS n FROM resources ${clause}`).get(...params).n;
     const limit = Math.max(1, Math.min(100, Number(take) || 20));
     const offset = Math.max(0, Number(skip) || 0);
     const rows = this.db.prepare(
-      `SELECT raw, thumbnail_url, created_at FROM resources ${clause} ORDER BY ${order} IS NULL, ${order} DESC LIMIT ? OFFSET ?`,
+      `SELECT raw, thumbnail_url, created_at FROM resources ${clause} ORDER BY ${order} IS NULL, ${order} ${direction} LIMIT ? OFFSET ?`,
     ).all(...params, limit, offset);
     return {
       rows: rows.map(withColumns),

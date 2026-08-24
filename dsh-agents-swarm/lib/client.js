@@ -3103,6 +3103,819 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 
+		//#region insights tab
+		/**
+		* 洞察 — standing claims with provenance.
+		*
+		* A card here is not a summary and not a document. It is one claim, the
+		* evidence under it, and the number of INDEPENDENT sources that have said
+		* it — which is the question a person cannot answer by reading faster, and
+		* the only reason this tab exists beside the daily digest.
+		*
+		* Every evidence row carries a verbatim quote and opens the reader 信源
+		* already has, because a claim you cannot follow back to the sentence it
+		* came from is decoration rather than provenance.
+		*
+		* What this tab deliberately does NOT have yet: a control for pinning a
+		* status by hand (`POST /insights/item/{id}/status`) or removing a card
+		* (`DELETE /insights/item/{id}`). Both routes exist and answer; neither has
+		* a button here. Written down so the next person adds them, rather than
+		* finding the routes and assuming the page must already be using them.
+		*/
+		/**
+		* The four chips from the plan, plus the default view.
+		*
+		* 有分歧 asks the route for `contradiction_count > 0` rather than for
+		* `status = 'contested'`, and the difference is the point: a disagreement
+		* that later went quiet is still the most valuable row on the page, and a
+		* chip named after the status column would hide it.
+		*/
+		const INSIGHT_FILTERS = [
+			{ id: "", en: "All", zh: "全部", hue: "100,116,139" },
+			{ id: "new", en: "New", zh: "新出现", hue: "5,150,105" },
+			{ id: "rising", en: "Rising", zh: "升温中", hue: "217,119,6" },
+			{ id: "contested", en: "Contested", zh: "有分歧", hue: "220,38,38" },
+			{ id: "dormant", en: "Dormant", zh: "已沉寂", hue: "100,116,139" }
+		];
+
+		/** The stored statuses, with the colour each carries on a card. */
+		const INSIGHT_STATUS_FACES = {
+			candidate: { zh: "候选", en: "Candidate", hue: "100,116,139" },
+			standing: { zh: "成立", en: "Standing", hue: "5,150,105" },
+			contested: { zh: "有分歧", en: "Contested", hue: "220,38,38" },
+			dormant: { zh: "已沉寂", en: "Dormant", hue: "148,163,184" }
+		};
+
+		/** The five claim kinds. Not resource types — a different vocabulary that also lives in plain strings. */
+		const INSIGHT_KIND_FACES = {
+			launch: { zh: "发布", en: "Launch" },
+			funding: { zh: "融资", en: "Funding" },
+			policy: { zh: "政策", en: "Policy" },
+			finding: { zh: "结果", en: "Finding" },
+			shift: { zh: "转向", en: "Shift" }
+		};
+
+		/**
+		* The kind a resource of an unlisted type is read under.
+		*
+		* `DetailView` colours itself from `kind.hue` and would throw on an
+		* undefined kind, taking the whole overlay blank — and an insight cites
+		* whatever the library holds, including the types the 信源 chips do not
+		* list (RSS, EVENT, PROJECT). A neutral entry is the difference between a
+		* grey badge and a page that renders nothing.
+		*/
+		const OTHER_KIND = { id: "other", type: "", en: "Source", zh: "信源", hue: "100,116,139" };
+
+		/**
+		* Label a stored vocabulary value, falling back to the value itself.
+		*
+		* Own-property lookup, and never an empty string: a `kind` arriving from a
+		* row can be `constructor`, and a badge that renders blank for a value the
+		* page does not recognise looks exactly like a badge for a row with no
+		* kind at all.
+		* @param faces - the label table.
+		* @param value - the stored value.
+		* @param zh - whether to write Chinese.
+		* @returns the label, or the raw value when it is not in the table.
+		*/
+		function insightFaceLabel(faces, value, zh) {
+			const key = String(value ?? "");
+			if (!Object.hasOwn(faces, key)) return key;
+			return zh ? faces[key].zh : faces[key].en;
+		}
+
+		/** The colour a status carries, neutral for one this page does not know. */
+		function insightStatusHue(value) {
+			const key = String(value ?? "");
+			return Object.hasOwn(INSIGHT_STATUS_FACES, key) ? INSIGHT_STATUS_FACES[key].hue : "100,116,139";
+		}
+
+		/**
+		* `8月18日` / `Aug 18` — the density the count strip needs.
+		*
+		* Says "未知" rather than "" for a date that will not parse, because the
+		* strip reads `首见 8月18日` and an empty half renders as `首见` followed by
+		* nothing, which is a label for a value that looks like it is still loading.
+		* @param iso - an ISO 8601 instant.
+		* @param zh - whether to write Chinese.
+		* @returns the short day.
+		*/
+		function insightDay(iso, zh) {
+			const at = Date.parse(iso);
+			if (Number.isNaN(at)) return zh ? "未知" : "unknown";
+			const when = new Date(at);
+			return zh
+				? `${when.getMonth() + 1}月${when.getDate()}日`
+				: when.toLocaleDateString("en-US", { day: "numeric", month: "short" });
+		}
+
+		/**
+		* One evidence row, from either of the two shapes the API sends.
+		*
+		* `/insights/list` flattens `title`/`sourceUrl`/`type` onto the preview
+		* row; `/insights/item` nests the same fields under `resource` and sends
+		* `null` when the library no longer holds the source. Read one shape by
+		* the other's field names and every row of the expanded card renders as a
+		* source that has been pruned — a card that cites nothing, opens nothing,
+		* and reports no error while doing it.
+		* @param row - a preview row or a full evidence row.
+		* @returns `{ present, title, sourceUrl, type }`.
+		*/
+		function evidenceFace(row) {
+			if (Object.hasOwn(row, "resource")) {
+				const resource = row.resource ?? null;
+				return {
+					present: resource !== null,
+					title: resource?.title ?? "",
+					sourceUrl: resource?.sourceUrl ?? "",
+					type: resource?.type ?? row.type ?? ""
+				};
+			}
+			return {
+				present: (row.title ?? null) !== null || (row.sourceUrl ?? null) !== null,
+				title: row.title ?? "",
+				sourceUrl: row.sourceUrl ?? "",
+				type: row.type ?? ""
+			};
+		}
+
+		/**
+		* A wire failure in the reader's language.
+		*
+		* Only the messages this page can improve on are translated; anything else
+		* is passed through in the words the Host used. Inventing a friendly
+		* sentence for an error nobody has seen is how a page ends up saying
+		* "something went wrong" about a problem it was told the name of.
+		* @param message - the error as it arrived.
+		* @param zh - whether to write Chinese.
+		* @returns the message to show.
+		*/
+		function insightTrouble(message, zh) {
+			if (message === "no model routed") {
+				return zh ? "还没有接入模型 —— 提炼这一步要模型才跑得起来。" : "No model routed — the pass needs one to run.";
+			}
+			return message;
+		}
+
+		/**
+		* One line for a recorded pass.
+		*
+		* Reported by its OUTCOME rather than as ran / did not run, the way
+		* `manualNote` reports a publish: a pass that legitimately found nothing
+		* and a button that does not work write the same amount to the screen
+		* otherwise, and only one of them is worth touching. `running` is a state
+		* of its own because the pass takes minutes while the button answers
+		* immediately — without it a pass in flight is indistinguishable from a
+		* press that did nothing at all.
+		* @param run - `insightLastRun` or `insightLastManualRun`, or null.
+		* @param zh - whether to write Chinese.
+		* @param manual - whether this is the button's record rather than the timer's.
+		* @returns the line, or "" when there is no record.
+		*/
+		function insightRunNote(run, zh, manual) {
+			if (run === null || run === undefined) return "";
+			const when = formatStamp(run.at);
+			const what = manual ? (zh ? "立即提炼" : "Run now") : (zh ? "上次提炼" : "Last pass");
+			if (run.running === true) {
+				return zh ? `${what} ${when} 正在跑，还没有结果。` : `${what} at ${when} is still running.`;
+			}
+			if (typeof run.error === "string") {
+				return `${what} ${when} ` + (zh ? "失败：" : "failed: ") + insightTrouble(run.error, zh);
+			}
+			if (typeof run.skipped === "string") {
+				return `${what} ${when} ` + (zh ? "跳过：" : "skipped: ") + insightTrouble(run.skipped, zh);
+			}
+			if (run.ran !== true) return `${what} ${when}` + (zh ? "：没有记下结果。" : ": no outcome recorded.");
+			const failures = Array.isArray(run.failures) ? run.failures.length : 0;
+			const line = zh
+				? `${what} ${when}：读了 ${run.rows ?? 0} 条信源，归并成 ${run.clusters ?? 0} 组，提炼出 ${run.claims ?? 0} 条主张，核验留下 ${run.verified ?? 0} 条、丢弃 ${run.dropped ?? 0} 条；新建 ${run.created ?? 0}、并入 ${run.merged ?? 0}、记为分歧 ${run.contested ?? 0}。`
+				: `${what} at ${when}: read ${run.rows ?? 0} source(s), grouped them into ${run.clusters ?? 0} cluster(s), extracted ${run.claims ?? 0} claim(s), kept ${run.verified ?? 0} and dropped ${run.dropped ?? 0}; ${run.created ?? 0} new, ${run.merged ?? 0} merged, ${run.contested ?? 0} contested.`;
+			if (failures === 0) return line;
+			return line + (zh ? ` 有 ${failures} 组提炼失败。` : ` ${failures} cluster(s) failed to extract.`);
+		}
+
+		/**
+		* What the pass is set to do, what it last did, and how much it invented.
+		*
+		* The drop rate is on the page rather than in a log because it is the one
+		* number that answers "is extraction good enough to build on" — claims
+		* whose quote was not in the source they were attributed to. A tab full of
+		* plausible cards and a 60% drop rate look identical from the outside.
+		* @param status - the payload from `/insights/status`, or null.
+		* @param zh - whether to write Chinese.
+		* @returns the line, or "" before the first answer arrives.
+		*/
+		function insightPassNote(status, zh) {
+			if (status === null || status === undefined) return "";
+			const parts = [];
+			const minutes = Number(status.insightIntervalMinutes);
+			parts.push(Number.isFinite(minutes) && minutes > 0
+				? (zh ? `每 ${minutes} 分钟自动提炼一次。` : `The pass runs every ${minutes} minute(s).`)
+				: (zh ? "定时提炼是关的 —— 只有按下“立即提炼”才会跑。" : "The scheduled pass is off — it only runs when you press Run now."));
+			const waiting = Number(status.waiting);
+			if (Number.isFinite(waiting)) {
+				parts.push(zh ? `现在有 ${waiting} 条新信源在等。` : `${waiting} new source(s) are waiting.`);
+				// A capped `waiting` reads as a healthy number, and the watermark moves
+				// past the rows a pass did not read — so a backlog here is not late,
+				// it is dropped, and nothing else on this page would say so.
+				if (status.waitingAtCap === true) {
+					parts.push(zh
+						? "已经顶到单次上限，后面多半还有读不到的。"
+						: "That is the per-pass ceiling, so there is very likely more behind it.");
+				}
+			}
+			const scheduled = insightRunNote(status.insightLastRun ?? null, zh, false);
+			if (scheduled !== "") parts.push(scheduled);
+			const drop = status.quoteDrop ?? null;
+			if (drop !== null && typeof drop.rate === "number") {
+				parts.push(zh
+					? `上次有 ${Math.round(drop.rate * 100)}% 的主张因为引文在原文里找不到而被丢掉。`
+					: `${Math.round(drop.rate * 100)}% of last pass's claims were dropped for a quote that was not in the source it was attributed to.`);
+			}
+			return parts.join(" ");
+		}
+		//#endregion
+
+		//#region insights card
+		/**
+		* One piece of evidence: a stance, a source, and the sentence itself.
+		*
+		* The contradicting row is drawn differently on purpose — it is the thing
+		* a reader opened the card for, and the one no comparable product shows.
+		* Colour is not the only carrier: the mark is ✗ against ✓, so the
+		* distinction survives a monochrome screen and a reader who cannot see red.
+		* @param row - a preview row or a full evidence row.
+		* @param zh - whether to write Chinese.
+		* @param busy - whether this row's source is being opened.
+		* @param onOpen - open the reader on a resource id.
+		*/
+		function InsightEvidenceRow({ row, zh, busy, onOpen }) {
+			const [hover, setHover] = useState(false);
+			const face = evidenceFace(row);
+			const contradicts = row.stance === "contradicts";
+			const accent = contradicts ? "220,38,38" : "5,150,105";
+			const name = face.title !== "" ? face.title : (hostOf(face.sourceUrl) !== "" ? hostOf(face.sourceUrl) : row.sourceKey ?? "");
+			const body = jsxs("div", {
+				style: { display: "flex", alignItems: "flex-start", gap: "9px", width: "100%", minWidth: 0 },
+				children: [
+					jsx("span", {
+						"aria-hidden": "true",
+						style: { flex: "none", width: "14px", color: `rgb(${accent})`, fontSize: "12px", lineHeight: "19px", fontWeight: 700 },
+						children: contradicts ? "✗" : "✓"
+					}),
+					jsxs("div", {
+						style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "2px" },
+						children: [
+							jsxs("div", {
+								style: { display: "flex", alignItems: "baseline", gap: "8px", minWidth: 0, fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+								children: [
+									jsx("span", {
+										style: {
+											flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis",
+											whiteSpace: "nowrap", fontWeight: 600,
+											color: contradicts ? `rgb(${accent})` : "var(--dsw-alias-label-primary)"
+										},
+										children: name === "" ? (zh ? "未署名信源" : "unnamed source") : name
+									}, "name"),
+									// The independence key, shown rather than implied. Five
+									// rewrites of one wire story are one source, and the count
+									// above says so — this is where a reader checks it.
+									jsx("span", { style: { flex: "none" }, children: row.sourceKey ?? "" }, "key"),
+									face.present
+										? null
+										: jsx("span", {
+											style: { flex: "none", fontStyle: "italic" },
+											children: zh ? "· 信源已不在库中" : "· no longer in the library"
+										}, "gone")
+								]
+							}, "who"),
+							jsx("p", {
+								style: {
+									margin: 0, paddingLeft: "9px",
+									borderLeft: `2px solid rgba(${accent},0.5)`,
+									fontSize: "12px", lineHeight: "19px",
+									color: "var(--dsw-alias-label-primary)"
+								},
+								children: "“" + String(row.quote ?? "") + "”"
+							}, "quote")
+						]
+					}, "text")
+				]
+			});
+
+			const frame = {
+				display: "block", width: "100%", textAlign: "left", padding: "8px 10px",
+				borderRadius: "8px", border: "1px solid transparent",
+				background: contradicts ? `rgba(${accent},0.06)` : "transparent",
+				font: "inherit", color: "inherit"
+			};
+
+			// A source the library has pruned is NOT a button. Offering a control
+			// that cannot do anything, and then failing quietly when it is pressed,
+			// is the same shape of lie as a card that claims six sources and shows
+			// five — so the row still renders its quote, and simply does not invite
+			// a click it cannot honour.
+			if (!face.present) {
+				return jsx("div", { style: { ...frame, opacity: 0.72 }, children: body });
+			}
+			return jsx("button", {
+				type: "button",
+				title: face.title === "" ? undefined : face.title,
+				disabled: busy,
+				onMouseEnter: () => { setHover(true); },
+				onMouseLeave: () => { setHover(false); },
+				onClick: () => { onOpen(row.resourceId); },
+				style: {
+					...frame,
+					appearance: "none", cursor: busy ? "progress" : "pointer",
+					borderColor: hover ? `rgba(${accent},0.35)` : "transparent",
+					background: hover
+						? `rgba(${accent},${contradicts ? 0.12 : 0.07})`
+						: (contradicts ? `rgba(${accent},0.06)` : "transparent")
+				},
+				children: body
+			});
+		}
+
+		/**
+		* One standing claim.
+		*
+		* The order is the plan's, densest first: the statement, the strip that
+		* says how well attested it is and since when, then the evidence. The
+		* strip is above the quotes because "four independent sources" changes how
+		* you read the quote under it.
+		* @param insight - one row from `/insights/list`.
+		* @param zh - whether to write Chinese.
+		* @param opening - the resource id currently being opened, or "".
+		* @param onOpen - open the reader on a resource id.
+		*/
+		function InsightCard({ insight, zh, opening, onOpen }) {
+			// The whole evidence trail, fetched only when somebody asks for it.
+			const [full, setFull] = useState(null);
+			const [loading, setLoading] = useState(false);
+			const [failed, setFailed] = useState("");
+
+			const preview = Array.isArray(insight.evidencePreview) ? insight.evidencePreview : [];
+			const evidence = full === null ? preview : (Array.isArray(full.evidence) ? full.evidence : []);
+			const supports = Number(insight.sourceCount ?? 0);
+			const against = Number(insight.contradictionCount ?? 0);
+			const independent = Number(insight.independentCount ?? 0);
+			// The preview holds at most two supporting rows and one contradicting
+			// one. A card whose strip says six and whose body shows three, with
+			// nothing offering the other three, is the disagreement between a count
+			// and its evidence that this whole tab exists to avoid.
+			const held = supports + against;
+			const more = full === null && held > preview.length;
+
+			const showAll = useCallback(async () => {
+				setLoading(true);
+				setFailed("");
+				try {
+					const response = await fetch(`${apiBase()}/insights/item/${encodeURIComponent(insight.id)}`);
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
+					setFull(payload.data ?? null);
+				} catch (cause) {
+					setFailed(String(cause?.message ?? cause));
+				} finally {
+					setLoading(false);
+				}
+			}, [insight.id]);
+
+			const status = insight.effectiveStatus ?? insight.status;
+			const pinned = (insight.pinnedStatus ?? null) !== null;
+			const accent = insightStatusHue(status);
+			const entities = Array.isArray(insight.entities) ? insight.entities.slice(0, 5) : [];
+			const strip = [
+				zh ? `${supports} 篇` : `${supports} article(s)`,
+				zh ? `${independent} 个独立来源` : `${independent} independent source(s)`,
+				(zh ? "首见 " : "first seen ") + insightDay(insight.firstSeenAt, zh),
+				(zh ? "最近 " : "last ") + insightDay(insight.lastSeenAt, zh)
+			].join(" · ");
+
+			return jsxs("article", {
+				style: { ...CARD_STYLE, display: "flex", flexDirection: "column", gap: "9px" },
+				children: [
+					jsx("h3", {
+						style: { margin: 0, fontSize: "15px", fontWeight: 600, lineHeight: "23px", color: "var(--dsw-alias-label-primary)" },
+						children: insight.statement
+					}, "statement"),
+					jsxs("div", {
+						style: META_STYLE,
+						children: [
+							jsx("span", {
+								style: {
+									flex: "none", padding: "1px 7px", borderRadius: "5px",
+									background: `rgba(${accent},0.12)`, color: `rgb(${accent})`,
+									fontSize: "11px", fontWeight: 600
+								},
+								// The person's verdict is marked as theirs. Without the mark a
+								// pinned card is indistinguishable from one the pass agreed
+								// with, and the next question — "why did this not change?" —
+								// has no answer on the page.
+								children: insightFaceLabel(INSIGHT_STATUS_FACES, status, zh) + (pinned ? (zh ? " · 手动" : " · pinned") : "")
+							}, "status"),
+							jsx("span", {
+								style: { flex: "none", color: "var(--dsw-alias-label-secondary)" },
+								children: insightFaceLabel(INSIGHT_KIND_FACES, insight.kind, zh)
+							}, "kind"),
+							jsx("span", { children: strip }, "strip"),
+							against === 0 ? null : jsx("span", {
+								style: { flex: "none", color: "rgb(220,38,38)", fontWeight: 600 },
+								children: zh ? `立场分歧 ${against}` : `${against} contradicting`
+							}, "against")
+						]
+					}, "meta"),
+					entities.length === 0 ? null : jsx("div", {
+						style: { display: "flex", flexWrap: "wrap", gap: "6px" },
+						children: entities.map((entity, at) => jsx("span", {
+							style: {
+								padding: "1px 7px", borderRadius: "5px",
+								border: "1px solid var(--dsw-alias-border-l2)",
+								fontSize: "11px", color: "var(--dsw-alias-label-secondary)"
+							},
+							children: String(entity)
+						}, `${String(entity)}-${at}`))
+					}, "entities"),
+					jsx("div", { style: { borderTop: "1px solid var(--dsw-alias-border-l1)" } }, "rule"),
+					evidence.length === 0
+						? jsx("div", {
+							style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+							// Not "no evidence": the row cannot exist without a verified
+							// quote, so an empty list here means the evidence did not travel
+							// with this response, which is a different problem entirely.
+							children: zh ? "这一条没有随卡片带回证据。" : "No evidence travelled with this card."
+						}, "none")
+						: jsx("div", {
+							style: { display: "flex", flexDirection: "column", gap: "4px" },
+							children: evidence.map((row, at) => jsx(InsightEvidenceRow, {
+								row, zh, busy: opening === row.resourceId, onOpen
+							}, `${String(row.resourceId ?? "row")}-${at}`))
+						}, "evidence"),
+					!more ? null : jsx("div", {
+						children: jsx("button", {
+							type: "button",
+							disabled: loading,
+							style: { ...controlStyle(), height: "27px", fontSize: "12px" },
+							onClick: () => { void showAll(); },
+							children: loading
+								? (zh ? "载入中…" : "Loading…")
+								: (zh ? `查看全部 ${held} 条证据` : `Show all ${held} pieces of evidence`)
+						})
+					}, "more"),
+					failed === "" ? null : jsx("div", {
+						style: { fontSize: "12px", color: "rgb(220,38,38)" },
+						children: (zh ? "证据读取失败：" : "Could not load the evidence: ") + insightTrouble(failed, zh)
+					}, "failed"),
+					full === null || full.supersededRow === null || full.supersededRow === undefined ? null : jsx("div", {
+						style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+						children: (zh ? "取代了：" : "Replaces: ") + String(full.supersededRow.statement ?? "")
+					}, "supersedes"),
+					full === null || !Array.isArray(full.supersededBy) || full.supersededBy.length === 0 ? null : jsx("div", {
+						style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+						children: zh
+							? `已被 ${full.supersededBy.length} 条更新的主张取代。`
+							: `Superseded by ${full.supersededBy.length} later claim(s).`
+					}, "supersededBy")
+				]
+			});
+		}
+		//#endregion
+
+		//#region insights tab body
+		/**
+		* The 洞察 tab: the claims, their evidence, and the pass that finds them.
+		*
+		* Reads `/insights/list` once per view — the evidence preview and the full
+		* status tally both travel with the page, so twenty cards are one request
+		* rather than twenty-one.
+		* @param zh - whether to write Chinese.
+		*/
+		function InsightsTab({ zh }) {
+			const [filterId, setFilterId] = useState("");
+			const [rows, setRows] = useState([]);
+			const [total, setTotal] = useState(0);
+			const [hasMore, setHasMore] = useState(false);
+			const [counts, setCounts] = useState({});
+			const [state, setState] = useState("loading");
+			const [error, setError] = useState("");
+			const [reloadTick, setReloadTick] = useState(0);
+			// The pass: its settings, its two records, and what it would read next.
+			const [pass, setPass] = useState(null);
+			const [passError, setPassError] = useState("");
+			const [passTick, setPassTick] = useState(0);
+			const [busy, setBusy] = useState(false);
+			const [watchUntil, setWatchUntil] = useState(0);
+			// list | detail, switched in place so the frame never moves — the same
+			// thing ExploreTab does when a card is opened.
+			const [selected, setSelected] = useState(null);
+			const [opening, setOpening] = useState("");
+			const [openError, setOpenError] = useState("");
+			// Guards a stale answer from overwriting a newer one when the chip
+			// changes while a request is still in flight.
+			const requestId = useRef(0);
+
+			const listUrl = useCallback((skip) => {
+				const params = new URLSearchParams({ take: String(PAGE_SIZE), skip: String(skip), sort: "rank" });
+				if (filterId !== "") params.append("filter", filterId);
+				return `${apiBase()}/insights/list?${params.toString()}`;
+			}, [filterId]);
+
+			/**
+			* Read one page of cards.
+			*
+			* The envelope is read even on a non-2xx answer, unlike the sources
+			* feed: a bad parameter here is answered 400 with a message NAMING the
+			* accepted values, and throwing "HTTP 400" discards the only part of
+			* that answer worth showing.
+			*/
+			const readPage = useCallback(async (response) => {
+				const payload = await response.json();
+				if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
+				const data = payload.data ?? {};
+				return {
+					insights: Array.isArray(data.insights) ? data.insights : [],
+					total: Number.isFinite(Number(data.total)) ? Number(data.total) : 0,
+					hasMore: data.hasMore === true,
+					counts: data.counts !== null && typeof data.counts === "object" ? data.counts : {}
+				};
+			}, []);
+
+			useEffect(() => {
+				let live = true;
+				const ticket = ++requestId.current;
+				setState("loading");
+				setError("");
+				fetch(listUrl(0))
+					.then(readPage)
+					.then((page) => {
+						if (!live || ticket !== requestId.current) return;
+						setRows(page.insights);
+						setTotal(page.total);
+						setHasMore(page.hasMore);
+						setCounts(page.counts);
+						setState("ready");
+					})
+					.catch((cause) => {
+						if (!live || ticket !== requestId.current) return;
+						setError(String(cause?.message ?? cause));
+						setState("error");
+					});
+				return () => { live = false; };
+				// The chip and the reload are the query's identity. `listUrl` and
+				// `readPage` close over it and would re-run this on every render if
+				// they were dependencies, which is the same reason ExploreTab depends
+				// on its identity fields rather than on its callback.
+			}, [filterId, reloadTick]);
+
+			const loadMore = useCallback(async () => {
+				const ticket = ++requestId.current;
+				setState("loading-more");
+				try {
+					const page = await readPage(await fetch(listUrl(rows.length)));
+					if (ticket !== requestId.current) return;
+					setRows(rows.concat(page.insights));
+					setTotal(page.total);
+					setHasMore(page.hasMore);
+					setCounts(page.counts);
+					setState("ready");
+				} catch (cause) {
+					if (ticket !== requestId.current) return;
+					setError(String(cause?.message ?? cause));
+					setState("error");
+				}
+			}, [rows, listUrl, readPage]);
+
+			useEffect(() => {
+				let live = true;
+				fetch(`${apiBase()}/insights/status`)
+					.then((response) => response.json())
+					.then((payload) => {
+						if (!live) return;
+						if (payload?.success !== true) throw new Error(payload?.error ?? "no status");
+						setPass(payload.data ?? null);
+						setPassError("");
+					})
+					.catch((cause) => {
+						// Reported rather than swallowed. The line below is the only place
+						// that says whether the pass is armed, when it last ran and how
+						// much it invented; a silent failure there leaves an empty tab
+						// looking like a tab with nothing to show.
+						if (live) setPassError(String(cause?.message ?? cause));
+					});
+				return () => { live = false; };
+			}, [passTick, reloadTick]);
+
+			// Watching a manual pass land. It ends on its own deadline and on
+			// unmount, so a tab left open does not poll for ever.
+			useEffect(() => {
+				if (watchUntil === 0) return;
+				const timer = setInterval(() => {
+					if (Date.now() > watchUntil) { setWatchUntil(0); return; }
+					setPassTick((tick) => tick + 1);
+				}, 5000);
+				return () => { clearInterval(timer); };
+			}, [watchUntil]);
+
+			// The pass settled: stop watching, and reload the list, which was drawn
+			// before the cards this run wrote.
+			useEffect(() => {
+				if (watchUntil === 0 || pass === null) return;
+				const record = pass.insightLastManualRun ?? null;
+				if (record === null || record.running === true || pass.manualRunInFlight === true) return;
+				setWatchUntil(0);
+				setReloadTick((tick) => tick + 1);
+			}, [pass, watchUntil]);
+
+			const runNow = useCallback(async () => {
+				setBusy(true);
+				setPassError("");
+				try {
+					const response = await fetch(`${apiBase()}/insights/run-now`, { method: "POST" });
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
+					// 202 the moment it starts, and it is up to twenty model calls long,
+					// so nothing in this answer is the outcome. `runInsightPass` stamps
+					// `insightLastManualRun` with `running` before the first call, and
+					// the note below reads that stamp — a press with no stamp behind it
+					// is indistinguishable from a button that does nothing.
+					if (payload.data?.started === false) {
+						setPassError(zh ? "已经有一次提炼在跑了，这次没有重复启动。" : "A pass is already running; this press did not start a second one.");
+					}
+					setWatchUntil(Date.now() + 20 * 60 * 1000);
+					setPassTick((tick) => tick + 1);
+				} catch (cause) {
+					setPassError(String(cause?.message ?? cause));
+				} finally {
+					setBusy(false);
+				}
+			}, [zh]);
+
+			/**
+			* Open the reader on the source behind an evidence row.
+			*
+			* The row itself is fetched rather than handed over: an evidence row
+			* carries five fields and `DetailView` reads the whole resource — the
+			* abstract, the authors, the transcript. Passing the five would render a
+			* reader with an empty document and nothing anywhere reporting why.
+			*/
+			const openResource = useCallback(async (resourceId) => {
+				setOpening(resourceId);
+				setOpenError("");
+				try {
+					const response = await fetch(`${apiBase()}/resources/${encodeURIComponent(resourceId)}`);
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
+					setSelected(payload.data ?? null);
+				} catch (cause) {
+					setOpenError(String(cause?.message ?? cause));
+				} finally {
+					setOpening("");
+				}
+			}, []);
+
+			if (selected !== null) {
+				const kind = KINDS.find((candidate) => candidate.type === selected.type) ?? OTHER_KIND;
+				return jsx(DetailView, { row: selected, kind, zh, onBack: () => { setSelected(null); } });
+			}
+
+			const running = pass?.insightLastManualRun?.running === true || pass?.manualRunInFlight === true;
+			const manual = insightRunNote(pass?.insightLastManualRun ?? null, zh, true);
+			const schedule = insightPassNote(pass, zh);
+			const statusTally = ["candidate", "standing", "contested", "dormant"]
+				.map((key) => insightFaceLabel(INSIGHT_STATUS_FACES, key, zh) + " " + (counts[key] ?? 0))
+				.join(" · ");
+			const known = ["candidate", "standing", "contested", "dormant"]
+				.reduce((sum, key) => sum + Number(counts[key] ?? 0), 0);
+
+			// The scrollbar belongs to the frame, not to the column of cards — the
+			// same arrangement ExploreTab settled on, and the reason the tab body
+			// hands this component the whole height.
+			return jsx("div", {
+				style: { height: "100%", minHeight: 0, overflowY: "auto" },
+				children: jsxs("div", {
+					style: { ...CONTENT_STYLE, padding: "0 24px" },
+					children: [
+						jsxs("div", {
+							style: TOOLBAR_STYLE,
+							children: [
+								...INSIGHT_FILTERS.map((entry) => jsx("button", {
+									type: "button",
+									role: "tab",
+									"aria-selected": entry.id === filterId,
+									style: chipStyle(entry, entry.id === filterId),
+									onClick: () => { setFilterId(entry.id); },
+									children: zh ? entry.zh : entry.en
+								}, entry.id === "" ? "all" : entry.id)),
+								jsx("span", { style: { flex: 1 } }, "spacer"),
+								jsx("button", {
+									type: "button",
+									disabled: busy || running,
+									style: controlStyle(),
+									onClick: () => { void runNow(); },
+									children: running ? (zh ? "提炼中…" : "Running…") : (zh ? "立即提炼" : "Run now")
+								}, "run")
+							]
+						}, "toolbar"),
+						schedule === "" && manual === "" && passError === "" ? null : jsxs("div", {
+							style: { margin: "0 0 14px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+							children: [
+								schedule === "" ? null : jsx("div", { children: schedule }, "schedule"),
+								// What the button did, kept apart from what the timer did.
+								// Pressing it and getting a legitimate skip is otherwise
+								// indistinguishable from a button that is simply broken.
+								manual === "" ? null : jsx("div", { style: { marginTop: "3px" }, children: manual }, "manual"),
+								passError === "" ? null : jsx("div", {
+									style: { marginTop: "3px", color: "rgb(220,38,38)" },
+									children: insightTrouble(passError, zh)
+								}, "trouble")
+							]
+						}, "pass"),
+						openError === "" ? null : jsx("div", {
+							style: { margin: "0 0 12px", fontSize: "12px", color: "rgb(220,38,38)" },
+							children: (zh ? "打不开这条信源：" : "Could not open that source: ") + insightTrouble(openError, zh)
+						}, "openError"),
+						state === "error"
+							? jsx("div", {
+								style: NOTE_STYLE,
+								children: jsxs("div", {
+									children: [
+										jsx("div", { children: (zh ? "洞察加载失败：" : "Could not load the insights: ") + insightTrouble(error, zh) }),
+										jsx("div", {
+											style: { marginTop: "10px", fontSize: "12px" },
+											children: (zh ? "接口：" : "Endpoint: ") + apiBase() + "/insights/list"
+										})
+									]
+								})
+							}, "error")
+							: null,
+						state === "loading"
+							? jsx("div", { style: NOTE_STYLE, children: zh ? "加载中…" : "Loading…" }, "loading")
+							: null,
+						state !== "loading" && state !== "error" && rows.length === 0
+							? jsx("div", {
+								style: NOTE_STYLE,
+								children: jsxs("div", {
+									children: [
+										jsx("div", {
+											children: filterId !== "" && known > 0
+												? (zh ? "这个筛选下没有卡片，换成“全部”看看。" : "Nothing under this chip — try All.")
+												: known > 0
+												? (zh ? "库里有洞察，但这一页没有取到。" : "The library holds insights, but this page fetched none.")
+												: (zh ? "还没有提炼出任何主张。" : "No claim has been extracted yet.")
+										}, "what"),
+										jsx("div", {
+											style: { marginTop: "6px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+											// Says which of the two empties this is. An armed pass
+											// that has found nothing and a pass nobody ever turned
+											// on look identical on an empty page, and only one of
+											// them is waiting for you to do something.
+											children: schedule === ""
+												? (zh ? "提炼状态还没读到。" : "The pass has not reported its state yet.")
+												: schedule
+										}, "why")
+									]
+								})
+							}, "empty")
+							: null,
+						rows.length === 0 ? null : jsxs("div", {
+							children: [
+								jsx("div", {
+									style: { margin: "0 0 10px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+									// The full tally, whichever chip is on: the counts travel
+									// with every page precisely so "+N candidates" needs no
+									// second request, and a page that hides dormant by default
+									// should say how much it is hiding.
+									children: (zh ? `本页共 ${total} 条 · ` : `${total} on this view · `) + statusTally
+								}, "tally"),
+								...rows.map((insight, at) => jsx(InsightCard, {
+									insight, zh, opening, onOpen: openResource
+								}, String(insight.id ?? at)))
+							]
+						}, "cards"),
+						hasMore && state === "ready"
+							? jsx("div", {
+								style: { display: "flex", justifyContent: "center", padding: "8px 0 4px" },
+								children: jsx("button", {
+									type: "button",
+									style: controlStyle(),
+									onClick: () => { void loadMore(); },
+									children: zh ? "加载更多" : "Load more"
+								})
+							}, "loadMore")
+							: null,
+						state === "loading-more"
+							? jsx("div", {
+								style: { textAlign: "center", padding: "8px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+								children: zh ? "加载中…" : "Loading…"
+							}, "loadingMore")
+							: null
+					]
+				})
+			});
+		}
+		//#endregion
+
 		//#region publish tab
 		/**
 		* The 发布 tab: selected sources, spoken as a two-host conversation.
@@ -4821,8 +5634,13 @@ window.__ModuleLoader__.load({
 				id: "insights", en: "Insights", zh: "洞察",
 				ledeEn: "Claims the swarm extracted from those sources, with provenance.",
 				ledeZh: "蜂群从信源中提炼出的结论，附出处。",
-				soon: true,
-				emptyEn: "Extraction is not built yet.", emptyZh: "提炼尚未实现。"
+				// No `soon`, and no empty text: this tab has a component of
+				// its own now, and both fields are read ONLY by the placeholder
+				// branch below. Left as they were, they would be a not-built
+				// notice with no way to reach the screen — waiting for the day
+				// somebody edits that branch and puts the lie back. 信源 carries
+				// them empty for the same reason.
+				emptyEn: "", emptyZh: ""
 			},
 			{
 				id: "research", en: "Research", zh: "研究",
@@ -4969,6 +5787,8 @@ window.__ModuleLoader__.load({
 
 			const zh = isChinese();
 			const active = TABS.find((candidate) => candidate.id === tab) ?? TABS[0];
+			// The tabs that carry their own scroller and their own reader.
+			const reads = active.id === "sources" || active.id === "insights";
 
 			return jsxs("section", {
 				"aria-label": swarmLabel(),
@@ -5026,13 +5846,20 @@ window.__ModuleLoader__.load({
 						}, candidate.id))
 					}),
 					jsx("div", {
-						style: active.id === "sources" ? READER_BODY_STYLE : BODY_STYLE,
+						// 信源 and 洞察 both open the reader IN PLACE, so both are
+						// handed the whole frame and scroll inside it. Under the
+						// padded, 1080px-capped body the reader's `height: 100%`
+						// resolves against a box that is only as tall as its own
+						// content, which renders a two-pane reader with no panes.
+						style: reads ? READER_BODY_STYLE : BODY_STYLE,
 						role: "tabpanel",
 						"aria-label": zh ? active.zh : active.en,
 						children: jsx("div", {
-							style: active.id === "sources" ? { ...WIDE_STYLE, height: "100%", minHeight: 0 } : CONTENT_STYLE,
+							style: reads ? { ...WIDE_STYLE, height: "100%", minHeight: 0 } : CONTENT_STYLE,
 							children: active.id === "sources"
 								? jsx(ExploreTab, { zh })
+								: active.id === "insights"
+								? jsx(InsightsTab, { zh })
 								: active.id === "publish"
 								? jsx(PublishTab, { zh })
 								: jsxs("div", {
@@ -5696,7 +6523,9 @@ window.__ModuleLoader__.load({
 			KINDS, SORTS, youTubeVideoId, thumbnailOf, hostOf, sourceNameOf,
 			authorLine, descriptionOf, formatDate, resourcesUrl, unwrapFeed,
 			renderMarkdown, mergeBySentence, formatTime, displayModeOf, buildExport, stampFor,
-			SourcesSettings, SwarmPage, PublishTab, ExploreTab, VersionLine, libraryLine
+			insightDay, insightRunNote, insightPassNote, evidenceFace, insightFaceLabel,
+			SourcesSettings, SwarmPage, PublishTab, ExploreTab, InsightsTab, InsightCard,
+			VersionLine, libraryLine
 		};
 		return module.exports;
 	}
