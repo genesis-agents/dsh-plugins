@@ -36,6 +36,7 @@
 import { assembleMaterial, detectLanguage } from "./podcast.js";
 import { localDate } from "./publish-schedule.js";
 import { EVIDENCE_STANCES, INSIGHT_KINDS } from "./insight-store.js";
+import { corroborateOne } from "./insight-corroborate.js";
 import {
   MIN_QUOTE_CHARS,
   MIN_QUOTE_CJK_CHARS,
@@ -78,6 +79,15 @@ const QUERY_PAGE = 100;
 const RESCORE_AFTER_MINUTES = 24 * 60;
 
 /** Insights the sweep rescores in one pass, on top of the ones it touched. */
+/**
+ * How long a claim is left alone after a corroboration attempt.
+ *
+ * A day. The stage fetches whole pages, and a claim nobody else has
+ * written about will find nothing again in an hour — retrying every pass is
+ * how a background job becomes a bill for the same negative answer.
+ */
+const CORROBORATE_AFTER_MINUTES = 24 * 60;
+
 const RESCORE_SWEEP = 200;
 
 /**
@@ -138,6 +148,11 @@ export const INSIGHT_DEFAULTS = {
   insightDormantDays: 21,
   insightDuplicateBits: 3,
   insightChinese: false,
+  // How many candidate claims go out and search per pass. Zero turns the
+  // search stage off entirely; it is the only stage that fetches whole pages,
+  // so it is the one worth being able to switch off without switching off the
+  // pass.
+  insightCorroborateClaims: 3,
 };
 
 /**
@@ -157,6 +172,7 @@ export function readInsightConfig(store) {
     insightDormantDays: store.getSetting("insightDormantDays", INSIGHT_DEFAULTS.insightDormantDays),
     insightDuplicateBits: store.getSetting("insightDuplicateBits", INSIGHT_DEFAULTS.insightDuplicateBits),
     insightChinese: store.getSetting("insightChinese", INSIGHT_DEFAULTS.insightChinese),
+    insightCorroborateClaims: store.getSetting("insightCorroborateClaims", INSIGHT_DEFAULTS.insightCorroborateClaims),
     insightLastRun: store.getSetting("insightLastRun", null),
     insightLastManualRun: store.getSetting("insightLastManualRun", null),
   };
@@ -1177,6 +1193,63 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     }
   }
 
+
+  // ── go and look for a second source ──────────────────────────────────────
+  //
+  // Everything above this line is a closed world: it can only find corroboration
+  // that a feed happened to deliver into the same slice. Measured on the real
+  // library that produced seven claims, all seven with one source — the tab
+  // would have been empty by construction, not for want of evidence but for
+  // want of asking.
+  //
+  // So candidates go out and search. Budgeted hard, because this is the only
+  // stage that fetches whole pages: `insightCorroborateClaims` per pass, and a
+  // claim is tried once and then left alone for a day whether or not it found
+  // anything. Retrying a claim nobody else has written about, every hour, is
+  // how a background job turns into a bill.
+  let corroborated = 0;
+  let corroborationEvidence = 0;
+  const corroborationReasons = {};
+  const wantCorroboration = bounded(config.insightCorroborateClaims, 0, 10, INSIGHT_DEFAULTS.insightCorroborateClaims);
+  if (wantCorroboration > 0) {
+    const web = options.web;
+    const stale = shiftIso(now, -CORROBORATE_AFTER_MINUTES);
+    const queue = insightStore.dueForCorroboration?.({ before: stale, limit: wantCorroboration }) ?? [];
+    for (const id of queue) {
+      const insight = insightStore.getInsight(id, { evidence: true });
+      if (insight === undefined) continue;
+      const known = (insight.evidence ?? []).map((row) => row.sourceKey ?? "").filter((key) => key !== "");
+      let outcome;
+      try {
+        outcome = await corroborateOne(insight, { web, chat, knownSources: known });
+      } catch (cause) {
+        failures.push(`corroborate ${id}: ${String(cause?.message ?? cause)}`);
+        continue;
+      }
+      corroborated += 1;
+      // Marked whatever happened, so a claim nobody corroborates is asked about
+      // once a day rather than once an hour.
+      insightStore.markCorroborated?.(id, now);
+      if (outcome.reason !== "") {
+        corroborationReasons[outcome.reason] = (corroborationReasons[outcome.reason] ?? 0) + 1;
+      }
+      for (const found of outcome.evidence) {
+        try {
+          insightStore.addExternalEvidence?.(id, {
+            url: found.url,
+            sourceKey: found.host,
+            stance: found.stance,
+            quote: found.quote,
+            addedAt: now,
+          });
+          corroborationEvidence += 1;
+          touched.add(id);
+        } catch (cause) {
+          failures.push(`corroborate ${id} evidence: ${String(cause?.message ?? cause)}`);
+        }
+      }
+    }
+  }
   // Everything touched, plus the sweep, so novelty keeps decaying on cards
   // that gained no new evidence this pass. A card whose novelty was computed a
   // month ago and never again looks exactly like a card that is still new.
@@ -1246,6 +1319,12 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     conflicted,
     reconcileCallsLeft: budget.calls,
     rescored,
+    // What the search stage did. Reported separately from the extraction
+    // counts because "found nothing to corroborate" and "was never asked to"
+    // are different states and both render as zero.
+    corroborated,
+    corroborationEvidence,
+    corroborationReasons,
     failures,
     watermark,
   };
@@ -1283,7 +1362,7 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
  * @param options - `{ markSkips }`.
  * @returns the outcome, as `insightPassOnce` reports it.
  */
-export async function runInsightPass(store, insightStore, chat, logger, { markSkips = false } = {}) {
+export async function runInsightPass(store, insightStore, chat, logger, { markSkips = false, web } = {}) {
   const key = markSkips ? "insightLastRun" : "insightLastManualRun";
   const carried = readInsightConfig(store).insightLastRun?.watermark;
   const stamp = () => ({ date: localDate(), at: new Date().toISOString() });
@@ -1295,7 +1374,7 @@ export async function runInsightPass(store, insightStore, chat, logger, { markSk
 
   note({ ...stamp(), running: true });
   try {
-    const result = await insightPassOnce(store, insightStore, chat, logger);
+    const result = await insightPassOnce(store, insightStore, chat, logger, { web });
     if (result.ran) {
       note({ ...stamp(), ...result });
       return result;

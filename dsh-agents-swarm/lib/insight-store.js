@@ -23,6 +23,7 @@
  */
 
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 
 /**
  * The schema, as one executable string. Exported so a test can build a scratch
@@ -382,6 +383,14 @@ export class InsightStore {
     const columns = this.db.prepare("PRAGMA table_info(insight_evidence)").all();
     if (!columns.some((column) => column.name === "resource_type")) {
       this.db.exec("ALTER TABLE insight_evidence ADD COLUMN resource_type TEXT NOT NULL DEFAULT ''");
+    }
+    // `corroborated_at` arrived with the search stage, after the column list
+    // was settled. Added in place for the same reason and NULL-able on
+    // purpose: never-asked and asked-and-found-nothing are different states,
+    // and a DEFAULT of '' would make every existing card look already tried.
+    const own = this.db.prepare("PRAGMA table_info(insights)").all();
+    if (!own.some((column) => column.name === "corroborated_at")) {
+      this.db.exec("ALTER TABLE insights ADD COLUMN corroborated_at TEXT");
     }
     // Deliberately no close(): the handle belongs to the SourceStore, and
     // offering a close here is an invitation to shut the whole library from a
@@ -891,6 +900,105 @@ export class InsightStore {
    * @param options - `{ before, limit }`; `before` is an ISO instant.
    * @returns ids, oldest score first, never-scored rows first of all.
    */
+
+  /**
+   * Candidates that have not been sent looking for a second source lately.
+   *
+   * Only candidates: a claim already standing has its independent sources and
+   * spending a page fetch on it buys nothing. Ordered by first seen, so the
+   * oldest unresolved claim is tried before today's.
+   *
+   * @param options - `{ before, limit }`; `before` is an ISO instant.
+   * @returns insight ids.
+   */
+  dueForCorroboration({ before, limit = 3 } = {}) {
+    const cap = Math.max(1, Math.min(20, Number(limit) || 3));
+    const cutoff = typeof before === "string" && before !== "" ? before : new Date().toISOString();
+    return this.db.prepare(
+      `SELECT id FROM insights
+        WHERE status = 'candidate'
+          AND (corroborated_at IS NULL OR corroborated_at < ?)
+        ORDER BY first_seen_at ASC
+        LIMIT ?`,
+    ).all(cutoff, cap).map((row) => String(row.id));
+  }
+
+  /**
+   * Record that a claim was searched for, whatever the search found.
+   *
+   * Stamped on the attempt rather than on success: a claim nobody else has
+   * written about finds nothing again in an hour, and a queue keyed on success
+   * would ask about it every pass for ever.
+   * @param id - the insight.
+   * @param at - ISO instant.
+   */
+  markCorroborated(id, at) {
+    this.db.prepare("UPDATE insights SET corroborated_at = ?, updated_at = ? WHERE id = ?")
+      .run(String(at), String(at), String(id));
+  }
+
+  /**
+   * Attach a page found by searching, as an ordinary source.
+   *
+   * The page is written into `resources` first and then cited like anything
+   * else. That is deliberate: evidence with no row behind it would need a
+   * second shape everywhere — the card could not link to a reader, the counts
+   * would need a union, and `for-resource` would answer half the truth. A
+   * corroborating article IS a source this library now holds, so it becomes
+   * one.
+   *
+   * @param insightId - the claim.
+   * @param found - `{ url, sourceKey, stance, quote, addedAt }`.
+   * @returns the resource id it was stored under.
+   */
+  addExternalEvidence(insightId, found) {
+    const url = String(found?.url ?? "");
+    if (url === "") throw new Error("external evidence needs a url");
+    const at = String(found?.addedAt ?? new Date().toISOString());
+    const host = String(found?.sourceKey ?? "").trim();
+
+    // An id derived from the URL, so the same page found twice for two claims
+    // is one row rather than two — `store.put` refuses a second id for one
+    // normalized URL and would otherwise silently drop the citation.
+    // Looked up here rather than through a SourceStore helper, because there
+    // is not one: `put` refuses a second id for a normalized URL it already
+    // holds, so the only way to cite an existing page is to find its id first.
+    const existing = this.db
+      .prepare("SELECT id FROM resources WHERE source_url = ? OR normalized_url = ? LIMIT 1")
+      .get(url, url);
+    let resourceId = existing?.id;
+    if (resourceId === undefined) {
+      resourceId = `corroborate-${createHash("sha1").update(url).digest("hex").slice(0, 16)}`;
+      const stored = this.store.put({
+        id: resourceId,
+        type: /arxiv\.org/u.test(host) ? "PAPER" : "NEWS",
+        title: String(found?.title ?? url).slice(0, 300),
+        sourceUrl: url,
+        sourceType: host === "" ? "web" : host,
+        createdAt: at,
+        raw: JSON.stringify({ foundBy: "insight-corroboration", url }),
+      });
+      if (stored === false) {
+        // `put` refuses when the normalized URL is already held under another
+        // id. Ask again rather than citing an id that was never written.
+        resourceId = this.db
+          .prepare("SELECT id FROM resources WHERE source_url = ? OR normalized_url = ? LIMIT 1")
+          .get(url, url)?.id;
+        if (resourceId === undefined) throw new Error(`could not store the corroborating page at ${url}`);
+      }
+    }
+
+    // An ARRAY: addEvidence takes rows, and handing it one object makes it
+    // iterate the object's keys instead of the row.
+    this.addEvidence(insightId, [{
+      resourceId,
+      stance: String(found?.stance ?? "supports"),
+      quote: String(found?.quote ?? ""),
+      sourceKey: host === "" ? "web" : host,
+      addedAt: at,
+    }]);
+    return resourceId;
+  }
   dueForRescore({ before, limit } = {}) {
     assertIso(before, "before");
     // Plain `ORDER BY scored_at`: SQLite sorts NULLs first in ASC, which is

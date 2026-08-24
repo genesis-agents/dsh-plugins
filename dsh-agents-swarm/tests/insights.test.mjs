@@ -61,6 +61,7 @@ import {
 // the store. Imported here because the drain order is a correctness property,
 // not an implementation detail.
 import { collectCandidates } from "../lib/insight-extract.js";
+import { buildQueries, isIndependent } from "../lib/insight-corroborate.js";
 
 /** Floating point comparison, for scores that are exact only in decimal. */
 const near = (actual, expected, message) =>
@@ -1053,4 +1054,36 @@ test("rows binned by the cluster ceiling are not watermarked past", () => {
     items.some((item) => !reached.has(item.id)),
     "no item was binned, so the guard is untested",
   );
+});
+
+/* ── going to look for a second source ─────────────────────────────────── */
+//
+// The pass as first built was a closed world, and measured on the real library
+// every one of its seven claims stayed a candidate with one source: the
+// momentum test asks whether several independent sources report a thing, and
+// that cannot be answered from a slice of what a feed happened to deliver.
+
+test("a query is built from what travels between sources, not the sentence", () => {
+  // A claim written to be specific enough to be wrong is a sentence no other
+  // outlet wrote; searching for it verbatim returns the one article it came
+  // from. Entities and distinctive terms are what another source would share.
+  const { web, arxiv } = buildQueries({
+    statement: "The VIALS benchmark contains 161 visual question-answering tasks and frontier models could not interpret the images",
+    entities: ["VIALS", "frontier vision-language models"],
+  });
+  assert.ok(web.includes("VIALS"), "the entity is missing");
+  assert.ok(web.includes("161"), "numbers are what another source has to agree with");
+  assert.ok(!web.includes(" the "), "stopwords survived into the query");
+  assert.ok(arxiv.startsWith("all:"), "the arXiv query is not in arXiv's language");
+  assert.ok(arxiv.includes(' AND '), "arXiv terms must be ANDed, or the query returns the category");
+});
+
+test("independence is judged by host, not by URL", () => {
+  // Five rewrites of one wire story are one source. Counting them separately
+  // is how the momentum test starts reporting confidence nobody earned.
+  const known = ["reuters.com", "arXiv cs.AI"];
+  assert.equal(isIndependent("https://www.reuters.com/other-article", known), false);
+  assert.equal(isIndependent("https://arxiv.org/abs/2601.00001", known), false, "arXiv cs.AI and arxiv.org are one source");
+  assert.equal(isIndependent("https://www.nature.com/articles/x", known), true);
+  assert.equal(isIndependent("not a url", known), false, "an unparseable URL is not an independent source");
 });

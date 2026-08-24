@@ -133,7 +133,7 @@ function quoteDrop(record) {
  * @param deps - `{ store, chat, logger, sendJson, readJson }` from the Host half.
  * @returns `async (req, res, path) => boolean` — true when it answered.
  */
-export function createInsightRoutes({ store, chat, logger, sendJson, readJson }) {
+export function createInsightRoutes({ store, chat, logger, sendJson, readJson, web }) {
   // Once, at creation. Construction runs the DDL, and a second instance would
   // be a second place to look when a statement is wrong. It throws when handed
   // anything but a SourceStore, which fails at plugin start-up rather than on
@@ -370,7 +370,7 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson })
       // the process with it. `runInsightPass` is specified to settle every
       // path into a record, but this file cannot verify that and a catch costs
       // one line.
-      void runInsightPass(store, insights, chat, logger, { markSkips: false })
+      void runInsightPass(store, insights, chat, logger, { markSkips: false, web })
         .catch((cause) => { logger?.warn?.(`swarm: manual insight pass failed: ${String(cause?.message ?? cause)}`); })
         .finally(() => { manualRunInFlight = false; });
       // The outcome arrives on `/insights/status` as `insightLastManualRun`,

@@ -387,7 +387,14 @@ export function startCollectionTimer(store, logger, insightStore, chat) {
     try {
       // Never throws; it settles into a recorded result either way, which is
       // what `/insights/status` reads.
-      await runInsightPass(store, insightStore, chat, logger, { markSkips: true });
+      // `ctx.get`, not `inject`. The search plugin stays optional: injecting
+      // "web" would make dsh-agents-swarm refuse to load without it, and the
+      // library is worth having on its own. Absent, the pass corroborates from
+      // arXiv alone and says so.
+      await runInsightPass(store, insightStore, chat, logger, {
+        markSkips: true,
+        web: typeof ctx.get === "function" ? ctx.get("web") : undefined,
+      });
     } finally {
       insightRunning = false;
     }
@@ -617,6 +624,15 @@ export function writeConfig(store, patch) {
       }
     }
   }
+  // Checked rather than coerced, like every other bound here: a value out of
+  // range that is quietly clamped is a setting that reports one thing and does
+  // another, and this one decides how many pages get fetched per pass.
+  if (patch.insightCorroborateClaims !== undefined) {
+    const n = Number(patch.insightCorroborateClaims);
+    if (!Number.isInteger(n) || n < 0 || n > 10) {
+      problems.push("insightCorroborateClaims must be a whole number from 0 (off) to 10");
+    }
+  }
   if (patch.insightChinese !== undefined && typeof patch.insightChinese !== "boolean") {
     problems.push("insightChinese must be true or false");
   }
@@ -634,7 +650,7 @@ export function writeConfig(store, patch) {
     // already read rows it never saw. Those rows are never offered again.
     "insightIntervalMinutes", "insightResourceTypes", "insightMaxRows", "insightMaxClusters",
     "insightMaxReconcileCalls", "insightMinIndependent", "insightWindowDays", "insightDormantDays",
-    "insightDuplicateBits", "insightChinese",
+    "insightDuplicateBits", "insightChinese", "insightCorroborateClaims",
   ]) {
     if (patch[key] !== undefined) store.setSetting(key, patch[key]);
   }
@@ -881,7 +897,7 @@ async function readJson(req, limit = 256 * 1024) {
  * @param chat - streaming chat entry point, or undefined when no model is routed.
  * @returns the node:http handler.
  */
-export function createHandler(store, logger, chat) {
+export function createHandler(store, logger, chat, web) {
   // The publish surface is a separate module because it is a different
   // subject with its own lifecycle — a render is a job, not a request — and
   // folding forty lines of job bookkeeping into this router would bury the
@@ -890,7 +906,11 @@ export function createHandler(store, logger, chat) {
   // 洞察 sits beside it, same dependencies, same shape of answer. Building it
   // here also runs its DDL here, so a broken statement fails while the plugin
   // is loading rather than the first time somebody opens a tab.
-  const insight = createInsightRoutes({ store, chat, logger, sendJson, readJson });
+  // `web` is the optional search seam, passed in by `apply` because THAT is
+  // where a Cordis context exists. Resolving it here reached for a `ctx` this
+  // function has never had — the plugin then failed to load entirely, with 122
+  // green tests, which is the shape of failure this repository specialises in.
+  const insight = createInsightRoutes({ store, chat, logger, sendJson, readJson, web });
 
   return async function handle(req, res) {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -1592,7 +1612,10 @@ export function apply(ctx) {
   const dispose = ctx.webServer.register({
     kind: "prefix",
     path: ROUTE_PREFIX,
-    handler: createHandler(store, ctx.logger, chat),
+    // `ctx.get`, not `inject`. Injecting "web" would make this plugin refuse to
+    // load without dsh-web-search, and the library is worth having on its own;
+    // absent, corroboration searches arXiv alone and says so.
+    handler: createHandler(store, ctx.logger, chat, typeof ctx.get === "function" ? ctx.get("web") : undefined),
   });
   // Agents reach the same library the page reads: one store, two faces.
   registerLibraryTool(ctx, store);
