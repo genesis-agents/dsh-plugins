@@ -633,3 +633,5 @@ that are complete.
 
 - [`mac-mini.md`](./mac-mini.md) — the migration, as carried out, including the
   four steps the first draft got wrong.
+- [`insights.md`](./insights.md) — a landing plan for 洞察, the empty stage
+  between collecting and publishing, grounded in what comparable systems do.

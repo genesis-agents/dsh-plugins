@@ -94,6 +94,8 @@ The alternative is a self-contained `prepare` script — see
 
 - [Architecture](./docs/architecture.md) — what runs where, the pipeline, the
   data, the seams, and a table of failures that do not announce themselves
+- [洞察 — a landing plan](./docs/insights.md) — the design for the stage
+  between collecting and publishing, and what the comparable systems taught it
 - [Running it on a Mac mini](./docs/mac-mini.md) — a migration that was actually
   carried out, including the steps whose first draft was wrong
 - [`deploy/`](./deploy/README.md) — setup, health check, self-update, release
