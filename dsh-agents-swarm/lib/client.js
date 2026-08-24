@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 		* both is how "deployed but apparently absent" becomes legible instead
 		* of costing an afternoon.
 		*/
-		const CLIENT_VERSION = "0.3.4";
+		const CLIENT_VERSION = "0.3.5";
 
 		//#region locale + mark
 		/**
@@ -3988,8 +3988,18 @@ window.__ModuleLoader__.load({
 					const response = await fetch(`${apiBase()}/publish/episodes?take=${take}`);
 					const payload = await response.json();
 					if (payload?.success === true) {
-						setEpisodes(payload.data.episodes);
-						setEpisodeTotal(payload.data.total ?? payload.data.episodes.length);
+						// Whatever came back has to be a list before it becomes
+						// the state a render iterates. A success envelope carrying
+						// something else -- a proxy returning an error page as
+						// JSON, a far end one version older -- used to put
+						// `undefined` here, and the next render died on
+						// `episodes.find`. A dead render is a blank panel with
+						// nothing in the log, which is the failure this codebase
+						// keeps producing; an empty list is a page that says
+						// there are no episodes.
+						const list = Array.isArray(payload.data?.episodes) ? payload.data.episodes : [];
+						setEpisodes(list);
+						setEpisodeTotal(Number.isFinite(payload.data?.total) ? payload.data.total : list.length);
 					}
 				} catch {
 					// The list is a convenience; failing to read it must not
@@ -5143,29 +5153,88 @@ window.__ModuleLoader__.load({
 		* The same fact, with room for the node version beside it.
 		* @param zh - whether to write Chinese.
 		*/
+		/**
+		* Where the library lives, said in one line.
+		*
+		* The machine holding the data is decided by one value — a pointer file
+		* and an environment variable — and nothing on screen ever mentioned it.
+		* A workstation proxying to a box that had gone down looked exactly like
+		* a workstation with an empty library: same page, same empty lists, no
+		* error anywhere. The far end's own version is shown for the same
+		* reason: two machines both claiming to be fine while running different
+		* code is the failure this whole display was built for.
+		*/
+		function libraryLine(host, zh) {
+			if (host === null) return null;
+			if (host.library !== "remote") {
+				return {
+					what: zh ? "本地" : "local",
+					detail: host.libraryPath ?? (zh ? "本机" : "this machine"),
+					trouble: ""
+				};
+			}
+			// A remote with a version is reachable; that is the whole check, and
+			// it is the answer to "is the other machine up" without leaving here.
+			const where = String(host.remote ?? "").replace(/^https?:\/\//, "").replace(/\/swarm-api$/, "");
+			return {
+				what: zh ? "远端" : "remote",
+				detail: where + (host.remoteLabel ? `  ·  v${host.remoteLabel}` : ""),
+				trouble: host.remoteError ? String(host.remoteError) : ""
+			};
+		}
+
 		function VersionLine({ zh }) {
 			const { host } = useHostVersion();
 			const { label, release } = versionVerdict(host);
+			const where = libraryLine(host, zh);
+			const cell = { display: "flex", alignItems: "center", gap: "10px" };
+			const key = { flex: "none", width: "44px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" };
 			return jsxs("div", {
 				style: {
-					display: "flex", alignItems: "center", gap: "10px",
+					display: "flex", flexDirection: "column", gap: "5px",
 					padding: "8px 12px", marginBottom: "18px",
 					border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "10px",
 					fontSize: "11px", color: "var(--dsw-alias-label-secondary)",
 					fontVariantNumeric: "tabular-nums"
 				},
 				children: [
-					jsx("span", {
-						style: { fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
-						children: zh ? "智能体" : "Agents"
+					jsxs("div", {
+						style: cell,
+						children: [
+							jsx("span", { style: key, children: zh ? "智能体" : "Agents" }),
+							jsx("span", {
+								children: release || host === null
+									? (zh ? `v${label} 发布版` : `v${label} release`)
+									: (zh ? `v${label} 开发版` : `v${label} dev`)
+							}),
+							jsx("span", { style: { flex: 1 } }),
+							host === null ? null : jsx("span", { children: `node ${host.node}` })
+						]
 					}),
-					jsx("span", {
-						children: release || host === null
-							? (zh ? `v${label} 发布版` : `v${label} release`)
-							: (zh ? `v${label} 开发版` : `v${label} dev`)
-					}),
-					jsx("span", { style: { flex: 1 } }),
-					host === null ? null : jsx("span", { children: `node ${host.node}` })
+					where === null ? null : jsxs("div", {
+						style: cell,
+						children: [
+							jsx("span", { style: key, children: zh ? "信源库" : "Library" }),
+							jsx("span", { style: { flex: "none" }, children: where.what }),
+							jsx("span", {
+								style: {
+									flex: 1, minWidth: 0, overflow: "hidden",
+									textOverflow: "ellipsis", whiteSpace: "nowrap",
+									// The path is direction-neutral text that reads
+									// left-to-right; ellipsis at the end would cut the
+									// filename, which is the half worth keeping.
+									direction: "rtl", textAlign: "left"
+								},
+								title: where.detail,
+								children: where.detail
+							}),
+							where.trouble === "" ? null : jsx("span", {
+								style: { flex: "none", fontWeight: 600, color: hue(KINDS[0], 1) },
+								title: where.trouble,
+								children: zh ? "连不上" : "unreachable"
+							})
+						]
+					})
 				]
 			});
 		}
@@ -5627,7 +5696,7 @@ window.__ModuleLoader__.load({
 			KINDS, SORTS, youTubeVideoId, thumbnailOf, hostOf, sourceNameOf,
 			authorLine, descriptionOf, formatDate, resourcesUrl, unwrapFeed,
 			renderMarkdown, mergeBySentence, formatTime, displayModeOf, buildExport, stampFor,
-			SourcesSettings, SwarmPage, PublishTab, ExploreTab
+			SourcesSettings, SwarmPage, PublishTab, ExploreTab, VersionLine, libraryLine
 		};
 		return module.exports;
 	}

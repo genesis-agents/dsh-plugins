@@ -797,6 +797,12 @@ export function createHandler(store, logger, chat) {
           // Whether this host owns the library or forwards to one. A proxy
           // answers this route itself, so a mismatch is legible from the page.
           library: "local",
+          // And where it is. The page had no way to say which machine holds
+          // the data — the one setting that decides it lives in a file and an
+          // environment variable, neither of which anybody looking at the
+          // screen can see. A box proxying to a box that has gone down looked
+          // exactly like a box with an empty library.
+          libraryPath: storePath(),
         },
       });
       return;
