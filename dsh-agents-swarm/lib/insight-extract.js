@@ -1222,7 +1222,12 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
       // is the behaviour rate limits exist to stop and the behaviour that gets
       // an anonymous client blocked outright.
       if (rateLimitedRuns > 0) break;
-      const insight = insightStore.getInsight(id, { evidence: true });
+      // `getWithEvidence`, which is what this store calls it. The first draft
+      // invented `getInsight(id, { evidence: true })` from the shape of the
+      // contract rather than from the file, and it crashed the whole stage on
+      // the first real run — after 127 green tests, none of which ever let the
+      // corroboration stage touch a store.
+      const insight = insightStore.getWithEvidence(id);
       if (insight === undefined) continue;
       const known = (insight.evidence ?? []).map((row) => row.sourceKey ?? "").filter((key) => key !== "");
       let outcome;

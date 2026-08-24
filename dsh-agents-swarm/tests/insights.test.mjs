@@ -1145,3 +1145,49 @@ test("a metered web backend that says no says so", async () => {
   assert.deepEqual(absent.hits, []);
   assert.equal(absent.rateLimited, undefined, "no seam installed is a configuration, not a refusal");
 });
+
+test("the corroboration stage speaks the store's actual API", async (t) => {
+  // It did not. `getInsight(id, { evidence: true })` was invented from the
+  // shape of the contract instead of read out of the file, and the whole stage
+  // died on the first real run — with 127 green tests, not one of which ever
+  // let this stage touch a store. Every method the stage calls is exercised
+  // here, against a real one, so a rename cannot pass again.
+  const { store, insights } = library(t);
+  store.put(resource("r-corrob", { createdAt: "2026-08-24T00:00:00.000Z" }));
+  const id = claim(insights, { status: "candidate" });
+  insights.addEvidence(id, [evidence("r-corrob")]);
+
+  // Every call the stage makes, in the order it makes them.
+  assert.equal(typeof insights.dueForCorroboration, "function");
+  const queue = insights.dueForCorroboration({ before: "2030-01-01T00:00:00.000Z", limit: 3 });
+  assert.ok(queue.includes(id), "a candidate was not offered for corroboration");
+
+  const loaded = insights.getWithEvidence(id);
+  assert.ok(loaded !== undefined, "the stage could not load the claim it was given");
+  assert.ok(Array.isArray(loaded.evidence), "evidence did not come back as a list");
+  assert.ok(
+    loaded.evidence.every((row) => "sourceKey" in row),
+    "the stage reads sourceKey off every evidence row to judge independence",
+  );
+
+  insights.markCorroborated(id, "2026-08-24T01:00:00.000Z");
+  assert.ok(
+    !insights.dueForCorroboration({ before: "2026-08-24T00:30:00.000Z", limit: 3 }).includes(id),
+    "a claim just asked about was offered again",
+  );
+
+  const resourceId = insights.addExternalEvidence(id, {
+    url: "https://elsewhere.test/story",
+    sourceKey: "elsewhere.test",
+    stance: "supports",
+    quote: "raised $3.5bn in a Series E round led by Lightspeed",
+    addedAt: "2026-08-24T01:00:00.000Z",
+  });
+  assert.ok(typeof resourceId === "string" && resourceId !== "", "no resource id came back");
+  const after = insights.getWithEvidence(id);
+  assert.equal(after.evidence.length, 2, "the corroborating page was not attached");
+  assert.ok(
+    after.evidence.some((row) => row.sourceKey === "elsewhere.test"),
+    "the corroborating source was attached without its host, so it counts as the same source",
+  );
+});
