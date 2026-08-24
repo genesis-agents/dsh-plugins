@@ -1209,6 +1209,7 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
   // how a background job turns into a bill.
   let corroborated = 0;
   let corroborationEvidence = 0;
+  let rateLimitedRuns = 0;
   const corroborationReasons = {};
   const wantCorroboration = bounded(config.insightCorroborateClaims, 0, 10, INSIGHT_DEFAULTS.insightCorroborateClaims);
   if (wantCorroboration > 0) {
@@ -1216,6 +1217,11 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     const stale = shiftIso(now, -CORROBORATE_AFTER_MINUTES);
     const queue = insightStore.dueForCorroboration?.({ before: stale, limit: wantCorroboration }) ?? [];
     for (const id of queue) {
+      // One refusal ends the stage for this pass. Carrying on to the next
+      // claim sends a second request to the service that just said no, which
+      // is the behaviour rate limits exist to stop and the behaviour that gets
+      // an anonymous client blocked outright.
+      if (rateLimitedRuns > 0) break;
       const insight = insightStore.getInsight(id, { evidence: true });
       if (insight === undefined) continue;
       const known = (insight.evidence ?? []).map((row) => row.sourceKey ?? "").filter((key) => key !== "");
@@ -1227,9 +1233,15 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
         continue;
       }
       corroborated += 1;
-      // Marked whatever happened, so a claim nobody corroborates is asked about
-      // once a day rather than once an hour.
-      insightStore.markCorroborated?.(id, now);
+      // Marked when the claim was actually ASKED ABOUT, which a rate-limited
+      // request was not. Stamping it anyway would put a claim to sleep for a
+      // day over a three-second interval — the search never happened, and the
+      // card would then sit as a candidate carrying an answer nobody gave.
+      if (outcome.rateLimited === true) {
+        rateLimitedRuns += 1;
+      } else {
+        insightStore.markCorroborated?.(id, now);
+      }
       if (outcome.reason !== "") {
         corroborationReasons[outcome.reason] = (corroborationReasons[outcome.reason] ?? 0) + 1;
       }
@@ -1325,6 +1337,11 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     corroborated,
     corroborationEvidence,
     corroborationReasons,
+    // Non-zero means the stage stopped early because a service refused us, and
+    // the claims it did not reach were NOT marked as tried. Without this a
+    // pass that was throttled and a pass that found nothing report the same
+    // three zeros.
+    corroborationRateLimited: rateLimitedRuns,
     failures,
     watermark,
   };

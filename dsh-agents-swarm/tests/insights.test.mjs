@@ -61,7 +61,7 @@ import {
 // the store. Imported here because the drain order is a correctness property,
 // not an implementation detail.
 import { collectCandidates } from "../lib/insight-extract.js";
-import { buildQueries, isIndependent } from "../lib/insight-corroborate.js";
+import { buildQueries, createPacer, isIndependent, searchArxiv, searchWeb } from "../lib/insight-corroborate.js";
 
 /** Floating point comparison, for scores that are exact only in decimal. */
 const near = (actual, expected, message) =>
@@ -1086,4 +1086,62 @@ test("independence is judged by host, not by URL", () => {
   assert.equal(isIndependent("https://arxiv.org/abs/2601.00001", known), false, "arXiv cs.AI and arxiv.org are one source");
   assert.equal(isIndependent("https://www.nature.com/articles/x", known), true);
   assert.equal(isIndependent("not a url", known), false, "an unparseable URL is not an independent source");
+});
+
+/* ── the services we are a guest of ────────────────────────────────────── */
+
+test("the pacer serialises and spaces, and survives a failure", async () => {
+  // arXiv's terms are explicit: one request every three seconds, one
+  // connection at a time, counted across every machine you run. The first
+  // draft issued one request per claim in a plain loop — three inside a
+  // second, hourly, for ever.
+  const pace = createPacer(30);
+  const started = [];
+  const at = () => Date.now();
+  const begin = at();
+  const jobs = [
+    pace(async () => { started.push(at() - begin); return "a"; }),
+    pace(async () => { started.push(at() - begin); throw new Error("refused"); }),
+    pace(async () => { started.push(at() - begin); return "c"; }),
+  ];
+  const settled = await Promise.allSettled(jobs);
+  assert.equal(settled[0].value, "a");
+  assert.equal(settled[1].status, "rejected", "a failure must reach its own caller");
+  assert.equal(settled[2].value, "c", "one refusal must not stall the chain for ever");
+  assert.ok(started[1] - started[0] >= 25, `second call came ${started[1] - started[0]}ms after the first`);
+  assert.ok(started[2] - started[1] >= 25, `third call came ${started[2] - started[1]}ms after the second`);
+});
+
+test("a refusal is not an empty result set", async () => {
+  // The one that matters. `catch { return [] }` reports a blocked search as
+  // "nobody else wrote about this" — a claim about the world drawn from a fact
+  // about our own request rate, and the exact shape of every other bug in this
+  // repository.
+  const limited = await searchArxiv("all:anything", {
+    fetchImpl: async () => ({ status: 429, ok: false, headers: { get: (k) => (k === "retry-after" ? "60" : null) }, text: async () => "" }),
+  });
+  assert.deepEqual(limited.hits, []);
+  assert.equal(limited.rateLimited, true, "a 429 was not recognised as a refusal");
+  assert.match(limited.error, /rate-limited/u);
+  assert.match(limited.error, /60/u, "Retry-After was thrown away");
+
+  const empty = await searchArxiv("all:anything", {
+    fetchImpl: async () => ({ status: 200, ok: true, headers: { get: () => null }, text: async () => "<feed></feed>" }),
+  });
+  assert.deepEqual(empty.hits, []);
+  assert.equal(empty.error, "", "an honest empty answer was reported as an error");
+  assert.notEqual(empty.rateLimited, true);
+});
+
+test("a metered web backend that says no says so", async () => {
+  const out = await searchWeb(
+    { search: async () => { throw new Error("HTTP 429 Too Many Requests"); } },
+    "anything",
+  );
+  assert.equal(out.rateLimited, true, "an exhausted quota looked like an empty web");
+  assert.match(out.error, /429/u);
+
+  const absent = await searchWeb(undefined, "anything");
+  assert.deepEqual(absent.hits, []);
+  assert.equal(absent.rateLimited, undefined, "no seam installed is a configuration, not a refusal");
 });

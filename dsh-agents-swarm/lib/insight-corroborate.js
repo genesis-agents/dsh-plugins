@@ -65,6 +65,98 @@ const STOPWORDS = new Set([
 ]);
 
 /**
+ * Serialised, spaced calls to a host that asked for them to be spaced.
+ *
+ * arXiv's terms of use are explicit and are not a suggestion: "make no more
+ * than one request every three seconds, and limit requests to a single
+ * connection at a time", counted across every machine under your control, with
+ * blocking as the stated remedy. The first draft of this file issued one
+ * request per candidate claim in a plain `for` loop — three requests inside a
+ * second, from a background job that runs hourly, for ever. That is a service
+ * asking politely and a client ignoring it.
+ *
+ * The chain is per-process, which is the honest limit of what this can promise:
+ * two boxes running the same library each keep their own. The interval is set
+ * high enough that two of them together still sit inside the published rate.
+ *
+ * @param minIntervalMs - the smallest gap between the START of two calls.
+ * @returns a function that runs a thunk in turn, no sooner than the gap allows.
+ */
+export function createPacer(minIntervalMs) {
+  let previous = Promise.resolve();
+  let last = 0;
+  return (thunk) => {
+    const run = previous.then(async () => {
+      const wait = minIntervalMs - (Date.now() - last);
+      if (wait > 0) await new Promise((resolve) => { setTimeout(resolve, wait); });
+      try {
+        return await thunk();
+      } finally {
+        // Stamped on completion, not on start: "one connection at a time" means
+        // the next call waits for this one to finish before its own gap begins.
+        last = Date.now();
+      }
+    });
+    // The chain must survive a failure, or one refused request stalls every
+    // later one for the life of the process.
+    previous = run.then(() => undefined, () => undefined);
+    return run;
+  };
+}
+
+/**
+ * arXiv asks for one request every three seconds. Four, for room.
+ *
+ * The extra second is not politeness theatre: `Date.now()` is stamped when a
+ * request finishes, network jitter moves the observed gap either way, and the
+ * penalty for being slightly under is being blocked from a service with no
+ * account to appeal through.
+ */
+const ARXIV_MIN_INTERVAL_MS = 4000;
+
+/** One chain for the whole process, so concurrent callers still queue. */
+const paceArxiv = createPacer(ARXIV_MIN_INTERVAL_MS);
+
+/**
+ * Publishers get a gap too, and one connection at a time.
+ *
+ * Not a published rule — a courtesy, and self-interest. Reading three pages
+ * per claim for three claims is nine fetches issued as fast as the event loop
+ * allows, from a job that runs every hour, and the sites on the receiving end
+ * are the ones whose articles this library is built out of. A second between
+ * them costs a pass eight seconds and costs nobody a block.
+ */
+const paceRead = createPacer(1000);
+
+/**
+ * A courtesy User-Agent.
+ *
+ * arXiv does not mandate one, but an anonymous background job hitting a free
+ * public API is exactly what an operator blocks first when they are looking for
+ * something to block.
+ */
+const ARXIV_UA = "dsh-agents-swarm/insight-corroboration (+https://github.com/genesis-agents/dsh-plugins)";
+
+/**
+ * Read a rate-limit refusal, if that is what this is.
+ *
+ * Separated because a 429 and an empty result set are the same value to every
+ * caller that only counts hits — and this whole feature exists to stop numbers
+ * that look healthy while nothing happened. A blocked search reported as "no
+ * corroboration found" is a claim quietly demoted for a reason that was not
+ * about the claim.
+ *
+ * @param response - a fetch Response.
+ * @returns a reason string, or "" when the response is not a refusal.
+ */
+export function rateLimitReason(response) {
+  const status = Number(response?.status ?? 0);
+  if (status !== 429 && status !== 503) return "";
+  const after = response?.headers?.get?.("retry-after");
+  return after ? `rate-limited, retry after ${after}s` : "rate-limited";
+}
+
+/**
  * Turn a claim into something a search engine can match.
  *
  * Not the statement itself: a claim written to be specific enough to be wrong
@@ -175,18 +267,24 @@ function parseArxiv(xml) {
  */
 export async function searchArxiv(query, options = {}) {
   const q = String(query ?? "").trim();
-  if (q === "") return [];
+  if (q === "") return { hits: [], error: "" };
   const max = Math.max(1, Math.min(20, Number(options.maxResults) || HITS_PER_CLAIM));
   const call = typeof options.fetchImpl === "function" ? options.fetchImpl : fetch;
   const url = `${ARXIV_API}?search_query=${encodeURIComponent(q)}&max_results=${max}&sortBy=relevance`;
   try {
-    const response = await call(url, { signal: AbortSignal.timeout(15000) });
-    if (!response.ok) return [];
-    return parseArxiv(await response.text());
-  } catch {
-    // A search that cannot be reached is not a claim that fails; the caller
-    // reports how many backends answered so a run with none is legible.
-    return [];
+    const response = await paceArxiv(() => call(url, {
+      headers: { "user-agent": ARXIV_UA },
+      signal: AbortSignal.timeout(15000),
+    }));
+    // A refusal is NOT an empty result. Returning [] for both is how a blocked
+    // search becomes "nobody else reported this", which is a claim about the
+    // world made from a fact about our own request rate.
+    const limited = rateLimitReason(response);
+    if (limited !== "") return { hits: [], error: `arXiv ${limited}`, rateLimited: true };
+    if (!response.ok) return { hits: [], error: `arXiv answered ${response.status}` };
+    return { hits: parseArxiv(await response.text()), error: "" };
+  } catch (cause) {
+    return { hits: [], error: `arXiv unreachable: ${String(cause?.message ?? cause)}` };
   }
 }
 
@@ -199,21 +297,33 @@ export async function searchArxiv(query, options = {}) {
  */
 export async function searchWeb(web, query, options = {}) {
   const q = String(query ?? "").trim();
-  if (q === "" || web === undefined || typeof web.search !== "function") return [];
+  if (q === "") return { hits: [], error: "" };
+  if (web === undefined || typeof web.search !== "function") {
+    return { hits: [], error: "no web search seam is registered" };
+  }
   const max = Math.max(1, Math.min(20, Number(options.maxResults) || HITS_PER_CLAIM));
   try {
     const answer = await web.search({ query: q, maxResults: max });
     const rows = Array.isArray(answer) ? answer : (answer?.results ?? []);
-    return rows
-      .map((row) => ({
-        url: String(row?.url ?? row?.link ?? ""),
-        title: String(row?.title ?? ""),
-        snippet: String(row?.snippet ?? row?.description ?? "").slice(0, 400),
-        source: "web",
-      }))
-      .filter((hit) => hit.url !== "");
-  } catch {
-    return [];
+    return {
+      hits: rows
+        .map((row) => ({
+          url: String(row?.url ?? row?.link ?? ""),
+          title: String(row?.title ?? ""),
+          snippet: String(row?.snippet ?? row?.description ?? "").slice(0, 400),
+          source: "web",
+        }))
+        .filter((hit) => hit.url !== ""),
+      error: "",
+    };
+  } catch (cause) {
+    // The backends behind this seam are metered — Brave, Serper and Tavily all
+    // sell quota — and the seam surfaces their refusal as a thrown error with
+    // the status in the message. Swallowing it would report an exhausted
+    // monthly allowance as "the web has nothing about this claim".
+    const message = String(cause?.message ?? cause);
+    const limited = /\b429\b|rate.?limit|quota|too many requests/iu.test(message);
+    return { hits: [], error: `web search failed: ${message}`, rateLimited: limited };
   }
 }
 
@@ -235,7 +345,7 @@ export async function readHit(hit, options = {}) {
   try {
     const doc = typeof options.fetchImpl === "function"
       ? await options.fetchImpl(url)
-      : await fetchDocument(url);
+      : await paceRead(() => fetchDocument(url));
 
     // A string means a test handed the HTML straight in. Otherwise it is
     // `fetchDocument`'s `{status, contentType, body}`, and both of the first
@@ -247,6 +357,11 @@ export async function readHit(hit, options = {}) {
       html = doc;
     } else if (doc !== undefined && doc !== null) {
       const status = Number(doc.status ?? 200);
+      // 429 and 403 are a publisher declining, not an article that failed to
+      // parse. Both end as "could not be read", which is honest, but they are
+      // worth telling apart from a 404 when somebody asks why nothing was
+      // corroborated all week.
+      if (status === 429 || status === 503) return { throttled: true, url };
       if (status < 200 || status >= 300) return undefined;
       const type = String(doc.contentType ?? "");
       if (type !== "" && !/html|xml|text\/plain/u.test(type)) return undefined;
@@ -306,19 +421,35 @@ export async function corroborateOne(insight, options = {}) {
 
   const backends = [];
   const found = [];
+  const errors = [];
+  let rateLimited = false;
+
   const arxiv = await searchArxiv(queries.arxiv, { fetchImpl: options.fetchImpl });
-  if (arxiv.length > 0) backends.push("arxiv");
-  found.push(...arxiv);
+  if (arxiv.error !== "") errors.push(arxiv.error);
+  if (arxiv.rateLimited === true) rateLimited = true;
+  if (arxiv.hits.length > 0) backends.push("arxiv");
+  found.push(...arxiv.hits);
+
   const web = await searchWeb(options.web, queries.web);
-  if (web.length > 0) backends.push("web");
-  found.push(...web);
+  // "No seam registered" is a configuration, not a failure, and reporting it
+  // as an error every pass would bury the errors that matter.
+  if (web.error !== "" && web.error !== "no web search seam is registered") errors.push(web.error);
+  if (web.rateLimited === true) rateLimited = true;
+  if (web.hits.length > 0) backends.push("web");
+  found.push(...web.hits);
 
   if (found.length === 0) {
-    // Naming which backends were even available is the difference between "no
-    // corroboration exists" and "nothing was asked", which look identical in a
-    // count of zero.
-    const available = options.web === undefined ? "arxiv only" : "arxiv and the web seam";
-    return { searched: backends.length, hits: 0, independent: 0, read: 0, verdicts: 0, evidence: [], reason: `no hits from ${available}` };
+    // Three different states that all count zero hits, kept apart:
+    //   - every backend answered and had nothing        -> a fact about the claim
+    //   - a backend refused us for going too fast       -> a fact about our rate
+    //   - there was no backend to ask                   -> a fact about the install
+    // Collapsing them is how a blocked search becomes "nobody else reported
+    // this", which is a claim about the world drawn from our own request rate.
+    if (errors.length > 0) {
+      return { searched: backends.length, hits: 0, independent: 0, read: 0, verdicts: 0, evidence: [], rateLimited, reason: errors.join("; ") };
+    }
+    const available = options.web === undefined ? "arXiv (no web search installed)" : "arXiv and the web seam";
+    return { searched: backends.length, hits: 0, independent: 0, read: 0, verdicts: 0, evidence: [], rateLimited: false, reason: `no hits from ${available}` };
   }
 
   const known = new Set(options.knownSources ?? []);
@@ -332,22 +463,25 @@ export async function corroborateOne(insight, options = {}) {
     fresh.push(hit);
   }
   if (fresh.length === 0) {
-    return { searched: backends.length, hits: found.length, independent: 0, read: 0, verdicts: 0, evidence: [], reason: "every hit came from a source this claim already cites" };
+    return { searched: backends.length, hits: found.length, independent: 0, read: 0, verdicts: 0, evidence: [], rateLimited, reason: "every hit came from a source this claim already cites" };
   }
 
   const maxReads = Math.max(1, Math.min(6, Number(options.maxReads) || READS_PER_CLAIM));
   const pages = [];
+  let throttledReads = 0;
   for (const hit of fresh.slice(0, maxReads)) {
     const page = await readHit(hit, options);
-    if (page !== undefined) pages.push(page);
+    if (page === undefined) continue;
+    if (page.throttled === true) { throttledReads += 1; rateLimited = true; continue; }
+    pages.push(page);
   }
   if (pages.length === 0) {
-    return { searched: backends.length, hits: found.length, independent: fresh.length, read: 0, verdicts: 0, evidence: [], reason: "none of the independent hits could be fetched and read" };
+    return { searched: backends.length, hits: found.length, independent: fresh.length, read: 0, verdicts: 0, evidence: [], rateLimited, reason: "none of the independent hits could be fetched and read" };
   }
 
   const chat = options.chat;
   if (typeof chat !== "function") {
-    return { searched: backends.length, hits: found.length, independent: fresh.length, read: pages.length, verdicts: 0, evidence: [], reason: "no model routed, so nothing could be judged" };
+    return { searched: backends.length, hits: found.length, independent: fresh.length, read: pages.length, verdicts: 0, evidence: [], rateLimited, reason: "no model routed, so nothing could be judged" };
   }
 
   const blocks = new Map();
@@ -396,6 +530,7 @@ export async function corroborateOne(insight, options = {}) {
     hits: found.length,
     independent: fresh.length,
     read: pages.length,
+    rateLimited,
     verdicts: Array.isArray(parsed?.verdicts) ? parsed.verdicts.length : 0,
     evidence,
     reason: evidence.length === 0 ? "nothing that was read either supported or contradicted the claim" : "",

@@ -265,6 +265,51 @@ real use.
 amount of architecture saves the tab. P1 exists to find that out in a week
 rather than a quarter.
 
+## 7. Being a guest on somebody else's service
+
+The corroboration step is the only part of this that leaves the machine, and
+every service it touches is either free or metered. Rate limits were missing
+from the first version of this plan and from the first version of the code,
+which is worth writing down rather than quietly fixing.
+
+**arXiv publishes a hard rule and means it**: "make no more than one request
+every three seconds, and limit requests to a single connection at a time",
+counted across every machine you run, with blocking as the stated
+remedy.[^arxiv-tou] The first implementation issued one request per candidate
+claim in a plain loop — three inside a second, hourly, for ever.
+
+Requests are now serialised through a per-process pacer at a four-second gap.
+The extra second is not politeness theatre: the interval is measured on
+completion, network jitter moves the observed gap either way, and the penalty
+for being slightly under is being blocked from a service with no account to
+appeal through. Fetched pages get the same treatment at one second, which is a
+courtesy rather than a rule — the sites on the receiving end are the ones this
+library is built out of.
+
+**A refusal is not an empty result.** This is the part that matters, and it is
+this repository's signature bug wearing a new hat. `catch { return [] }` reports
+a blocked search as "nobody else wrote about this" — a claim about the world
+drawn from a fact about our own request rate. Three states are now kept apart:
+
+| what happened | what it is a fact about |
+|---|---|
+| every backend answered, nothing found | the claim |
+| a backend refused us for going too fast | our request rate |
+| there was no backend to ask | the installation |
+
+A pass that is throttled stops the stage rather than moving to the next claim —
+a second request to a service that just said no is what gets an anonymous
+client blocked outright — and the claims it did not reach are **not** marked as
+tried, so a three-second interval does not put a card to sleep for a day.
+`corroborationRateLimited` reports it.
+
+**The metered backends behind `ctx.web`** — Serper, Tavily, Brave — sell quota
+by the month. The seam surfaces their refusal as a thrown error carrying the
+status, and that is now matched and reported rather than swallowed, so an
+exhausted monthly allowance does not read as an empty web.
+
+[^arxiv-tou]: [arXiv API terms of use](https://info.arxiv.org/help/api/tou.html) — one request per three seconds, one connection, across all your machines.
+
 ---
 
 ## Sources
