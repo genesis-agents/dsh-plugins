@@ -21,6 +21,11 @@ have already configured.
 
 ## Requirements
 
+- **A harness.** `npm install -g @deepseek-ai/dsh`, then `dsh --version` to
+  check. Verified against `0.1.1-rc.2` on every release. Nothing here pins a
+  harness version: a plugin is mounted by the harness rather than imported by
+  it, so a peer range in this manifest would only warn in a directory the
+  harness is not installed into.
 - **Node 24 or newer.** `node:sqlite` is used unguarded, so an older Node does
   not degrade — it throws on the first database call.
 - **A model routed in the harness.** Translation and writing use

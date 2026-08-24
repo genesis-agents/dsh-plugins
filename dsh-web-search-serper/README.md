@@ -9,7 +9,9 @@ to three is a name that lies to whoever reads their dependency list.
 
 ## Install
 
-Two steps, and the second one is easy to miss.
+Needs a harness — `npm install -g @deepseek-ai/dsh`, verified against
+`0.1.1-rc.2` — and Node 22 or newer. Then two steps, and the second one is easy
+to miss.
 
 ```sh
 dsh plugin --profile web add @ai4gensteam/dsh-web-search

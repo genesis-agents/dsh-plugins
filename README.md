@@ -17,7 +17,15 @@ not. What the harness resolves is always the **package** name.
 
 ## Install
 
-Add them to the profile's `package.json` and let the harness mount them:
+You need a harness first — these are plugins for one, not programs:
+
+```sh
+npm install -g @deepseek-ai/dsh
+dsh --version                  # verified against 0.1.1-rc.2
+```
+
+Then add the plugins to the profile's `package.json` and let the harness mount
+them:
 
 ```jsonc
 {

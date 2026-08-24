@@ -177,6 +177,14 @@ all of those reach for the package directly, and a consumer never does. The
 harness resolves the `name` in `cordis.patch.yml`, and the page registers the
 `id` in `client.js`. Both were stale, and only a boot said so.
 
+The harness it boots comes from npm as well — `@deepseek-ai/dsh@latest`, cached
+under `~/.cache/dsh-release-check` and refreshed when the published version
+moves. It used to boot the checkout next door through `tsx`, which left the
+important word unverified: "can somebody else install this?" answered by a
+harness nobody else has, built from sources nobody else fetches. Pass
+`HARNESS=/path/to/deepseek-harness` to go back to the checkout while iterating;
+leave it unset for the answer that counts.
+
 Give the registry a minute. A version published seconds ago answers on its own
 URL while `npm install` still reports "no matching version found", because npm
 resolves against a cached packument; `release-check.sh` passes `--prefer-online`

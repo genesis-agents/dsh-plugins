@@ -24,7 +24,6 @@ set -uo pipefail
 SWARM_VERSION="${1:-latest}"
 SEARCH_VERSION="${2:-latest}"
 PORT="${PORT:-3091}"
-HARNESS="${HARNESS:-D:/engineering/deepseek-harness}"
 WORK="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/release-check.$$")"
 PASS=0; FAIL=0
 
@@ -101,9 +100,40 @@ for pkg in dsh-agents-swarm dsh-web-search; do
   [ "$CH" = "release" ] && ok "$pkg reports channel=release" || bad "$pkg reports channel=$CH"
 done
 
-echo "booting a harness on port $PORT"
-( cd "$HARNESS" && DSH_HOME="$DSH_HOME" node --import tsx/esm apps/cli/src/bin.ts web --no-open --port "$PORT" ) \
-  > "$WORK/boot.log" 2>&1 &
+# The harness comes from npm too, unless told otherwise.
+#
+# Until now this booted the harness CHECKOUT sitting next to this repo, with
+# tsx compiling its TypeScript. That leaves the most important word in the
+# question unverified: "can somebody else install this?" answered by a harness
+# nobody else has, built from sources nobody else fetches. What a stranger runs
+# is the published `@deepseek-ai/dsh`, and it is the one thing in the chain
+# that was never part of the check.
+#
+# Cached, because the install is minutes and this runs on every release. The
+# cache is refreshed only when the published version moves.
+HARNESS_CACHE="${HARNESS_CACHE:-$HOME/.cache/dsh-release-check}"
+if [ -n "${HARNESS:-}" ]; then
+  echo "booting the harness checkout at $HARNESS on port $PORT"
+  BOOT=(env "DSH_HOME=$DSH_HOME" node --import tsx/esm "$HARNESS/apps/cli/src/bin.ts" web --no-open --port "$PORT")
+else
+  WANT="$(npm view @deepseek-ai/dsh version 2>/dev/null || echo latest)"
+  HAVE="$( cd "$HARNESS_CACHE" 2>/dev/null && node -p "require('./node_modules/@deepseek-ai/dsh/package.json').version" 2>/dev/null || true )"
+  if [ "$HAVE" != "$WANT" ]; then
+    echo "installing @deepseek-ai/dsh@$WANT into $HARNESS_CACHE (minutes, once per release of the harness)"
+    mkdir -p "$HARNESS_CACHE"
+    printf '{"name":"dsh-release-check","private":true}\n' > "$HARNESS_CACHE/package.json"
+    npm install --prefix "$HARNESS_CACHE" "@deepseek-ai/dsh@$WANT" \
+      --no-audit --no-fund --prefer-online --loglevel=error >/dev/null 2>&1 \
+      || { bad "could not install the published harness"; exit 1; }
+    HAVE="$( cd "$HARNESS_CACHE" && node -p "require('./node_modules/@deepseek-ai/dsh/package.json').version" )"
+  fi
+  [ "$HAVE" = "$WANT" ] && ok "harness $HAVE, installed from npm" || bad "harness is $HAVE, wanted $WANT"
+  echo "booting it on port $PORT"
+  # By path rather than through `.bin/dsh`: the shim is a .cmd on Windows and a
+  # shell script elsewhere, and only one of those is executable from here.
+  BOOT=(env "DSH_HOME=$DSH_HOME" node "$HARNESS_CACHE/node_modules/@deepseek-ai/dsh/lib/bin.js" web --no-open --port "$PORT")
+fi
+"${BOOT[@]}" > "$WORK/boot.log" 2>&1 &
 HARNESS_PID=$!
 
 for _ in $(seq 1 60); do
