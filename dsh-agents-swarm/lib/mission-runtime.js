@@ -1337,7 +1337,15 @@ const FAILURE_SENTENCES = Object.freeze({
   rate_limited: (d) =>
     `${d.backend ?? "A backend"} rate-limited us${d.retryAfter ? `, asking for ${d.retryAfter}` : " and gave no retry-after"}. Wait, then re-run the stage.`,
   model_error: (d) =>
-    `The model returned an error: ${d.providerMessage ?? "no message"}${d.providerCode ? ` (${d.providerCode})` : ""}. There is one model and no fallback, so re-run when the provider recovers.`,
+    // The advice is conditional, because this code covers two different
+    // things. A transport failure IS "wait for the provider". A model that
+    // answered in prose instead of calling the tool it was given is not, and
+    // telling somebody to wait for a recovery that has nothing to recover
+    // sends them away from the only place the answer is.
+    `The model returned an error: ${d.providerMessage ?? "no message"}${d.providerCode ? ` (${d.providerCode})` : ""}. `
+    + (d.providerMessage === undefined || /(HTTP|timeout|connect|network|unavailable|overload|refused by the provider)/iu.test(String(d.providerMessage))
+      ? "There is one model and no fallback, so re-run when the provider recovers."
+      : "That is what the model did, not a transport failure — re-running will repeat it unless the stage's instructions change."),
   no_evidence: (d) =>
     `${d.emptyDimensions ?? 0} of ${d.totalDimensions ?? 0} dimensions returned no verifiable evidence. The brief lists every query issued and every host tried. Narrow the topic, or install the search plugin if only arXiv was reachable.`,
   runtime_crashed: (d) =>

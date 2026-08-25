@@ -1183,3 +1183,24 @@ test("a failure keeps the reason the stage already knew", () => {
   );
   assert.ok(!verdict.message.includes("no message"), "reported no message while holding one");
 });
+
+test("a model that answered in prose is not reported as a provider outage", () => {
+  // The sentence used to end "re-run when the provider recovers" whatever the
+  // reason. s8-write failed because the model wrote the report as prose
+  // instead of submitting it through `finalize` — re-running repeats that
+  // exactly, and the advice sent the reader to watch a provider that was fine.
+  const prose = classifyFailure({
+    error: Object.assign(
+      new Error("Turn 1 answered in prose with no tool call, but this stage's output must be submitted through finalize."),
+      { code: "model_error" },
+    ),
+  });
+  assert.ok(prose.message.includes("prose"), "the reason was dropped");
+  assert.ok(!prose.message.includes("provider recovers"), `told to wait for a provider that is fine: ${prose.message}`);
+
+  // A transport failure still gets the wait-for-it advice, because there it is true.
+  const outage = classifyFailure({
+    error: Object.assign(new Error("HTTP 503 upstream connect error"), { code: "model_error" }),
+  });
+  assert.ok(outage.message.includes("provider recovers"), "a real outage lost its advice");
+});

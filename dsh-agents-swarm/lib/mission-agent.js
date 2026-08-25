@@ -197,6 +197,16 @@ export const oneHostRefusal = (hosts, needed) =>
   + `pages you read on it. Fetch from a different host before finishing, or say in your summary which `
   + `other hosts you tried and why they could not be used.`;
 
+/**
+ * How many times a prose answer is sent back before the run gives up.
+ *
+ * Measured: s8-write answered in prose on turn 1, the run ended there, and the
+ * eleven verified findings behind it went nowhere. The same shape as a `finish`
+ * that read nothing — the model complies once the refusal reaches it, and
+ * killing the run on the first occurrence never let it.
+ */
+const MAX_PROSE_RETRIES = 2;
+
 /** Estimated completion tokens accumulated before the pool is asked again. */
 const ESTIMATE_FLUSH_TOKENS = 200;
 
@@ -388,6 +398,7 @@ export function createMissionChat(ctx, { logger = null } = {}) {
     let candidate;
     let rejects = 0;
     let iterations = 0;
+    let proseRetries = 0;
     let truncations = 0;
     let reAskedAfterTruncation = false;
     let rung = Number.isInteger(shrinkFrom) ? shrinkFrom : 0;
@@ -606,7 +617,7 @@ export function createMissionChat(ctx, { logger = null } = {}) {
         });
       }
 
-      // 10. an empty turn. Terminated on the FIRST occurrence, sub-classified.
+      // 10. an empty turn.
       if (turn.calls.length === 0) {
         // With no finalize gate in force, prose IS the product: this is the
         // normal end of a speaking turn, and `runAgentTurn` without a schema
@@ -616,6 +627,27 @@ export function createMissionChat(ctx, { logger = null } = {}) {
           messages.push(assistantTurn(iterations, turn.text, []));
           return settle("completed", { output: turn.text, stateOverride: "completed" });
         }
+
+        // Told, then asked again — not killed on the first occurrence.
+        //
+        // A model that writes the report as prose instead of submitting it
+        // through `finalize` has made a recoverable mistake, and this ended the
+        // whole mission over it: measured, s8-write failed at turn 1 and the
+        // eleven verified findings behind it went nowhere. It is the same shape
+        // as a `finish` that read nothing, and the spike settled that one — the
+        // refusal has to reach the model, and once it does the model complies.
+        if (turn.text.trim() !== "" && proseRetries < MAX_PROSE_RETRIES) {
+          proseRetries += 1;
+          note("model:prose-instead-of-tool", { turn: iterations, attempt: proseRetries });
+          messages.push(assistantTurn(iterations, turn.text, []));
+          messages.push(noticeMessage(iterations,
+            zh
+              ? `你用散文作答了，但本阶段的产出必须通过 ${finalizeName} 工具提交，否则没有任何内容会被记录。把你刚写的内容原样放进 ${finalizeName} 的参数里再提交一次。`
+              : `You answered in prose, but this stage's output is only recorded when it is submitted through the ${finalizeName} tool. Call ${finalizeName} now with what you just wrote.`,
+          ));
+          continue;
+        }
+
         note("model:empty-turn", { turn: iterations, hadText: turn.text.trim() !== "" });
         return settle("empty_response", {
           output: candidate,
@@ -625,8 +657,8 @@ export function createMissionChat(ctx, { logger = null } = {}) {
               ? `第 ${iterations + 1} 轮既没有文字也没有工具调用：模型返回了空回合。`
               : `Turn ${iterations + 1} produced neither text nor a tool call: the model returned an empty turn.`)
             : (zh
-              ? `第 ${iterations + 1} 轮只有散文、没有工具调用，而本阶段的产出必须通过 ${finalizeName} 提交。`
-              : `Turn ${iterations + 1} answered in prose with no tool call, but this stage's output must be submitted through ${finalizeName}.`),
+              ? `第 ${iterations + 1} 轮只有散文、没有工具调用，被要求改用 ${finalizeName} 提交 ${proseRetries} 次后仍然如此。`
+              : `Turn ${iterations + 1} answered in prose with no tool call, and still did so after being asked ${proseRetries} time(s) to submit through ${finalizeName}.`),
         });
       }
 
