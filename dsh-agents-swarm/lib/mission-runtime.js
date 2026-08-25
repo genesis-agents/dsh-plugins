@@ -238,6 +238,11 @@ export const FAILURE_CODES = Object.freeze([
   "user_cancelled",
   "superseded",
   "shutdown",
+  // The Leader read the report and declined to sign, or `contentGuard` fired.
+  // Its own code because the alternative was reusing `no_evidence` for a report
+  // that has plenty of evidence and was refused on entirely different grounds —
+  // a lie in the one column §5.5 exists to make learnable.
+  "quality_refused",
 ]);
 
 /**
@@ -320,6 +325,11 @@ export const EVENT_TYPES = Object.freeze({
   "gate:soft-warning": "business",
   "gate:hard-warning": "business",
   "gate:refused": "business",
+  // `MissionStore.putArtifact` appends exactly this type, and `#appendEventRow`
+  // throws on an unregistered one — inside putArtifact's own transaction, so the
+  // artefact row rolled back with the throw. s12 could not write an artefact at
+  // all until this line existed.
+  "artifact:written": "business",
   "evidence:none": "business",
   "evidence:thin": "business",
   "recollect:allowed": "business",
@@ -1100,17 +1110,32 @@ export function detectNoProgress({ entry, now, noProgressKillMs, spendRose = fal
   // supplier of these shapes. Read as `shape.args_hash` every key was
   // `tool::undefined`, so three unrelated calls to one tool tripped the guard
   // and a healthy fan-out was killed as a wedge.
+  // Keyed by (agent, tool, args), not by (tool, args).
+  //
+  // `s3-collect` fans out over five dimensions and each researcher searches the
+  // topic's own vocabulary, so two dimensions asking arXiv the same question is
+  // ordinary and three is not rare. Aggregating across the fan-out cannot tell
+  // that from one agent asking the same question three times, which is the
+  // actual loop shape -- and it did not: measured, a mission whose s3 had just
+  // delivered findings for three of five dimensions was killed as `no_progress`
+  // with "No progress for 0s", because this branch borrowed its sentence from
+  // the timeout branch, which had not fired at all.
+  //
+  // Same failure playground records for its stage stopwatch: a liveness rule
+  // that cannot see sub-work kills a stage that is demonstrably alive. Their
+  // answer was to stop killing on the stage clock; ours is to count a loop
+  // where a loop can happen, which is inside one agent.
   const seen = new Map();
   for (const shape of toolShapes) {
-    const key = `${shape.tool}::${shape.argsHash}`;
+    const key = `${shape.agentId ?? shape.stepId ?? "?"}::${shape.tool}::${shape.argsHash}`;
     const count = (seen.get(key) ?? 0) + 1;
     seen.set(key, count);
     if (count >= 3) {
       return {
         tripped: true,
         reason: "no_progress",
-        detail: { stalledMs, stepId: entry.stepId, tool: shape.tool, argsHash: shape.argsHash, repeats: count, condition: "loop-shape" },
-        why: `${shape.tool} called ${count} times with identical arguments — that is a loop shape, not a statistic`,
+        detail: { stalledMs, stepId: entry.stepId, agentId: shape.agentId ?? null, tool: shape.tool, argsHash: shape.argsHash, repeats: count, condition: "loop-shape" },
+        why: `${shape.agentId ?? "an agent"} called ${shape.tool} ${count} times with identical arguments — that is a loop shape, not a statistic`,
       };
     }
   }
@@ -1322,7 +1347,14 @@ const FAILURE_SENTENCES = Object.freeze({
   stage_contract_violation: (d) =>
     `Stage ${d.stepId ?? "unknown"} broke the stage contract: ${d.detail ?? "no detail"}. This is a bug in the stage, not in your mission; the run stopped rather than continuing over it.`,
   no_progress: (d) =>
-    `No progress for ${Math.round((d.stalledMs ?? 0) / 1000)}s at ${d.stepId ?? "an unnamed stage"} (${d.condition ?? "unknown condition"}). ${d.tool ? `${d.tool} was called ${d.repeats ?? "several"} times with identical arguments.` : "Spend kept rising with nothing to show for it."} Re-run the stage.`,
+    // Two conditions, two sentences. Reporting "No progress for 0s" for a
+    // loop-shape trip -- which does not consult the clock at all -- sent
+    // whoever read it looking for a stall that never happened.
+    d.condition === "loop-shape"
+      ? `${d.agentId ?? "An agent"} at ${d.stepId ?? "an unnamed stage"} called ${d.tool ?? "a tool"} ${d.repeats ?? "several"} times with identical arguments, which is a loop rather than work. Re-run the stage.`
+      : `No progress for ${Math.round((d.stalledMs ?? 0) / 1000)}s at ${d.stepId ?? "an unnamed stage"} while spend kept rising. Re-run the stage.`,
+  quality_refused: (d) =>
+    `The report was written but not accepted: ${d.detail ?? d.refusalReason ?? "the Leader declined to sign it"}. It is readable in full — open the artefact and judge it yourself, or re-run with a narrower topic.${Array.isArray(d.violations) && d.violations.length > 0 ? ` Content guard: ${d.violations.join("; ")}.` : ""}`,
   user_cancelled: () => "Cancelled on request. Everything produced up to the cancel was kept and is readable.",
   superseded: () => "Superseded by a newer run of the same mission. Nothing was lost; open the newer run.",
   shutdown: (d) =>

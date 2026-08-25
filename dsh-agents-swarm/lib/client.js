@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 		* both is how "deployed but apparently absent" becomes legible instead
 		* of costing an afternoon.
 		*/
-		const CLIENT_VERSION = "0.4.1";
+		const CLIENT_VERSION = "0.5.0";
 
 		//#region locale + mark
 		/**
@@ -3103,813 +3103,1845 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 
-		//#region insights tab
+		//#region missions model
 		/**
-		* 洞察 — standing claims with provenance.
+		* 洞察 — the mission surface: start one, watch it run, read what it wrote.
 		*
-		* A card here is not a summary and not a document. It is one claim, the
-		* evidence under it, and the number of INDEPENDENT sources that have said
-		* it — which is the question a person cannot answer by reading faster, and
-		* the only reason this tab exists beside the daily digest.
+		* This tab used to list claim cards from the hourly batch pass. It drives
+		* the twelve-stage mission pipeline instead, because that is the thing a
+		* person can start, watch, and be answered by; the batch pass has no
+		* beginning anybody chose and no end they can read.
 		*
-		* Every evidence row carries a verbatim quote and opens the reader 信源
-		* already has, because a claim you cannot follow back to the sentence it
-		* came from is decoration rather than provenance.
+		* Everything on screen comes from the Host half's routes and nothing is
+		* computed here that lib/mission-view.js already computes: `/missions/list`,
+		* `/missions/:id/view` (the whole read model), `/missions/:id/artifact`,
+		* and the four POST actions. In particular the tier table and the five
+		* ceilings are READ from `/missions/budget-tiers` rather than held here —
+		* playground centralised its tier values and its frontend still drifted
+		* from its backend on the field limits, which is exactly why that route
+		* serves the limits too.
 		*
-		* What this tab deliberately does NOT have yet: a control for pinning a
-		* status by hand (`POST /insights/item/{id}/status`) or removing a card
-		* (`DELETE /insights/item/{id}`). Both routes exist and answer; neither has
-		* a button here. Written down so the next person adds them, rather than
-		* finding the routes and assuming the page must already be using them.
+		* Progress is POLLED. `/missions/:id/events` is a Server-Sent stream and
+		* would give a tighter tail, but the view route already carries that tail
+		* beside the stages, the dimensions and the cost — one request that
+		* cannot disagree with itself beats two that can.
 		*/
+		const MISSION_POLL_MS = 4000;
+
 		/**
-		* The four chips from the plan, plus the default view.
+		* How many events the tail asks for.
 		*
-		* 有分歧 asks the route for `contradiction_count > 0` rather than for
-		* `status = 'contested'`, and the difference is the point: a disagreement
-		* that later went quiet is still the most valuable row on the page, and a
-		* chip named after the status column would hide it.
+		* The view route bounds this read and says so (`timeline.bounded`), and
+		* the one payload worth having in it — the `evidence:none` diagnostics —
+		* is written at s4, near the end of a mission that found nothing. Asking
+		* for the maximum would carry a deep mission's whole log on every poll.
 		*/
-		const INSIGHT_FILTERS = [
+		const MISSION_TAIL = 200;
+
+		/**
+		* The status chips. Every id is a member of the Host half's
+		* MISSION_STATUSES, because the route answers an unknown one with a 400
+		* naming the accepted values — which is the right answer, and not one
+		* worth provoking from a chip.
+		*/
+		const MISSION_FILTERS = [
 			{ id: "", en: "All", zh: "全部", hue: "100,116,139" },
-			{ id: "new", en: "New", zh: "新出现", hue: "5,150,105" },
-			{ id: "rising", en: "Rising", zh: "升温中", hue: "217,119,6" },
-			{ id: "contested", en: "Contested", zh: "有分歧", hue: "220,38,38" },
-			{ id: "dormant", en: "Dormant", zh: "已沉寂", hue: "100,116,139" }
+			{ id: "running", en: "Running", zh: "运行中", hue: "2,132,199" },
+			{ id: "completed", en: "Completed", zh: "已完成", hue: "5,150,105" },
+			{ id: "quality-failed", en: "Not signed", zh: "未签署", hue: "217,119,6" },
+			{ id: "resumable", en: "Resumable", zh: "可继续", hue: "124,58,237" },
+			{ id: "failed", en: "Failed", zh: "失败", hue: "220,38,38" },
+			{ id: "cancelled", en: "Cancelled", zh: "已取消", hue: "100,116,139" }
 		];
 
-		/** The stored statuses, with the colour each carries on a card. */
-		const INSIGHT_STATUS_FACES = {
-			candidate: { zh: "候选", en: "Candidate", hue: "100,116,139" },
-			standing: { zh: "成立", en: "Standing", hue: "5,150,105" },
-			contested: { zh: "有分歧", en: "Contested", hue: "220,38,38" },
-			dormant: { zh: "已沉寂", en: "Dormant", hue: "148,163,184" }
+		/**
+		* The pill vocabulary, keyed by the code the projector computes.
+		*
+		* `mission.pill.label` arrives from the Host half in Chinese only, so the
+		* words are re-derived here rather than shown as they come: a tab that
+		* pairs every other string and then prints one server-side Chinese label
+		* into an English page is worse than one that never translated anything.
+		*
+		* `quality-failed` is 未签署 rather than 失败 because the report exists
+		* and is readable and the Leader declined to sign it. Those are different
+		* outcomes, and the second one still has something to read.
+		*/
+		const MISSION_PILL_FACES = {
+			running: { zh: "运行中", en: "Running", hue: "2,132,199" },
+			resumable: { zh: "可继续", en: "Resumable", hue: "124,58,237" },
+			completed: { zh: "完成", en: "Completed", hue: "5,150,105" },
+			failed: { zh: "失败", en: "Failed", hue: "220,38,38" },
+			cancelled: { zh: "已取消", en: "Cancelled", hue: "100,116,139" },
+			"quality-failed": { zh: "未签署", en: "Not signed off", hue: "217,119,6" },
+			unknown: { zh: "未知", en: "Unknown", hue: "100,116,139" },
+			"unknown-terminal": { zh: "未知（已结束）", en: "Unknown (ended)", hue: "220,38,38" }
 		};
 
-		/** The five claim kinds. Not resource types — a different vocabulary that also lives in plain strings. */
-		const INSIGHT_KIND_FACES = {
-			launch: { zh: "发布", en: "Launch" },
-			funding: { zh: "融资", en: "Funding" },
-			policy: { zh: "政策", en: "Policy" },
-			finding: { zh: "结果", en: "Finding" },
-			shift: { zh: "转向", en: "Shift" }
+		/** The twelve stages, in the order they run. The ids are the Host half's; the words are ours. */
+		const MISSION_STAGE_FACES = {
+			"s1-brief": { zh: "立项", en: "Brief" },
+			"s2-plan": { zh: "规划", en: "Plan" },
+			"s3-collect": { zh: "采集", en: "Collect" },
+			"s4-assess": { zh: "评估", en: "Assess" },
+			"s5-reconcile": { zh: "归一", en: "Reconcile" },
+			"s6-synthesize": { zh: "综合", en: "Synthesize" },
+			"s7-outline": { zh: "拟纲", en: "Outline" },
+			"s8-write": { zh: "撰写", en: "Write" },
+			"s9-verify": { zh: "核验", en: "Verify" },
+			"s10-critique": { zh: "复盘", en: "Critique" },
+			"s11-signoff": { zh: "签署", en: "Sign-off" },
+			"s12-persist": { zh: "归档", en: "Persist" }
+		};
+
+		/** Stage statuses. `skipped-by-tier` is not a failure and must not be drawn as one. */
+		const MISSION_STAGE_STATUS_FACES = {
+			pending: { zh: "待运行", en: "Pending", hue: "148,163,184" },
+			running: { zh: "运行中", en: "Running", hue: "2,132,199" },
+			done: { zh: "完成", en: "Done", hue: "5,150,105" },
+			degraded: { zh: "降级完成", en: "Degraded", hue: "217,119,6" },
+			failed: { zh: "失败", en: "Failed", hue: "220,38,38" },
+			"skipped-by-tier": { zh: "本档跳过", en: "Skipped at this tier", hue: "148,163,184" }
+		};
+
+		/** Dimension states, from `mission_dimensions.state`. */
+		const MISSION_DIMENSION_FACES = {
+			pending: { zh: "待采集", en: "Pending", hue: "148,163,184" },
+			collecting: { zh: "采集中", en: "Collecting", hue: "2,132,199" },
+			collected: { zh: "已采集", en: "Collected", hue: "5,150,105" },
+			degraded: { zh: "降级", en: "Degraded", hue: "217,119,6" },
+			failed: { zh: "失败", en: "Failed", hue: "220,38,38" }
 		};
 
 		/**
-		* The kind a resource of an unlisted type is read under.
+		* The verify states, split the way the store splits them.
 		*
-		* `DetailView` colours itself from `kind.hue` and would throw on an
-		* undefined kind, taking the whole overlay blank — and an insight cites
-		* whatever the library holds, including the types the 信源 chips do not
-		* list (RSS, EVENT, PROJECT). A neutral entry is the difference between a
-		* grey badge and a page that renders nothing.
+		* The whole reason `verify_state` has nine values is that "4 fetches
+		* failed with 429" and "4 quotes were invented" are the same number in
+		* the same place and need opposite responses. Merging them here would
+		* undo that at the last step, on the one screen where it matters.
 		*/
-		const OTHER_KIND = { id: "other", type: "", en: "Source", zh: "信源", hue: "100,116,139" };
+		const MISSION_VERIFY_FACES = {
+			"verified-source-text": { zh: "已核验", en: "Verified" },
+			"verified-adjacent-spans": { zh: "跨段核验", en: "Verified across spans" },
+			"verified-abstract": { zh: "仅摘要核验", en: "Verified against an abstract" },
+			misattributed: { zh: "出处不符", en: "Found in another source" },
+			unverifiable: { zh: "查无此文", en: "Found nowhere we hold" },
+			"too-short": { zh: "引语过短", en: "Below the quote floor" },
+			"unchecked-fetch-failed": { zh: "抓取失败", en: "Fetch failed" },
+			"unchecked-rate-limited": { zh: "被限流", en: "Rate limited" },
+			"unchecked-stale": { zh: "页面过期", en: "Page too old" }
+		};
+
+		/** The six ceilings, named. `wall` is a clock, so it is formatted as one. */
+		const MISSION_METER_FACES = {
+			tokens: { zh: "令牌", en: "Tokens" },
+			calls: { zh: "模型调用", en: "Model calls" },
+			arxiv: { zh: "arXiv 请求", en: "arXiv requests" },
+			web: { zh: "网页搜索", en: "Web searches" },
+			fetch: { zh: "抓取页面", en: "Page fetches" },
+			wall: { zh: "用时", en: "Wall clock" }
+		};
+
+		/** Every event type the Host half registers, in the reader's language. */
+		const MISSION_EVENT_FACES = {
+			"mission:created": { zh: "任务建立", en: "Mission created" },
+			"mission:claimed": { zh: "接管本次运行", en: "Run claimed" },
+			"mission:parked": { zh: "已挂起", en: "Parked" },
+			"mission:finalized": { zh: "任务收尾", en: "Mission finalized" },
+			"mission:started": { zh: "开始运行", en: "Mission started" },
+			"mission:resumed": { zh: "从检查点继续", en: "Resumed from a checkpoint" },
+			"stages:opened": { zh: "阶段表建立", en: "Stage rows opened" },
+			"stage:started": { zh: "阶段开始", en: "Stage started" },
+			"stage:done": { zh: "阶段完成", en: "Stage done" },
+			"stage:degraded": { zh: "阶段降级完成", en: "Stage degraded" },
+			"stage:failed": { zh: "阶段失败", en: "Stage failed" },
+			"stage:skipped-by-tier": { zh: "本档跳过", en: "Skipped at this tier" },
+			"stage:stalled": { zh: "阶段停滞", en: "Stage stalled" },
+			"gate:passed": { zh: "闸门通过", en: "Gate passed" },
+			"gate:soft-warning": { zh: "预算软警告", en: "Soft budget warning" },
+			"gate:hard-warning": { zh: "硬闸门告警", en: "Hard gate warning" },
+			"gate:refused": { zh: "闸门拒绝", en: "Gate refused" },
+			"artifact:written": { zh: "报告已归档", en: "Artefact written" },
+			"evidence:none": { zh: "没有任何可核验的证据", en: "No verifiable evidence" },
+			"evidence:thin": { zh: "证据偏薄", en: "Evidence is thin" },
+			"recollect:allowed": { zh: "允许补采", en: "Recollect allowed" },
+			"recollect:refused": { zh: "拒绝补采", en: "Recollect refused" },
+			"recollect:no-gain": { zh: "补采没有新增", en: "Recollect gained nothing" },
+			"checkpoint:divergence": { zh: "检查点分歧", en: "Checkpoint divergence" },
+			"runtime:orphan-reclaimed": { zh: "回收了孤儿任务", en: "Orphan reclaimed" },
+			"runtime:owner-conflict": { zh: "归属冲突", en: "Owner conflict" },
+			"runtime:reclaim-limit": { zh: "回收次数到顶", en: "Reclaim limit reached" },
+			"postlude:pending": { zh: "收尾待办", en: "Postlude pending" },
+			"postlude:handoff-failed": { zh: "收尾交接失败", en: "Postlude handoff failed" }
+		};
 
 		/**
 		* Label a stored vocabulary value, falling back to the value itself.
 		*
-		* Own-property lookup, and never an empty string: a `kind` arriving from a
-		* row can be `constructor`, and a badge that renders blank for a value the
-		* page does not recognise looks exactly like a badge for a row with no
-		* kind at all.
+		* Own-property lookup, and never an empty string: these tables are keyed
+		* by whatever a TEXT column holds, `constructor` included, and a badge
+		* that renders blank for a value the page does not recognise looks
+		* exactly like a badge for a row that has no value at all.
 		* @param faces - the label table.
 		* @param value - the stored value.
 		* @param zh - whether to write Chinese.
-		* @returns the label, or the raw value when it is not in the table.
+		* @returns the label, or the raw value when the table does not know it.
 		*/
-		function insightFaceLabel(faces, value, zh) {
+		function missionFace(faces, value, zh) {
 			const key = String(value ?? "");
 			if (!Object.hasOwn(faces, key)) return key;
 			return zh ? faces[key].zh : faces[key].en;
 		}
 
-		/** The colour a status carries, neutral for one this page does not know. */
-		function insightStatusHue(value) {
+		/** The colour a vocabulary value carries, neutral for one this page does not know. */
+		function missionHue(faces, value) {
 			const key = String(value ?? "");
-			return Object.hasOwn(INSIGHT_STATUS_FACES, key) ? INSIGHT_STATUS_FACES[key].hue : "100,116,139";
+			return Object.hasOwn(faces, key) && typeof faces[key].hue === "string" ? faces[key].hue : "100,116,139";
 		}
 
 		/**
-		* `8月18日` / `Aug 18` — the density the count strip needs.
+		* The pill: its words, its colour, and the degradation it carries.
 		*
-		* Says "未知" rather than "" for a date that will not parse, because the
-		* strip reads `首见 8月18日` and an empty half renders as `首见` followed by
-		* nothing, which is a label for a value that looks like it is still loading.
-		* @param iso - an ISO 8601 instant.
+		* `pill.code` is `completed-degraded` when the projector found degraded
+		* dimensions or a degraded report, and that suffix is the whole point —
+		* 完成 and 完成 · 3/5 维度降级 are different answers to "did this work",
+		* and only the second one says go and read it anyway.
+		* @param pill - `mission.pill` from the view route.
 		* @param zh - whether to write Chinese.
-		* @returns the short day.
+		* @returns `{ label, hue, note }`; `note` is "" when nothing is degraded.
 		*/
-		function insightDay(iso, zh) {
-			const at = Date.parse(iso);
-			if (Number.isNaN(at)) return zh ? "未知" : "unknown";
-			const when = new Date(at);
-			return zh
-				? `${when.getMonth() + 1}月${when.getDate()}日`
-				: when.toLocaleDateString("en-US", { day: "numeric", month: "short" });
+		function missionPillFace(pill, zh) {
+			const code = String(pill?.code ?? "unknown");
+			const degraded = code.endsWith("-degraded");
+			const base = degraded ? code.slice(0, -"-degraded".length) : code;
+			const label = missionFace(MISSION_PILL_FACES, base, zh);
+			if (!degraded) return { label, hue: missionHue(MISSION_PILL_FACES, base), note: "" };
+			const total = Number(pill?.totalDimensions ?? 0);
+			const bad = Number(pill?.degradedDimensions ?? 0);
+			return {
+				label,
+				// Degradation is amber whatever the base outcome was, because the
+				// question it answers — can I trust all of this — is the same
+				// whether the mission completed or failed.
+				hue: "217,119,6",
+				note: bad > 0
+					? (zh ? `${bad}/${total} 个维度降级` : `${bad}/${total} dimensions degraded`)
+					: (zh ? "报告降级" : "the report is degraded")
+			};
 		}
 
 		/**
-		* One evidence row, from either of the two shapes the API sends.
+		* A duration a person reads at a glance.
 		*
-		* `/insights/list` flattens `title`/`sourceUrl`/`type` onto the preview
-		* row; `/insights/item` nests the same fields under `resource` and sends
-		* `null` when the library no longer holds the source. Read one shape by
-		* the other's field names and every row of the expanded card renders as a
-		* source that has been pruned — a card that cites nothing, opens nothing,
-		* and reports no error while doing it.
-		* @param row - a preview row or a full evidence row.
-		* @returns `{ present, title, sourceUrl, type }`.
+		* Missions run from minutes to hours, so seconds alone are unreadable at
+		* the top of the range and hours alone say nothing while one is starting.
+		* @param ms - milliseconds.
+		* @param zh - whether to write Chinese.
+		* @returns the duration, or "" when there is no number to show.
 		*/
-		function evidenceFace(row) {
-			if (Object.hasOwn(row, "resource")) {
-				const resource = row.resource ?? null;
+		function missionDuration(ms, zh) {
+			const value = Number(ms);
+			if (!Number.isFinite(value) || value < 0) return "";
+			const seconds = Math.round(value / 1000);
+			if (seconds < 60) return zh ? `${seconds} 秒` : `${seconds}s`;
+			const minutes = Math.floor(seconds / 60);
+			if (minutes < 60) {
+				// A round number stays round. "20 分 0 秒" is the same duration
+				// written to look like a measurement, and a ceiling that reads as
+				// a measurement invites a precision nobody promised.
+				if (seconds % 60 === 0) return zh ? `${minutes} 分` : `${minutes}m`;
+				return zh ? `${minutes} 分 ${seconds % 60} 秒` : `${minutes}m ${seconds % 60}s`;
+			}
+			const hours = Math.floor(minutes / 60);
+			if (minutes % 60 === 0) return zh ? `${hours} 小时` : `${hours}h`;
+			return zh ? `${hours} 小时 ${minutes % 60} 分` : `${hours}h ${minutes % 60}m`;
+		}
+
+		/**
+		* One meter's used-against-limit line, in the unit that meter counts in.
+		*
+		* `limit: null` is not "no ceiling to worry about" — it is a ceiling the
+		* mission row does not carry, which is a different sentence and must not
+		* read as plenty left.
+		* @param meter - one of the six from `cost`.
+		* @param zh - whether to write Chinese.
+		* @returns the line under the bar.
+		*/
+		function missionMeterLine(meter, zh) {
+			const wall = meter.dimension === "wall";
+			const used = wall ? missionDuration(meter.used, zh) : String(meter.used ?? 0);
+			if (meter.limit === null || meter.limit === undefined) {
+				return used + (zh ? " · 未记录上限" : " · no ceiling recorded");
+			}
+			const limit = wall ? missionDuration(meter.limit, zh) : String(meter.limit);
+			return `${used} / ${limit} · ${Math.round((meter.ratio ?? 0) * 100)}%`;
+		}
+
+		/**
+		* Read one mission answer, envelope and all.
+		*
+		* The envelope is read even on a non-2xx, unlike the sources feed: these
+		* routes answer 400 and 409 with the sentence that says what to do about
+		* it — budgetGate's own refusal, canResume's next action, the concurrency
+		* cap listing what is already running — and throwing "HTTP 409" discards
+		* the only part of that answer worth showing.
+		* @param response - the fetch response.
+		* @returns the `data` object.
+		*/
+		async function missionData(response) {
+			const payload = await response.json();
+			if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
+			return payload.data ?? {};
+		}
+
+		/**
+		* Non-zero entries of a verify-state histogram, labelled and ordered.
+		*
+		* Zeroes are dropped rather than drawn as "0 被限流", which reads as a
+		* problem that happened none of the time instead of one that never
+		* happened at all.
+		* @param counts - `{[verifyState]: n}`.
+		* @param zh - whether to write Chinese.
+		* @returns `[{ state, n, label }]`, largest first.
+		*/
+		function missionVerifyRows(counts, zh) {
+			const rows = [];
+			for (const [state, value] of Object.entries(counts ?? {})) {
+				const n = Number(value ?? 0);
+				if (!Number.isFinite(n) || n <= 0) continue;
+				rows.push({ state, n, label: missionFace(MISSION_VERIFY_FACES, state, zh) });
+			}
+			return rows.sort((a, b) => b.n - a.n);
+		}
+
+		/**
+		* One line of detail for an event, from the fields we know it carries.
+		*
+		* Known keys first, then a bounded dump of the rest. The dump is
+		* deliberate: this tail is the only place a person can see WHY a stage
+		* settled the way it did, and a log that hides every payload it was not
+		* taught about stops being useful exactly when something new goes wrong.
+		* @param event - one entry from `timeline.events`.
+		* @param zh - whether to write Chinese.
+		* @returns the detail line, or "".
+		*/
+		function missionEventDetail(event, zh) {
+			const payload = event?.payload ?? {};
+			if (payload === null || typeof payload !== "object") return "";
+			const parts = [];
+			const step = payload.stepId ?? payload.step_id ?? null;
+			if (typeof step === "string" && step !== "") parts.push(missionFace(MISSION_STAGE_FACES, step, zh));
+			if (typeof payload.durationMs === "number") parts.push(missionDuration(payload.durationMs, zh));
+			// Every one of these is a sentence the Host half wrote to say what
+			// happened and what to do next. Shown verbatim: two wordings of one
+			// refusal is the same defect as two names for one method.
+			for (const key of ["why", "reason", "note", "detail", "error", "degradeNote"]) {
+				const value = payload[key];
+				if (typeof value === "string" && value !== "") parts.push(value);
+			}
+			if (Array.isArray(payload.violations) && payload.violations.length > 0) {
+				parts.push(payload.violations.map((row) => `${row?.code ?? ""}: ${row?.detail ?? ""}`).join(" "));
+			}
+			if (parts.length > 0) return parts.join(" · ");
+			const rest = JSON.stringify(payload);
+			return rest === "{}" || rest === undefined ? "" : rest.slice(0, 200);
+		}
+
+		/**
+		* The collection diagnostics carried by the last `evidence:none` event.
+		*
+		* Written by the runtime the moment the evidence floor gate answers
+		* `none`, precisely so a mission that verified nothing can still say what
+		* it tried. Read from the event tail rather than from a second route,
+		* because there is no second route and inventing one would put a second
+		* answer beside the one the runtime already froze.
+		* @param timeline - `timeline` from the view route.
+		* @returns `{ why, diagnostics }`, or null when no such event is in the tail.
+		*/
+		function missionNoEvidence(timeline) {
+			const events = Array.isArray(timeline?.events) ? timeline.events : [];
+			for (let at = events.length - 1; at >= 0; at -= 1) {
+				const event = events[at];
+				if (event?.type !== "evidence:none") continue;
+				const payload = event.payload ?? {};
 				return {
-					present: resource !== null,
-					title: resource?.title ?? "",
-					sourceUrl: resource?.sourceUrl ?? "",
-					type: resource?.type ?? row.type ?? ""
+					why: typeof payload.why === "string" ? payload.why : "",
+					diagnostics: payload.diagnostics ?? null
 				};
 			}
-			return {
-				present: (row.title ?? null) !== null || (row.sourceUrl ?? null) !== null,
-				title: row.title ?? "",
-				sourceUrl: row.sourceUrl ?? "",
-				type: row.type ?? ""
-			};
-		}
-
-		/**
-		* A wire failure in the reader's language.
-		*
-		* Only the messages this page can improve on are translated; anything else
-		* is passed through in the words the Host used. Inventing a friendly
-		* sentence for an error nobody has seen is how a page ends up saying
-		* "something went wrong" about a problem it was told the name of.
-		* @param message - the error as it arrived.
-		* @param zh - whether to write Chinese.
-		* @returns the message to show.
-		*/
-		function insightTrouble(message, zh) {
-			if (message === "no model routed") {
-				return zh ? "还没有接入模型 —— 提炼这一步要模型才跑得起来。" : "No model routed — the pass needs one to run.";
-			}
-			return message;
-		}
-
-		/**
-		* One line for a recorded pass.
-		*
-		* Reported by its OUTCOME rather than as ran / did not run, the way
-		* `manualNote` reports a publish: a pass that legitimately found nothing
-		* and a button that does not work write the same amount to the screen
-		* otherwise, and only one of them is worth touching. `running` is a state
-		* of its own because the pass takes minutes while the button answers
-		* immediately — without it a pass in flight is indistinguishable from a
-		* press that did nothing at all.
-		* @param run - `insightLastRun` or `insightLastManualRun`, or null.
-		* @param zh - whether to write Chinese.
-		* @param manual - whether this is the button's record rather than the timer's.
-		* @returns the line, or "" when there is no record.
-		*/
-		function insightRunNote(run, zh, manual) {
-			if (run === null || run === undefined) return "";
-			const when = formatStamp(run.at);
-			const what = manual ? (zh ? "立即提炼" : "Run now") : (zh ? "上次提炼" : "Last pass");
-			if (run.running === true) {
-				return zh ? `${what} ${when} 正在跑，还没有结果。` : `${what} at ${when} is still running.`;
-			}
-			if (typeof run.error === "string") {
-				return `${what} ${when} ` + (zh ? "失败：" : "failed: ") + insightTrouble(run.error, zh);
-			}
-			if (typeof run.skipped === "string") {
-				return `${what} ${when} ` + (zh ? "跳过：" : "skipped: ") + insightTrouble(run.skipped, zh);
-			}
-			if (run.ran !== true) return `${what} ${when}` + (zh ? "：没有记下结果。" : ": no outcome recorded.");
-			const failures = Array.isArray(run.failures) ? run.failures.length : 0;
-			const line = zh
-				? `${what} ${when}：读了 ${run.rows ?? 0} 条信源，归并成 ${run.clusters ?? 0} 组，提炼出 ${run.claims ?? 0} 条主张，核验留下 ${run.verified ?? 0} 条、丢弃 ${run.dropped ?? 0} 条；新建 ${run.created ?? 0}、并入 ${run.merged ?? 0}、记为分歧 ${run.contested ?? 0}。`
-				: `${what} at ${when}: read ${run.rows ?? 0} source(s), grouped them into ${run.clusters ?? 0} cluster(s), extracted ${run.claims ?? 0} claim(s), kept ${run.verified ?? 0} and dropped ${run.dropped ?? 0}; ${run.created ?? 0} new, ${run.merged ?? 0} merged, ${run.contested ?? 0} contested.`;
-			if (failures === 0) return line;
-			return line + (zh ? ` 有 ${failures} 组提炼失败。` : ` ${failures} cluster(s) failed to extract.`);
-		}
-
-		/**
-		* What the pass is set to do, what it last did, and how much it invented.
-		*
-		* The drop rate is on the page rather than in a log because it is the one
-		* number that answers "is extraction good enough to build on" — claims
-		* whose quote was not in the source they were attributed to. A tab full of
-		* plausible cards and a 60% drop rate look identical from the outside.
-		* @param status - the payload from `/insights/status`, or null.
-		* @param zh - whether to write Chinese.
-		* @returns the line, or "" before the first answer arrives.
-		*/
-		function insightPassNote(status, zh) {
-			if (status === null || status === undefined) return "";
-			const parts = [];
-			const minutes = Number(status.insightIntervalMinutes);
-			parts.push(Number.isFinite(minutes) && minutes > 0
-				? (zh ? `每 ${minutes} 分钟自动提炼一次。` : `The pass runs every ${minutes} minute(s).`)
-				: (zh ? "定时提炼是关的 —— 只有按下“立即提炼”才会跑。" : "The scheduled pass is off — it only runs when you press Run now."));
-			const waiting = Number(status.waiting);
-			if (Number.isFinite(waiting)) {
-				parts.push(zh ? `现在有 ${waiting} 条新信源在等。` : `${waiting} new source(s) are waiting.`);
-				// A capped `waiting` reads as a healthy number, and the watermark moves
-				// past the rows a pass did not read — so a backlog here is not late,
-				// it is dropped, and nothing else on this page would say so.
-				if (status.waitingAtCap === true) {
-					parts.push(zh
-						? "已经顶到单次上限，后面多半还有读不到的。"
-						: "That is the per-pass ceiling, so there is very likely more behind it.");
-				}
-			}
-			const scheduled = insightRunNote(status.insightLastRun ?? null, zh, false);
-			if (scheduled !== "") parts.push(scheduled);
-			const drop = status.quoteDrop ?? null;
-			if (drop !== null && typeof drop.rate === "number") {
-				parts.push(zh
-					? `上次有 ${Math.round(drop.rate * 100)}% 的主张因为引文在原文里找不到而被丢掉。`
-					: `${Math.round(drop.rate * 100)}% of last pass's claims were dropped for a quote that was not in the source it was attributed to.`);
-			}
-			return parts.join(" ");
+			return null;
 		}
 		//#endregion
 
-		//#region insights card
+		//#region missions start
 		/**
-		* One piece of evidence: a stance, a source, and the sentence itself.
+		* The three depth tiers, as words only.
 		*
-		* The contradicting row is drawn differently on purpose — it is the thing
-		* a reader opened the card for, and the one no comparable product shows.
-		* Colour is not the only carrier: the mark is ✗ against ✓, so the
-		* distinction survives a monochrome screen and a reader who cannot see red.
-		* @param row - a preview row or a full evidence row.
-		* @param zh - whether to write Chinese.
-		* @param busy - whether this row's source is being opened.
-		* @param onOpen - open the reader on a resource id.
+		* Every NUMBER behind a tier — the five ceilings and the wall clock —
+		* comes from `/missions/budget-tiers`, never from here. A copy of the
+		* tier table in the browser is the drift playground shipped: its frontend
+		* and its backend disagreed about the field limits long after the tier
+		* values had been centralised, and nothing on either side said so.
 		*/
-		function InsightEvidenceRow({ row, zh, busy, onOpen }) {
-			const [hover, setHover] = useState(false);
-			const face = evidenceFace(row);
-			const contradicts = row.stance === "contradicts";
-			const accent = contradicts ? "220,38,38" : "5,150,105";
-			const name = face.title !== "" ? face.title : (hostOf(face.sourceUrl) !== "" ? hostOf(face.sourceUrl) : row.sourceKey ?? "");
-			const body = jsxs("div", {
-				style: { display: "flex", alignItems: "flex-start", gap: "9px", width: "100%", minWidth: 0 },
+		const MISSION_TIER_FACES = {
+			quick: { zh: "快速", en: "Quick", hue: "5,150,105" },
+			standard: { zh: "标准", en: "Standard", hue: "2,132,199" },
+			deep: { zh: "深度", en: "Deep", hue: "124,58,237" }
+		};
+
+		/**
+		* What one tier costs at most, in the units the ceilings are counted in.
+		* @param budget - one entry of `tiers` from `/missions/budget-tiers`.
+		* @param zh - whether to write Chinese.
+		* @returns the line under the tier's name, or "" when the route sent nothing for it.
+		*/
+		function missionTierLine(budget, zh) {
+			if (budget === null || budget === undefined || typeof budget !== "object") return "";
+			const wall = missionDuration(budget.wallMs, zh);
+			return zh
+				? `最长 ${wall} · ${budget.maxCalls} 次模型调用 · 最多抓 ${budget.maxFetch} 页`
+				: `up to ${wall} · ${budget.maxCalls} model calls · at most ${budget.maxFetch} pages fetched`;
+		}
+
+		/**
+		* Start a mission: a topic, a tier, and one button.
+		*
+		* The tiers are FETCHED rather than listed, so the three names on screen
+		* are the three the Host half will accept and the numbers under them are
+		* the ones it will actually spend. When that fetch fails the button is
+		* disabled and says which endpoint did not answer — a form that submits a
+		* tier the server has never heard of is a 400 the person cannot act on.
+		* @param zh - whether to write Chinese.
+		* @param onStarted - called with the new mission id, to open it.
+		*/
+		function MissionStarter({ zh, onStarted }) {
+			const [topic, setTopic] = useState("");
+			const [depth, setDepth] = useState("");
+			const [tiers, setTiers] = useState(null);
+			const [tiersError, setTiersError] = useState("");
+			const [busy, setBusy] = useState(false);
+			const [error, setError] = useState("");
+			const [notice, setNotice] = useState("");
+
+			useEffect(() => {
+				let live = true;
+				fetch(`${apiBase()}/missions/budget-tiers`)
+					.then(missionData)
+					.then((data) => {
+						if (!live) return;
+						setTiers(data);
+						setTiersError("");
+						// The middle tier is the default the Host half also
+						// defaults to, but it is picked from the answer rather
+						// than named here, so a tier list that changes shape does
+						// not leave this form pointing at a depth nobody serves.
+						const depths = Array.isArray(data.depths) ? data.depths : [];
+						setDepth((current) => (current !== "" ? current : depths[1] ?? depths[0] ?? ""));
+					})
+					.catch((cause) => { if (live) setTiersError(String(cause?.message ?? cause)); });
+				return () => { live = false; };
+			}, []);
+
+			const start = useCallback(async () => {
+				setBusy(true);
+				setError("");
+				setNotice("");
+				try {
+					const response = await fetch(`${apiBase()}/missions/create`, {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({ topic, depth })
+					});
+					const data = await missionData(response);
+					setTopic("");
+					// `started: false` means the row exists and nothing is driving
+					// it. Reported with the Host half's own reason: a create that
+					// answered 200 and quietly did not run is the one failure this
+					// field exists to name.
+					if (data.started === false) {
+						setNotice((zh ? "任务已建立，但没有跑起来：" : "The mission was created but did not start: ")
+							+ String(data.startedReason ?? ""));
+					}
+					if (typeof data.id === "string" && data.id !== "") onStarted(data.id);
+				} catch (cause) {
+					// budgetGate's refusal, the concurrency cap, the topic length —
+					// all of them arrive as one sentence that says what to change.
+					// Shown as it came.
+					setError(String(cause?.message ?? cause));
+				} finally {
+					setBusy(false);
+				}
+			}, [topic, depth, zh, onStarted]);
+
+			const depths = Array.isArray(tiers?.depths) ? tiers.depths : [];
+			const table = tiers?.tiers ?? {};
+			const ready = topic.trim() !== "" && depth !== "" && !busy;
+
+			return jsxs("div", {
+				style: { ...CARD_STYLE, display: "flex", flexDirection: "column", gap: "12px", padding: "16px" },
 				children: [
-					jsx("span", {
-						"aria-hidden": "true",
-						style: { flex: "none", width: "14px", color: `rgb(${accent})`, fontSize: "12px", lineHeight: "19px", fontWeight: 700 },
-						children: contradicts ? "✗" : "✓"
-					}),
+					jsx("input", {
+						type: "text",
+						value: topic,
+						placeholder: zh ? "要调研什么？写一个问题，越具体越好。" : "What should the swarm research? A question, as specific as you can make it.",
+						"aria-label": zh ? "任务课题" : "Mission topic",
+						onChange: (event) => { setTopic(event.target.value); },
+						onKeyDown: (event) => { if (event.key === "Enter" && ready) void start(); },
+						style: SEARCH_STYLE
+					}, "topic"),
 					jsxs("div", {
-						style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "2px" },
+						style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" },
 						children: [
-							jsxs("div", {
-								style: { display: "flex", alignItems: "baseline", gap: "8px", minWidth: 0, fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
-								children: [
-									jsx("span", {
-										style: {
-											flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis",
-											whiteSpace: "nowrap", fontWeight: 600,
-											color: contradicts ? `rgb(${accent})` : "var(--dsw-alias-label-primary)"
-										},
-										children: name === "" ? (zh ? "未署名信源" : "unnamed source") : name
-									}, "name"),
-									// The independence key, shown rather than implied. Five
-									// rewrites of one wire story are one source, and the count
-									// above says so — this is where a reader checks it.
-									jsx("span", { style: { flex: "none" }, children: row.sourceKey ?? "" }, "key"),
-									face.present
-										? null
-										: jsx("span", {
-											style: { flex: "none", fontStyle: "italic" },
-											children: zh ? "· 信源已不在库中" : "· no longer in the library"
-										}, "gone")
-								]
-							}, "who"),
-							jsx("p", {
-								style: {
-									margin: 0, paddingLeft: "9px",
-									borderLeft: `2px solid rgba(${accent},0.5)`,
-									fontSize: "12px", lineHeight: "19px",
-									color: "var(--dsw-alias-label-primary)"
-								},
-								children: "“" + String(row.quote ?? "") + "”"
-							}, "quote")
+							...depths.map((id) => jsx("button", {
+								type: "button",
+								role: "tab",
+								"aria-selected": id === depth,
+								title: missionTierLine(table[id], zh),
+								onClick: () => { setDepth(id); },
+								style: chipStyle({ hue: missionHue(MISSION_TIER_FACES, id) }, id === depth),
+								children: missionFace(MISSION_TIER_FACES, id, zh)
+							}, id)),
+							jsx("span", { style: { flex: 1 } }, "spacer"),
+							jsx("button", {
+								type: "button",
+								disabled: !ready,
+								onClick: () => { void start(); },
+								style: { ...controlStyle(), opacity: ready ? 1 : 0.5 },
+								children: busy ? (zh ? "正在建立…" : "Starting…") : (zh ? "开始调研" : "Start")
+							}, "go")
 						]
-					}, "text")
+					}, "controls"),
+					depth === "" ? null : jsx("div", {
+						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						children: missionTierLine(table[depth], zh)
+					}, "tier"),
+					tiersError === "" ? null : jsx("div", {
+						style: { fontSize: "12px", color: "rgb(220,38,38)" },
+						children: (zh ? "读不到档位表，暂时不能新建任务：" : "The tier table did not answer, so a mission cannot be started: ")
+							+ tiersError + ` (${apiBase()}/missions/budget-tiers)`
+					}, "tiersError"),
+					error === "" ? null : jsx("div", {
+						style: { fontSize: "12px", lineHeight: "18px", color: "rgb(220,38,38)" },
+						children: error
+					}, "error"),
+					notice === "" ? null : jsx("div", {
+						style: { fontSize: "12px", lineHeight: "18px", color: "rgb(217,119,6)" },
+						children: notice
+					}, "notice")
 				]
 			});
+		}
+		//#endregion
 
-			const frame = {
-				display: "block", width: "100%", textAlign: "left", padding: "8px 10px",
-				borderRadius: "8px", border: "1px solid transparent",
-				background: contradicts ? `rgba(${accent},0.06)` : "transparent",
-				font: "inherit", color: "inherit"
-			};
+		//#region missions list
+		/**
+		* One mission in the list: what was asked, how it ended, what it cost.
+		*
+		* `live` is the Host half's answer to "which of these is this process
+		* actually running", which is not the same question as "which rows say
+		* running". A row left running by a process that died is not a live
+		* mission, and this list is where that difference is visible.
+		* @param mission - one row from `/missions/list`.
+		* @param live - whether the runner reports this id as running here.
+		* @param zh - whether to write Chinese.
+		* @param onOpen - open the detail view on this mission.
+		*/
+		function MissionListRow({ mission, live, zh, onOpen }) {
+			const [hover, setHover] = useState(false);
+			const face = missionPillFace({ code: mission.status }, zh);
+			const stale = mission.status === "running" && !live;
+			const meta = [
+				missionFace(MISSION_TIER_FACES, mission.depth, zh),
+				zh ? `第 ${mission.runCount} 次运行` : `run ${mission.runCount}`,
+				zh ? `已核验 ${mission.verifiedFindings ?? 0} 条` : `${mission.verifiedFindings ?? 0} verified`,
+				zh ? `${Number(mission.spend?.tokens ?? 0).toLocaleString()} 令牌` : `${Number(mission.spend?.tokens ?? 0).toLocaleString()} tokens`,
+				formatStamp(mission.startedAt)
+			].filter((piece) => piece !== "").join(" · ");
 
-			// A source the library has pruned is NOT a button. Offering a control
-			// that cannot do anything, and then failing quietly when it is pressed,
-			// is the same shape of lie as a card that claims six sources and shows
-			// five — so the row still renders its quote, and simply does not invite
-			// a click it cannot honour.
-			if (!face.present) {
-				return jsx("div", { style: { ...frame, opacity: 0.72 }, children: body });
-			}
-			return jsx("button", {
-				type: "button",
-				title: face.title === "" ? undefined : face.title,
-				disabled: busy,
+			// The topic is the control, the way a 信源 card's title is: a whole
+			// card wrapped in one button puts flow content inside phrasing
+			// content and hands a screen reader one enormous label.
+			return jsx("article", {
+				style: hover ? CARD_HOVER_STYLE : CARD_STYLE,
 				onMouseEnter: () => { setHover(true); },
 				onMouseLeave: () => { setHover(false); },
-				onClick: () => { onOpen(row.resourceId); },
-				style: {
-					...frame,
-					appearance: "none", cursor: busy ? "progress" : "pointer",
-					borderColor: hover ? `rgba(${accent},0.35)` : "transparent",
-					background: hover
-						? `rgba(${accent},${contradicts ? 0.12 : 0.07})`
-						: (contradicts ? `rgba(${accent},0.06)` : "transparent")
-				},
-				children: body
+				children: jsxs("div", {
+					style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "8px" },
+					children: [
+						jsxs("div", {
+							style: { display: "flex", alignItems: "center", gap: "10px", width: "100%" },
+							children: [
+								jsx("button", {
+									type: "button",
+									onClick: () => { onOpen(mission.id); },
+									style: {
+										appearance: "none", border: "none", background: "transparent", padding: 0,
+										flex: 1, minWidth: 0, textAlign: "left", font: "inherit", cursor: "pointer",
+										fontSize: "15px", fontWeight: 600, lineHeight: "22px",
+										color: "var(--dsw-alias-label-primary)"
+									},
+									children: mission.topic
+								}, "topic"),
+								jsx("span", {
+									style: {
+										flex: "none", padding: "1px 7px", borderRadius: "5px",
+										background: `rgba(${face.hue},0.12)`, color: `rgb(${face.hue})`,
+										fontSize: "11px", fontWeight: 600
+									},
+									children: face.label
+								}, "pill")
+							]
+						}, "head"),
+						jsx("div", { style: META_STYLE, children: meta }, "meta"),
+						// A row that says running while nothing is running it is the
+						// symptom of a process that died mid-mission. Named here
+						// rather than left for the person to infer from a clock that
+						// never moves.
+						!stale ? null : jsx("div", {
+							style: { fontSize: "12px", color: "rgb(217,119,6)" },
+							children: zh
+								? "这一条写着运行中，但本进程没有在跑它 —— 多半是上次进程退出时留下的，打开后可以继续或重跑。"
+								: "This row says running, but this process is not running it — most likely left behind by an earlier exit. Open it to resume or rerun."
+						}, "stale"),
+						mission.errorMessage === null || mission.errorMessage === undefined || mission.errorMessage === "" ? null : jsx("div", {
+							style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+							children: (mission.failureCode === null || mission.failureCode === undefined ? "" : `${mission.failureCode} · `) + mission.errorMessage
+						}, "error")
+					]
+				})
 			});
 		}
 
 		/**
-		* One standing claim.
+		* The 洞察 tab: the mission list, the form that opens one, and the
+		* detail view that watches it.
 		*
-		* The order is the plan's, densest first: the statement, the strip that
-		* says how well attested it is and since when, then the evidence. The
-		* strip is above the quotes because "four independent sources" changes how
-		* you read the quote under it.
-		* @param insight - one row from `/insights/list`.
-		* @param zh - whether to write Chinese.
-		* @param opening - the resource id currently being opened, or "".
-		* @param onOpen - open the reader on a resource id.
-		*/
-		function InsightCard({ insight, zh, opening, onOpen }) {
-			// The whole evidence trail, fetched only when somebody asks for it.
-			const [full, setFull] = useState(null);
-			const [loading, setLoading] = useState(false);
-			const [failed, setFailed] = useState("");
-
-			const preview = Array.isArray(insight.evidencePreview) ? insight.evidencePreview : [];
-			const evidence = full === null ? preview : (Array.isArray(full.evidence) ? full.evidence : []);
-			const supports = Number(insight.sourceCount ?? 0);
-			const against = Number(insight.contradictionCount ?? 0);
-			const independent = Number(insight.independentCount ?? 0);
-			// The preview holds at most two supporting rows and one contradicting
-			// one. A card whose strip says six and whose body shows three, with
-			// nothing offering the other three, is the disagreement between a count
-			// and its evidence that this whole tab exists to avoid.
-			const held = supports + against;
-			const more = full === null && held > preview.length;
-
-			const showAll = useCallback(async () => {
-				setLoading(true);
-				setFailed("");
-				try {
-					const response = await fetch(`${apiBase()}/insights/item/${encodeURIComponent(insight.id)}`);
-					const payload = await response.json();
-					if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
-					setFull(payload.data ?? null);
-				} catch (cause) {
-					setFailed(String(cause?.message ?? cause));
-				} finally {
-					setLoading(false);
-				}
-			}, [insight.id]);
-
-			const status = insight.effectiveStatus ?? insight.status;
-			const pinned = (insight.pinnedStatus ?? null) !== null;
-			const accent = insightStatusHue(status);
-			const entities = Array.isArray(insight.entities) ? insight.entities.slice(0, 5) : [];
-			const strip = [
-				zh ? `${supports} 篇` : `${supports} article(s)`,
-				zh ? `${independent} 个独立来源` : `${independent} independent source(s)`,
-				(zh ? "首见 " : "first seen ") + insightDay(insight.firstSeenAt, zh),
-				(zh ? "最近 " : "last ") + insightDay(insight.lastSeenAt, zh)
-			].join(" · ");
-
-			return jsxs("article", {
-				style: { ...CARD_STYLE, display: "flex", flexDirection: "column", gap: "9px" },
-				children: [
-					jsx("h3", {
-						style: { margin: 0, fontSize: "15px", fontWeight: 600, lineHeight: "23px", color: "var(--dsw-alias-label-primary)" },
-						children: insight.statement
-					}, "statement"),
-					jsxs("div", {
-						style: META_STYLE,
-						children: [
-							jsx("span", {
-								style: {
-									flex: "none", padding: "1px 7px", borderRadius: "5px",
-									background: `rgba(${accent},0.12)`, color: `rgb(${accent})`,
-									fontSize: "11px", fontWeight: 600
-								},
-								// The person's verdict is marked as theirs. Without the mark a
-								// pinned card is indistinguishable from one the pass agreed
-								// with, and the next question — "why did this not change?" —
-								// has no answer on the page.
-								children: insightFaceLabel(INSIGHT_STATUS_FACES, status, zh) + (pinned ? (zh ? " · 手动" : " · pinned") : "")
-							}, "status"),
-							jsx("span", {
-								style: { flex: "none", color: "var(--dsw-alias-label-secondary)" },
-								children: insightFaceLabel(INSIGHT_KIND_FACES, insight.kind, zh)
-							}, "kind"),
-							jsx("span", { children: strip }, "strip"),
-							against === 0 ? null : jsx("span", {
-								style: { flex: "none", color: "rgb(220,38,38)", fontWeight: 600 },
-								children: zh ? `立场分歧 ${against}` : `${against} contradicting`
-							}, "against")
-						]
-					}, "meta"),
-					entities.length === 0 ? null : jsx("div", {
-						style: { display: "flex", flexWrap: "wrap", gap: "6px" },
-						children: entities.map((entity, at) => jsx("span", {
-							style: {
-								padding: "1px 7px", borderRadius: "5px",
-								border: "1px solid var(--dsw-alias-border-l2)",
-								fontSize: "11px", color: "var(--dsw-alias-label-secondary)"
-							},
-							children: String(entity)
-						}, `${String(entity)}-${at}`))
-					}, "entities"),
-					jsx("div", { style: { borderTop: "1px solid var(--dsw-alias-border-l1)" } }, "rule"),
-					evidence.length === 0
-						? jsx("div", {
-							style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
-							// Not "no evidence": the row cannot exist without a verified
-							// quote, so an empty list here means the evidence did not travel
-							// with this response, which is a different problem entirely.
-							children: zh ? "这一条没有随卡片带回证据。" : "No evidence travelled with this card."
-						}, "none")
-						: jsx("div", {
-							style: { display: "flex", flexDirection: "column", gap: "4px" },
-							children: evidence.map((row, at) => jsx(InsightEvidenceRow, {
-								row, zh, busy: opening === row.resourceId, onOpen
-							}, `${String(row.resourceId ?? "row")}-${at}`))
-						}, "evidence"),
-					!more ? null : jsx("div", {
-						children: jsx("button", {
-							type: "button",
-							disabled: loading,
-							style: { ...controlStyle(), height: "27px", fontSize: "12px" },
-							onClick: () => { void showAll(); },
-							children: loading
-								? (zh ? "载入中…" : "Loading…")
-								: (zh ? `查看全部 ${held} 条证据` : `Show all ${held} pieces of evidence`)
-						})
-					}, "more"),
-					failed === "" ? null : jsx("div", {
-						style: { fontSize: "12px", color: "rgb(220,38,38)" },
-						children: (zh ? "证据读取失败：" : "Could not load the evidence: ") + insightTrouble(failed, zh)
-					}, "failed"),
-					full === null || full.supersededRow === null || full.supersededRow === undefined ? null : jsx("div", {
-						style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
-						children: (zh ? "取代了：" : "Replaces: ") + String(full.supersededRow.statement ?? "")
-					}, "supersedes"),
-					full === null || !Array.isArray(full.supersededBy) || full.supersededBy.length === 0 ? null : jsx("div", {
-						style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
-						children: zh
-							? `已被 ${full.supersededBy.length} 条更新的主张取代。`
-							: `Superseded by ${full.supersededBy.length} later claim(s).`
-					}, "supersededBy")
-				]
-			});
-		}
-		//#endregion
-
-		//#region insights tab body
-		/**
-		* The 洞察 tab: the claims, their evidence, and the pass that finds them.
-		*
-		* Reads `/insights/list` once per view — the evidence preview and the full
-		* status tally both travel with the page, so twenty cards are one request
-		* rather than twenty-one.
+		* List and detail are switched IN PLACE, the way 信源 switches into its
+		* reader, so the frame never moves under the person reading it.
 		* @param zh - whether to write Chinese.
 		*/
-		function InsightsTab({ zh }) {
+		function MissionsTab({ zh }) {
 			const [filterId, setFilterId] = useState("");
-			const [rows, setRows] = useState([]);
-			const [total, setTotal] = useState(0);
-			const [hasMore, setHasMore] = useState(false);
+			const [missions, setMissions] = useState([]);
 			const [counts, setCounts] = useState({});
+			const [live, setLive] = useState([]);
+			const [total, setTotal] = useState(0);
 			const [state, setState] = useState("loading");
 			const [error, setError] = useState("");
-			const [reloadTick, setReloadTick] = useState(0);
-			// The pass: its settings, its two records, and what it would read next.
-			const [pass, setPass] = useState(null);
-			const [passError, setPassError] = useState("");
-			const [passTick, setPassTick] = useState(0);
-			const [busy, setBusy] = useState(false);
-			const [watchUntil, setWatchUntil] = useState(0);
-			// list | detail, switched in place so the frame never moves — the same
-			// thing ExploreTab does when a card is opened.
-			const [selected, setSelected] = useState(null);
-			const [opening, setOpening] = useState("");
-			const [openError, setOpenError] = useState("");
+			const [tick, setTick] = useState(0);
+			const [openId, setOpenId] = useState("");
 			// Guards a stale answer from overwriting a newer one when the chip
 			// changes while a request is still in flight.
 			const requestId = useRef(0);
 
-			const listUrl = useCallback((skip) => {
-				const params = new URLSearchParams({ take: String(PAGE_SIZE), skip: String(skip), sort: "rank" });
-				if (filterId !== "") params.append("filter", filterId);
-				return `${apiBase()}/insights/list?${params.toString()}`;
-			}, [filterId]);
-
-			/**
-			* Read one page of cards.
-			*
-			* The envelope is read even on a non-2xx answer, unlike the sources
-			* feed: a bad parameter here is answered 400 with a message NAMING the
-			* accepted values, and throwing "HTTP 400" discards the only part of
-			* that answer worth showing.
-			*/
-			const readPage = useCallback(async (response) => {
-				const payload = await response.json();
-				if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
-				const data = payload.data ?? {};
-				return {
-					insights: Array.isArray(data.insights) ? data.insights : [],
-					total: Number.isFinite(Number(data.total)) ? Number(data.total) : 0,
-					hasMore: data.hasMore === true,
-					counts: data.counts !== null && typeof data.counts === "object" ? data.counts : {}
-				};
-			}, []);
-
 			useEffect(() => {
-				let live = true;
+				let alive = true;
 				const ticket = ++requestId.current;
-				setState("loading");
-				setError("");
-				fetch(listUrl(0))
-					.then(readPage)
-					.then((page) => {
-						if (!live || ticket !== requestId.current) return;
-						setRows(page.insights);
-						setTotal(page.total);
-						setHasMore(page.hasMore);
-						setCounts(page.counts);
+				const params = new URLSearchParams({ take: String(PAGE_SIZE), skip: "0" });
+				if (filterId !== "") params.append("status", filterId);
+				fetch(`${apiBase()}/missions/list?${params.toString()}`)
+					.then(missionData)
+					.then((data) => {
+						if (!alive || ticket !== requestId.current) return;
+						setMissions(Array.isArray(data.missions) ? data.missions : []);
+						setCounts(data.counts !== null && typeof data.counts === "object" ? data.counts : {});
+						setLive(Array.isArray(data.live) ? data.live : []);
+						setTotal(Number(data.total ?? 0));
 						setState("ready");
 					})
 					.catch((cause) => {
-						if (!live || ticket !== requestId.current) return;
+						if (!alive || ticket !== requestId.current) return;
 						setError(String(cause?.message ?? cause));
 						setState("error");
 					});
-				return () => { live = false; };
-				// The chip and the reload are the query's identity. `listUrl` and
-				// `readPage` close over it and would re-run this on every render if
-				// they were dependencies, which is the same reason ExploreTab depends
-				// on its identity fields rather than on its callback.
-			}, [filterId, reloadTick]);
+				return () => { alive = false; };
+			}, [filterId, tick]);
 
-			const loadMore = useCallback(async () => {
-				const ticket = ++requestId.current;
-				setState("loading-more");
-				try {
-					const page = await readPage(await fetch(listUrl(rows.length)));
-					if (ticket !== requestId.current) return;
-					setRows(rows.concat(page.insights));
-					setTotal(page.total);
-					setHasMore(page.hasMore);
-					setCounts(page.counts);
-					setState("ready");
-				} catch (cause) {
-					if (ticket !== requestId.current) return;
-					setError(String(cause?.message ?? cause));
-					setState("error");
-				}
-			}, [rows, listUrl, readPage]);
-
+			// Re-read while this process is running something. The timer is
+			// unref'd because this module is also rendered in Node by
+			// tests/settings.test.mjs, which never unmounts: an ordinary interval
+			// there keeps the test runner alive after the assertions have passed.
 			useEffect(() => {
-				let live = true;
-				fetch(`${apiBase()}/insights/status`)
-					.then((response) => response.json())
-					.then((payload) => {
-						if (!live) return;
-						if (payload?.success !== true) throw new Error(payload?.error ?? "no status");
-						setPass(payload.data ?? null);
-						setPassError("");
-					})
-					.catch((cause) => {
-						// Reported rather than swallowed. The line below is the only place
-						// that says whether the pass is armed, when it last ran and how
-						// much it invented; a silent failure there leaves an empty tab
-						// looking like a tab with nothing to show.
-						if (live) setPassError(String(cause?.message ?? cause));
-					});
-				return () => { live = false; };
-			}, [passTick, reloadTick]);
+				if (live.length === 0) return;
+				const timer = setTimeout(() => { setTick((value) => value + 1); }, MISSION_POLL_MS);
+				timer.unref?.();
+				return () => { clearTimeout(timer); };
+			}, [live, tick]);
 
-			// Watching a manual pass land. It ends on its own deadline and on
-			// unmount, so a tab left open does not poll for ever.
-			useEffect(() => {
-				if (watchUntil === 0) return;
-				const timer = setInterval(() => {
-					if (Date.now() > watchUntil) { setWatchUntil(0); return; }
-					setPassTick((tick) => tick + 1);
-				}, 5000);
-				return () => { clearInterval(timer); };
-			}, [watchUntil]);
-
-			// The pass settled: stop watching, and reload the list, which was drawn
-			// before the cards this run wrote.
-			useEffect(() => {
-				if (watchUntil === 0 || pass === null) return;
-				const record = pass.insightLastManualRun ?? null;
-				if (record === null || record.running === true || pass.manualRunInFlight === true) return;
-				setWatchUntil(0);
-				setReloadTick((tick) => tick + 1);
-			}, [pass, watchUntil]);
-
-			const runNow = useCallback(async () => {
-				setBusy(true);
-				setPassError("");
-				try {
-					const response = await fetch(`${apiBase()}/insights/run-now`, { method: "POST" });
-					const payload = await response.json();
-					if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
-					// 202 the moment it starts, and it is up to twenty model calls long,
-					// so nothing in this answer is the outcome. `runInsightPass` stamps
-					// `insightLastManualRun` with `running` before the first call, and
-					// the note below reads that stamp — a press with no stamp behind it
-					// is indistinguishable from a button that does nothing.
-					if (payload.data?.started === false) {
-						setPassError(zh ? "已经有一次提炼在跑了，这次没有重复启动。" : "A pass is already running; this press did not start a second one.");
-					}
-					setWatchUntil(Date.now() + 20 * 60 * 1000);
-					setPassTick((tick) => tick + 1);
-				} catch (cause) {
-					setPassError(String(cause?.message ?? cause));
-				} finally {
-					setBusy(false);
-				}
-			}, [zh]);
-
-			/**
-			* Open the reader on the source behind an evidence row.
-			*
-			* The row itself is fetched rather than handed over: an evidence row
-			* carries five fields and `DetailView` reads the whole resource — the
-			* abstract, the authors, the transcript. Passing the five would render a
-			* reader with an empty document and nothing anywhere reporting why.
-			*/
-			const openResource = useCallback(async (resourceId) => {
-				setOpening(resourceId);
-				setOpenError("");
-				try {
-					const response = await fetch(`${apiBase()}/resources/${encodeURIComponent(resourceId)}`);
-					const payload = await response.json();
-					if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
-					setSelected(payload.data ?? null);
-				} catch (cause) {
-					setOpenError(String(cause?.message ?? cause));
-				} finally {
-					setOpening("");
-				}
-			}, []);
-
-			if (selected !== null) {
-				const kind = KINDS.find((candidate) => candidate.type === selected.type) ?? OTHER_KIND;
-				return jsx(DetailView, { row: selected, kind, zh, onBack: () => { setSelected(null); } });
+			if (openId !== "") {
+				return jsx(MissionDetail, {
+					missionId: openId,
+					zh,
+					onBack: () => { setOpenId(""); setTick((value) => value + 1); }
+				});
 			}
 
-			const running = pass?.insightLastManualRun?.running === true || pass?.manualRunInFlight === true;
-			const manual = insightRunNote(pass?.insightLastManualRun ?? null, zh, true);
-			const schedule = insightPassNote(pass, zh);
-			const statusTally = ["candidate", "standing", "contested", "dormant"]
-				.map((key) => insightFaceLabel(INSIGHT_STATUS_FACES, key, zh) + " " + (counts[key] ?? 0))
-				.join(" · ");
-			const known = ["candidate", "standing", "contested", "dormant"]
-				.reduce((sum, key) => sum + Number(counts[key] ?? 0), 0);
+			const known = Object.values(counts).reduce((sum, value) => sum + Number(value ?? 0), 0);
 
-			// The scrollbar belongs to the frame, not to the column of cards — the
-			// same arrangement ExploreTab settled on, and the reason the tab body
+			// The scrollbar belongs to the frame, not to the column of cards —
+			// the same arrangement 信源 settled on, and the reason the tab body
 			// hands this component the whole height.
 			return jsx("div", {
 				style: { height: "100%", minHeight: 0, overflowY: "auto" },
 				children: jsxs("div", {
 					style: { ...CONTENT_STYLE, padding: "0 24px" },
 					children: [
+						jsx(MissionStarter, { zh, onStarted: (id) => { setOpenId(id); } }, "starter"),
 						jsxs("div", {
 							style: TOOLBAR_STYLE,
 							children: [
-								...INSIGHT_FILTERS.map((entry) => jsx("button", {
+								...MISSION_FILTERS.map((entry) => jsx("button", {
 									type: "button",
 									role: "tab",
 									"aria-selected": entry.id === filterId,
 									style: chipStyle(entry, entry.id === filterId),
 									onClick: () => { setFilterId(entry.id); },
-									children: zh ? entry.zh : entry.en
+									children: entry.id === "" || counts[entry.id] === undefined
+										? (zh ? entry.zh : entry.en)
+										: `${zh ? entry.zh : entry.en} ${counts[entry.id]}`
 								}, entry.id === "" ? "all" : entry.id)),
 								jsx("span", { style: { flex: 1 } }, "spacer"),
 								jsx("button", {
 									type: "button",
-									disabled: busy || running,
 									style: controlStyle(),
-									onClick: () => { void runNow(); },
-									children: running ? (zh ? "提炼中…" : "Running…") : (zh ? "立即提炼" : "Run now")
-								}, "run")
+									onClick: () => { setTick((value) => value + 1); },
+									children: zh ? "刷新" : "Refresh"
+								}, "refresh")
 							]
 						}, "toolbar"),
-						schedule === "" && manual === "" && passError === "" ? null : jsxs("div", {
-							style: { margin: "0 0 14px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
-							children: [
-								schedule === "" ? null : jsx("div", { children: schedule }, "schedule"),
-								// What the button did, kept apart from what the timer did.
-								// Pressing it and getting a legitimate skip is otherwise
-								// indistinguishable from a button that is simply broken.
-								manual === "" ? null : jsx("div", { style: { marginTop: "3px" }, children: manual }, "manual"),
-								passError === "" ? null : jsx("div", {
-									style: { marginTop: "3px", color: "rgb(220,38,38)" },
-									children: insightTrouble(passError, zh)
-								}, "trouble")
-							]
-						}, "pass"),
-						openError === "" ? null : jsx("div", {
-							style: { margin: "0 0 12px", fontSize: "12px", color: "rgb(220,38,38)" },
-							children: (zh ? "打不开这条信源：" : "Could not open that source: ") + insightTrouble(openError, zh)
-						}, "openError"),
-						state === "error"
-							? jsx("div", {
-								style: NOTE_STYLE,
-								children: jsxs("div", {
-									children: [
-										jsx("div", { children: (zh ? "洞察加载失败：" : "Could not load the insights: ") + insightTrouble(error, zh) }),
-										jsx("div", {
-											style: { marginTop: "10px", fontSize: "12px" },
-											children: (zh ? "接口：" : "Endpoint: ") + apiBase() + "/insights/list"
-										})
-									]
-								})
-							}, "error")
-							: null,
-						state === "loading"
-							? jsx("div", { style: NOTE_STYLE, children: zh ? "加载中…" : "Loading…" }, "loading")
-							: null,
-						state !== "loading" && state !== "error" && rows.length === 0
-							? jsx("div", {
-								style: NOTE_STYLE,
-								children: jsxs("div", {
-									children: [
-										jsx("div", {
-											children: filterId !== "" && known > 0
-												? (zh ? "这个筛选下没有卡片，换成“全部”看看。" : "Nothing under this chip — try All.")
-												: known > 0
-												? (zh ? "库里有洞察，但这一页没有取到。" : "The library holds insights, but this page fetched none.")
-												: (zh ? "还没有提炼出任何主张。" : "No claim has been extracted yet.")
-										}, "what"),
-										jsx("div", {
-											style: { marginTop: "6px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
-											// Says which of the two empties this is. An armed pass
-											// that has found nothing and a pass nobody ever turned
-											// on look identical on an empty page, and only one of
-											// them is waiting for you to do something.
-											children: schedule === ""
-												? (zh ? "提炼状态还没读到。" : "The pass has not reported its state yet.")
-												: schedule
-										}, "why")
-									]
-								})
-							}, "empty")
-							: null,
-						rows.length === 0 ? null : jsxs("div", {
+						state !== "error" ? null : jsx("div", {
+							style: NOTE_STYLE,
+							children: jsxs("div", {
+								children: [
+									jsx("div", { children: (zh ? "任务列表加载失败：" : "Could not load the missions: ") + error }),
+									jsx("div", {
+										style: { marginTop: "10px", fontSize: "12px" },
+										children: (zh ? "接口：" : "Endpoint: ") + apiBase() + "/missions/list"
+									})
+								]
+							})
+						}, "error"),
+						state !== "loading" ? null : jsx("div", { style: NOTE_STYLE, children: zh ? "加载中…" : "Loading…" }, "loading"),
+						state !== "ready" || missions.length > 0 ? null : jsx("div", {
+							style: NOTE_STYLE,
+							children: jsx("div", {
+								// Two different empties, two different sentences. A
+								// chip with nothing under it is a filter to undo; a
+								// library with nothing in it is waiting for somebody
+								// to ask a question.
+								children: filterId !== "" && known > 0
+									? (zh ? "这个筛选下没有任务，换成“全部”看看。" : "No mission under this chip — try All.")
+									: (zh ? "还没有跑过任何任务。在上面写一个课题，选一个档位，按“开始调研”。" : "No mission has been run yet. Write a topic above, pick a tier, and press Start.")
+							})
+						}, "empty"),
+						missions.length === 0 ? null : jsxs("div", {
 							children: [
 								jsx("div", {
 									style: { margin: "0 0 10px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
-									// The full tally, whichever chip is on: the counts travel
-									// with every page precisely so "+N candidates" needs no
-									// second request, and a page that hides dormant by default
-									// should say how much it is hiding.
-									children: (zh ? `本页共 ${total} 条 · ` : `${total} on this view · `) + statusTally
+									children: (zh ? `共 ${total} 个任务` : `${total} mission(s)`)
+										+ (live.length === 0 ? "" : (zh ? ` · 本进程正在跑 ${live.length} 个` : ` · ${live.length} running in this process`))
 								}, "tally"),
-								...rows.map((insight, at) => jsx(InsightCard, {
-									insight, zh, opening, onOpen: openResource
-								}, String(insight.id ?? at)))
+								...missions.map((mission) => jsx(MissionListRow, {
+									mission, zh, live: live.includes(mission.id), onOpen: (id) => { setOpenId(id); }
+								}, mission.id))
 							]
-						}, "cards"),
-						hasMore && state === "ready"
-							? jsx("div", {
-								style: { display: "flex", justifyContent: "center", padding: "8px 0 4px" },
-								children: jsx("button", {
+						}, "rows")
+					]
+				})
+			});
+		}
+		//#endregion
+
+		//#region missions detail panels
+		/** A small section heading, so the detail view reads as panels rather than as one column of text. */
+		function MissionPanel({ title, note, children }) {
+			return jsxs("section", {
+				style: { ...CARD_STYLE, display: "flex", flexDirection: "column", gap: "10px", padding: "16px" },
+				children: [
+					jsxs("div", {
+						style: { display: "flex", alignItems: "baseline", gap: "10px", flexWrap: "wrap" },
+						children: [
+							jsx("h3", {
+								style: { margin: 0, fontSize: "13px", fontWeight: 600, letterSpacing: "0.02em", color: "var(--dsw-alias-label-primary)" },
+								children: title
+							}, "title"),
+							note === "" || note === undefined || note === null ? null : jsx("span", {
+								style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+								children: note
+							}, "note")
+						]
+					}, "head"),
+					jsx("div", { children }, "body")
+				]
+			});
+		}
+
+		/**
+		* The twelve stages, always twelve, in catalogue order.
+		*
+		* The projector guarantees the count is invariant — a stage this tier
+		* does not run is `skipped-by-tier`, not a hole — so the strip is a fixed
+		* ruler a person can learn the shape of, rather than a list that grows.
+		* Degrade notes are printed UNDER the strip rather than left in a
+		* tooltip: a stage that finished by lowering its own bar has said why,
+		* and hiding that behind a hover is how a degraded run reads as a clean one.
+		* @param stages - `stages` from the view route.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionStageStrip({ stages, zh }) {
+			const notes = stages.filter((stage) => (stage.degradeNote ?? "") !== "" || stage.status === "failed" || stage.stalled);
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: "10px" },
+				children: [
+					jsx("div", {
+						style: { display: "flex", flexWrap: "wrap", gap: "6px" },
+						children: stages.map((stage) => {
+							const hue = missionHue(MISSION_STAGE_STATUS_FACES, stage.status);
+							const duration = stage.durationMs === null || stage.durationMs === undefined
+								? "" : missionDuration(stage.durationMs, zh);
+							return jsxs("span", {
+								title: `${stage.stepId} · ${missionFace(MISSION_STAGE_STATUS_FACES, stage.status, zh)}`
+									+ (stage.agent === null ? "" : ` · ${stage.agent}`),
+								style: {
+									display: "inline-flex", alignItems: "center", gap: "6px",
+									padding: "3px 9px", borderRadius: "7px",
+									border: `1px solid rgba(${hue},0.35)`, background: `rgba(${hue},0.08)`,
+									color: `rgb(${hue})`, fontSize: "12px", lineHeight: "18px"
+								},
+								children: [
+									jsx("span", { children: missionFace(MISSION_STAGE_FACES, stage.stepId, zh) }, "name"),
+									duration === "" ? null : jsx("span", { style: { opacity: 0.75 }, children: duration }, "took"),
+									stage.attempts > 1 ? jsx("span", {
+										style: { opacity: 0.75 },
+										children: zh ? `第 ${stage.attempts} 次` : `attempt ${stage.attempts}`
+									}, "attempts") : null,
+									stage.stalled ? jsx("span", { children: zh ? "停滞" : "stalled" }, "stalled") : null
+								]
+							}, stage.stepId);
+						})
+					}, "strip"),
+					notes.length === 0 ? null : jsx("div", {
+						style: { display: "flex", flexDirection: "column", gap: "4px" },
+						children: notes.map((stage) => jsx("div", {
+							style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+							children: `${missionFace(MISSION_STAGE_FACES, stage.stepId, zh)} · `
+								+ missionFace(MISSION_STAGE_STATUS_FACES, stage.status, zh)
+								+ ((stage.degradeNote ?? "") === "" ? "" : `：${stage.degradeNote}`)
+						}, stage.stepId))
+					}, "notes")
+				]
+			});
+		}
+
+		/**
+		* The six ceilings, as bars, with the tight one named.
+		*
+		* Named rather than summed: a mission that has burned 100% of its arXiv
+		* allowance at 20% of its tokens is about to start failing tool calls,
+		* and a single blended percentage would say it is fine right up until it
+		* stops working.
+		* @param cost - `cost` from the view route.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionCostMeters({ cost, zh }) {
+			const order = ["tokens", "calls", "arxiv", "web", "fetch", "wall"];
+			const waste = cost.waste ?? {};
+			const wasted = [
+				waste.stageRetries > 0 ? (zh ? `阶段重试 ${waste.stageRetries} 次` : `${waste.stageRetries} stage retries`) : "",
+				waste.chapterRewrites > 0 ? (zh ? `章节重写 ${waste.chapterRewrites} 次` : `${waste.chapterRewrites} chapter rewrites`) : "",
+				waste.underDeliveredChapters > 0 ? (zh ? `字数不足的章节 ${waste.underDeliveredChapters} 个` : `${waste.underDeliveredChapters} under-delivered chapters`) : "",
+				waste.toolFailures > 0 ? (zh ? `工具调用失败 ${waste.toolFailures} 次` : `${waste.toolFailures} tool-call failures`) : "",
+				waste.toolCached > 0 ? (zh ? `命中缓存 ${waste.toolCached} 次` : `${waste.toolCached} cache hits`) : ""
+			].filter((piece) => piece !== "").join(" · ");
+
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: "10px" },
+				children: [
+					jsx("div", {
+						style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" },
+						children: order.map((key) => {
+							const meter = cost[key] ?? { dimension: key, used: 0, limit: null, ratio: null };
+							const ratio = meter.ratio ?? 0;
+							// The ladder the Host half froze, passed through on the
+							// cost object. Reading a second copy of 0.70 / 0.85 here
+							// is how the meter and the degrade steps start disagreeing.
+							const ladder = cost.ladder ?? {};
+							const hue = ratio >= (ladder.warn ?? 0.9) ? "220,38,38"
+								: ratio >= (ladder.soften ?? 0.7) ? "217,119,6"
+								: "5,150,105";
+							const tight = cost.tight?.dimension === key;
+							return jsxs("div", {
+								style: { display: "flex", flexDirection: "column", gap: "4px" },
+								children: [
+									jsxs("div", {
+										style: { display: "flex", alignItems: "baseline", gap: "6px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+										children: [
+											jsx("span", {
+												style: { fontWeight: tight ? 600 : 400, color: tight ? `rgb(${hue})` : "inherit" },
+												children: missionFace(MISSION_METER_FACES, key, zh)
+											}, "name"),
+											!tight ? null : jsx("span", {
+												style: { color: `rgb(${hue})` },
+												children: zh ? "最紧" : "tightest"
+											}, "tight")
+										]
+									}, "head"),
+									jsx("div", {
+										style: { height: "6px", borderRadius: "3px", background: "var(--dsw-alias-border-l1)", overflow: "hidden" },
+										children: jsx("div", {
+											style: {
+												width: `${Math.min(100, Math.round(ratio * 100))}%`,
+												height: "100%", background: `rgb(${hue})`
+											}
+										})
+									}, "bar"),
+									jsx("div", {
+										style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+										children: missionMeterLine(meter, zh)
+									}, "line")
+								]
+							}, key);
+						})
+					}, "meters"),
+					wasted === "" ? null : jsx("div", {
+						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						children: (zh ? "其中花在返工上的：" : "Spent on rework: ") + wasted
+					}, "waste"),
+					// Two quantities, reported as a disagreement rather than
+					// reconciled into whichever one is to hand. The exact figure is
+					// the ledger; the estimate is what the live pool was steering by.
+					cost.drift?.exceeds !== true ? null : jsx("div", {
+						style: { fontSize: "12px", color: "rgb(217,119,6)" },
+						children: zh
+							? `预估用量与实际账本相差 ${Math.round((cost.drift.ratio ?? 0) * 100)}%（预估 ${cost.drift.estimated}，实际 ${cost.drift.exact}），超过 ${Math.round((cost.drift.tolerance ?? 0) * 100)}% 的容差 —— 运行中的预算表是估算，账本才是准的。`
+							: `The live estimate and the ledger differ by ${Math.round((cost.drift.ratio ?? 0) * 100)}% (estimated ${cost.drift.estimated}, exact ${cost.drift.exact}), past the ${Math.round((cost.drift.tolerance ?? 0) * 100)}% tolerance. The meter is an estimate; the ledger is the truth.`
+					}, "drift")
+				]
+			});
+		}
+
+		/**
+		* One dimension: how much verified evidence it found, from how many
+		* hosts, and what stopped it.
+		*
+		* The floor is shown as a fraction rather than as a tick, because
+		* `verified` is the only currency the evidence gate spends and "3/4" is
+		* the difference between a dimension that nearly made it and one that
+		* found nothing.
+		* @param dimension - one card from the view route.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionDimensionCard({ dimension, zh }) {
+			const hue = missionHue(MISSION_DIMENSION_FACES, dimension.state);
+			const axes = dimension.gradeAxes ?? {};
+			const rows = missionVerifyRows(dimension.counts, zh);
+			const chapters = dimension.chapters ?? {};
+
+			return jsxs("div", {
+				style: {
+					display: "flex", flexDirection: "column", gap: "6px", padding: "10px 12px",
+					border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "10px"
+				},
+				children: [
+					jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: "8px" },
+						children: [
+							jsx("span", {
+								style: { flex: 1, minWidth: 0, fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+								children: dimension.name
+							}, "name"),
+							jsx("span", {
+								style: {
+									flex: "none", padding: "1px 7px", borderRadius: "5px",
+									background: `rgba(${hue},0.12)`, color: `rgb(${hue})`, fontSize: "11px", fontWeight: 600
+								},
+								children: missionFace(MISSION_DIMENSION_FACES, dimension.state, zh)
+							}, "state")
+						]
+					}, "head"),
+					jsx("div", {
+						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						children: [
+							// `floor: null` means s3 has not measured supply yet. It
+							// must not render as 0, or every dimension reads as
+							// passing a bar nobody has set.
+							dimension.floor === null || dimension.floor === undefined
+								? (zh ? `已核验 ${dimension.verified} 条 · 门槛还没算出来` : `${dimension.verified} verified · floor not derived yet`)
+								: (zh ? `已核验 ${dimension.verified}/${dimension.floor} 条` : `${dimension.verified}/${dimension.floor} verified`),
+							zh ? `${dimension.uniqueHosts} 个独立站点` : `${dimension.uniqueHosts} independent host(s)`,
+							axes.pagesFetched === undefined ? "" : (zh ? `读了 ${axes.pagesFetched} 个页面` : `${axes.pagesFetched} pages read`),
+							chapters.total > 0 ? (zh ? `章节 ${chapters.done}/${chapters.total}` : `chapters ${chapters.done}/${chapters.total}`) : ""
+						].filter((piece) => piece !== "").join(" · ")
+					}, "counts"),
+					rows.length === 0 ? null : jsx("div", {
+						style: { display: "flex", flexWrap: "wrap", gap: "6px" },
+						children: rows.map((row) => jsx("span", {
+							style: {
+								padding: "1px 7px", borderRadius: "5px",
+								border: "1px solid var(--dsw-alias-border-l2)",
+								fontSize: "11px", color: "var(--dsw-alias-label-secondary)"
+							},
+							children: `${row.label} ${row.n}`
+						}, row.state))
+					}, "states"),
+					!dimension.blocked ? null : jsx("div", {
+						style: { fontSize: "12px", color: "rgb(217,119,6)" },
+						children: zh
+							? "这个维度有请求被限流 —— 这是取不到，不是没有。"
+							: "Requests under this dimension were rate limited — that is an availability result, not evidence of absence."
+					}, "blocked"),
+					(dimension.summary ?? "") === "" ? null : jsx("div", {
+						style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+						// The researcher's own closing note, in the mission's
+						// language, verbatim. It is the only sentence that says what
+						// this dimension actually ran into.
+						children: dimension.summary
+					}, "summary")
+				]
+			});
+		}
+
+		/**
+		* What was tried, for a mission that verified nothing.
+		*
+		* This panel is the reason the runtime freezes `collectionDiagnostics`
+		* into the `evidence:none` event: a mission that ends with zero verified
+		* findings is exactly the one whose screen would otherwise be blank, and
+		* a blank screen is indistinguishable from a broken feature. Tools
+		* called, hosts reached, and every tool call that FAILED with the code the
+		* tool door classified it as.
+		*
+		* It says plainly that search terms are not among them. `mission_tool_calls`
+		* stores a hash of the arguments, not the arguments, so listing "queries"
+		* here would be a promise the column cannot keep.
+		* @param report - `missionNoEvidence`'s answer.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionTried({ report, zh }) {
+			const diagnostics = report.diagnostics ?? null;
+			const tools = diagnostics?.tools ?? {};
+			const hosts = Array.isArray(diagnostics?.hosts) ? diagnostics.hosts : [];
+			const failed = Array.isArray(diagnostics?.queries) ? diagnostics.queries : [];
+			const findings = missionVerifyRows(diagnostics?.findings ?? {}, zh);
+			const toolRows = Object.entries(tools);
+
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: "10px" },
+				children: [
+					report.why === "" ? null : jsx("div", {
+						style: { fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-primary)" },
+						// The evidence gate's own sentence. Reused rather than
+						// re-worded: two wordings of one refusal is the same defect
+						// as two names for one method.
+						children: report.why
+					}, "why"),
+					diagnostics === null ? jsx("div", {
+						style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+						children: zh
+							? "这次运行没有留下采集诊断，或者它已经滚出了事件尾部。事件是完整存着的：用 /events?since=0 可以从头读。"
+							: "No collection diagnostics were recorded for this run, or they have scrolled out of the event tail. The log itself is complete — read it from the beginning with /events?since=0."
+					}, "none") : null,
+					typeof diagnostics?.unavailable === "string" ? jsx("div", {
+						style: { fontSize: "12px", color: "rgb(217,119,6)" },
+						children: (zh ? "采集诊断本身失败了：" : "The diagnostics query itself failed: ") + diagnostics.unavailable
+					}, "unavailable") : null,
+					toolRows.length === 0 ? null : jsxs("div", {
+						children: [
+							jsx("div", {
+								style: { fontSize: "12px", fontWeight: 600, marginBottom: "4px", color: "var(--dsw-alias-label-primary)" },
+								children: zh ? "调用过的工具" : "Tools called"
+							}, "head"),
+							jsx("div", {
+								style: { display: "flex", flexWrap: "wrap", gap: "6px" },
+								children: toolRows.map(([tool, tally]) => jsx("span", {
+									style: {
+										padding: "1px 7px", borderRadius: "5px",
+										border: "1px solid var(--dsw-alias-border-l2)",
+										fontSize: "11px", color: "var(--dsw-alias-label-secondary)"
+									},
+									children: zh
+										? `${tool} 调用 ${tally.calls} 次，成功 ${tally.ok}，失败 ${tally.failed}`
+										: `${tool}: ${tally.calls} call(s), ${tally.ok} ok, ${tally.failed} failed`
+								}, tool))
+							}, "tools")
+						]
+					}, "toolBlock"),
+					hosts.length === 0 ? null : jsx("div", {
+						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						children: (zh ? "已核验证据来自这些站点：" : "Verified evidence came from these hosts: ") + hosts.join("、")
+					}, "hosts"),
+					findings.length === 0 ? null : jsx("div", {
+						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						children: (zh ? "写下来的发现按核验结果分：" : "Recorded findings by verify state: ")
+							+ findings.map((row) => `${row.label} ${row.n}`).join(" · ")
+					}, "findings"),
+					failed.length === 0 ? null : jsxs("div", {
+						children: [
+							jsx("div", {
+								style: { fontSize: "12px", fontWeight: 600, marginBottom: "4px", color: "var(--dsw-alias-label-primary)" },
+								children: zh ? `失败或被拒绝的工具调用（最近 ${failed.length} 条）` : `Tool calls that failed or were refused (latest ${failed.length})`
+							}, "head"),
+							jsx("div", {
+								style: { display: "flex", flexDirection: "column", gap: "3px" },
+								children: failed.map((row, at) => jsx("div", {
+									style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+									children: `${formatStamp(row.at)} · ${missionFace(MISSION_STAGE_FACES, row.stepId, zh)} · ${row.tool}`
+										+ (row.paceKey === null || row.paceKey === undefined ? "" : ` · ${row.paceKey}`)
+										+ ` · ${row.errorCode ?? (zh ? "未记录错误码" : "no error code recorded")}`
+								}, `${row.tool}-${row.at}-${at}`))
+							}, "list"),
+							jsx("div", {
+								style: { marginTop: "6px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+								children: zh
+									? "工具调用只记了工具名、配额键和参数哈希，没有记检索词本身，所以这里给不出具体搜了什么。"
+									: "Tool calls are recorded with the tool, the pace key and a hash of the arguments — not the arguments — so the search terms themselves cannot be listed here."
+							}, "caveat")
+						]
+					}, "failedBlock")
+				]
+			});
+		}
+
+		/**
+		* The live tail: what the mission has been doing, newest first.
+		*
+		* Newest first because this is read while something is running, and the
+		* line worth seeing is the one that just landed. The read is bounded and
+		* the panel says so, so an absent event is "not in this window" rather
+		* than "never happened".
+		* @param timeline - `timeline` from the view route.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionTimeline({ timeline, zh }) {
+			const events = Array.isArray(timeline?.events) ? timeline.events : [];
+			const shown = events.slice(-60).reverse();
+			if (shown.length === 0) {
+				return jsx("div", {
+					style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+					children: zh ? "这一段窗口里还没有事件。" : "No events in this window yet."
+				});
+			}
+			return jsx("div", {
+				style: { display: "flex", flexDirection: "column", gap: "4px" },
+				children: shown.map((event) => {
+					const detail = missionEventDetail(event, zh);
+					return jsxs("div", {
+						style: { display: "flex", gap: "8px", fontSize: "12px", lineHeight: "18px" },
+						children: [
+							jsx("span", {
+								style: { flex: "none", color: "var(--dsw-alias-label-secondary)", fontVariantNumeric: "tabular-nums" },
+								children: formatStamp(event.ts)
+							}, "at"),
+							jsx("span", {
+								style: { flex: "none", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+								children: missionFace(MISSION_EVENT_FACES, event.type, zh)
+							}, "type"),
+							detail === "" ? null : jsx("span", {
+								style: { flex: 1, minWidth: 0, color: "var(--dsw-alias-label-secondary)", wordBreak: "break-word" },
+								children: detail
+							}, "detail")
+						]
+					}, String(event.seq));
+				})
+			});
+		}
+		//#endregion
+
+		//#region missions detail
+		/**
+		* One action's answer, said out loud.
+		*
+		* Every one of these routes reports two things — whether the row moved
+		* and whether the WORK moved — and they can disagree: a cancel that wins
+		* the write while the run belongs to a dead process aborts nothing, and a
+		* rerun that parks has claimed the row without dispatching it. Collapsing
+		* either pair into "done" is how a button that did half of what it said
+		* looks exactly like one that worked.
+		* @param action - `cancel` | `resume` | `rerun`.
+		* @param data - the route's `data` object.
+		* @param zh - whether to write Chinese.
+		* @returns the sentence to show.
+		*/
+		function missionActionNote(action, data, zh) {
+			if (action === "cancel") {
+				return data.aborted === true
+					? (zh ? "已中止，运行中的工作也停了。" : "Cancelled, and the running work was stopped.")
+					: (zh ? `状态已写成 ${data.status ?? "cancelled"}，但本进程没有在跑它，所以没有东西可以中止。` : `The row was written as ${data.status ?? "cancelled"}, but this process was not running it, so there was nothing to abort.`);
+			}
+			if (action === "resume") {
+				return data.started === true
+					? (zh ? `已从检查点继续，这是第 ${data.runCount} 次运行。` : `Resumed from the checkpoint as run ${data.runCount}.`)
+					: (zh ? "没有继续起来。" : "It did not resume.");
+			}
+			if (action === "rerun") {
+				if (data.started === true) {
+					return data.mode === "incremental"
+						? (zh ? `已增量重跑，这是第 ${data.runCount} 次运行；上一次的结果一条也没删。` : `Rerunning incrementally as run ${data.runCount}; nothing from the previous run was deleted.`)
+						: (zh ? `已全新重跑，这是第 ${data.runCount} 次运行；上一次的结果一条也没删。` : `Rerunning from scratch as run ${data.runCount}; nothing from the previous run was deleted.`);
+				}
+				return data.parked === true
+					? (zh ? "任务已认领但没有派发出去，已经挂回可继续状态 —— 不会留下一个没人跑的“运行中”。" : "The mission was claimed but not dispatched, so it was parked back as resumable rather than left running with nothing driving it.")
+					: (zh ? "没有重跑起来。" : "It did not start.");
+			}
+			return "";
+		}
+
+		/**
+		* One mission, watched: the stages, the dimensions, the cost, the tail,
+		* and the four things a person can do about it.
+		*
+		* Polls `/missions/:id/view` while the mission is not terminal and stops
+		* the moment it is. There is no websocket here and the SSE route is not
+		* used: the view route already carries the tail beside everything else,
+		* and one request cannot disagree with itself.
+		* @param missionId - the mission to watch.
+		* @param zh - whether to write Chinese.
+		* @param onBack - return to the list.
+		*/
+		function MissionDetail({ missionId, zh, onBack }) {
+			const [view, setView] = useState(null);
+			const [state, setState] = useState("loading");
+			const [error, setError] = useState("");
+			const [tick, setTick] = useState(0);
+			const [busy, setBusy] = useState("");
+			const [notice, setNotice] = useState("");
+			const [actionError, setActionError] = useState("");
+			const [reading, setReading] = useState(false);
+
+			useEffect(() => {
+				let alive = true;
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/view?tail=${MISSION_TAIL}`)
+					.then(missionData)
+					.then((data) => {
+						if (!alive) return;
+						setView(data);
+						setState("ready");
+					})
+					.catch((cause) => {
+						if (!alive) return;
+						setError(String(cause?.message ?? cause));
+						setState("error");
+					});
+				return () => { alive = false; };
+			}, [missionId, tick]);
+
+			// Polls only while the mission is live. Unref'd for the same reason
+			// the list's timer is: this module is rendered in Node by
+			// tests/settings.test.mjs, which never unmounts.
+			const terminal = view?.mission?.terminal === true;
+			useEffect(() => {
+				if (state !== "ready" || terminal) return;
+				const timer = setTimeout(() => { setTick((value) => value + 1); }, MISSION_POLL_MS);
+				timer.unref?.();
+				return () => { clearTimeout(timer); };
+			}, [state, terminal, tick]);
+
+			const act = useCallback(async (action, body) => {
+				setBusy(action);
+				setNotice("");
+				setActionError("");
+				try {
+					const response = await fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/${action}`, {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify(body ?? {})
+					});
+					setNotice(missionActionNote(action, await missionData(response), zh));
+				} catch (cause) {
+					// The 409s here carry the reason AND the next action — one of
+					// the six resume refusals, or the sentence telling you to
+					// cancel before rerunning a live mission. Shown as it came.
+					setActionError(String(cause?.message ?? cause));
+				} finally {
+					setBusy("");
+					setTick((value) => value + 1);
+				}
+			}, [missionId, zh]);
+
+			if (state === "loading" && view === null) {
+				// With the back control, not without it. A slow first read that
+				// offers no way out is a tab a person has to close the whole
+				// page to leave.
+				return jsxs("div", {
+					style: { ...CONTENT_STYLE, padding: "0 24px" },
+					children: [
+						jsx("button", {
+							type: "button", style: controlStyle(), onClick: onBack,
+							children: zh ? "← 返回任务列表" : "← Back to missions"
+						}, "back"),
+						jsx("div", { style: { ...NOTE_STYLE, marginTop: "14px" }, children: zh ? "加载中…" : "Loading…" }, "note")
+					]
+				});
+			}
+			if (state === "error" && view === null) {
+				return jsxs("div", {
+					style: { ...CONTENT_STYLE, padding: "0 24px" },
+					children: [
+						jsx("button", {
+							type: "button", style: controlStyle(), onClick: onBack,
+							children: zh ? "← 返回任务列表" : "← Back to missions"
+						}, "back"),
+						jsx("div", {
+							style: { ...NOTE_STYLE, marginTop: "14px" },
+							children: (zh ? "读不到这个任务：" : "Could not read this mission: ") + error
+						}, "note")
+					]
+				});
+			}
+
+			if (reading) {
+				return jsx(MissionReport, { missionId, zh, onBack: () => { setReading(false); } });
+			}
+
+			const mission = view.mission;
+			const face = missionPillFace(mission.pill, zh);
+			const artifact = view.artifact ?? { kind: "empty-artifact", reason: "not-yet-materialized" };
+			const hasReport = artifact.kind === "artifact";
+			const evidence = mission.evidence ?? {};
+			const noEvidence = missionNoEvidence(view.timeline);
+			const preflight = view.timeline?.preflight ?? null;
+			const resume = view.resume ?? { offered: false };
+			const progress = mission.progress ?? {};
+
+			const meta = [
+				missionFace(MISSION_TIER_FACES, mission.depth, zh),
+				zh ? `第 ${mission.runCount} 次运行` : `run ${mission.runCount}`,
+				zh ? `阶段 ${progress.stagesResolved}/${progress.stagesTotal}` : `stages ${progress.stagesResolved}/${progress.stagesTotal}`,
+				progress.dimensionsTotal > 0
+					? (zh ? `维度 ${progress.dimensionsResolved}/${progress.dimensionsTotal}` : `dimensions ${progress.dimensionsResolved}/${progress.dimensionsTotal}`)
+					: "",
+				progress.chaptersTotal > 0
+					? (zh ? `章节 ${progress.chaptersDone}/${progress.chaptersTotal}` : `chapters ${progress.chaptersDone}/${progress.chaptersTotal}`)
+					: "",
+				zh ? `已用 ${missionDuration(mission.elapsedMs, zh)}` : `${missionDuration(mission.elapsedMs, zh)} elapsed`,
+				formatStamp(mission.startedAt)
+			].filter((piece) => piece !== "").join(" · ");
+
+			return jsx("div", {
+				style: { height: "100%", minHeight: 0, overflowY: "auto" },
+				children: jsxs("div", {
+					style: { ...CONTENT_STYLE, padding: "0 24px 24px" },
+					children: [
+						jsxs("div", {
+							style: { display: "flex", alignItems: "center", gap: "10px", margin: "0 0 12px" },
+							children: [
+								jsx("button", {
+									type: "button", style: controlStyle(), onClick: onBack,
+									children: zh ? "← 返回任务列表" : "← Back to missions"
+								}, "back"),
+								jsx("span", { style: { flex: 1 } }, "spacer"),
+								jsx("span", {
+									style: {
+										padding: "2px 9px", borderRadius: "6px",
+										background: `rgba(${face.hue},0.12)`, color: `rgb(${face.hue})`,
+										fontSize: "12px", fontWeight: 600
+									},
+									children: face.note === "" ? face.label : `${face.label} · ${face.note}`
+								}, "pill")
+							]
+						}, "bar"),
+						jsx("h2", {
+							style: { margin: "0 0 6px", fontSize: "18px", lineHeight: "26px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+							children: mission.topic
+						}, "topic"),
+						jsx("div", { style: { ...META_STYLE, margin: "0 0 14px" }, children: meta }, "meta"),
+
+						// The four actions, and every one of them says what it did.
+						jsxs("div", {
+							style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", margin: "0 0 14px" },
+							children: [
+								mission.terminal ? null : jsx("button", {
+									type: "button",
+									disabled: busy !== "",
+									style: controlStyle(),
+									onClick: () => { void act("cancel"); },
+									children: busy === "cancel" ? (zh ? "正在中止…" : "Cancelling…") : (zh ? "中止" : "Cancel")
+								}, "cancel"),
+								!resume.offered ? null : jsx("button", {
+									type: "button",
+									disabled: busy !== "",
+									title: resume.detail ?? "",
+									style: controlStyle(),
+									onClick: () => { void act("resume"); },
+									children: busy === "resume" ? (zh ? "正在继续…" : "Resuming…") : (zh ? "从检查点继续" : "Resume")
+								}, "resume"),
+								!mission.terminal ? null : jsx("button", {
+									type: "button",
+									disabled: busy !== "",
+									style: controlStyle(),
+									onClick: () => { void act("rerun", { mode: "fresh" }); },
+									children: busy === "rerun" ? (zh ? "正在重跑…" : "Rerunning…") : (zh ? "全新重跑" : "Rerun from scratch")
+								}, "rerun"),
+								!mission.terminal ? null : jsx("button", {
+									type: "button",
+									disabled: busy !== "",
+									style: controlStyle(),
+									onClick: () => { void act("rerun", { mode: "incremental" }); },
+									children: zh ? "增量重跑" : "Rerun incrementally"
+								}, "rerunIncremental"),
+								!hasReport ? null : jsx("button", {
 									type: "button",
 									style: controlStyle(),
-									onClick: () => { void loadMore(); },
-									children: zh ? "加载更多" : "Load more"
-								})
-							}, "loadMore")
-							: null,
-						state === "loading-more"
+									onClick: () => { setReading(true); },
+									children: zh ? "读报告" : "Read the report"
+								}, "read"),
+								!hasReport ? null : jsx("a", {
+									href: `${apiBase()}/missions/${encodeURIComponent(missionId)}/report.md`,
+									download: `${missionId}.md`,
+									style: { ...controlStyle(), display: "inline-flex", alignItems: "center", textDecoration: "none" },
+									children: zh ? "下载 .md" : "Download .md"
+								}, "download")
+							]
+						}, "actions"),
+						notice === "" ? null : jsx("div", {
+							style: { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+							children: notice
+						}, "notice"),
+						actionError === "" ? null : jsx("div", {
+							style: { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "rgb(220,38,38)" },
+							children: actionError
+						}, "actionError"),
+						// A refresh that failed over a view we already have. Without
+						// this line the page keeps drawing the last good answer with
+						// a clock that never moves, which is the most convincing
+						// wrong screen this tab can produce.
+						state !== "error" ? null : jsx("div", {
+							style: { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "rgb(217,119,6)" },
+							children: (zh ? "这一次刷新失败了，下面是上一次读到的状态：" : "The latest refresh failed; what follows is the last state that was read: ") + error
+						}, "staleView"),
+						// The mission's own failure, with the code beside it. The
+						// code is what makes a failure countable across missions;
+						// the sentence is what makes this one actionable.
+						(mission.errorMessage ?? "") === "" ? null : jsx("div", {
+							style: {
+								margin: "0 0 14px", padding: "10px 12px", borderRadius: "10px",
+								background: "rgba(220,38,38,0.06)", border: "1px solid rgba(220,38,38,0.25)",
+								fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-primary)"
+							},
+							children: (mission.failureCode === null ? "" : `${mission.failureCode} · `) + mission.errorMessage
+						}, "failure"),
+						// Sign-off, when there is one. `signed: null` means s11 never
+						// ran; `false` means the Leader read the report and refused.
+						// Different failures, different next actions.
+						mission.signed === null || mission.signed === undefined ? null : jsx("div", {
+							style: { margin: "0 0 14px", fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-primary)" },
+							children: mission.signed
+								? (zh ? `领队已签署，评分 ${mission.score ?? "—"}${(mission.verdict ?? "") === "" ? "" : `（${mission.verdict}）`}。` : `Signed off by the leader at ${mission.score ?? "—"}${(mission.verdict ?? "") === "" ? "" : ` (${mission.verdict})`}.`)
+								: (zh ? `领队读过报告后拒绝签署，评分 ${mission.score ?? "—"}。报告仍然可读。` : `The leader read the report and declined to sign it, at ${mission.score ?? "—"}. The report is still readable.`)
+						}, "signature"),
+						!hasReport ? jsx("div", {
+							style: { margin: "0 0 14px", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+							// Three reasons, three sentences. A sentinel that means
+							// both "not yet" and "we tried and it did not land" is a
+							// default wearing a costume.
+							children: artifact.reason === "write-failed"
+								? (zh ? "报告写失败了：任务已经结束，但没有落下任何一版报告。" : "The artefact write failed: the mission ended and no version was stored.")
+								: artifact.reason === "terminal-without-artifact"
+								? (zh ? "任务结束了，却没有留下报告 —— 每条结束路径都应该写一版，所以这是失败路径上的一个洞。" : "The mission ended without an artefact. Every terminal path is supposed to write one, so this is a hole in a failure path.")
+								: (zh ? "报告还没有生成 —— 任务还没有走到归档那一步。" : "No report yet — the mission has not reached the persist stage.")
+						}, "noArtifact") : null,
+
+						jsx(MissionPanel, {
+							title: zh ? "阶段" : "Stages",
+							note: zh ? `十二个阶段，本档跳过的也在其中` : "twelve stages, including the ones this tier skips",
+							children: jsx(MissionStageStrip, { stages: view.stages ?? [], zh })
+						}, "stages"),
+
+						jsx(MissionPanel, {
+							title: zh ? "花费" : "Cost",
+							note: zh ? "上限在建立任务时冻结，之后每个阶段都读同一行" : "the ceilings were frozen when the mission was opened",
+							children: jsx(MissionCostMeters, { cost: view.cost ?? {}, zh })
+						}, "cost"),
+
+						(view.dimensions ?? []).length === 0 ? null : jsx(MissionPanel, {
+							title: zh ? "维度" : "Dimensions",
+							note: zh
+								? `已核验 ${evidence.verified ?? 0} 条 · 共 ${evidence.total ?? 0} 条发现`
+								: `${evidence.verified ?? 0} verified of ${evidence.total ?? 0} findings`,
+							children: jsx("div", {
+								style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "10px" },
+								children: view.dimensions.map((dimension) => jsx(MissionDimensionCard, {
+									dimension, zh
+								}, dimension.dimensionId))
+							})
+						}, "dimensions"),
+
+						preflight === null || (preflight.messages ?? []).length === 0 ? null : jsx(MissionPanel, {
+							title: zh ? "核验风险" : "Verification risk",
+							note: preflight.known
+								? (zh ? "已经过核验阶段" : "measured after the verify stage")
+								: (zh ? "核验阶段还没跑完，这是临时值" : "provisional: the verify stage has not run yet"),
+							children: jsx("div", {
+								style: { display: "flex", flexDirection: "column", gap: "6px" },
+								children: preflight.messages.map((message, at) => jsx("div", {
+									style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+									children: message
+								}, String(at)))
+							})
+						}, "preflight"),
+
+						// The panel that keeps a failed mission from being a blank
+						// screen. Shown whenever the run recorded that it verified
+						// nothing, whatever the mission then went on to do.
+						noEvidence === null ? null : jsx(MissionPanel, {
+							title: zh ? "这次都试了什么" : "What was tried",
+							note: zh ? "零条通过核验时留下的采集诊断" : "the collection diagnostics frozen when nothing verified",
+							children: jsx(MissionTried, { report: noEvidence, zh })
+						}, "tried"),
+
+						jsx(MissionPanel, {
+							title: zh ? "实况" : "Live tail",
+							note: view.timeline?.bounded === true
+								? (zh ? `只是最近的一段，不是全部日志` : "the latest window, not the whole log")
+								: "",
+							children: jsx(MissionTimeline, { timeline: view.timeline, zh })
+						}, "timeline"),
+
+						// The projector's own health. Anomalies are things it had to
+						// repair while reading — a stage still marked running on a
+						// finished mission, a stage id the catalogue does not know —
+						// and they are shown rather than silently smoothed over.
+						(view.swept ?? []).length === 0 ? null : jsx(MissionPanel, {
+							title: zh ? "读取时修正的异常" : "Anomalies repaired while reading",
+							note: zh ? "这些是显示层的修补，不是任务本身的输出" : "display-time repairs, not the mission's own output",
+							children: jsx("div", {
+								style: { display: "flex", flexDirection: "column", gap: "6px" },
+								children: view.swept.map((entry, at) => jsx("div", {
+									style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+									children: `${entry.kind} · ${entry.key} · ${entry.reason}`
+								}, `${entry.kind}-${entry.key}-${at}`))
+							})
+						}, "swept")
+					]
+				})
+			});
+		}
+		//#endregion
+
+		//#region missions report
+		/**
+		* The kind an evidence source is read under.
+		*
+		* `DocumentView` colours itself from `kind.hue` and would throw on an
+		* undefined kind, taking the whole pane blank — and a mission cites
+		* whatever the open web served it, which is not one of the 信源 kinds at
+		* all. A neutral entry is the difference between a grey badge and a
+		* reader that renders nothing.
+		*/
+		const MISSION_SOURCE_KIND = { id: "other", type: "", en: "Source", zh: "信源", hue: "100,116,139" };
+
+		/**
+		* One frozen piece of evidence: what was claimed, the sentence it rests
+		* on, and the address a reader can open.
+		*
+		* The blob is frozen at persist time on purpose — the live findings and
+		* documents move on, and a report nobody can check later is not a report.
+		* So the quote is shown verbatim, the source is named, and the link goes
+		* to the page the quote was verified against rather than to anything this
+		* page reconstructed.
+		* @param row - one entry of `artifact.evidence`.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionEvidenceRow({ row, zh, onOpen }) {
+			const verified = String(row.verifyState ?? "").startsWith("verified");
+			const accent = verified ? "5,150,105" : "217,119,6";
+			const name = (row.sourceTitle ?? "") !== "" ? row.sourceTitle
+				: (row.sourceHost ?? "") !== "" ? row.sourceHost
+				: hostOf(row.sourceUrl ?? "");
+			const openable = typeof row.sourceUrl === "string" && row.sourceUrl !== "";
+
+			return jsxs("div", {
+				style: {
+					display: "flex", alignItems: "flex-start", gap: "9px",
+					padding: "8px 10px", borderRadius: "8px", background: `rgba(${accent},0.06)`
+				},
+				children: [
+					jsx("span", {
+						style: { flex: "none", color: `rgb(${accent})`, fontSize: "13px", lineHeight: "20px" },
+						children: verified ? "✓" : "!"
+					}, "mark"),
+					jsxs("div", {
+						style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "3px" },
+						children: [
+							jsx("div", {
+								style: { fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-primary)" },
+								children: row.claim
+							}, "claim"),
+							jsx("div", {
+								style: { fontSize: "12px", lineHeight: "19px", color: "var(--dsw-alias-label-secondary)" },
+								children: `“${row.quote}”`
+							}, "quote"),
+							jsxs("div", {
+								style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+								children: [
+									jsx("span", { children: missionFace(MISSION_VERIFY_FACES, row.verifyState, zh) }, "state"),
+									jsx("span", { children: name }, "name"),
+									row.fetchedAt === null || row.fetchedAt === undefined ? null
+										: jsx("span", { children: (zh ? "抓取于 " : "fetched ") + formatStamp(row.fetchedAt) }, "fetched"),
+									// Two ways to follow the quote, because they answer
+									// two questions. The reader is 信源's own — the
+									// Host half re-fetches the page and extracts it —
+									// and answers "does the page still say this". The
+									// plain link answers "what else is on that page",
+									// which an extractor cannot.
+									//
+									// An address that did not survive is neither: the
+									// row still shows its quote and simply does not
+									// offer a control it cannot honour, because a
+									// button that fails quietly when pressed is the
+									// same lie as a report that cites what it cannot
+									// show.
+									!openable ? jsx("span", {
+										children: zh ? "证据里没有带回可打开的地址" : "no openable address travelled with this evidence"
+									}, "noUrl") : jsx("button", {
+										type: "button",
+										onClick: () => { onOpen(row); },
+										style: {
+											appearance: "none", border: "none", background: "transparent", padding: 0,
+											color: `rgb(${accent})`, font: "inherit", fontSize: "11px", cursor: "pointer"
+										},
+										children: (zh ? "在阅读器里打开 · " : "Open in the reader · ") + hostOf(row.sourceUrl)
+									}, "open"),
+									!openable ? null : jsx("a", {
+										href: row.sourceUrl,
+										target: "_blank",
+										rel: "noreferrer noopener",
+										style: { color: "var(--dsw-alias-label-secondary)", textDecoration: "none" },
+										children: zh ? "原始链接" : "Original link"
+									}, "raw")
+								]
+							}, "meta")
+						]
+					}, "body")
+				]
+			});
+		}
+
+		/**
+		* The report, its scorecard, and every quote under it.
+		*
+		* The markdown is read from `/missions/:id/artifact` rather than
+		* reassembled here: `assemble()` is the Host half's, it is deterministic,
+		* and a second assembler in the browser is a second document that would
+		* drift from the one the sign-off was given against.
+		* @param missionId - the mission.
+		* @param zh - whether to write Chinese.
+		* @param onBack - return to the detail view.
+		*/
+		function MissionReport({ missionId, zh, onBack }) {
+			const [version, setVersion] = useState(0);
+			const [artifact, setArtifact] = useState(null);
+			const [versions, setVersions] = useState([]);
+			const [state, setState] = useState("loading");
+			const [error, setError] = useState("");
+			const [showEvidence, setShowEvidence] = useState(true);
+			// report | source, switched in place: the same arrangement 信源 uses
+			// when a card is opened, so the frame never moves under the reader.
+			const [source, setSource] = useState(null);
+
+			useEffect(() => {
+				let alive = true;
+				const query = version === 0 ? "" : `?version=${version}`;
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/artifact${query}`)
+					.then(missionData)
+					.then((data) => {
+						if (!alive) return;
+						setArtifact(data.artifact ?? null);
+						setVersions(Array.isArray(data.versions) ? data.versions : []);
+						setState("ready");
+					})
+					.catch((cause) => {
+						if (!alive) return;
+						setError(String(cause?.message ?? cause));
+						setState("error");
+					});
+				return () => { alive = false; };
+			}, [missionId, version]);
+
+			const back = jsx("button", {
+				type: "button", style: controlStyle(), onClick: onBack,
+				children: zh ? "← 返回任务" : "← Back to the mission"
+			}, "back");
+
+			// The source behind one quote, read through 信源's own reader: the
+			// Host half re-fetches the page and extracts it, which is the only
+			// way to answer "does that page still say this" from here. A second
+			// reader written for missions would be a second answer to that.
+			if (source !== null) {
+				return jsxs("div", {
+					style: { height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: "10px", padding: "0 24px 16px" },
+					children: [
+						jsxs("div", {
+							style: { flex: "none", display: "flex", alignItems: "center", gap: "10px" },
+							children: [
+								jsx("button", {
+									type: "button", style: controlStyle(), onClick: () => { setSource(null); },
+									children: zh ? "← 返回报告" : "← Back to the report"
+								}, "back"),
+								jsx("span", {
+									style: { flex: 1, minWidth: 0, fontSize: "13px", color: "var(--dsw-alias-label-secondary)" },
+									children: ((source.sourceTitle ?? "") === "" ? hostOf(source.sourceUrl) : source.sourceTitle)
+										+ (zh ? " · 引语：" : " · quote: ") + `“${source.quote}”`
+								}, "which")
+							]
+						}, "bar"),
+						jsx("div", {
+							style: { flex: 1, minHeight: 0 },
+							children: jsx(DocumentView, {
+								// A synthetic row, because `DocumentView` reads a
+								// resource and this is a fetched web page: the mission
+								// documents are not library rows and no route serves
+								// them. Everything the reader actually uses — the url,
+								// the title, the display mode it derives from the url —
+								// is here.
+								row: { id: source.documentId ?? source.sourceUrl, title: source.sourceTitle ?? "", sourceUrl: source.sourceUrl, type: "" },
+								kind: MISSION_SOURCE_KIND, zh, wide: true
+							})
+						}, "reader")
+					]
+				});
+			}
+
+			if (state === "loading") {
+				return jsx("div", { style: NOTE_STYLE, children: zh ? "加载中…" : "Loading…" });
+			}
+			if (state === "error") {
+				return jsxs("div", {
+					style: { ...CONTENT_STYLE, padding: "0 24px" },
+					children: [back, jsx("div", {
+						style: { ...NOTE_STYLE, marginTop: "14px" },
+						children: (zh ? "读不到这份报告：" : "Could not read this report: ") + error
+					}, "note")]
+				});
+			}
+			if (artifact === null || artifact.kind === "empty-artifact") {
+				return jsxs("div", {
+					style: { ...CONTENT_STYLE, padding: "0 24px" },
+					children: [back, jsx("div", {
+						style: { ...NOTE_STYLE, marginTop: "14px" },
+						children: artifact?.reason === "write-failed"
+							? (zh ? "报告写失败了：任务已经结束，但没有落下任何一版。" : "The artefact write failed: the mission ended and no version was stored.")
+							: artifact?.reason === "no-such-version"
+							? (zh ? "没有这一版报告。" : "There is no such version.")
+							: (zh ? "还没有生成报告。" : "No report has been produced yet.")
+					}, "note")]
+				});
+			}
+
+			const quality = artifact.quality ?? {};
+			const evidence = Array.isArray(artifact.evidence) ? artifact.evidence : [];
+			const citations = Array.isArray(artifact.citations) ? artifact.citations : [];
+			const tallies = [
+				["evidenced", zh ? "有据章节" : "Evidenced"],
+				["interpretive", zh ? "解读章节" : "Interpretive"],
+				["unplaced", zh ? "无法归章" : "Unplaced"]
+			].filter(([key]) => Number(quality[key]?.total ?? 0) > 0);
+
+			return jsx("div", {
+				style: { height: "100%", minHeight: 0, overflowY: "auto" },
+				children: jsxs("div", {
+					style: { ...CONTENT_STYLE, padding: "0 24px 24px" },
+					children: [
+						jsxs("div", {
+							style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", margin: "0 0 12px" },
+							children: [
+								back,
+								jsx("span", { style: { flex: 1 } }, "spacer"),
+								...versions.map((entry) => jsx("button", {
+									type: "button",
+									role: "tab",
+									"aria-selected": entry.version === artifact.version,
+									style: chipStyle({ hue: entry.degraded ? "217,119,6" : "100,116,139" }, entry.version === artifact.version),
+									onClick: () => { setVersion(entry.version); },
+									children: (zh ? `第 ${entry.version} 版` : `v${entry.version}`)
+										+ (entry.degraded ? (zh ? " · 降级" : " · degraded") : "")
+								}, String(entry.version)))
+							]
+						}, "versions"),
+						jsx("h2", {
+							style: { margin: "0 0 6px", fontSize: "20px", lineHeight: "28px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+							children: artifact.title
+						}, "title"),
+						jsx("div", {
+							style: { ...META_STYLE, margin: "0 0 6px" },
+							children: [
+								zh ? `${artifact.wordCount} 字` : `${artifact.wordCount} words`,
+								zh ? `${citations.length} 处引用` : `${citations.length} citation(s)`,
+								zh ? `${evidence.length} 条冻结证据` : `${evidence.length} frozen evidence row(s)`,
+								artifact.trigger === null || artifact.trigger === undefined ? "" : String(artifact.trigger),
+								formatStamp(artifact.createdAt)
+							].filter((piece) => piece !== "").join(" · ")
+						}, "meta"),
+						!artifact.degraded ? null : jsx("div", {
+							style: { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "rgb(217,119,6)" },
+							children: zh
+								? "这一版是降级归档的：要么内容闸门有违规，要么领队没有签署。报告仍然写出来了，就是为了让你能看见问题出在哪。"
+								: "This version was stored degraded: either the content guard fired or the leader did not sign it. It was written anyway so the problem is readable."
+						}, "degraded"),
+						// Per section type, never averaged. "Chapter seven has zero
+						// citations" has to stay visible instead of disappearing
+						// into a healthy-looking overall ratio.
+						Number(quality.total ?? 0) === 0
 							? jsx("div", {
-								style: { textAlign: "center", padding: "8px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
-								children: zh ? "加载中…" : "Loading…"
-							}, "loadingMore")
-							: null
+								style: { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "rgb(220,38,38)" },
+								children: zh
+									? "核验记分卡是空的：一处引用都没有核验过。这不是“没有发现问题”，这是没有检查过。"
+									: "The scorecard is empty: not one citation was checked. That is not a clean bill — nothing was verified at all."
+							}, "noScore")
+							: jsx("div", {
+								style: { display: "flex", flexWrap: "wrap", gap: "8px", margin: "0 0 14px" },
+								children: tallies.map(([key, label]) => {
+									const tally = quality[key] ?? {};
+									return jsx("span", {
+										style: {
+											padding: "2px 9px", borderRadius: "6px",
+											border: "1px solid var(--dsw-alias-border-l2)",
+											fontSize: "11px", color: "var(--dsw-alias-label-secondary)"
+										},
+										children: `${label} · ` + (zh
+											? `${tally.verified}/${tally.total} 已核验，未通过 ${tally.unverified}，未检查 ${tally.unchecked}，被反驳 ${tally.contradicted}`
+											: `${tally.verified}/${tally.total} verified, ${tally.unverified} unverified, ${tally.unchecked} unchecked, ${tally.contradicted} contradicted`)
+									}, key);
+								})
+							}, "score"),
+						jsx("div", {
+							style: { maxWidth: "760px", margin: "0 0 18px" },
+							children: renderMarkdown(artifact.markdown ?? "", "article")
+						}, "body"),
+						jsxs("div", {
+							style: { display: "flex", alignItems: "center", gap: "8px", margin: "0 0 10px" },
+							children: [
+								jsx("h3", {
+									style: { margin: 0, fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+									children: zh ? "证据" : "Evidence"
+								}, "title"),
+								jsx("button", {
+									type: "button",
+									style: { ...controlStyle(), height: "27px", fontSize: "12px" },
+									onClick: () => { setShowEvidence(!showEvidence); },
+									children: showEvidence
+										? (zh ? "收起" : "Hide")
+										: (zh ? `展开 ${evidence.length} 条` : `Show ${evidence.length}`)
+								}, "toggle")
+							]
+						}, "evidenceHead"),
+						!showEvidence ? null : (evidence.length === 0
+							? jsx("div", {
+								style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+								// An empty blob is only legal on a degraded artefact,
+								// and "we looked and found nothing verifiable" is a
+								// real answer — as long as it is said rather than
+								// rendered as an empty list.
+								children: zh
+									? "这一版没有冻结任何证据 —— 也就是说这次运行没有产出一条通过核验的引语。"
+									: "No evidence was frozen with this version: the run produced no quote that verified."
+							}, "noEvidence")
+							: jsx("div", {
+								style: { display: "flex", flexDirection: "column", gap: "6px" },
+								children: evidence.map((row, at) => jsx(MissionEvidenceRow, {
+									row, zh, onOpen: (entry) => { setSource(entry); }
+								}, `${String(row.findingId ?? "row")}-${at}`))
+							}, "evidence"))
 					]
 				})
 			});
@@ -5632,8 +6664,8 @@ window.__ModuleLoader__.load({
 			},
 			{
 				id: "insights", en: "Insights", zh: "洞察",
-				ledeEn: "Claims the swarm extracted from those sources, with provenance.",
-				ledeZh: "蜂群从信源中提炼出的结论，附出处。",
+				ledeEn: "Missions the swarm ran against a topic: what it read, what verified, and the report it signed.",
+				ledeZh: "蜂群针对一个课题跑完的调研任务：读了什么、哪些引语通过了核验、最后签署的报告。",
 				// No `soon`, and no empty text: this tab has a component of
 				// its own now, and both fields are read ONLY by the placeholder
 				// branch below. Left as they were, they would be a not-built
@@ -5846,11 +6878,13 @@ window.__ModuleLoader__.load({
 						}, candidate.id))
 					}),
 					jsx("div", {
-						// 信源 and 洞察 both open the reader IN PLACE, so both are
-						// handed the whole frame and scroll inside it. Under the
-						// padded, 1080px-capped body the reader's `height: 100%`
-						// resolves against a box that is only as tall as its own
-						// content, which renders a two-pane reader with no panes.
+						// 信源 and 洞察 both switch views IN PLACE — 信源 into its
+						// reader, 洞察 into a mission and then into that mission's
+						// report — so both are handed the whole frame and scroll
+						// inside it. Under the padded, 1080px-capped body the
+						// reader's `height: 100%` resolves against a box that is
+						// only as tall as its own content, which renders a two-pane
+						// reader with no panes.
 						style: reads ? READER_BODY_STYLE : BODY_STYLE,
 						role: "tabpanel",
 						"aria-label": zh ? active.zh : active.en,
@@ -5859,7 +6893,7 @@ window.__ModuleLoader__.load({
 							children: active.id === "sources"
 								? jsx(ExploreTab, { zh })
 								: active.id === "insights"
-								? jsx(InsightsTab, { zh })
+								? jsx(MissionsTab, { zh })
 								: active.id === "publish"
 								? jsx(PublishTab, { zh })
 								: jsxs("div", {
@@ -6523,8 +7557,13 @@ window.__ModuleLoader__.load({
 			KINDS, SORTS, youTubeVideoId, thumbnailOf, hostOf, sourceNameOf,
 			authorLine, descriptionOf, formatDate, resourcesUrl, unwrapFeed,
 			renderMarkdown, mergeBySentence, formatTime, displayModeOf, buildExport, stampFor,
-			insightDay, insightRunNote, insightPassNote, evidenceFace, insightFaceLabel,
-			SourcesSettings, SwarmPage, PublishTab, ExploreTab, InsightsTab, InsightCard,
+			missionFace, missionHue, missionPillFace, missionDuration, missionMeterLine,
+			missionVerifyRows, missionEventDetail, missionNoEvidence, missionActionNote,
+			missionTierLine, MISSION_FILTERS, MISSION_STAGE_FACES, MISSION_VERIFY_FACES,
+			SourcesSettings, SwarmPage, PublishTab, ExploreTab,
+			MissionsTab, MissionStarter, MissionListRow, MissionDetail, MissionPanel,
+			MissionStageStrip, MissionCostMeters, MissionDimensionCard, MissionTried,
+			MissionTimeline, MissionReport, MissionEvidenceRow,
 			VersionLine, libraryLine
 		};
 		return module.exports;

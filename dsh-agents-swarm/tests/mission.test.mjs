@@ -58,6 +58,7 @@ import {
   STAGE_IDS,
   SWEEP_STORE_METHODS,
   budgetGate,
+  detectNoProgress,
   canResume,
   checkDeadlines,
   checkStageReturn,
@@ -1066,4 +1067,35 @@ test("the mission tables stamp no schema version of their own", (t) => {
   assert.equal(store.db.prepare("PRAGMA user_version").get().user_version, 1);
   assert.equal(typeof missions.close, "undefined", "the handle belongs to the SourceStore");
   assert.equal(openMissionStore(store), missions, "two instances would be two places to look when a row is wrong");
+});
+
+test("a fan-out is not a loop, however alike its searches look", () => {
+  // Measured on a real mission: s3-collect fans out over five dimensions, three
+  // of them delivered findings, and the guard killed the run as `no_progress`
+  // with "No progress for 0s" — a sentence borrowed from the timeout branch,
+  // which had not fired. Two dimensions asking arXiv the same question is
+  // ordinary; three is not rare. A loop can only happen inside ONE agent.
+  const entry = { missionId: "m", stepId: "s3-collect", lastProgressAtMs: Date.now(), runCount: 1 };
+  const now = () => new Date().toISOString();
+
+  const fanOut = detectNoProgress({
+    entry, now: now(), noProgressKillMs: 600000, spendRose: true,
+    toolShapes: [
+      { agentId: "researcher:dim-1", stepId: "s3-collect", tool: "arxiv_search", argsHash: "same" },
+      { agentId: "researcher:dim-2", stepId: "s3-collect", tool: "arxiv_search", argsHash: "same" },
+      { agentId: "researcher:dim-3", stepId: "s3-collect", tool: "arxiv_search", argsHash: "same" },
+    ],
+  });
+  assert.equal(fanOut.tripped, false, `three dimensions searching alike was called a wedge: ${fanOut.why}`);
+
+  const wedge = detectNoProgress({
+    entry, now: now(), noProgressKillMs: 600000, spendRose: true,
+    toolShapes: [
+      { agentId: "researcher:dim-1", stepId: "s3-collect", tool: "arxiv_search", argsHash: "same" },
+      { agentId: "researcher:dim-1", stepId: "s3-collect", tool: "arxiv_search", argsHash: "same" },
+      { agentId: "researcher:dim-1", stepId: "s3-collect", tool: "arxiv_search", argsHash: "same" },
+    ],
+  });
+  assert.equal(wedge.tripped, true, "one agent asking the same question three times is the loop shape");
+  assert.match(wedge.why, /researcher:dim-1/u, "the reason must name which agent is looping");
 });

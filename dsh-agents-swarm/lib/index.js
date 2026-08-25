@@ -29,6 +29,10 @@ import { PUBLISH_DEFAULTS, readPublishConfig, startPublishTimer } from "./publis
 import { createInsightRoutes } from "./insight-routes.js";
 import { isInsightDue, readInsightConfig, runInsightPass } from "./insight-extract.js";
 import { openInsightStore } from "./insight-store.js";
+import { openMissionStore } from "./mission-store.js";
+import { createMissionRuntime } from "./mission-handlers.js";
+import { createMissionRoutes } from "./mission-routes.js";
+import { MISSION_SETTING_KEYS, readMissionConfig, validateMissionConfig } from "./mission-config.js";
 import { createProxyHandler } from "./remote.js";
 import { PLUGIN_CHANNEL, PLUGIN_COMMIT, PLUGIN_DIR, PLUGIN_VERSION, versionLabel } from "./version.js";
 import { DOCUMENT_FORMATS } from "./documents.js";
@@ -345,9 +349,10 @@ export function recordCollection(store, entry) {
  * @param logger - Cordis logger.
  * @param insightStore - the 洞察 store, or undefined to leave the pass unwired.
  * @param chat - streaming chat entry point, or undefined when no model is routed.
+ * @param ctx - Cordis context, for the optional `ctx.get("web")` search seam.
  * @returns a disposer stopping the timer.
  */
-export function startCollectionTimer(store, logger, insightStore, chat) {
+export function startCollectionTimer(store, logger, insightStore, chat, ctx) {
   let timer;
   let catchUp;
   const configured = Number(readConfig(store).collectIntervalMinutes ?? DEFAULT_COLLECT_INTERVAL_MINUTES);
@@ -393,7 +398,11 @@ export function startCollectionTimer(store, logger, insightStore, chat) {
       // arXiv alone and says so.
       await runInsightPass(store, insightStore, chat, logger, {
         markSkips: true,
-        web: typeof ctx.get === "function" ? ctx.get("web") : undefined,
+        // `ctx` is a PARAMETER. It was read here as a free variable, which is a
+        // ReferenceError on every tick the pass was due — swallowed by the outer
+        // catch as "insight pass could not be started: ctx is not defined", so
+        // the hourly 洞察 pass never ran at all and the tab simply stayed empty.
+        web: typeof ctx?.get === "function" ? ctx.get("web") : undefined,
       });
     } finally {
       insightRunning = false;
@@ -503,6 +512,10 @@ export function readConfig(store) {
     collectIntervalMinutes: store.getSetting("collectIntervalMinutes", DEFAULT_COLLECT_INTERVAL_MINUTES),
     ...readPublishConfig(store),
     ...readInsightConfig(store),
+    // 任务. Same shape as the two above: defaults, reader and validator all live
+    // in the feature's own module, and this line is the only place index.js
+    // knows the section exists.
+    ...readMissionConfig(store),
   };
 }
 
@@ -636,6 +649,17 @@ export function writeConfig(store, patch) {
   if (patch.insightChinese !== undefined && typeof patch.insightChinese !== "boolean") {
     problems.push("insightChinese must be true or false");
   }
+  // ── 任务 ─────────────────────────────────────────────────────────────
+  // Checked key by key, in the feature's own module, for the same reason every
+  // bound above is checked rather than coerced — and two of these decide how
+  // fast this installation talks to arXiv and to other people's web servers, so
+  // a silently clamped value is a promise made to a third party and broken.
+  //
+  // NOT here, on purpose: the five ceilings and `wallMs`. They are resolved once
+  // by `resolveBudget()` at create and read from the mission row thereafter. A
+  // ceiling a settings page could move under a running mission is playground's
+  // two-dollar rerun with a nicer name.
+  problems.push(...validateMissionConfig(patch));
   if (problems.length > 0) return problems;
   for (const key of [
     "feeds", "jobs", "transcriptLanguages", "supadataKey", "collectIntervalMinutes",
@@ -651,6 +675,10 @@ export function writeConfig(store, patch) {
     "insightIntervalMinutes", "insightResourceTypes", "insightMaxRows", "insightMaxClusters",
     "insightMaxReconcileCalls", "insightMinIndependent", "insightWindowDays", "insightDormantDays",
     "insightDuplicateBits", "insightChinese", "insightCorroborateClaims",
+    // 任务. The whitelist comes from the defaults object, so adding a setting is
+    // one edit in one file rather than two that can disagree — the way the three
+    // lists above can, and have.
+    ...MISSION_SETTING_KEYS,
   ]) {
     if (patch[key] !== undefined) store.setSetting(key, patch[key]);
   }
@@ -838,10 +866,25 @@ export function createChat(ctx) {
       messages,
     });
     for await (const chunk of stream) {
-      if (chunk.type === "text-delta") yield { text: chunk.text };
-      else if (chunk.type === "finish" && chunk.reason?.kind !== "stop") {
+      if (chunk.type === "text-delta") { yield { text: chunk.text }; continue; }
+      if (chunk.type !== "finish") continue;
+
+      // ONLY `aborted` AND `error` ARE FAILURES. This branch used to read
+      // `kind !== "stop"`, which reports every other ending as an outage.
+      // `max-tokens` is the one that actually reaches a user here: a long
+      // answer runs to the output cap, the reader has the prose in front of
+      // them, and the page appends a red error under it saying the model call
+      // failed. It did not fail — it was truncated, and the honest thing is to
+      // say so once, after the text, rather than to discard the answer's
+      // standing. `tool-calls` cannot arise on this seam today because the
+      // reading assistant is given no tools, but it is the NORMAL end of an
+      // acting turn and must never be an error if tools are ever added here.
+      const kind = chunk.reason?.kind;
+      if (kind === "aborted" || kind === "error") {
         const failure = chunk.reason?.failure;
-        yield { error: failure?.message ?? chunk.reason?.kind ?? "model call failed" };
+        yield { error: failure?.message ?? kind ?? "model call failed" };
+      } else if (kind === "max-tokens") {
+        yield { truncated: true };
       }
     }
   };
@@ -867,7 +910,11 @@ async function streamChat(res, chat, request) {
   try {
     for await (const piece of chat(request)) {
       if (piece.error !== undefined) send({ error: piece.error });
-      else send({ content: piece.text });
+      // A truncation is not an outage. The reader already has everything above
+      // it, so this is a note appended to a real answer rather than a red box
+      // replacing one — `{content}` keeps the browser's one parser unchanged.
+      else if (piece.truncated === true) send({ content: "\n\n[truncated: the model reached its output limit]" });
+      else if (piece.text !== undefined) send({ content: piece.text });
     }
   } catch (cause) {
     send({ error: String(cause?.message ?? cause) });
@@ -897,7 +944,7 @@ async function readJson(req, limit = 256 * 1024) {
  * @param chat - streaming chat entry point, or undefined when no model is routed.
  * @returns the node:http handler.
  */
-export function createHandler(store, logger, chat, web) {
+export function createHandler(store, logger, chat, web, ctx, missions) {
   // The publish surface is a separate module because it is a different
   // subject with its own lifecycle — a render is a job, not a request — and
   // folding forty lines of job bookkeeping into this router would bury the
@@ -923,6 +970,13 @@ export function createHandler(store, logger, chat, web) {
     // handler that answers it sat registered, loaded and never reached.
     // Adding one later means widening this condition in the same commit.
     if (path.startsWith("/insights/") && await insight(req, res, path)) return;
+    // 任务, beside the other two and with the same second-segment rule: a bare
+    // `/missions` would 404 because `"/missions".startsWith("/missions/")` is
+    // false, and widening this condition is part of adding such a route, not a
+    // follow-up. `missions` is undefined on a host that proxies its library —
+    // that machine runs no missions at all, and the proxy handler answers this
+    // prefix long before the router does. See `apply`.
+    if (missions !== undefined && path.startsWith("/missions/") && await missions(req, res, path)) return;
 
     // ── what this host is running ───────────────────────────────────────
     // Two halves of this plugin can be different versions: the page is served
@@ -1574,6 +1628,61 @@ export function createHandler(store, logger, chat, web) {
   };
 }
 
+/**
+ * The boot sweep, and the separate question of whether to pick anything back up.
+ *
+ * TWO DECISIONS, DELIBERATELY NOT ONE:
+ *
+ * The sweep ALWAYS runs. Every mission still `running` under a different boot id
+ * is orphaned by definition — in one process no other owner can exist — so it is
+ * one synchronous query with no threshold, no grace period and zero false
+ * positives, and each row is moved out of `running` with `runtime_crashed` and a
+ * checkpoint left behind for resume. Skipping it would leave rows that claim to
+ * be working while nothing is, which is the state the whole liveness apparatus
+ * exists to make impossible.
+ *
+ * AUTO-RESUME DOES NOT, unless `missionAutoResume` is on, and it ships off. A
+ * plugin process restarts on a settings change and on a harness auto-update, not
+ * only on a crash — so a `deep` mission with a 4M-token ceiling would otherwise
+ * silently resume, unattended, on every restart, and each restart would start it
+ * again. Resume is OFFERED (the mission list shows it, `/resume` takes it); it is
+ * not taken on the machine's own initiative.
+ *
+ * @param runtime - the mission runner.
+ * @param config - the plugin configuration.
+ * @param logger - Cordis logger.
+ * @returns `{ swept, resumed, refused }` — never a silent nothing.
+ */
+export function sweepMissionsOnBoot(runtime, config, logger) {
+  const result = runtime.sweep();
+  if (!result.claimed) {
+    // Refused, not resolved. Another live harness owns this library file, and
+    // reclaiming its missions would abort work that is genuinely running.
+    logger?.warn?.(`swarm: not sweeping missions — ${result.reason}`);
+    return { swept: [], resumed: [], refused: result.reason };
+  }
+  for (const row of result.swept) {
+    logger?.info?.(`swarm: mission ${row.missionId} ${row.outcome}: ${row.reason}`);
+  }
+
+  const resumed = [];
+  if (config.missionAutoResume === true) {
+    for (const row of result.swept) {
+      if (row.outcome !== "resumable") continue;
+      const started = runtime.claim(row.missionId);
+      // Reported either way. A resume that quietly did not happen is
+      // indistinguishable from a resume that is broken.
+      if (started.started) resumed.push(row.missionId);
+      else logger?.warn?.(`swarm: auto-resume declined ${row.missionId}: ${started.reason}`);
+    }
+    if (resumed.length > 0) logger?.info?.(`swarm: auto-resumed ${resumed.length} mission(s): ${resumed.join(", ")}`);
+  } else if (result.swept.some((row) => row.outcome === "resumable")) {
+    const waiting = result.swept.filter((row) => row.outcome === "resumable").length;
+    logger?.info?.(`swarm: ${waiting} mission(s) can be resumed from the mission list; missionAutoResume is off, so nothing was restarted on its own`);
+  }
+  return { swept: result.swept, resumed, refused: null };
+}
+
 /** Required services: the HTTP carrier, the model runtime, and the default route. */
 export const inject = ["webServer", "llm", "agentDefaultModel", "tools"];
 
@@ -1587,9 +1696,17 @@ export function apply(ctx) {
   // deliberately total: a machine serving someone else's library must not open
   // a database of its own, and must not run the timers. Two collectors would
   // fetch all 72 feeds twice into two diverging libraries.
+  //
+  // MISSIONS ARE PART OF "EVERYTHING BELOW". A machine that proxies has no
+  // mission tables, no boot id and no runner: it forwards `/swarm-api/missions/*`
+  // to the machine that owns the library, exactly as it forwards every other
+  // route. That is not an optimisation — a second runner over a database it does
+  // not own would claim a boot id, sweep the owner's live missions as orphans
+  // and finalize them mid-flight. Which machine owns the library is a decision,
+  // not something to detect.
   const library = resolveLibrary(process.env, homedir());
   if (library.kind === "remote") {
-    ctx.logger?.info?.(`swarm: proxying the source library from ${library.base}`);
+    ctx.logger?.info?.(`swarm: proxying the source library from ${library.base}; no missions run on this host`);
     const disposeProxy = ctx.webServer.register({
       kind: "prefix",
       path: ROUTE_PREFIX,
@@ -1607,15 +1724,55 @@ export function apply(ctx) {
   // rather than an empty tab a week later; `openInsightStore` memoises, so the
   // routes below get this same instance.
   const insightStore = openInsightStore(store);
+  // The 任务 tables, for the same reason and over the same handle: the migration
+  // ledger runs at open, so a statement that cannot run is a stack trace here
+  // rather than a tab that 500s the first time somebody starts a mission.
+  // `openMissionStore` memoises on the SourceStore, so the runner and the routes
+  // below get this same instance.
+  const missionStore = openMissionStore(store);
   const chat = createChat(ctx);
-  ctx.logger?.info?.(`swarm: source library at ${path} (${store.count()} rows, ${insightStore.count()} insight(s))`);
+  ctx.logger?.info?.(`swarm: source library at ${path} (${store.count()} rows, ${insightStore.count()} insight(s), ${missionStore.stats().missions} mission(s))`);
+
+  // The runner: one boot id, one abort registry, one failure circuit, one set of
+  // twelve handlers. It resolves `ctx.llm` and `ctx.agentDefaultModel` per model
+  // call — the settings document can replace the route between calls — and the
+  // optional search seam through `ctx.get("web")`, never `inject`, so
+  // dsh-web-search staying uninstalled costs corroboration rather than the whole
+  // plugin's ability to load.
+  const bootConfig = readConfig(store);
+  const missionRuntime = createMissionRuntime({
+    store,
+    missionStore,
+    ctx,
+    config: bootConfig,
+    spillDir: bootConfig.missionSpillDir,
+    logger: ctx.logger,
+  });
+
   const dispose = ctx.webServer.register({
     kind: "prefix",
     path: ROUTE_PREFIX,
     // `ctx.get`, not `inject`. Injecting "web" would make this plugin refuse to
     // load without dsh-web-search, and the library is worth having on its own;
     // absent, corroboration searches arXiv alone and says so.
-    handler: createHandler(store, ctx.logger, chat, typeof ctx.get === "function" ? ctx.get("web") : undefined),
+    handler: createHandler(
+      store, ctx.logger, chat,
+      typeof ctx.get === "function" ? ctx.get("web") : undefined,
+      ctx,
+      createMissionRoutes({
+        store,
+        missionStore,
+        runtime: missionRuntime,
+        logger: ctx.logger,
+        sendJson,
+        readJson,
+        // A FUNCTION, not a snapshot. `missionDefaultDepth`, the two pacing
+        // intervals and the concurrency cap are read at the moment a mission is
+        // created, so saving a setting takes effect at the next create rather
+        // than at the next restart.
+        config: () => readConfig(store),
+      }),
+    ),
   });
   // Agents reach the same library the page reads: one store, two faces.
   registerLibraryTool(ctx, store);
@@ -1623,9 +1780,18 @@ export function apply(ctx) {
   // and log a success.
   ensureSourceRoster(store, ctx.logger);
   // The insight pass rides this timer; it has none of its own.
-  const stopTimer = startCollectionTimer(store, ctx.logger, insightStore, chat);
+  const stopTimer = startCollectionTimer(store, ctx.logger, insightStore, chat, ctx);
   const stopPublish = startPublishTimer(store, chat, ctx.logger);
+  sweepMissionsOnBoot(missionRuntime, bootConfig, ctx.logger);
   ctx.on("dispose", () => {
+    // Missions FIRST, and this is an ordering, not a list. A live run holds the
+    // same connection the store below is about to close, so a mission still in a
+    // stage when `store.close()` lands writes into a closed handle — and the row
+    // it was about to settle stays `running` with nothing anywhere saying why
+    // until the next boot sweep finds it. `stop()` aborts each run and writes an
+    // honest `shutdown` row for it.
+    const stopped = missionRuntime.stop();
+    if (stopped > 0) ctx.logger?.info?.(`swarm: stopped ${stopped} running mission(s) for shutdown; resume is armed for each`);
     stopTimer();
     // `stopPublish` was assigned and never called here, so the publish timer
     // kept ticking against a closed database after dispose — a plugin that
