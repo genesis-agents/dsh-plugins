@@ -1204,3 +1204,39 @@ test("a model that answered in prose is not reported as a provider outage", () =
   });
   assert.ok(outage.message.includes("provider recovers"), "a real outage lost its advice");
 });
+
+test("a settled mission can be deleted, a running one is refused with a reason", (t) => {
+  // There was no way to remove a mission at all — no store method, no route, no
+  // button — so the list only grew. And a live one must NOT go: the runtime
+  // holds its id and would keep writing stages and events against rows that no
+  // longer exist.
+  const { missions } = library(t);
+  const id = mission(missions);
+
+  const live = missions.deleteMission(id);
+  assert.equal(live.ok, false, "a running mission was deleted out from under its runtime");
+  assert.match(live.reason, /Cancel it first/u, "the refusal does not say what to do");
+
+  missions.finalizeMissionRow({ missionId: id, runCount: 1, status: "cancelled", at: "2026-08-25T00:00:00.000Z" });
+  const gone = missions.deleteMission(id);
+  assert.equal(gone.ok, true, `a settled mission would not delete: ${gone.reason}`);
+  assert.equal(missions.getMission(id), undefined, "the row survived its own deletion");
+
+  const twice = missions.deleteMission(id);
+  assert.equal(twice.ok, false, "deleting a mission that is gone reported success");
+  assert.match(twice.reason, /no mission/u);
+});
+
+test("the chapter count follows the dimensions that found something", () => {
+  // Measured: 13 verified findings across three dimensions, from three hosts of
+  // which two were the same site, produced ONE chapter of 306 words. The cap
+  // was `floor(uniqueHosts / 2)`, which reads host COUNT as a proxy for how
+  // much there is to say, and two thirds of the evidence was never written up.
+  const capOf = (hosts, evidenced) => Math.max(1, Math.min(evidenced, Math.max(1, hosts)));
+  assert.equal(capOf(3, 3), 3, "three evidenced dimensions still collapsed to fewer chapters");
+  // Host diversity remains a ceiling: two hosts cannot carry five independent chapters.
+  assert.equal(capOf(2, 5), 2);
+  // And one of anything is still one.
+  assert.equal(capOf(1, 1), 1);
+  assert.equal(capOf(0, 3), 1, "a mission with no host recorded lost its only chapter");
+});

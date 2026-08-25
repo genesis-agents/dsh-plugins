@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 		* both is how "deployed but apparently absent" becomes legible instead
 		* of costing an afternoon.
 		*/
-		const CLIENT_VERSION = "0.5.5";
+		const CLIENT_VERSION = "0.6.0";
 
 		//#region locale + mark
 		/**
@@ -3646,8 +3646,34 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @param onOpen - open the detail view on this mission.
 		*/
-		function MissionListRow({ mission, live, zh, onOpen }) {
+		function MissionListRow({ mission, live, zh, onOpen, onRemoved }) {
 			const [hover, setHover] = useState(false);
+			// Two clicks, no dialog. `confirm()` blocks the event loop and a modal
+			// for one row is more chrome than the action deserves; the label
+			// changing to "click again" is the confirmation.
+			const [confirming, setConfirming] = useState(false);
+			const [removing, setRemoving] = useState(false);
+			const [trouble, setTrouble] = useState("");
+
+			const remove = useCallback(async () => {
+				if (!confirming) { setConfirming(true); return; }
+				setRemoving(true);
+				setTrouble("");
+				try {
+					const response = await fetch(`${apiBase()}/missions/${encodeURIComponent(mission.id)}/delete`, { method: "DELETE" });
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? `HTTP ${response.status}`);
+					onRemoved?.(mission.id);
+				} catch (cause) {
+					// Named, not swallowed: the route refuses a running mission with
+					// a reason, and that reason is the whole answer to "why is it
+					// still there".
+					setTrouble(String(cause?.message ?? cause));
+					setConfirming(false);
+				} finally {
+					setRemoving(false);
+				}
+			}, [confirming, mission.id, onRemoved]);
 			const face = missionPillFace({ code: mission.status }, zh);
 			const stale = mission.status === "running" && !live;
 			const meta = [
@@ -3706,7 +3732,43 @@ window.__ModuleLoader__.load({
 						mission.errorMessage === null || mission.errorMessage === undefined || mission.errorMessage === "" ? null : jsx("div", {
 							style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
 							children: (mission.failureCode === null || mission.failureCode === undefined ? "" : `${mission.failureCode} · `) + mission.errorMessage
-						}, "error")
+						}, "error"),
+						// Delete. There was no way to remove a mission at all — no
+						// route, no store method, no button — so the list only ever
+						// grew, and the first thing anybody wants to do with a run
+						// that failed for a reason since fixed is get rid of it.
+						//
+						// Shown on hover and only for a settled mission: the route
+						// refuses a running one, and offering a control that will be
+						// refused is worse than not offering it.
+						!hover || mission.status === "running" ? null : jsx("div", {
+							style: { display: "flex", justifyContent: "flex-end" },
+							children: jsx("button", {
+								type: "button",
+								disabled: removing,
+								style: {
+									appearance: "none", background: "transparent", cursor: "pointer",
+									border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "8px",
+									padding: "3px 10px", fontSize: "11px",
+									color: "var(--dsw-alias-label-secondary)"
+								},
+								onClick: (event) => {
+									// The card's own click opens the mission; without this
+									// the delete would open what it just removed.
+									event.stopPropagation();
+									void remove();
+								},
+								children: removing
+									? (zh ? "删除中…" : "Deleting…")
+									: confirming
+									? (zh ? "再点一次确认删除" : "Click again to delete")
+									: (zh ? "删除" : "Delete")
+							}, "delete")
+						}, "actions"),
+						trouble === "" ? null : jsx("div", {
+							style: { fontSize: "12px", color: "rgb(220,38,38)" },
+							children: trouble
+						}, "trouble")
 					]
 				})
 			});
@@ -3842,7 +3904,12 @@ window.__ModuleLoader__.load({
 										+ (live.length === 0 ? "" : (zh ? ` · 本进程正在跑 ${live.length} 个` : ` · ${live.length} running in this process`))
 								}, "tally"),
 								...missions.map((mission) => jsx(MissionListRow, {
-									mission, zh, live: live.includes(mission.id), onOpen: (id) => { setOpenId(id); }
+									mission, zh, live: live.includes(mission.id),
+									onOpen: (id) => { setOpenId(id); },
+									// The list refreshes on a tick rather than through a
+									// loader, so a delete nudges the tick instead of
+									// calling one that does not exist.
+									onRemoved: () => { setTick((value) => value + 1); }
 								}, mission.id))
 							]
 						}, "rows")

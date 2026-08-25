@@ -2231,8 +2231,18 @@ export function createS8Write(deps) {
       // `quick` skips s7, so the plan is made HERE — through the same
       // `planChapters` the other tiers use, so that a cheap tier does not reach
       // a terminal state by a path the expensive tiers never take.
+      // One chapter per dimension that HAS evidence, with host diversity as a
+      // ceiling rather than the definition.
+      //
+      // It was floor(uniqueHosts / 2) alone, which reads host COUNT as a proxy
+      // for how much there is to say. Measured: 13 verified findings across
+      // three dimensions from three hosts produced ONE chapter of 306 words,
+      // and two thirds of the evidence was left on the floor because two of
+      // the three hosts happened to be the same site. The number of subjects
+      // worth a chapter is the number of dimensions that found something.
       const hosts = store.uniqueHosts(missionId, { runCount });
-      const maxChapters = Math.max(1, Math.floor(hosts.length / 2));
+      const evidenced = new Set(findings.map((f) => f.dimensionId)).size;
+      const maxChapters = Math.max(1, Math.min(evidenced, Math.max(1, hosts.length)));
       const dimensions = (asArray(crossState?.dimensions).length > 0
         ? asArray(crossState.dimensions)
         : store.listDimensions(missionId, { runCount }))

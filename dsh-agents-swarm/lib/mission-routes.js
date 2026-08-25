@@ -449,6 +449,22 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
     }
 
     // ── stop one ────────────────────────────────────────────────────────
+    // DELETE, not POST: this removes rather than starts something, and a
+    // route whose verb lies about that is one a reader has to check.
+    if (req.method === "DELETE" && action === "delete") {
+      const mission = missionOr404(id);
+      if (mission === null) return true;
+      const gone = missionStore.deleteMission(id);
+      if (!gone.ok) {
+        // 409, not 500: a running mission refusing deletion is a state, not a
+        // fault, and the reason names the thing to do about it.
+        sendJson(res, 409, { success: false, error: gone.reason });
+        return true;
+      }
+      sendJson(res, 200, { success: true, data: { id, removed: gone.removed } });
+      return true;
+    }
+
     if (req.method === "POST" && action === "cancel") {
       const mission = missionOr404(id);
       if (mission === null) return true;

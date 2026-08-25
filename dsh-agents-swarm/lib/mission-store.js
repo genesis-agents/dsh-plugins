@@ -1370,6 +1370,51 @@ export class MissionStore {
     return shapeMission(this.db.prepare(`SELECT ${MISSION_COLUMNS} FROM missions WHERE id = ?`).get(String(id)));
   }
 
+
+  /**
+   * Delete a mission and everything hanging off it.
+   *
+   * There was no way to remove one at all — no store method, no route, no
+   * button. A list that only grows is a list nobody opens, and the first thing
+   * anybody does with a run that failed for a reason they have since fixed is
+   * try to get rid of it.
+   *
+   * A RUNNING mission is refused rather than deleted: the runtime holds its id
+   * and would go on writing stages and events against rows that no longer
+   * exist. Cancel it first, which is what the refusal says.
+   *
+   * @param missionId - the mission to remove.
+   * @returns `{ok}` and, when refused, `reason` — never a silent false.
+   */
+  deleteMission(missionId) {
+    const id = assertText(missionId, "missionId");
+    const row = this.db.prepare("SELECT status FROM missions WHERE id = ?").get(id);
+    if (row === undefined) return { ok: false, reason: `no mission ${id}` };
+    if (row.status === "running") {
+      return { ok: false, reason: `mission ${id} is running. Cancel it first — deleting a live one leaves the runtime writing stages and events against rows that are gone.` };
+    }
+    return withTx(this.db, () => {
+      // Children first, then the row itself. Ordered rather than relying on a
+      // cascade, because `notes` beside this schema deliberately has no foreign
+      // key and neither do these — a delete that half-succeeded would leave
+      // evidence pointing at a mission the list no longer shows.
+      let removed = 0;
+      for (const table of [
+        "mission_tool_calls", "mission_spend", "mission_events", "mission_checkpoints",
+        "mission_findings", "mission_chapters", "mission_artifacts", "mission_dimensions",
+        "mission_conflicts", "mission_stages",
+      ]) {
+        try {
+          removed += this.db.prepare(`DELETE FROM ${table} WHERE mission_id = ?`).run(id).changes;
+        } catch {
+          // A table this schema version does not have is not an error here: the
+          // list is written once and the migrations add tables over time.
+        }
+      }
+      const gone = this.db.prepare("DELETE FROM missions WHERE id = ?").run(id).changes;
+      return { ok: gone > 0, removed, reason: gone > 0 ? undefined : `mission ${id} vanished between the check and the delete` };
+    });
+  }
   /**
    * Page the mission list, with the numbers the list row shows.
    *
