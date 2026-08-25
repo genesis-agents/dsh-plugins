@@ -304,7 +304,16 @@ export async function searchWeb(web, query, options = {}) {
   const max = Math.max(1, Math.min(20, Number(options.maxResults) || HITS_PER_CLAIM));
   try {
     const answer = await web.search({ query: q, maxResults: max });
-    const rows = Array.isArray(answer) ? answer : (answer?.results ?? []);
+    // `sources`, which is what the seam returns. Reading `results` — a name
+    // nothing in dsh-web-search ever produced — made every web search succeed
+    // with zero hits: measured, one mission logged 86 ok web_search calls and
+    // fetched thirteen pages, four of eight dimensions found nothing, and the
+    // ledger said the searches worked. `sources` is what
+    // dsh-web-search-serper/lib/routes.js counts, and it is the only name the
+    // provider ever emits.
+    const rows = Array.isArray(answer)
+      ? answer
+      : (answer?.sources ?? answer?.results ?? []);
     return {
       hits: rows
         .map((row) => ({

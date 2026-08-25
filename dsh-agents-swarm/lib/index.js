@@ -964,6 +964,7 @@ export function createHandler(store, logger, chat, web, ctx, missions) {
     const path = url.pathname.slice(ROUTE_PREFIX.length) || "/";
     const query = url.searchParams;
 
+
     if (path.startsWith("/publish/") && await publish(req, res, path)) return;
     // Every insight route carries a second segment, because `"/insights"`
     // does not start with `"/insights/"`: a bare route would 404 while the

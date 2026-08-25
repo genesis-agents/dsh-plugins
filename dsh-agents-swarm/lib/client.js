@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 		* both is how "deployed but apparently absent" becomes legible instead
 		* of costing an afternoon.
 		*/
-		const CLIENT_VERSION = "0.5.2";
+		const CLIENT_VERSION = "0.5.3";
 
 		//#region locale + mark
 		/**

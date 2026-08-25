@@ -1191,3 +1191,27 @@ test("the corroboration stage speaks the store's actual API", async (t) => {
     "the corroborating source was attached without its host, so it counts as the same source",
   );
 });
+
+test("a web search reads the field the seam actually returns", async () => {
+  // The whole thing turned on one word. `dsh-web-search` answers with
+  // `{sources: [...]}` and this read `answer.results`, a name nothing in that
+  // plugin ever produces — so every web search "succeeded" with zero hits.
+  // Measured on a real mission: 86 ok web_search calls, 13 pages fetched, four
+  // of eight dimensions empty, and a ledger reporting that the searches worked.
+  const hit = { url: "https://example.test/a", title: "A", snippet: "s" };
+
+  const seam = { search: async () => ({ sources: [hit] }) };
+  const out = await searchWeb(seam, "anything");
+  assert.equal(out.hits.length, 1, "the seam's own field name returned nothing");
+  assert.equal(out.hits[0].url, "https://example.test/a");
+
+  // A bare array stays supported, and `results` is still read so a future seam
+  // that uses it is not silently emptied the way this one was.
+  assert.equal((await searchWeb({ search: async () => [hit] }, "x")).hits.length, 1);
+  assert.equal((await searchWeb({ search: async () => ({ results: [hit] }) }, "x")).hits.length, 1);
+
+  // Genuinely empty stays genuinely empty, and is not an error.
+  const none = await searchWeb({ search: async () => ({ sources: [] }) }, "x");
+  assert.deepEqual(none.hits, []);
+  assert.equal(none.error, "");
+});
