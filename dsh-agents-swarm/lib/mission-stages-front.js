@@ -36,6 +36,7 @@ import { fileURLToPath } from "node:url";
 import {
   QUOTE_FAILURES,
   READ_NOTHING_REFUSAL,
+  oneHostRefusal,
   finalizeToolFor,
   quoteIssue,
   readUsage,
@@ -98,7 +99,16 @@ const MAX_MIN_COVERAGE = 80;
  * rather than deadlock, and §2's evidence floor is what stops honest emptiness
  * becoming a report.
  */
-const MAX_READ_NOTHING_REFUSALS = 1;
+// Three, not one. Refused once the model searched again and finished again
+// without fetching, and the dimension was released empty — four of eight ended
+// that way while fetch_page had a 100% success rate.
+export const MAX_READ_NOTHING_REFUSALS = 3;
+
+/** How many distinct hosts a dimension is pushed toward before it may finish. */
+const INDEPENDENT_SOURCES_WANTED = 2;
+
+/** One push toward a second host, then released: one host may be all there is. */
+const MAX_ONE_HOST_REFUSALS = 1;
 const MAX_UNVERIFIED_FINISH_REFUSALS = 2;
 
 /* ── small shared helpers ──────────────────────────────────────────────── */
@@ -1251,6 +1261,7 @@ async function collectOneDimension({ deps, context, dimension, policy, zh }) {
   const seenResults = new Set();    // tool-result ids already harvested
 
   let unreadRefusals = 0;
+  let oneHostRefusals = 0;
   let unverifiedRefusals = 0;
   let spanIndexMisses = 0;
   let fetchesSucceeded = 0;
@@ -1395,6 +1406,12 @@ async function collectOneDimension({ deps, context, dimension, policy, zh }) {
       // actually fetched, because "you never fetched that" against a page the
       // model did fetch under another spelling is the bookkeeping failure, not
       // a model failure.
+      //
+      // Refused up to three times, not once. Measured on a real mission: the
+      // model was refused once, searched again, finished again without
+      // fetching, and the dimension was released empty. Four of eight
+      // dimensions ended that way while `fetch_page` had a 100% success rate —
+      // it was never the fetching that failed, it was the deciding to fetch.
       if (pages.size === 0) {
         if (unreadRefusals < MAX_READ_NOTHING_REFUSALS) {
           unreadRefusals += 1;
@@ -1405,6 +1422,25 @@ async function collectOneDimension({ deps, context, dimension, policy, zh }) {
         // dimension; §2's evidence floor is what stops honest emptiness
         // becoming a report.
         accepted = { findings: [], summary: String(output?.summary ?? ""), rejected: output?.rejected ?? [], verified: [] };
+        return issues;
+      }
+
+      // G1b — refuse a dimension covered from ONE host.
+      //
+      // The same mission: every dimension that produced anything produced it
+      // from exactly one host — six findings off a single page, or nothing.
+      // The researcher reads "I found a good page" as "this dimension is done",
+      // and then the floor it is held to asks for two independent sources and
+      // marks it degraded. Six of eight cards said 降级 for a bar the loop was
+      // never pushed to clear.
+      //
+      // Released after one refusal, for the same reason G1 is: one host may be
+      // all that exists, and a dimension that says so is more useful than a
+      // deadlock.
+      const readHosts = new Set([...pages.values()].map((page) => hostOf(page?.url ?? "")).filter((host) => host !== ""));
+      if (readHosts.size < INDEPENDENT_SOURCES_WANTED && oneHostRefusals < MAX_ONE_HOST_REFUSALS) {
+        oneHostRefusals += 1;
+        issues.push(oneHostRefusal(readHosts.size, INDEPENDENT_SOURCES_WANTED));
         return issues;
       }
 

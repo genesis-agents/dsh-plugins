@@ -1471,6 +1471,7 @@ export function createSqliteLedger(store, context = {}) {
       tool: String(row.tool ?? ""),
       paceKey: row.paceKey ?? null,
       argsHash: String(row.argsHash ?? ""),
+      argsText: String(row.argsText ?? ""),
       ok: row.ok === true,
       errorCode: row.code ?? row.errorCode ?? null,
       cached: row.cached === true,
@@ -1481,6 +1482,27 @@ export function createSqliteLedger(store, context = {}) {
 }
 
 /* ── the one door ───────────────────────────────────────────────────────── */
+
+/**
+ * One line of a call's arguments, for the ledger.
+ *
+ * Values only, keys dropped: a search's argument is its query and a fetch's is
+ * its URL, and a JSON envelope around that is noise in a column a person reads.
+ * Bounded here as well as in the store, so a pathological argument never
+ * reaches the driver.
+ * @param args - the call's arguments, already parsed.
+ * @returns a short readable string.
+ */
+function argsTextOf(args) {
+  if (args === null || args === undefined) return "";
+  if (typeof args === "string") return args.slice(0, 300);
+  if (typeof args !== "object") return String(args).slice(0, 300);
+  return Object.values(args)
+    .filter((value) => value !== null && value !== undefined && value !== "")
+    .map((value) => (typeof value === "object" ? JSON.stringify(value) : String(value)))
+    .join(" · ")
+    .slice(0, 300);
+}
 
 /**
  * Run one tool. The only way a tool ever runs.
@@ -1513,6 +1535,7 @@ export async function invokeTool(action, options = {}) {
       missionId, stepId, agent, tool: name,
       paceKey: getTool(name)?.paceKey ?? null,
       argsHash: extra.argsHash ?? "",
+      argsText: argsTextOf(action?.args ?? action?.arguments),
       ok: result.ok === true,
       code: result.ok === true ? null : result.code,
       cached: extra.cached === true,

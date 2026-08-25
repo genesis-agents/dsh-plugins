@@ -39,6 +39,8 @@ import { DatabaseSync } from "node:sqlite";
 
 import { SourceStore } from "../lib/store.js";
 import { operativeWordFloor } from "../lib/mission-stages-back.js";
+import { MAX_READ_NOTHING_REFUSALS } from "../lib/mission-stages-front.js";
+import { oneHostRefusal } from "../lib/mission-agent.js";
 import {
   FAILURE_CODES as STORE_FAILURE_CODES,
   MISSION_STATUSES,
@@ -1122,4 +1124,42 @@ test("the word floor follows the evidence, and says which bound it", () => {
   const empty = operativeWordFloor(9000, 0);
   assert.equal(empty.source, "evidence");
   assert.ok(empty.floor >= 400, "no evidence removed the floor entirely");
+});
+
+test("a refusal that is ignored is repeated, not waived", () => {
+  // Measured: the model was refused once for finishing without reading a page,
+  // searched again, finished again without fetching, and the dimension was
+  // released empty. Four of eight dimensions ended that way in one mission —
+  // while `fetch_page` had a 100% success rate. It was never the fetching that
+  // failed, it was the deciding to fetch, and one refusal did not change it.
+  assert.ok(MAX_READ_NOTHING_REFUSALS >= 3, `one refusal is not a gate: ${MAX_READ_NOTHING_REFUSALS}`);
+});
+
+test("one host is one source, and the refusal says so", () => {
+  // Every dimension in that mission that produced anything produced it from
+  // exactly ONE host — six findings off a single page, or nothing — while the
+  // floor asked for two independent sources. Six of eight cards read 降级 for
+  // a bar the loop was never pushed to clear.
+  const text = oneHostRefusal(1, 2);
+  assert.match(text, /one host/u, "the refusal does not say what is wrong");
+  assert.match(text, /2 independent sources/u, "the refusal does not say what is wanted");
+  assert.match(text, /different host/u, "the refusal does not say what to do");
+  // And it leaves the honest exit open: one host may be all that exists.
+  assert.match(text, /which\s+other hosts you tried/u, "the refusal offers no way out for a dimension with one real source");
+});
+
+test("a tool call records its arguments, not only their hash", (t) => {
+  // Eighty-six searches and not one query written down. `args_hash` answers
+  // "is this the same call again" and nothing else, so a dimension that found
+  // nothing could not be diagnosed by anybody — including whoever built it.
+  const { store, missions } = library(t);
+  const id = mission(missions);
+  missions.insertToolCall({
+    missionId: id, stepId: "s3-collect", agentId: "researcher:d1",
+    tool: "web_search", argsHash: "abc", argsText: "Kanata North talent workforce",
+    ok: true, latencyMs: 12, at: new Date().toISOString(),
+  });
+  const [call] = missions.recentToolCalls(id, 10);
+  assert.equal(call.argsText, "Kanata North talent workforce", "the query was not stored");
+  assert.equal(call.argsHash, "abc", "the hash was lost while adding the text");
 });

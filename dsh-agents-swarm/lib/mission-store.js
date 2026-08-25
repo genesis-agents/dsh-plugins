@@ -582,6 +582,13 @@ CREATE TABLE IF NOT EXISTS mission_tool_calls (
   -- Also the thrash detector's key: the same tool with the same args three times
   -- is a loop SHAPE, not a statistic.
   args_hash   TEXT NOT NULL,
+  -- The arguments themselves, truncated. The hash answers "is this the same
+  -- call again" and nothing else: a dimension that produced no findings could
+  -- not be diagnosed, because what it SEARCHED FOR was never written down.
+  -- Eight dimensions, eighty-six searches, thirteen fetches, and the only
+  -- honest answer to "why did four find nothing" was that nobody could see the
+  -- queries.
+  args_text   TEXT NOT NULL DEFAULT '',
   ok          INTEGER NOT NULL,
   error_code  TEXT,
   cached      INTEGER NOT NULL DEFAULT 0,
@@ -695,6 +702,19 @@ export const MISSION_MIGRATIONS = Object.freeze([
   Object.freeze({ id: "002-corpus", up: (db) => db.exec(MISSION_DDL_CORPUS) }),
   Object.freeze({ id: "003-report", up: (db) => db.exec(MISSION_DDL_REPORT) }),
   Object.freeze({ id: "004-owner", up: (db) => db.exec(MISSION_DDL_OWNER) }),
+  // `args_text` landed after libraries already held tool-call rows, so the DDL
+  // above cannot reach them: CREATE TABLE IF NOT EXISTS does nothing to a table
+  // that exists. Without this, the first insert after an upgrade fails on a
+  // column the schema says is there — on somebody else's machine, at the first
+  // tool call of a mission they just started.
+  Object.freeze({
+    id: "005-tool-args",
+    up: (db) => {
+      const has = db.prepare("PRAGMA table_info(mission_tool_calls)").all()
+        .some((column) => column.name === "args_text");
+      if (!has) db.exec("ALTER TABLE mission_tool_calls ADD COLUMN args_text TEXT NOT NULL DEFAULT ''");
+    },
+  }),
 ]);
 
 // ── small helpers ─────────────────────────────────────────────────────────
@@ -3650,12 +3670,17 @@ export class MissionStore {
     assertIso(at, "at");
     const info = this.db.prepare(`
       INSERT INTO mission_tool_calls (
-        mission_id, step_id, agent_id, tool, pace_key, args_hash, ok, error_code, cached, latency_ms, at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        mission_id, step_id, agent_id, tool, pace_key, args_hash, args_text, ok, error_code, cached, latency_ms, at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       missionId, stepId, agentId, tool,
       typeof record?.paceKey === "string" && record.paceKey !== "" ? record.paceKey : null,
-      argsHash, flag(record?.ok),
+      argsHash,
+      // Truncated: a fetch's arguments are a URL and a search's are a sentence,
+      // and an unbounded column on a per-call table is a library that grows
+      // without anybody choosing to.
+      String(record?.argsText ?? "").slice(0, 300),
+      flag(record?.ok),
       typeof record?.errorCode === "string" ? record.errorCode : null,
       flag(record?.cached),
       assertCount(record?.latencyMs ?? 0, "latencyMs", 0),
@@ -3729,7 +3754,7 @@ export class MissionStore {
    */
   recentToolCalls(missionId, limit = 50) {
     return this.db.prepare(`
-      SELECT step_id, agent_id, tool, pace_key, args_hash, ok, error_code, cached, latency_ms, at
+      SELECT step_id, agent_id, tool, pace_key, args_hash, args_text, ok, error_code, cached, latency_ms, at
       FROM mission_tool_calls WHERE mission_id = ? ORDER BY at DESC, id DESC LIMIT ?
     `).all(String(missionId), clampInt(limit, 1, 500, 50)).map((row) => ({
       stepId: row.step_id,
@@ -3737,6 +3762,7 @@ export class MissionStore {
       tool: row.tool,
       paceKey: row.pace_key ?? null,
       argsHash: row.args_hash,
+      argsText: row.args_text ?? "",
       ok: row.ok === 1,
       errorCode: row.error_code ?? null,
       cached: row.cached === 1,

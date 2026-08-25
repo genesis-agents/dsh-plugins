@@ -178,6 +178,25 @@ export const READ_NOTHING_REFUSAL =
   + "nothing in it can be quoted. Fetch the most promising candidates and then "
   + "record what they say.";
 
+/**
+ * The refusal for a dimension covered from ONE host.
+ *
+ * Measured: a mission searched eighty-six times, fetched thirteen pages across
+ * eight dimensions, and every dimension that produced anything produced it from
+ * exactly ONE host — six findings from a single page, or nothing. The
+ * researcher treats "I found a good page" as "this dimension is done", and the
+ * floor it is held to asks for two independent sources.
+ *
+ * @param hosts - how many distinct hosts have been read.
+ * @param needed - how many independent sources this dimension's floor wants.
+ * @returns the refusal text.
+ */
+export const oneHostRefusal = (hosts, needed) =>
+  `every page you have read comes from ${hosts === 1 ? "one host" : `${hosts} hosts`}, and this dimension is `
+  + `held to ${needed} independent sources. One site agreeing with itself is one source however many `
+  + `pages you read on it. Fetch from a different host before finishing, or say in your summary which `
+  + `other hosts you tried and why they could not be used.`;
+
 /** Estimated completion tokens accumulated before the pool is asked again. */
 const ESTIMATE_FLUSH_TOKENS = 200;
 
