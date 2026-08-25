@@ -38,6 +38,7 @@ import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
 import { SourceStore } from "../lib/store.js";
+import { operativeWordFloor } from "../lib/mission-stages-back.js";
 import {
   FAILURE_CODES as STORE_FAILURE_CODES,
   MISSION_STATUSES,
@@ -59,6 +60,8 @@ import {
   SWEEP_STORE_METHODS,
   budgetGate,
   detectNoProgress,
+} from "../lib/mission-runtime.js";
+import {
   canResume,
   checkDeadlines,
   checkStageReturn,
@@ -1098,4 +1101,25 @@ test("a fan-out is not a loop, however alike its searches look", () => {
   });
   assert.equal(wedge.tripped, true, "one agent asking the same question three times is the loop shape");
   assert.match(wedge.why, /researcher:dim-1/u, "the reason must name which agent is looping");
+});
+
+test("the word floor follows the evidence, and says which bound it", () => {
+  // A real mission collected 11 verified findings and wrote 1,008 words, and
+  // the guard refused it "against a standard floor of 9,000" — a sentence about
+  // the writer for a problem that was about supply. Eleven findings cannot
+  // honestly carry nine thousand words, and demanding it asks for padding: a
+  // padded report that passes is worse than a short one that fails.
+  const thin = operativeWordFloor(9000, 11);
+  assert.equal(thin.source, "evidence", "eleven findings were judged against the tier constant");
+  assert.ok(thin.floor < 9000 && thin.floor > 1008, `an unusable floor: ${thin.floor}`);
+
+  // With supply to match, the tier's own number binds and nothing is softened.
+  const rich = operativeWordFloor(9000, 40);
+  assert.equal(rich.source, "tier");
+  assert.equal(rich.floor, 9000, "a well-evidenced report escaped its tier floor");
+
+  // Zero evidence still has a floor: a two-line report is not a report.
+  const empty = operativeWordFloor(9000, 0);
+  assert.equal(empty.source, "evidence");
+  assert.ok(empty.floor >= 400, "no evidence removed the floor entirely");
 });
