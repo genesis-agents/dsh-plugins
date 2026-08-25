@@ -62,6 +62,7 @@ import {
   SWEEP_STORE_METHODS,
   budgetGate,
   detectNoProgress,
+  classifyFailure,
 } from "../lib/mission-runtime.js";
 import {
   canResume,
@@ -1162,4 +1163,23 @@ test("a tool call records its arguments, not only their hash", (t) => {
   const [call] = missions.recentToolCalls(id, 10);
   assert.equal(call.argsText, "Kanata North talent workforce", "the query was not stored");
   assert.equal(call.argsHash, "abc", "the hash was lost while adding the text");
+});
+
+test("a failure keeps the reason the stage already knew", () => {
+  // Twice in one afternoon a mission ended with "The model returned an error:
+  // no message" while holding the message. A stage that knows what went wrong
+  // throws `fail(code, diagnostic)`, and the diagnostic reads "the model
+  // returned an error on turn 3: <what the provider said>" — but the moment the
+  // classifier recognised the code it called describeFailure without it.
+  const said = "the model returned an error on turn 3: upstream connect error";
+  const verdict = classifyFailure({
+    error: Object.assign(new Error(said), { code: "model_error" }),
+    detail: { stepId: "s8-write" },
+  });
+  assert.equal(verdict.code, "model_error");
+  assert.ok(
+    verdict.message.includes("upstream connect error"),
+    `the reason was dropped on the recognised-code path: ${verdict.message}`,
+  );
+  assert.ok(!verdict.message.includes("no message"), "reported no message while holding one");
 });

@@ -1425,26 +1425,41 @@ export function classifyFailure({ signal = null, error = null, fallbackCode = "m
   // 2. A code the error itself carries. The harness's own canonical codes
   //    arrive this way, and CONTEXT_WINDOW_EXCEEDED is a routine outcome (§8.5),
   //    not an exceptional one.
+  // The error's own message, carried into EVERY branch below.
+  //
+  // It used to be read only by the last one. A stage that knows exactly what
+  // went wrong throws `fail(code, diagnostic)` — and the diagnostic says "the
+  // model returned an error on turn 3: <what the provider said>" — but the
+  // moment the classifier recognised the code it called `describeFailure(code,
+  // detail)` and dropped the sentence. Twice in one afternoon a mission ended
+  // with "The model returned an error: no message" while holding the message.
+  const carriedMessage = error && typeof error.message === "string" && error.message !== ""
+    ? error.message
+    : undefined;
+  const said = { providerMessage: carriedMessage, ...detail };
   const carried = error && (error.code ?? error.failureCode ?? null);
   if (carried === "CONTEXT_WINDOW_EXCEEDED" || carried === "context_exceeded") {
-    return { status: "failed", code: "context_exceeded", message: describeFailure("context_exceeded", detail), source: "error-code" };
+    return { status: "failed", code: "context_exceeded", message: describeFailure("context_exceeded", said), source: "error-code" };
   }
   if (typeof carried === "string" && FAILURE_CODES.includes(carried)) {
-    return { status: "failed", code: carried, message: describeFailure(carried, detail), source: "error-code" };
+    return { status: "failed", code: carried, message: describeFailure(carried, said), source: "error-code" };
   }
 
   // 3. Message text, last, and only to pick between two codes that both already
   //    exist. It never decides that something was a user cancellation.
   const text = error && typeof error.message === "string" ? error.message : "";
   if (/\b429\b|rate.?limit/i.test(text)) {
-    return { status: "failed", code: "rate_limited", message: describeFailure("rate_limited", detail), source: "message-regex" };
+    return { status: "failed", code: "rate_limited", message: describeFailure("rate_limited", said), source: "message-regex" };
   }
 
   const code = FAILURE_CODES.includes(fallbackCode) ? fallbackCode : "model_error";
   return {
     status: "failed",
     code,
-    message: describeFailure(code, { providerMessage: text || undefined, ...detail }),
+    // `said` first, then detail, then the message again — a caller that passes
+    // an explicit providerMessage wins, and a detail carrying the key as
+    // `undefined` no longer erases the one the error came with.
+    message: describeFailure(code, { ...said, ...detail, providerMessage: detail?.providerMessage ?? carriedMessage ?? (text || undefined) }),
     source: text ? "fallback-with-message" : "fallback",
   };
 }
