@@ -573,6 +573,400 @@ const ARTIFACTS = {
   },
 };
 
+
+// ── the trajectory ──────────────────────────────────────────────────────────
+//
+// `/missions/:id/trace` merges four streams into one ordered list, and the
+// rows below are shaped exactly as `buildMissionTrace` emits them — `seq`
+// assigned oldest-first over the whole list, `ref` as the identity, `ok` and
+// `verified` three-valued. A fixture that collapsed `ok` to a boolean would
+// test the page against a server that does not exist, and against the one
+// distinction the whole evidence column is built to keep.
+
+/** The rows a running mission has recorded, oldest first. */
+const LIVE_TRACE_ROWS = [
+  {
+    seq: 1, at: "2026-08-24T09:00:01.000Z", kind: "event", role: "SYSTEM",
+    title: "mission:started", detail: "stepId=s1-brief", result: "",
+    ms: null, ok: null, state: "mission:started",
+    stepId: "s1-brief", agentId: null, dimensionId: null, dimensionName: null,
+    paceKey: null, ref: "event:1",
+  },
+  {
+    seq: 2, at: "2026-08-24T09:01:00.000Z", kind: "stage", role: "STAGE",
+    title: "s2-plan", detail: "started", result: "stepId=s2-plan · status=started",
+    ms: null, ok: null, state: "started",
+    stepId: "s2-plan", agentId: "leader", dimensionId: null, dimensionName: null,
+    paceKey: null, ref: "stage:s2-plan@2",
+  },
+  {
+    seq: 3, at: "2026-08-24T09:12:00.000Z", kind: "stage", role: "STAGE",
+    title: "s2-plan", detail: "done", result: "stepId=s2-plan · status=done · durationMs=120000",
+    ms: 120000, ok: true, state: "done",
+    stepId: "s2-plan", agentId: "leader", dimensionId: null, dimensionName: null,
+    paceKey: null, ref: "stage:s2-plan@3",
+  },
+  // The row `args_text` was added for: eighty-six searches, and the only honest
+  // answer to "why did four of them find nothing" used to be that nobody could
+  // see the queries.
+  {
+    seq: 4, at: "2026-08-24T09:13:00.000Z", kind: "tool", role: "TOOL",
+    title: "web.search", detail: '{"q":"test-time compute scaling laws"}', result: "ok",
+    ms: 820, ok: true, state: "ok",
+    stepId: "s3-collect", agentId: "researcher:d1", dimensionId: "d1",
+    dimensionName: "推理时序扩展的训练侧做法",
+    paceKey: "web", ref: "tool:2026-08-24T09:13:00.000Z#0",
+  },
+  {
+    seq: 5, at: "2026-08-24T09:13:30.000Z", kind: "tool", role: "TOOL",
+    title: "web.fetch", detail: '{"url":"https://arxiv.org/abs/2401.00001"}', result: "rate_limited",
+    ms: 30, ok: false, state: "rate_limited",
+    stepId: "s3-collect", agentId: "researcher:d2", dimensionId: "d2",
+    dimensionName: "推理时序扩展的推理侧做法",
+    paceKey: "fetch", ref: "tool:2026-08-24T09:13:30.000Z#0",
+  },
+  {
+    seq: 6, at: "2026-08-24T09:14:00.000Z", kind: "finding", role: "EVIDENCE",
+    title: "deepmind.google",
+    detail: "三家实验室同期收敛到同一种推理时序扩展做法",
+    result: "we observe the same scaling behaviour at test time",
+    ms: null, ok: true, state: "verified-source-text",
+    stepId: null, agentId: null, dimensionId: "d1",
+    dimensionName: "推理时序扩展的训练侧做法",
+    paceKey: null, ref: "finding:f1",
+  },
+];
+
+/** The rows of the mission that verified nothing. */
+const DEAD_TRACE_ROWS = [
+  {
+    seq: 1, at: "2026-08-23T09:26:00.000Z", kind: "tool", role: "TOOL",
+    title: "fetch_page", detail: '{"url":"https://example.org/whitepaper"}', result: "not_admissible",
+    ms: 40, ok: false, state: "not_admissible",
+    stepId: "s3-collect", agentId: "researcher-d1", dimensionId: "d1",
+    dimensionName: "这个冷门课题的公开材料",
+    paceKey: "fetch", ref: "tool:2026-08-23T09:26:00.000Z#0",
+  },
+  // Two of this dimension's four findings are inside the trajectory window and
+  // two are not, which is the situation `/findings` and `/trace` can genuinely
+  // be in: they page independently over different bounds. The panel has to say
+  // which of the two it hit rather than showing an empty tab.
+  {
+    seq: 2, at: "2026-08-23T09:28:00.000Z", kind: "finding", role: "EVIDENCE",
+    title: "example.org", detail: "这个课题的第一条线索",
+    result: "the paper reports a single unreplicated result",
+    ms: null, ok: null, state: "unchecked-fetch-failed",
+    stepId: null, agentId: null, dimensionId: "d1", dimensionName: "这个冷门课题的公开材料",
+    paceKey: null, ref: "finding:g1",
+  },
+  {
+    seq: 3, at: "2026-08-23T09:29:00.000Z", kind: "finding", role: "EVIDENCE",
+    title: "mirror.example.net", detail: "这个课题的第四条线索",
+    result: "a mirror of the same page carries the identical wording",
+    ms: null, ok: null, state: "unchecked-rate-limited",
+    stepId: null, agentId: null, dimensionId: "d1", dimensionName: "这个冷门课题的公开材料",
+    paceKey: null, ref: "finding:g4",
+  },
+  {
+    seq: 4, at: "2026-08-23T09:30:00.000Z", kind: "stage", role: "STAGE",
+    title: "s3-collect", detail: "degraded", result: "stepId=s3-collect · status=degraded",
+    ms: 600000, ok: null, state: "degraded",
+    stepId: "s3-collect", agentId: "researcher", dimensionId: null, dimensionName: null,
+    paceKey: null, ref: "stage:s3-collect@40",
+  },
+  {
+    seq: 5, at: "2026-08-23T09:31:00.000Z", kind: "event", role: "GATE",
+    title: "evidence:none", detail: "outcome=none · verified=0 · floorSum=3",
+    result: "no dimension produced a single finding whose quote verified",
+    ms: null, ok: false, state: "evidence:none",
+    stepId: null, agentId: null, dimensionId: null, dimensionName: null,
+    paceKey: null, ref: "event:41",
+  },
+];
+
+const LIVE_TRACE_DIMENSIONS = [
+  { dimensionId: "d1", name: "推理时序扩展的训练侧做法", state: "collected", verified: 5, total: 5, uniqueHosts: 3 },
+  { dimensionId: "d2", name: "推理时序扩展的推理侧做法", state: "collecting", verified: 2, total: 4, uniqueHosts: 2 },
+];
+
+const TRACES = {
+  [RUNNING.id]: {
+    rows: LIVE_TRACE_ROWS,
+    stages: stagesUpTo("s3-collect").map(({ stepId, ordinal, status, attempts, startedAt, endedAt, durationMs, degradeNote }) =>
+      ({ stepId, ordinal, status, attempts, startedAt, endedAt, durationMs, tokens: 0, degradeNote })),
+    dimensions: LIVE_TRACE_DIMENSIONS,
+    lastEventSeq: 6,
+    window: {
+      events: { taken: 3, cap: 1000, saturated: false },
+      toolCalls: { taken: 2, cap: 500, saturated: false },
+      findings: { taken: 1, cap: 2000, saturated: false },
+      note: "the trajectory is assembled from bounded reads over three tables",
+    },
+  },
+  [REFUSED.id]: {
+    rows: DEAD_TRACE_ROWS,
+    stages: stagesUpTo("s12-persist", { degradeAt: "s3-collect" })
+      .map(({ stepId, ordinal, status, attempts, startedAt, endedAt, durationMs, degradeNote }) =>
+        ({ stepId, ordinal, status, attempts, startedAt, endedAt, durationMs, tokens: 0, degradeNote })),
+    dimensions: [{ dimensionId: "d1", name: "这个冷门课题的公开材料", state: "degraded", verified: 0, total: 4, uniqueHosts: 0 }],
+    lastEventSeq: 41,
+    // A read that hit its ceiling. Rendered rather than swallowed: a mission
+    // that stops at the thousandth event looks exactly like a mission that
+    // stopped working, and only this flag tells them apart.
+    window: {
+      events: { taken: 1000, cap: 1000, saturated: true },
+      toolCalls: { taken: 11, cap: 500, saturated: false },
+      findings: { taken: 4, cap: 2000, saturated: false },
+      note: "the trajectory is assembled from bounded reads over three tables",
+    },
+  },
+};
+
+TRACES[ORPHAN.id] = TRACES[RUNNING.id];
+TRACES[SIGNED.id] = TRACES[RUNNING.id];
+
+/**
+ * A mission that has recorded nothing at all.
+ *
+ * Handed to `stubFetch({ traces })` by the empty-state tests. Not a mistake
+ * and not a failure: a mission whose first stage has not written its first
+ * event answers exactly this, and it must not read as "your filter is wrong"
+ * — nor, one step earlier, may a read still in flight read as this.
+ */
+const EMPTY_TRACE = {
+  rows: [],
+  stages: [],
+  dimensions: [],
+  lastEventSeq: 0,
+  window: {
+    events: { taken: 0, cap: 1000, saturated: false },
+    toolCalls: { taken: 0, cap: 500, saturated: false },
+    findings: { taken: 0, cap: 2000, saturated: false },
+    note: "the trajectory is assembled from bounded reads over three tables",
+  },
+};
+
+/**
+ * The parts of a row `/trace` had to truncate, keyed by `ref`.
+ *
+ * Merged over the list row rather than restated beside it, because that is what
+ * the route does: one read serves both, so the detail can never describe a row
+ * the list did not show.
+ */
+const TRACE_EXTRAS = {
+  "finding:f1": {
+    payload: {
+      id: "f1", dimensionId: "d1", dimensionName: "推理时序扩展的训练侧做法",
+      runCount: 1, attempt: 0,
+      claim: "三家实验室同期收敛到同一种推理时序扩展做法",
+      claimHash: "c-1",
+      quote: "we observe the same scaling behaviour at test time across all three model families",
+      quoteChars: 79,
+      sourceUrl: "https://deepmind.google/discover/scaling",
+      sourceHost: "deepmind.google", sourceTitle: "Scaling test-time compute",
+      publishedAt: null, verifyState: "verified-source-text", verifyReason: null,
+      counts: true, verified: true, documentId: "doc-1", spanIndex: 4,
+      recordedAt: "2026-08-24T09:14:00.000Z",
+    },
+    result: {
+      text: "we observe the same scaling behaviour at test time across all three model families",
+      format: "text", note: null,
+    },
+    timing: { at: "2026-08-24T09:14:00.000Z", ms: null, startedAt: null, endedAt: "2026-08-24T09:14:00.000Z", source: "mission_findings.created_at" },
+    dimension: { dimensionId: "d1", name: "推理时序扩展的训练侧做法", facet: "technical", state: "collected", grade: 78, summary: null, verified: 5, total: 5, uniqueHosts: 3 },
+  },
+  // Never checked, and the panel has to say that rather than say it failed. A
+  // 429 is not a fabrication, and `verified: null` is how the column keeps them
+  // apart all the way to the screen.
+  "finding:g1": {
+    payload: {
+      id: "g1", dimensionId: "d1", dimensionName: "这个冷门课题的公开材料",
+      runCount: 1, attempt: 0,
+      claim: "这个课题的第一条线索",
+      claimHash: "c-g1",
+      quote: "the paper reports a single unreplicated result and no dataset was released with it",
+      quoteChars: 81,
+      sourceUrl: "https://example.org/whitepaper",
+      sourceHost: "example.org", sourceTitle: null, publishedAt: null,
+      verifyState: "unchecked-fetch-failed",
+      verifyReason: "the fetch returned 503 three times",
+      counts: false, verified: null, documentId: null, spanIndex: null,
+      recordedAt: "2026-08-23T09:28:00.000Z",
+    },
+    result: {
+      text: "the paper reports a single unreplicated result and no dataset was released with it",
+      format: "text", note: "verifier: the fetch returned 503 three times",
+    },
+    timing: { at: "2026-08-23T09:28:00.000Z", ms: null, startedAt: null, endedAt: "2026-08-23T09:28:00.000Z", source: "mission_findings.created_at" },
+    dimension: { dimensionId: "d1", name: "这个冷门课题的公开材料", facet: "technical", state: "degraded", grade: 12, summary: "这个维度读了 2 个页面，没有产出任何通过核验的引语。", verified: 0, total: 4, uniqueHosts: 0 },
+  },
+  "tool:2026-08-24T09:13:00.000Z#0": {
+    payload: {
+      tool: "web.search", argsText: '{"q":"test-time compute scaling laws","max":8,"recency":"90d"}',
+      argsTextStoredCap: 300, argsHash: "a-1", paceKey: "web", cached: false,
+      stepId: "s3-collect", agentId: "researcher:d1",
+    },
+    result: {
+      text: "ok", format: "text",
+      note: "mission_tool_calls records the verdict of a call, not its body. A fetched page's text is in mission_documents; a finding's quote is on the finding row.",
+    },
+    timing: {
+      at: "2026-08-24T09:13:00.000Z", ms: 820,
+      startedAt: "2026-08-24T09:12:59.180Z", endedAt: "2026-08-24T09:13:00.000Z",
+      source: "mission_tool_calls.at is written when the call returns; startedAt is that instant minus the measured latency_ms, and is derived rather than recorded.",
+    },
+  },
+};
+
+/** One finding, in the shape `projectFinding` returns it. */
+const finding = (id, over) => ({
+  id, dimensionId: "d1", dimensionName: "这个冷门课题的公开材料",
+  runCount: 1, attempt: 0, claim: "", claimHash: null,
+  quote: "", quoteChars: 0,
+  sourceUrl: null, sourceHost: null, sourceTitle: null, publishedAt: null,
+  verifyState: "unchecked-fetch-failed", verifyReason: null,
+  counts: false, verified: null, documentId: null, spanIndex: null,
+  recordedAt: "2026-08-23T09:28:00.000Z",
+  ...over,
+});
+
+/**
+ * `/missions/:id/findings?dimensionId=…`, per mission and dimension.
+ *
+ * The mission that verified NOTHING is the interesting one: four findings, none
+ * of them checked, every one of them readable. A dimension card that says
+ * "已核验 0" and shows nothing at all is the screen this route was added to fix.
+ */
+const FINDINGS = {
+  [RUNNING.id]: {
+    d1: {
+      missionId: RUNNING.id, runCount: 1,
+      scope: { dimensionId: "d1", verifyState: null, attempt: null },
+      dimension: { dimensionId: "d1", name: "推理时序扩展的训练侧做法", rationale: null, facet: "technical", state: "collected", attempt: 1, grade: 78, gradeAxes: null, summary: null, failureCode: null, updatedAt: "2026-08-24T09:12:00.000Z" },
+      findings: [
+        finding("f1", {
+          dimensionName: "推理时序扩展的训练侧做法",
+          claim: "三家实验室同期收敛到同一种推理时序扩展做法",
+          quote: "we observe the same scaling behaviour at test time across all three model families",
+          quoteChars: 79,
+          sourceUrl: "https://deepmind.google/discover/scaling",
+          sourceHost: "deepmind.google", sourceTitle: "Scaling test-time compute",
+          verifyState: "verified-source-text", counts: true, verified: true,
+          documentId: "doc-1", spanIndex: 4,
+        }),
+        finding("f1b", {
+          dimensionName: "推理时序扩展的训练侧做法",
+          claim: "第二家实验室报告了同样的曲线",
+          quote: "the replication holds across the two smaller model sizes",
+          quoteChars: 55,
+          sourceUrl: "https://arxiv.org/abs/2401.00002",
+          sourceHost: "arxiv.org", verifyState: "verified-source-text",
+          counts: true, verified: true,
+        }),
+      ],
+      // Two of five, and it says so rather than presenting a page as a whole.
+      page: { take: 50, skip: 0, returned: 2, hasMore: true, order: "oldest" },
+      counts: { total: 5, byState: { "verified-source-text": 5 }, verified: 5, verifiedAbstract: 0, unchecked: 0, uniqueHosts: 3 },
+      hosts: [{ host: "deepmind.google", findings: 3 }, { host: "arxiv.org", findings: 2 }],
+      vocabulary: { verifyStates: [], countingState: "verified-source-text", fetchBackedStates: [] },
+    },
+    d2: {
+      missionId: RUNNING.id, runCount: 1,
+      scope: { dimensionId: "d2", verifyState: null, attempt: null },
+      dimension: null, findings: [],
+      page: { take: 50, skip: 0, returned: 0, hasMore: false, order: "oldest" },
+      counts: { total: 0, byState: {}, verified: 0, verifiedAbstract: 0, unchecked: 0, uniqueHosts: 0 },
+      hosts: [],
+      vocabulary: { verifyStates: [], countingState: "verified-source-text", fetchBackedStates: [] },
+    },
+  },
+  [REFUSED.id]: {
+    d1: {
+      missionId: REFUSED.id, runCount: 1,
+      scope: { dimensionId: "d1", verifyState: null, attempt: null },
+      dimension: { dimensionId: "d1", name: "这个冷门课题的公开材料", rationale: null, facet: "technical", state: "degraded", attempt: 1, grade: 12, gradeAxes: null, summary: "这个维度读了 2 个页面，没有产出任何通过核验的引语。", failureCode: null, updatedAt: "2026-08-23T09:31:00.000Z" },
+      findings: [
+        finding("g1", { claim: "这个课题的第一条线索", quote: "the paper reports a single unreplicated result", quoteChars: 46, sourceUrl: "https://example.org/whitepaper", sourceHost: "example.org", verifyState: "unchecked-fetch-failed" }),
+        finding("g2", { claim: "这个课题的第二条线索", quote: "no follow-up work was published in the two years since", quoteChars: 54, sourceUrl: "https://example.org/followup", sourceHost: "example.org", verifyState: "unchecked-fetch-failed" }),
+        finding("g3", { claim: "这个课题的第三条线索", quote: "the archive copy has been withdrawn by the author", quoteChars: 48, sourceUrl: "https://example.org/withdrawn", sourceHost: "example.org", verifyState: "unchecked-fetch-failed" }),
+        finding("g4", { claim: "这个课题的第四条线索", quote: "a mirror of the same page carries the identical wording", quoteChars: 55, sourceUrl: "https://mirror.example.net/copy", sourceHost: "mirror.example.net", verifyState: "unchecked-rate-limited" }),
+      ],
+      page: { take: 50, skip: 0, returned: 4, hasMore: false, order: "oldest" },
+      counts: { total: 4, byState: { "unchecked-fetch-failed": 3, "unchecked-rate-limited": 1 }, verified: 0, verifiedAbstract: 0, unchecked: 4, uniqueHosts: 0 },
+      hosts: [{ host: "example.org", findings: 3 }, { host: "mirror.example.net", findings: 1 }],
+      vocabulary: { verifyStates: [], countingState: "verified-source-text", fetchBackedStates: [] },
+    },
+  },
+};
+
+FINDINGS[ORPHAN.id] = FINDINGS[RUNNING.id];
+FINDINGS[SIGNED.id] = FINDINGS[RUNNING.id];
+
+/**
+ * `/missions/:id/trace`, filtered and ordered the way the route does it.
+ *
+ * Filtered here rather than answered as one fixed page, for the reason
+ * `/missions/list` is answered per status: the interesting question about a
+ * filter is not whether the chip draws, it is whether the list under it changes.
+ */
+function tracePage(missionId, query, from = TRACES[missionId]) {
+  const source = from ?? { rows: [], stages: [], dimensions: [], lastEventSeq: 0, window: {} };
+  const kind = query.get("kind");
+  const stepId = query.get("stepId");
+  const dimensionId = query.get("dimensionId");
+  const needle = (query.get("search") ?? "").toLowerCase();
+  const order = query.get("order") ?? "newest";
+  const matched = source.rows.filter((row) => {
+    if (kind !== null && row.kind !== kind) return false;
+    if (stepId !== null && row.stepId !== stepId) return false;
+    if (dimensionId !== null && row.dimensionId !== dimensionId) return false;
+    if (needle === "") return true;
+    return [row.title, row.detail, row.result, row.stepId, row.agentId, row.dimensionName, row.state]
+      .some((field) => typeof field === "string" && field.toLowerCase().includes(needle));
+  });
+  const rows = order === "oldest" ? matched : [...matched].reverse();
+  return {
+    missionId, runCount: 1, rows,
+    page: {
+      order, take: Number(query.get("take") ?? 100), skip: 0,
+      returned: rows.length, total: matched.length, hasMore: false,
+      unfiltered: source.rows.length,
+    },
+    filters: { kind, role: null, stepId, dimensionId, search: needle === "" ? null : needle },
+    window: source.window,
+    stages: source.stages,
+    dimensions: source.dimensions,
+    lastEventSeq: source.lastEventSeq,
+    truncation: { detailChars: 200, resultChars: 160 },
+    vocabulary: {
+      kinds: ["stage", "tool", "finding", "event"],
+      roles: ["STAGE", "TOOL", "EVIDENCE", "GATE", "SYSTEM"],
+      orders: ["newest", "oldest"],
+    },
+  };
+}
+
+/** `/missions/:id/trace/:ref`, in the shape `traceDetail` builds it. */
+function traceDetail(missionId, ref, from = TRACES[missionId]) {
+  const rows = (from ?? { rows: [] }).rows;
+  const row = rows.find((entry) => entry.ref === ref);
+  if (row === undefined) return null;
+  const extra = TRACE_EXTRAS[ref] ?? {};
+  const payload = extra.payload ?? {};
+  return {
+    missionId, ref, seq: row.seq, kind: row.kind, role: row.role, at: row.at,
+    ok: row.ok, state: row.state, row, payload,
+    result: extra.result ?? { text: null, format: null, note: null },
+    timing: extra.timing ?? { at: row.at, ms: row.ms, startedAt: null, endedAt: null, source: "mission_events.ts" },
+    stepId: row.stepId, agentId: row.agentId,
+    stage: extra.stage ?? null,
+    dimension: extra.dimension ?? null,
+    toolCall: row.kind === "tool" ? payload : null,
+    finding: row.kind === "finding" ? payload : null,
+    event: row.kind === "event" || row.kind === "stage" ? { payload } : null,
+  };
+}
+
 const VERSION = {
   version: "0.3.4", channel: "release", label: "0.3.4", node: "24.12.0",
   library: "local", libraryPath: "/home/someone/.dsh/swarm/swarm-sources.sqlite",
@@ -596,6 +990,11 @@ let posted = [];
 function stubFetch(overrides = {}) {
   const pages = { ...MISSION_PAGES, ...(overrides.missionPages ?? {}) };
   const views = { ...MISSION_VIEWS, ...(overrides.views ?? {}) };
+  // Overridable for the same reason `cancelled` is an empty page above: a
+  // mission that has recorded nothing yet is a state the route really serves,
+  // and the only way to prove the screen says something different about it is
+  // to hand this stub a trajectory with nothing in it.
+  const traces = { ...TRACES, ...(overrides.traces ?? {}) };
   posted = [];
   globalThis.fetch = async (url, init) => {
     const address = String(url);
@@ -634,6 +1033,52 @@ function stubFetch(overrides = {}) {
 
     const view = Object.keys(views).find((id) => address.includes(`/missions/${id}/view`));
     if (view !== undefined) return ok(views[view]);
+
+    // The three routes the trajectory reads. `/trace/<ref>` is matched before
+    // `/trace`, because the ref is a fourth path segment on the same action and
+    // a prefix test would answer the detail request with the list.
+    const traced = Object.keys(traces).find((id) => address.includes(`/missions/${id}/trace`));
+    if (traced !== undefined) {
+      const path = address.includes("?") ? address.slice(0, address.indexOf("?")) : address;
+      const query = new URLSearchParams(address.includes("?") ? address.slice(address.indexOf("?") + 1) : "");
+      const marker = `/missions/${traced}/trace/`;
+      if (path.includes(marker)) {
+        const ref = decodeURIComponent(path.slice(path.indexOf(marker) + marker.length));
+        const detail = traceDetail(traced, ref, traces[traced]);
+        return detail === null
+          ? {
+            ok: false,
+            json: async () => ({
+              success: false,
+              // The route's own 404, which names the WINDOW rather than the
+              // absence: a row that scrolled out of a bounded read and a row
+              // that never existed want different reactions.
+              error: `no trajectory row ${ref} in the window this page reads. The trajectory is assembled from the newest 1000 events, 500 tool calls and 2000 findings; an older row is on disk but outside it.`,
+            }),
+          }
+          : ok(detail);
+      }
+      return ok(tracePage(traced, query, traces[traced]));
+    }
+
+    const evidenced = Object.keys(FINDINGS).find((id) => address.includes(`/missions/${id}/findings`));
+    if (evidenced !== undefined) {
+      const query = new URLSearchParams(address.slice(address.indexOf("?") + 1));
+      const dimensionId = query.get("dimensionId") ?? "";
+      const page = FINDINGS[evidenced][dimensionId];
+      return page === undefined
+        ? {
+          ok: false,
+          json: async () => ({
+            success: false,
+            // Named, never an empty list: an empty list from a mistyped id is
+            // indistinguishable from an empty list from a dimension that found
+            // nothing, and those two want opposite reactions.
+            error: `mission ${evidenced} has no dimension "${dimensionId}" at run 1. It has ${Object.keys(FINDINGS[evidenced]).join(", ")}.`,
+          }),
+        }
+        : ok(page);
+    }
 
     const artifact = Object.keys(ARTIFACTS).find((id) => address.includes(`/missions/${id}/artifact`));
     if (artifact !== undefined) return ok(ARTIFACTS[artifact]);
@@ -1053,6 +1498,299 @@ test("a scorecard with nothing in it is not a clean bill", async () => {
   assert.ok(text.includes("这不是“没有发现问题”"), "an empty scorecard reads as a pass");
   assert.ok(text.includes("这一版是降级归档的"), "a degraded artefact does not say it is degraded");
   assert.ok(text.includes("没有产出一条通过核验的引语"), "an empty evidence list is rendered as an empty list");
+});
+
+// The trajectory.
+//
+// The complaint these answer, in the user's words: the dimensions are
+// completely unusable and invisible. A card said "已核验 6 · 1 个独立站点" and
+// nothing on the screen could show one of those six — the claim, the quote, the
+// source and the verify state were all in `mission_findings` the whole time.
+// Every test below reads what a person reads: the steps in order, one of them
+// opened, and a dimension's evidence in words rather than as a count.
+
+/** The search box over the trajectory. */
+function traceSearch(tree) {
+  const hit = find(tree, (node) => node.props?.["aria-label"] === "搜索轨迹");
+  assert.ok(hit, "no search box over the trajectory");
+  return hit;
+}
+
+test("the trajectory is one dense row per step, whatever the step was", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  const text = await open(view, RUNNING.topic);
+
+  // Four kinds in one ordered list. A tail that showed only events answered
+  // "what is it doing" and never "why did that dimension come back empty".
+  for (const chipLabel of ["阶段", "工具", "证据", "系统"]) {
+    assert.ok(text.includes(chipLabel), `no ${chipLabel} row in the trajectory`);
+  }
+  // The call, and the arguments it was made with. `args_text` exists precisely
+  // because "eighty-six searches found nothing" was unanswerable without them.
+  assert.ok(text.includes("web.search"), "the tool call is not named");
+  assert.ok(text.includes("test-time compute scaling laws"), "the arguments the call was made with are not shown");
+  assert.ok(text.includes("rate_limited"), "a failed call does not say what it failed with");
+  assert.ok(text.includes("→"), "there is no arrow between what went in and what came out");
+  // A stage id and an event type are vocabulary this page has words for.
+  assert.ok(text.includes("规划"), "a stage row prints its raw step id");
+  assert.ok(text.includes("开始运行"), "an event row prints its raw type");
+  // The read is bounded and says how far it got against how much there is.
+  assert.ok(text.includes("显示 6 / 6 条"), "the trajectory does not say how much of itself it is showing");
+});
+
+test("clicking a row opens a panel beside the list, and the list stays put", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, RUNNING.topic);
+  await view.act(() => { button(view.tree, "web.search").props.onClick(); });
+
+  const text = textOf(view.tree).join(" ");
+  // Master-detail IN PLACE: the row that was clicked is still in the list
+  // beside the panel, and so is every other row.
+  assert.ok(text.includes("三家实验室同期收敛到同一种推理时序扩展做法"), "opening a row replaced the list instead of appearing beside it");
+  assert.ok(text.includes("tool:2026-08-24T09:13:00.000Z#0"), "the panel does not say which row it is showing");
+  // Keyed on the ref, and the panel says so: `seq` is a position in a snapshot
+  // over bounded windows, and a panel reopened against the wrong row is the
+  // most expensive kind of wrong because it is plausible.
+  assert.ok(text.includes("不是身份"), "the panel presents a snapshot position as an identity");
+
+  await view.act(() => { chip(view.tree, "载荷").props.onClick(); });
+  const payload = textOf(view.tree).join(" ");
+  // The row is clipped to 200 characters for display; the panel is the only
+  // place the rest of the arguments exists, which is the whole reason it opens.
+  assert.ok(payload.includes("recency"), "the payload tab shows only the clipped arguments the row already had");
+  // Which layer cut the string. Without this a reader goes looking for a rest
+  // that was never stored.
+  assert.ok(payload.includes("参数在写入时就截到 300 个字符"), "the payload tab does not say where the cap came from");
+
+  await view.act(() => { chip(view.tree, "结果").props.onClick(); });
+  assert.ok(
+    textOf(view.tree).join(" ").includes("records the verdict of a call, not its body"),
+    "the result tab pretends the ledger holds the page it fetched",
+  );
+
+  await view.act(() => { chip(view.tree, "计时").props.onClick(); });
+  const timing = textOf(view.tree).join(" ");
+  assert.ok(timing.includes("820ms"), "a sub-second latency was rounded away to nothing");
+  // A tool call's start is derived — the row is written when the call returns —
+  // and a computed instant presented as a recorded one is a measurement nobody
+  // promised.
+  assert.ok(timing.includes("is derived rather than recorded"), "the timing tab does not say where its numbers came from");
+});
+
+test("a finding opens onto the whole quote, with the state in words", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  const listed = await open(view, RUNNING.topic);
+  // The row clips the quote; that is the display bound, and the whole point of
+  // the panel is that the clipped half is reachable.
+  assert.ok(!listed.includes("across all three model families"), "the fixture does not clip, so nothing is being proved");
+
+  await view.act(() => { button(view.tree, "三家实验室同期收敛到同一种推理时序扩展做法").props.onClick(); });
+  const text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("across all three model families"), "the verbatim quote is still truncated in the one place it can be read whole");
+  // The enum spelled out. `verified-source-text` is a column value, not an
+  // answer a person can act on.
+  assert.ok(text.includes("已核验"), "the verify state is shown as the raw enum");
+  assert.ok(text.includes("越过了证据边界"), "the panel does not say whether this finding counts");
+  assert.ok(text.includes("Scaling test-time compute"), "the panel does not name the source");
+  assert.ok(text.includes("在阅读器里打开"), "there is no way to follow the quote to its page");
+  const link = find(view.tree, (node) => node.type === "a" && node.props?.href === "https://deepmind.google/discover/scaling");
+  assert.ok(link, "the panel does not link to the page the quote was verified against");
+});
+
+test("the kind chips and the search change the list under them", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, RUNNING.topic);
+
+  await view.act(() => { chip(view.tree, "发现").props.onClick(); });
+  let text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("三家实验室同期收敛到同一种推理时序扩展做法"), "发现 lost the finding");
+  assert.ok(!text.includes("test-time compute scaling laws"), "发现 kept the tool calls: the chip changed the URL and nothing else");
+
+  await view.act(() => { chip(view.tree, "全部记录").props.onClick(); });
+  await view.act(() => { traceSearch(view.tree).props.onChange({ target: { value: "arxiv" } }); });
+  text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("arxiv.org/abs/2401.00001"), "the search lost the row it should have matched");
+  assert.ok(!text.includes("test-time compute scaling laws"), "the search matched everything");
+
+  await view.act(() => { traceSearch(view.tree).props.onChange({ target: { value: "没有这种东西" } }); });
+  // "0" and "0 of 6" are different sentences: one says the mission did nothing,
+  // the other says this filter matches nothing.
+  assert.ok(
+    textOf(view.tree).join(" ").includes("轨迹里一共有 6 条"),
+    "an empty filter reads as an empty mission",
+  );
+});
+
+test("a dimension opens into its findings, and none of them is hidden", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  const closed = await open(view, REFUSED.topic);
+  // The state the rebuild started from: a count, and no way to see one of them.
+  assert.ok(closed.includes("看这 4 条证据"), "a dimension card does not offer to show its evidence");
+  assert.ok(!closed.includes("no follow-up work was published"), "the fixture is already showing the quotes, so nothing is being proved");
+
+  await view.act(() => { button(view.tree, "看这 4 条证据").props.onClick(); });
+  const text = textOf(view.tree).join(" ");
+  for (const quote of [
+    "the paper reports a single unreplicated result",
+    "no follow-up work was published in the two years since",
+    "the archive copy has been withdrawn by the author",
+    "a mirror of the same page carries the identical wording",
+  ]) {
+    assert.ok(text.includes(quote), `a finding this dimension recorded is still invisible: ${quote}`);
+  }
+  // WHICH sites, not how many. "1 个独立站点" gave a number and withheld the
+  // only part of it that can be judged.
+  assert.ok(text.includes("example.org (3)"), "the dimension names no host it actually reached");
+  // Availability is not quality. Four unchecked findings must not be drawn as
+  // four refuted ones — that is the collapse the verify-state column exists to
+  // prevent, reproduced at the last step.
+  assert.ok(text.includes("抓取失败") && text.includes("被限流"), "the unchecked findings do not say why they are unchecked");
+  assert.ok(!text.includes("未通过"), "a finding nobody checked is drawn as a finding that failed");
+});
+
+test("a finding reached from a dimension opens the same panel, and the reader", async () => {
+  stubFetch();
+  const asked = [];
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, REFUSED.topic);
+  await view.act(() => { button(view.tree, "看这 4 条证据").props.onClick(); });
+  await view.act(() => { button(view.tree, "这个课题的第一条线索").props.onClick(); });
+
+  let text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("finding:g1"), "the panel does not say which finding it is showing");
+  assert.ok(text.includes("and no dataset was released with it"), "the panel truncated the quote it exists to show whole");
+  // Three-valued all the way to the screen.
+  assert.ok(text.includes("没有判定"), "a finding nobody checked is reported as having a verdict");
+  assert.ok(text.includes("the fetch returned 503 three times"), "the verifier's own reason was dropped");
+
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { asked.push(String(url)); return inner(url, init); };
+  await view.act(() => { button(view.tree, "在阅读器里打开").props.onClick(); });
+  // 信源's own reader: the Host half re-fetches the page and extracts it, which
+  // is the only thing that can answer "does that page still say this".
+  assert.ok(
+    asked.some((url) => url.includes("/proxy/reader") && url.includes(encodeURIComponent("https://example.org/whitepaper"))),
+    "the source was not fetched: " + asked.join(", "),
+  );
+  text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("and no dataset was released with it"), "the reader lost the quote it was opened for");
+  assert.ok(text.includes("返回任务"), "there is no way back from the reader");
+});
+
+test("a row outside the window says so, and a saturated read says so too", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  const text = await open(view, REFUSED.topic);
+  // The window is the honest answer to "is this the whole history". A mission
+  // that stops at the thousandth event looks exactly like one that stopped
+  // working.
+  assert.ok(text.includes("已经读到窗口上限"), "a trajectory that hit its ceiling reports as a complete one");
+
+  await view.act(() => { button(view.tree, "看这 4 条证据").props.onClick(); });
+  // `/findings` and `/trace` page over different bounds, so a finding the
+  // dimension lists can sit outside the trajectory the panel reads. The 404
+  // that follows names the bound rather than the absence.
+  await view.act(() => { button(view.tree, "这个课题的第二条线索").props.onClick(); });
+  const opened = textOf(view.tree).join(" ");
+  assert.ok(opened.includes("读不到这一行"), "a row outside the window fails silently");
+  assert.ok(opened.includes("an older row is on disk but outside it"), "the failure does not say what the bound was");
+});
+
+test("the trajectory reads in English too, every string paired", async () => {
+  // Every other test on this tab runs in Chinese, which means the English half
+  // of every `zh ? … : …` pair on the newest region of this file had never been
+  // executed by anything. A pair whose second arm throws is a blank panel for
+  // exactly the readers who cannot read the first arm.
+  stubFetch();
+  const view = await render("MissionsTab", { zh: false });
+  await view.act(() => { button(view.tree, RUNNING.topic).props.onClick(); });
+  let text = textOf(view.tree).join(" ");
+  for (const piece of ["All rows", "Findings", "TOOL", "EVIDENCE", "web.search", "showing 6 of 6", "Mission started"]) {
+    assert.ok(text.includes(piece), `the English trajectory is missing ${piece}`);
+  }
+
+  await view.act(() => { button(view.tree, "web.search").props.onClick(); });
+  text = textOf(view.tree).join(" ");
+  for (const piece of ["Summary", "Payload", "Result", "Timing", "✓ Passed", "a position in this snapshot"]) {
+    assert.ok(text.includes(piece), `the English detail panel is missing ${piece}`);
+  }
+});
+
+test("an empty trajectory and an empty filter are different sentences", async () => {
+  // The distinction the mission list already makes for its chips, one level
+  // down. "0" answers two different questions with the same character: the
+  // mission has done nothing yet, and this filter selects none of what it did.
+  // A reader who cannot tell them apart either waits for a mission that is
+  // finished or clears a filter that was never set.
+  stubFetch({ traces: { [ORPHAN.id]: EMPTY_TRACE } });
+  const view = await render("MissionsTab", { zh: true });
+  const nothing = await open(view, ORPHAN.topic);
+  assert.ok(nothing.includes("这个任务还没有留下任何轨迹"), "a mission with no trajectory does not say so");
+  assert.ok(!nothing.includes("轨迹里一共有"), "an empty mission is reported as a filter that matched nothing");
+  // And it does not invent a ceiling it never reached: every window in this
+  // fixture is unsaturated, so the honest-bounds line has nothing to say.
+  assert.ok(!nothing.includes("已经读到窗口上限"), "an unsaturated read claims it hit its window");
+
+  // The other sentence, on a mission that DOES have a trajectory, so the two
+  // are proved distinct rather than merely present.
+  const other = await render("MissionsTab", { zh: true });
+  await open(other, RUNNING.topic);
+  await other.act(() => { traceSearch(other.tree).props.onChange({ target: { value: "没有这种东西" } }); });
+  const filtered = textOf(other.tree).join(" ");
+  assert.ok(filtered.includes("轨迹里一共有 6 条"), "a filter that matches nothing does not say what it filtered");
+  assert.ok(!filtered.includes("还没有留下任何轨迹"), "a filter that matched nothing is reported as a mission that did nothing");
+});
+
+test("both empty states read in English as well", async () => {
+  // The English arm of a `zh ? … : …` pair that no test has ever executed is
+  // a blank line for exactly the readers who cannot read the other arm, and
+  // these two arms sit on the branch a reader reaches when there is nothing
+  // else on the screen to correct them.
+  stubFetch({ traces: { [ORPHAN.id]: EMPTY_TRACE } });
+  const view = await render("MissionsTab", { zh: false });
+  const nothing = await open(view, ORPHAN.topic);
+  assert.ok(nothing.includes("has not recorded a trajectory yet"), "the English empty mission says nothing");
+
+  const other = await render("MissionsTab", { zh: false });
+  await open(other, RUNNING.topic);
+  await other.act(() => {
+    find(other.tree, (node) => node.props?.["aria-label"] === "Search the trajectory").props.onChange({ target: { value: "nothing like this" } });
+  });
+  assert.ok(
+    textOf(other.tree).join(" ").includes("the trajectory holds 6 row(s)"),
+    "the English empty filter does not say what it filtered",
+  );
+});
+
+test("a trajectory still being read is not a trajectory that came back empty", async () => {
+  // The third state, and the one that is wrong on a working mission: between
+  // the first paint and the route's answer, `page` is null and `rows` is [],
+  // which is the same shape as a mission that has recorded nothing. On a slow
+  // or wedged read that is a screen telling you a running mission has done
+  // nothing — a claim the page has not checked and cannot make.
+  stubFetch();
+  const inner = globalThis.fetch;
+  globalThis.fetch = (url, init) => {
+    const address = String(url);
+    // Only the list route hangs. Everything else on the tab answers, so what
+    // is under test is this one pending read rather than a dead page.
+    if (address.includes("/trace")) return new Promise(() => {});
+    return inner(url, init);
+  };
+  const view = await render("MissionsTab", { zh: true });
+  const text = await open(view, RUNNING.topic);
+  assert.ok(
+    !text.includes("这个任务还没有留下任何轨迹"),
+    "a read that has not come back yet is reported as a mission that recorded nothing",
+  );
+  assert.ok(text.includes("正在读取轨迹"), "a pending read says nothing at all while it is pending");
+  // And it must not report a total it has not been told.
+  assert.ok(!text.includes("显示 0 / 0 条"), "a pending read prints a count it does not have");
 });
 
 test("the tab no longer says it is unbuilt, and the other two still do", () => {

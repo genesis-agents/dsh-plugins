@@ -62,6 +62,16 @@
  * fell through to `return 'running'`. Every copy is another list somebody can
  * forget, so this module holds none of them.
  *
+ * THE SECOND PROJECTION IN THIS FILE. `buildMissionTrace` and its neighbours,
+ * at the foot of the module, answer the other question — "what did this mission
+ * DO, in order, one row per thing" — for the trajectory tab. It is here rather
+ * than in the routes because it is the same kind of thing: a pure fold over
+ * rows somebody else read, testable from fixtures with no database. It is a
+ * separate function rather than more fields on the view because it is read on
+ * demand, once, by a tab a person opened, and the view is read on a poll — and
+ * the whole reason the view projects from counters is that the expensive
+ * question must not be asked on the cheap question's schedule.
+ *
  * No imports. No dependencies. Synchronous throughout, matching store.js's 45
  * call sites and zero awaits.
  */
@@ -1537,6 +1547,579 @@ function query(db, sql, params) {
     }
     throw err;
   }
+}
+
+// ── the trajectory projection ────────────────────────────────────────────────
+
+/**
+ * The trajectory: one ordered list of everything a mission did.
+ *
+ * WHY THIS IS A SEPARATE PROJECTION AND NOT PART OF `projectMissionView`.
+ * The view above answers "what is this mission doing right now" from the
+ * COUNTER tables — deliberately, because folding the event stream on every tick
+ * is what stalls the mission it describes. The trajectory asks the opposite
+ * question: "what happened, in order, one row per thing". It is read on demand
+ * by a tab a person opened, one page at a time, never on the live poll — so it
+ * may read the streams the view refuses to. Keeping the two apart is what stops
+ * the expensive question from being asked on the cheap question's schedule.
+ *
+ * WHY STAGE TRANSITIONS COME FROM THE EVENT LOG AND NOT FROM `mission_stages`.
+ * `stage:started`, `stage:done`, `stage:degraded`, `stage:failed` and
+ * `stage:skipped-by-tier` are all registered event types; `mission_stages`
+ * holds the CURRENT status of each stage and one pair of stamps. Emitting rows
+ * from both would print a stage twice — once as it happened and once as it now
+ * stands — and on a rerun the second copy carries the NEW generation's stamps
+ * against the OLD generation's position in the list. So the event log supplies
+ * the rows and `mission_stages` supplies the numbers each row is annotated
+ * with. A stage that has a row and no event is invisible here on purpose: it
+ * did not transition inside the window this page read.
+ *
+ * WHY IT IS PURE. Same reason as the view: every input arrives already read, so
+ * a fixture test can build a trajectory with no database, and the bound on how
+ * much is read lives at the route where the caps are visible beside each other
+ * rather than buried inside a fold.
+ */
+
+/**
+ * Where a trajectory row came from. This is the row's provenance, not its
+ * severity — a filter on `kind` narrows to one stream.
+ *
+ * `stage` and `event` both come from `mission_events`; the split is that a
+ * `stage:*` type is a transition of the pipeline and everything else is a
+ * notice about it. A reader scanning for "what did s3 actually do" wants the
+ * first without the second, and a `kind=event` filter that also returned stage
+ * transitions would make that scan impossible.
+ */
+export const TRACE_KINDS = Object.freeze(["stage", "tool", "finding", "event"]);
+
+/**
+ * The chip printed at the left of a trajectory row.
+ *
+ * A FIXED vocabulary, exported, for the reason the status list is: the client
+ * colours by this string, and a role invented at read time would arrive at a
+ * `switch` with no case and render as an unstyled blank. Anything this module
+ * cannot class is `SYSTEM`, never a made-up chip.
+ */
+export const TRACE_ROLES = Object.freeze(["STAGE", "TOOL", "EVIDENCE", "GATE", "SYSTEM"]);
+
+/** Which end of the trajectory a page is taken from. */
+export const TRACE_ORDERS = Object.freeze(["newest", "oldest"]);
+
+/**
+ * How much of the left-hand argument a list row carries.
+ *
+ * The list is one line per row and the detail route returns the whole thing, so
+ * this is a display bound, not a data bound. It is deliberately generous: a
+ * search whose query is cut at forty characters cannot be told apart from the
+ * next search, which is the exact failure `args_text` was added to fix.
+ */
+export const TRACE_DETAIL_CHARS = 200;
+
+/** How much of the right-hand result a list row carries. See `TRACE_DETAIL_CHARS`. */
+export const TRACE_RESULT_CHARS = 160;
+
+/**
+ * Event types that report a failure, so `ok: false` is never guessed from a name.
+ *
+ * Listed rather than matched by suffix. A guess by suffix would class
+ * `gate:soft-warning` as a pass, and a soft warning is the one signal that says
+ * the mission is heading for a quality failure while every stage still reports
+ * success.
+ */
+const TRACE_FAILED_EVENTS = Object.freeze([
+  "stage:failed",
+  "stage:stalled",
+  "gate:refused",
+  "gate:hard-warning",
+  "evidence:none",
+  "recollect:refused",
+  "checkpoint:divergence",
+  "runtime:owner-conflict",
+  "runtime:reclaim-limit",
+  "postlude:handoff-failed",
+  "artifact:write-failed",
+]);
+
+/** Event types that report a pass, for the same reason the list above exists. */
+const TRACE_PASSED_EVENTS = Object.freeze([
+  "stage:done",
+  "gate:passed",
+  "artifact:written",
+  "recollect:allowed",
+  "mission:finalized",
+]);
+
+/**
+ * Verify states that mean the claim was CHECKED AND WRONG, as opposed to unchecked.
+ *
+ * The `unchecked-` family is deliberately absent: a 429 is not a fabrication,
+ * and colouring it red on the trajectory reproduces in the UI the collapse §4.4
+ * forbids in the column. Those rows carry `ok: null` — no verdict — and the
+ * reader sees the state string itself.
+ */
+const TRACE_REFUTED_STATES = Object.freeze(["misattributed", "unverifiable", "too-short"]);
+
+/**
+ * Build the whole trajectory from streams that have already been read.
+ *
+ * Rows are numbered OLDEST FIRST, always, whichever way the caller then pages.
+ * Numbering from the newest end would renumber every row each time the mission
+ * wrote one more, so a detail panel opened on row 12 would be showing a
+ * different row a second later. `seq` is a position in this snapshot and `ref`
+ * is the identity — see `parseTraceRef`; the client keys on `ref`.
+ *
+ * @param {object} input - the streams, each already read from the store.
+ * @param {object[]} [input.events] - `MissionStore.eventTail` / `readEvents` rows: `{seq, ts, type, class, agentId, stepId, payload}`.
+ * @param {object[]} [input.stages] - `MissionStore.listStages` rows, for the numbers each stage row is annotated with.
+ * @param {object[]} [input.toolCalls] - `MissionStore.recentToolCalls` rows, NEWEST FIRST as that method returns them.
+ * @param {object[]} [input.findings] - `MissionStore.listFindings` rows, oldest first as that method returns them.
+ * @param {object[]} [input.dimensions] - `MissionStore.listDimensions` rows, for dimension names.
+ * @returns {object[]} every row, oldest first, `seq` assigned from 1.
+ */
+export function buildMissionTrace(input) {
+  const stages = asArray(input?.stages);
+  const findings = asArray(input?.findings);
+  const dimensions = asArray(input?.dimensions);
+
+  const stageByStep = new Map();
+  for (const stage of stages) stageByStep.set(String(stage?.stepId ?? ""), stage);
+  const dimensionNames = new Map();
+  for (const dimension of dimensions) dimensionNames.set(String(dimension?.dimensionId ?? ""), dimension?.name ?? null);
+  const dimensionIds = new Set(dimensionNames.keys());
+
+  /** Every candidate row, each carrying the tuple it is sorted by. */
+  const candidates = [];
+
+  // ── the event log: stage transitions, and everything else ───────────────
+  //
+  // `rank: 0` for BOTH kinds, tiebroken by the event `seq`. Ranking stage rows
+  // ahead of the rest would reorder two events written in the same millisecond
+  // against the order the store recorded them in, and that seq is the only
+  // record of that order there is.
+  for (const event of dedupeEvents(asArray(input?.events))) {
+    const type = String(event?.type ?? "");
+    const seq = numberOr(event?.seq, 0);
+    const payload = parseJson(event?.payload, {});
+    const stepId = event?.stepId == null ? stepIdOf(payload) : String(event.stepId);
+    const isStage = type.startsWith("stage:");
+    const stage = stepId === null ? undefined : stageByStep.get(stepId);
+    const verb = isStage ? type.slice("stage:".length) : type;
+    // The duration belongs to the transition that ENDED the stage. Printing it
+    // on `stage:started` too would show a stage announcing, at the moment it
+    // began, how long it was going to take.
+    const ended = isStage && verb !== "started";
+    candidates.push({
+      rank: 0,
+      ordinal: seq,
+      at: event?.ts == null ? null : String(event.ts),
+      kind: isStage ? "stage" : "event",
+      role: roleOfEvent(type),
+      title: isStage ? (stepId ?? type) : type,
+      detail: isStage ? verb : oneLine(payload, TRACE_DETAIL_CHARS),
+      result: isStage ? oneLine(payload, TRACE_RESULT_CHARS) : reasonOf(payload, TRACE_RESULT_CHARS),
+      ms: ended ? nullableNumber(stage?.durationMs) : nullableNumber(payload?.ms ?? payload?.durationMs),
+      ok: okOfEvent(type),
+      state: isStage ? verb : type,
+      stepId,
+      agentId: event?.agentId == null ? null : String(event.agentId),
+      dimensionId: resolveDimensionId(event?.agentId ?? null, dimensionIds) ?? dimensionIdOf(payload, dimensionIds),
+      paceKey: null,
+      ref: isStage ? `stage:${stepId ?? type}@${seq}` : `event:${seq}`,
+    });
+  }
+
+  // ── tool calls ──────────────────────────────────────────────────────────
+  //
+  // REVERSED, not re-sorted. `recentToolCalls` orders `at DESC, id DESC`, so
+  // reversing yields `at ASC, id ASC` — and the row id is the only thing that
+  // orders two calls recorded in the same millisecond. A sort keyed on `at`
+  // alone would scramble exactly those, which are the rows a thrash
+  // investigation is looking at.
+  const ascendingCalls = [...asArray(input?.toolCalls)].reverse();
+  /** How many calls have already been seen at each instant, for the ref's ordinal. */
+  const seenAtInstant = new Map();
+  for (const call of ascendingCalls) {
+    const at = call?.at == null ? "" : String(call.at);
+    const ordinal = seenAtInstant.get(at) ?? 0;
+    seenAtInstant.set(at, ordinal + 1);
+    const outcome = call?.errorCode ? String(call.errorCode) : (call?.cached === true ? "cached" : "ok");
+    candidates.push({
+      rank: 1,
+      ordinal,
+      at: at === "" ? null : at,
+      kind: "tool",
+      role: "TOOL",
+      title: String(call?.tool ?? ""),
+      // The arguments, which is the whole reason `args_text` exists: eight
+      // dimensions, eighty-six searches, and the only honest answer to "why did
+      // four of them find nothing" was that nobody could see the queries.
+      detail: clip(collapse(String(call?.argsText ?? "")), TRACE_DETAIL_CHARS),
+      result: outcome,
+      ms: nullableNumber(call?.latencyMs),
+      ok: call?.ok === true,
+      state: outcome,
+      stepId: call?.stepId == null ? null : String(call.stepId),
+      agentId: call?.agentId == null || call.agentId === "" ? null : String(call.agentId),
+      dimensionId: resolveDimensionId(call?.agentId ?? null, dimensionIds),
+      paceKey: call?.paceKey == null ? null : String(call.paceKey),
+      ref: `tool:${at}#${ordinal}`,
+    });
+  }
+
+  // ── findings ────────────────────────────────────────────────────────────
+  //
+  // The rows the tab exists for. `detail` is the CLAIM and `result` is the
+  // verbatim quote, because a card that reports "已核验 6" and shows neither is
+  // a count of evidence the screen refuses to display.
+  let findingOrdinal = 0;
+  for (const finding of findings) {
+    const dimensionId = finding?.dimensionId == null ? null : String(finding.dimensionId);
+    candidates.push({
+      rank: 2,
+      ordinal: findingOrdinal++,
+      at: finding?.createdAt == null ? null : String(finding.createdAt),
+      kind: "finding",
+      role: "EVIDENCE",
+      title: String(finding?.sourceHost ?? ""),
+      detail: clip(collapse(String(finding?.claim ?? "")), TRACE_DETAIL_CHARS),
+      result: clip(collapse(String(finding?.evidence ?? "")), TRACE_RESULT_CHARS),
+      ms: null,
+      ok: okOfVerifyState(String(finding?.verifyState ?? "")),
+      state: String(finding?.verifyState ?? ""),
+      stepId: null,
+      agentId: null,
+      dimensionId,
+      paceKey: null,
+      ref: `finding:${String(finding?.id ?? "")}`,
+    });
+  }
+
+  candidates.sort(compareTraceCandidates);
+
+  return candidates.map((candidate, index) => ({
+    seq: index + 1,
+    at: candidate.at,
+    kind: candidate.kind,
+    role: candidate.role,
+    title: candidate.title,
+    detail: candidate.detail,
+    result: candidate.result,
+    ms: candidate.ms,
+    ok: candidate.ok,
+    state: candidate.state,
+    stepId: candidate.stepId,
+    agentId: candidate.agentId,
+    dimensionId: candidate.dimensionId,
+    dimensionName: candidate.dimensionId === null ? null : dimensionNames.get(candidate.dimensionId) ?? null,
+    paceKey: candidate.paceKey,
+    ref: candidate.ref,
+  }));
+}
+
+/**
+ * Filter and page a built trajectory.
+ *
+ * Separate from `buildMissionTrace` so `seq` is assigned over the WHOLE list
+ * before any filter runs. Numbering after the filter would give row 12 of a
+ * `kind=tool` page a different identity from row 12 of the unfiltered page, and
+ * a detail panel that reopened against the wrong row is the most expensive kind
+ * of wrong: plausible.
+ *
+ * @param {object[]} rows - the output of `buildMissionTrace`.
+ * @param {object} [options] - `{kind, role, stepId, dimensionId, search, order, take, skip}`.
+ * @returns {object} `{rows, total, order, take, skip, returned, hasMore}`.
+ */
+export function sliceMissionTrace(rows, options = {}) {
+  const all = asArray(rows);
+  const kind = emptyToNull(options.kind);
+  const role = emptyToNull(options.role);
+  const stepId = emptyToNull(options.stepId);
+  const dimensionId = emptyToNull(options.dimensionId);
+  const needle = emptyToNull(options.search)?.toLowerCase() ?? null;
+  const order = options.order === "oldest" ? "oldest" : "newest";
+  const take = Math.max(1, numberOr(options.take, 100));
+  const skip = Math.max(0, numberOr(options.skip, 0));
+
+  const matched = all.filter((row) => {
+    if (kind !== null && row.kind !== kind) return false;
+    if (role !== null && row.role !== role) return false;
+    if (stepId !== null && row.stepId !== stepId) return false;
+    if (dimensionId !== null && row.dimensionId !== dimensionId) return false;
+    if (needle === null) return true;
+    // Searched over what the row PRINTS, plus the ids it is filed under.
+    // Searching the whole record instead would match a `ref` nobody can see and
+    // return rows with no visible reason for being there.
+    return [row.title, row.detail, row.result, row.stepId, row.agentId, row.dimensionName, row.state]
+      .some((field) => typeof field === "string" && field.toLowerCase().includes(needle));
+  });
+
+  const ordered = order === "newest" ? [...matched].reverse() : matched;
+  const page = ordered.slice(skip, skip + take);
+  return {
+    rows: page,
+    total: matched.length,
+    order,
+    take,
+    skip,
+    returned: page.length,
+    hasMore: skip + page.length < matched.length,
+  };
+}
+
+/**
+ * Read one row's `ref` back into the identity it names.
+ *
+ * A ref, not the `seq`, is what a detail panel refetches with. `seq` is a
+ * position in a snapshot: the trajectory is assembled from bounded windows over
+ * three streams, so a mission that wrote fifty more events between the list
+ * request and the click has shifted every position by fifty. The grammar is
+ * `kind ":" key`, split on the FIRST colon because two of the keys contain
+ * colons of their own — an ISO instant and a step id both can.
+ *
+ *   event:412                             the event with that `seq`
+ *   stage:s3-collect@118                  that stage, at that event
+ *   tool:2026-08-25T09:14:02.771Z#0       the first tool call recorded at that instant
+ *   finding:f-9a2c…                       that finding row
+ *
+ * @param {string} ref - the `ref` field of a trajectory row.
+ * @returns {object|null} `{kind, …}` naming what to fetch, or null when the ref is malformed.
+ */
+export function parseTraceRef(ref) {
+  if (typeof ref !== "string" || ref === "") return null;
+  const cut = ref.indexOf(":");
+  if (cut < 1) return null;
+  const kind = ref.slice(0, cut);
+  const key = ref.slice(cut + 1);
+  if (!TRACE_KINDS.includes(kind) || key === "") return null;
+
+  if (kind === "event") {
+    const seq = Number(key);
+    return Number.isInteger(seq) && seq > 0 ? { kind, eventSeq: seq } : null;
+  }
+  if (kind === "stage") {
+    // `lastIndexOf`, not `indexOf`: no step id contains `@` today, but reading
+    // from the right means that the day one does, the event seq is still read
+    // correctly rather than the id being silently truncated.
+    const at = key.lastIndexOf("@");
+    if (at < 1) return null;
+    const seq = Number(key.slice(at + 1));
+    if (!Number.isInteger(seq) || seq <= 0) return null;
+    return { kind, stepId: key.slice(0, at), eventSeq: seq };
+  }
+  if (kind === "tool") {
+    const hash = key.lastIndexOf("#");
+    if (hash < 1) return null;
+    const ordinal = Number(key.slice(hash + 1));
+    if (!Number.isInteger(ordinal) || ordinal < 0) return null;
+    return { kind, at: key.slice(0, hash), ordinal };
+  }
+  return { kind: "finding", findingId: key };
+}
+
+/**
+ * Find the store rows one trajectory ref names, inside the streams the page was
+ * built from.
+ *
+ * Kept HERE, beside `buildMissionTrace`, because it is that function's inverse
+ * and the two have to agree about one rule: a tool call's ordinal is its index
+ * among the calls recorded at the same instant, ASCENDING. Spelled twice in two
+ * files, that rule drifts, and the drift shows up as a detail panel that opens
+ * on the wrong call of a retried fetch — the one case where two rows genuinely
+ * do share a timestamp and a tool name.
+ *
+ * A ref that names nothing returns null rather than a partially filled bag. The
+ * caller answers 404 with the window bound, because "the row scrolled out of
+ * the window this page reads" and "there is no such row" want different
+ * sentences and a null that means both is a sentinel wearing a costume.
+ *
+ * @param {object|null} parsed - `parseTraceRef`'s answer.
+ * @param {object} [streams] - `{events, stages, toolCalls, findings}`, exactly as handed to `buildMissionTrace`.
+ * @returns {object|null} `{event, stage, toolCall, finding}` with the members this kind has, or null.
+ */
+export function resolveTraceSource(parsed, streams = {}) {
+  if (parsed === null || typeof parsed !== "object") return null;
+  const events = asArray(streams.events);
+  const stages = asArray(streams.stages);
+  const stageOf = (stepId) => (stepId == null ? null : stages.find((s) => String(s?.stepId ?? "") === String(stepId)) ?? null);
+
+  if (parsed.kind === "event" || parsed.kind === "stage") {
+    const event = events.find((row) => numberOr(row?.seq, -1) === parsed.eventSeq) ?? null;
+    if (event === null) return null;
+    return { event, stage: stageOf(parsed.stepId ?? event.stepId), toolCall: null, finding: null };
+  }
+  if (parsed.kind === "tool") {
+    // Reversed then filtered, in that order: `recentToolCalls` returns
+    // `at DESC, id DESC`, and only after reversing does index-within-instant
+    // mean the same thing it meant when the ref was minted.
+    const atInstant = [...asArray(streams.toolCalls)].reverse().filter((row) => String(row?.at ?? "") === parsed.at);
+    const toolCall = atInstant[parsed.ordinal] ?? null;
+    if (toolCall === null) return null;
+    return { event: null, stage: stageOf(toolCall.stepId), toolCall, finding: null };
+  }
+  const finding = asArray(streams.findings).find((row) => String(row?.id ?? "") === parsed.findingId) ?? null;
+  if (finding === null) return null;
+  return { event: null, stage: null, toolCall: null, finding };
+}
+
+/**
+ * One finding, in the shape the evidence panel renders.
+ *
+ * The quote is called `quote` here and `evidence` in the store, and the rename
+ * is deliberate rather than careless: `evidence` already names three other
+ * things in this codebase — the artefact's frozen citation blob, the dimension
+ * roll-up on the view, and the `evidence:*` event family — and a panel field
+ * that collides with all three is a field somebody will fetch the wrong one of.
+ * Every other field keeps the store's name exactly.
+ *
+ * @param {object} finding - a `MissionStore.listFindings` row.
+ * @param {object} [context] - `{dimensionName}`.
+ * @returns {object} the wire shape.
+ */
+export function projectFinding(finding, context = {}) {
+  const verifyState = String(finding?.verifyState ?? "");
+  const quote = String(finding?.evidence ?? "");
+  return {
+    id: finding?.id == null ? null : String(finding.id),
+    dimensionId: finding?.dimensionId == null ? null : String(finding.dimensionId),
+    dimensionName: context.dimensionName ?? null,
+    runCount: numberOr(finding?.runCount, 1),
+    attempt: numberOr(finding?.attempt, 0),
+    claim: String(finding?.claim ?? ""),
+    claimHash: finding?.claimHash == null ? null : String(finding.claimHash),
+    // The verbatim span, WHOLE. This is the only place it is ever returned, and
+    // truncating it here would leave the quote unreadable everywhere in the
+    // product — which is the state the tab is being rebuilt out of.
+    quote,
+    quoteChars: quote.length,
+    sourceUrl: finding?.sourceUrl == null ? null : String(finding.sourceUrl),
+    sourceHost: finding?.sourceHost == null ? null : String(finding.sourceHost),
+    sourceTitle: finding?.sourceTitle ?? null,
+    publishedAt: finding?.publishedAt ?? null,
+    verifyState,
+    verifyReason: finding?.verifyReason ?? null,
+    // `counts` is the store's own name for the evidence boundary and is carried
+    // through unchanged, so the one gate every stage converges on is spelled
+    // the same on the wire as it is in the column.
+    counts: finding?.counts === true || verifyState === VERIFIED,
+    // Three values, never two — see `okOfVerifyState`.
+    verified: okOfVerifyState(verifyState),
+    documentId: finding?.documentId ?? null,
+    spanIndex: finding?.spanIndex ?? null,
+    recordedAt: finding?.createdAt == null ? null : String(finding.createdAt),
+  };
+}
+
+// ── trajectory helpers ───────────────────────────────────────────────────────
+
+/** Order two candidates: by instant, then by stream, then by that stream's own order. */
+function compareTraceCandidates(a, b) {
+  const at = toMs(a.at) - toMs(b.at);
+  if (at !== 0) return at;
+  if (a.rank !== b.rank) return a.rank - b.rank;
+  return a.ordinal - b.ordinal;
+}
+
+/** The chip an event type prints under. An unknown family is SYSTEM, never an invented chip. */
+function roleOfEvent(type) {
+  if (type.startsWith("stage:")) return "STAGE";
+  if (type.startsWith("gate:") || type.startsWith("evidence:") || type.startsWith("recollect:")) return "GATE";
+  return "SYSTEM";
+}
+
+/** An event's verdict, from the two registered lists. Anything else has NO verdict, which is not the same as passing. */
+function okOfEvent(type) {
+  if (TRACE_FAILED_EVENTS.includes(type)) return false;
+  if (TRACE_PASSED_EVENTS.includes(type)) return true;
+  return null;
+}
+
+/**
+ * A finding's verdict.
+ *
+ * Three values, not two. `null` means nobody ever checked — a fetch that failed
+ * or a host that refused us — and reporting that as `false` is the collapse
+ * that makes a rate limit read as a fabrication.
+ */
+function okOfVerifyState(verifyState) {
+  if (verifyState === "") return null;
+  if (verifyState.startsWith(UNCHECKED_PREFIX)) return null;
+  if (TRACE_REFUTED_STATES.includes(verifyState)) return false;
+  return true;
+}
+
+/** A step id carried in an event payload rather than in the column. */
+function stepIdOf(payload) {
+  const value = payload?.stepId ?? payload?.step_id ?? payload?.stage;
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** A dimension id carried in an event payload, accepted only when it names a KNOWN dimension. */
+function dimensionIdOf(payload, dimensionIds) {
+  const value = payload?.dimensionId ?? payload?.dimension_id;
+  return typeof value === "string" && dimensionIds.has(value) ? value : null;
+}
+
+/** The one field of a payload a reader scanning for a failure wants on the right of the arrow. */
+function reasonOf(payload, limit) {
+  const value = payload?.reason ?? payload?.error ?? payload?.message ?? payload?.note ?? payload?.verdict;
+  if (value == null) return null;
+  return clip(collapse(String(value)), limit);
+}
+
+/** A finite number, or null. Never 0 for "unknown": a latency of zero and an unmeasured latency are different rows. */
+function nullableNumber(value) {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** A trimmed non-empty string, or null, so `?stepId=` reads as absent rather than as an id of "". */
+function emptyToNull(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+/** Newlines and runs of whitespace flattened, because a trajectory row is one line. */
+function collapse(text) {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** Cut to `limit`, marking the cut. The marker is what tells the reader there is a detail panel worth opening. */
+function clip(text, limit) {
+  return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+/**
+ * A JSON payload as one scannable line.
+ *
+ * Not `JSON.stringify`: a stringified payload spends its first forty characters
+ * on braces and quotes, so every row in the list looks identical until the
+ * reader has read past the punctuation. `k=v · k=v` puts the field names where
+ * they can be scanned down a column.
+ */
+function oneLine(value, limit) {
+  if (value == null) return "";
+  if (typeof value === "string") return clip(collapse(value), limit);
+  if (typeof value !== "object") return String(value);
+  if (Array.isArray(value)) return clip(`[${value.length}] ${value.map(scalarish).join(", ")}`, limit);
+  const parts = [];
+  let width = 0;
+  for (const [key, entry] of Object.entries(value)) {
+    const piece = `${key}=${scalarish(entry)}`;
+    parts.push(piece);
+    width += piece.length + 3;
+    if (width > limit) break;
+  }
+  return clip(parts.join(" · "), limit);
+}
+
+/** One field of a payload, as a short token. A nested object is reported by SHAPE, never expanded. */
+function scalarish(value) {
+  if (value == null) return "null";
+  if (typeof value === "string") return collapse(value).slice(0, 60);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return `[${value.length}]`;
+  return `{${Object.keys(value).length}}`;
 }
 
 // ── small shared helpers ─────────────────────────────────────────────────────

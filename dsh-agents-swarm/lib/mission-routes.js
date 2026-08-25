@@ -5,7 +5,7 @@
  * helpers, returning a handler that either answers or reports that it did not,
  * so index.js keeps one router rather than three competing ones.
  *
- * THREE THINGS THAT LOOK LIKE STYLE AND ARE NOT:
+ * FOUR THINGS THAT LOOK LIKE STYLE AND ARE NOT:
  *
  * 1. Every route here carries a SECOND segment under `/missions/`. index.js
  *    dispatches with `path.startsWith("/missions/")`, and
@@ -23,7 +23,24 @@
  *
  * 3. A bad parameter is a 400 naming the accepted values, never an empty list.
  *    An empty list from a typo is indistinguishable from an empty list from no
- *    data, which is a filter that looks like it works and shows nothing.
+ *    data, which is a filter that looks like it works and shows nothing. On the
+ *    routes added for the trajectory tab this goes one step further: a
+ *    parameter the route does NOT read is refused too, and the refusal names
+ *    the ones it does — see `strayParams`.
+ *
+ * 4. EXACTLY ONE ROUTE TAKES A FOURTH PATH SEGMENT. `/missions/<id>/trace/<ref>`
+ *    is the detail behind one trajectory row; every other action is matched on
+ *    its own segment alone, so `splitMissionPath` returns the tail separately
+ *    and the handler refuses it everywhere else. Folding it into the action
+ *    would make `/missions/<id>/cancel/oops` a cancel.
+ *
+ * WHAT THE TRAJECTORY ROUTES ARE FOR. `/view` answers "what is this mission
+ * doing" in counters, which is the right answer for a page that polls. It is
+ * the wrong answer for a person asking "what did it actually do" — the mission
+ * tab showed "已核验 6 · 1 个独立站点" and there was no route anywhere that could
+ * return one of those six. `/findings` returns them, quote and source and
+ * verify state; `/trace` returns everything the mission did as one ordered
+ * list; `/trace/<ref>` returns whatever that list had to truncate, whole.
  *
  * The `path` argument arrives already stripped of ROUTE_PREFIX and WITHOUT a
  * query string (index.js hands over `url.pathname`), which is why
@@ -44,8 +61,26 @@ import {
   finalize,
 } from "./mission-runtime.js";
 import { concurrencyCap } from "./mission-handlers.js";
-import { isMissionId } from "./mission-store.js";
-import { projectMissionView, readMissionViewInput } from "./mission-view.js";
+import {
+  COUNTING_VERIFY_STATE,
+  FETCH_BACKED_VERIFY_STATES,
+  VERIFY_STATES,
+  isMissionId,
+} from "./mission-store.js";
+import {
+  TRACE_DETAIL_CHARS,
+  TRACE_KINDS,
+  TRACE_ORDERS,
+  TRACE_RESULT_CHARS,
+  TRACE_ROLES,
+  buildMissionTrace,
+  parseTraceRef,
+  projectFinding,
+  projectMissionView,
+  readMissionViewInput,
+  resolveTraceSource,
+  sliceMissionTrace,
+} from "./mission-view.js";
 import {
   BUDGET_FIELDS,
   BUDGET_FIELD_LIMITS,
@@ -68,6 +103,47 @@ const EVENT_POLL_MS = 1000;
 
 /** How long a stream stays open with nothing to say before it closes and asks the client to resume. */
 const EVENT_IDLE_MS = 10 * 60_000;
+
+/**
+ * THE THREE WINDOWS THE TRAJECTORY IS ASSEMBLED FROM, together in one place so
+ * they can be read against each other.
+ *
+ * `/missions/<id>/trace` merges three unbounded tables. A three-hour `deep`
+ * mission writes tens of thousands of `mission_events` rows — §4.7 keeps the
+ * WRITE unbounded on purpose — and serving all of them would put megabytes
+ * through the same blocking connection the mission is writing on, to render a
+ * list a person scrolls thirty rows of. So each stream is read newest-end-first
+ * to its own cap, the merged list is paged, and the response reports which caps
+ * were hit under `window` rather than silently presenting a partial history as
+ * a complete one. A trajectory that quietly stops at the thousandth event looks
+ * exactly like a mission that stopped doing things.
+ *
+ * Each cap is at or under the store method's own clamp, so the number here is
+ * the number that takes effect: `eventTail` clamps at 1000, `recentToolCalls`
+ * at 500, `listFindings` at 2000.
+ */
+const TRACE_EVENT_WINDOW = 1000;
+
+/** See `TRACE_EVENT_WINDOW`. `recentToolCalls` clamps at this exact value. */
+const TRACE_TOOL_WINDOW = 500;
+
+/** See `TRACE_EVENT_WINDOW`. `listFindings` clamps at this exact value. */
+const TRACE_FINDING_WINDOW = 2000;
+
+/** Most rows one trajectory page returns. */
+const TRACE_PAGE_MAX = 500;
+
+/** Rows per trajectory page when the caller does not say. About three screens of a dense list. */
+const TRACE_PAGE_DEFAULT = 100;
+
+/** Most findings one evidence page returns. */
+const FINDINGS_PAGE_MAX = 200;
+
+/** Findings per page when the caller does not say. */
+const FINDINGS_PAGE_DEFAULT = 50;
+
+/** Longest a filter string may be. Past this it is not a filter, it is a payload. */
+const MAX_FILTER_CHARS = 200;
 
 /**
  * Read one query parameter as a bounded integer.
@@ -107,20 +183,71 @@ function oneOf(params, name, allowed) {
 }
 
 /**
- * The mission id and the action from `/missions/<id>/<action>`.
+ * Read one free-text query parameter, bounded.
+ * @param params - the parsed search parameters.
+ * @param name - the parameter name.
+ * @returns `{ value }` — undefined when absent or empty — or `{ error }`.
+ */
+function boundedText(params, name) {
+  const raw = params.get(name);
+  if (raw === null) return { value: undefined };
+  const value = raw.trim();
+  if (value === "") return { value: undefined };
+  if (value.length > MAX_FILTER_CHARS) {
+    return { error: `${name} must be at most ${MAX_FILTER_CHARS} characters` };
+  }
+  return { value };
+}
+
+/**
+ * Refuse any query parameter the route does not read, naming the ones it does.
+ *
+ * The same rule `/missions/create` applies to its body, and for the same
+ * reason: `{"tier":"quick"}` was accepted, silently ignored, and cost a whole
+ * run. A query string has exactly the failure mode — `?dimension=d3` where the
+ * parameter is `dimensionId` returns every finding in the mission, which reads
+ * as a filter that works and a dimension with far more evidence than it has.
+ *
+ * Applied to the routes below only. Retrofitting `view`, `events` and
+ * `artifact` would be the right thing and is a separate change: the browser
+ * half already calls those, and turning a tolerated parameter into a 400 on a
+ * route the live tab polls is a change that has to land WITH its caller.
+ *
+ * @param params - the parsed search parameters.
+ * @param known - every parameter this route reads, in the order to print them.
+ * @returns null when every parameter is known, or the refusal sentence.
+ */
+function strayParams(params, known) {
+  const stray = [...new Set(params.keys())].filter((key) => !known.includes(key));
+  if (stray.length === 0) return null;
+  return `this route does not read ${stray.join(", ")}. It takes ${known.join(", ")}.`;
+}
+
+/**
+ * The mission id, the action, and the one optional tail segment beneath it.
+ *
+ * `/missions/<id>/<action>` and `/missions/<id>/trace/<ref>`. The tail is
+ * returned rather than folded into the action so the handler can REFUSE it
+ * everywhere except the trajectory: without that check
+ * `/missions/<id>/cancel/oops` would match `action === "cancel"` and cancel the
+ * mission, which is a route ignoring part of its own path and doing the thing
+ * anyway.
+ *
  * @param path - the already-stripped path.
- * @returns `{ id, action }`, or null when the shape does not match.
+ * @returns `{ id, action, rest }` — `rest` is null when there is no tail — or null when the shape does not match.
  */
 function splitMissionPath(path) {
   const parts = path.split("/").filter((part) => part !== "");
-  if (parts.length !== 3 || parts[0] !== "missions") return null;
+  if (parts.length < 3 || parts.length > 4 || parts[0] !== "missions") return null;
   let id;
+  let rest = null;
   try {
     id = decodeURIComponent(parts[1]);
+    if (parts.length === 4) rest = decodeURIComponent(parts[3]);
   } catch {
     return null;
   }
-  return { id, action: parts[2] };
+  return { id, action: parts[2], rest };
 }
 
 /**
@@ -354,7 +481,12 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
 
     const target = splitMissionPath(path);
     if (target === null) return false;
-    const { id, action } = target;
+    const { id, action, rest } = target;
+    // Only the trajectory takes a fourth segment. Every other action is matched
+    // on `action` alone, so a tail let through here would make
+    // `/missions/<id>/cancel/oops` a cancel. Reported as unhandled rather than
+    // 400 so the outer router 404s it in the one place that does that.
+    if (rest !== null && action !== "trace") return false;
 
     // ── the read model ──────────────────────────────────────────────────
     if (req.method === "GET" && action === "view") {
@@ -387,6 +519,286 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
       if (since.error !== undefined) return bad(since.error);
       if (missionOr404(id) === null) return true;
       await streamEvents(res, missionStore, id, since.value, runtime);
+      return true;
+    }
+
+    // ── the evidence, at last ───────────────────────────────────────────
+    //
+    // THE ROUTE WHOSE ABSENCE WAS THE COMPLAINT. A dimension card printed
+    // "已核验 6 · 1 个独立站点" and there was no way, anywhere in the product, to
+    // see one of those six. The six rows existed the whole time — claim,
+    // verbatim quote, source URL, source host, verify state, all in
+    // `mission_findings` — and the screen reported a count of evidence it would
+    // not show. Everything below is one call to `listFindings` and one to
+    // `listDimensions`; the work was never the query.
+    if (req.method === "GET" && action === "findings") {
+      const mission = missionOr404(id);
+      if (mission === null) return true;
+      const params = paramsOf(req);
+      const stray = strayParams(params, ["dimensionId", "verifyState", "attempt", "runCount", "take", "skip"]);
+      if (stray !== null) return bad(stray);
+
+      const verifyState = oneOf(params, "verifyState", VERIFY_STATES);
+      if (verifyState.error !== undefined) return bad(verifyState.error);
+      const runCount = boundedInteger(params, "runCount", 1, 1_000_000, mission.runCount);
+      if (runCount.error !== undefined) return bad(runCount.error);
+      const attempt = boundedInteger(params, "attempt", 0, 1000, undefined);
+      if (attempt.error !== undefined) return bad(attempt.error);
+      const take = boundedInteger(params, "take", 1, FINDINGS_PAGE_MAX, FINDINGS_PAGE_DEFAULT);
+      if (take.error !== undefined) return bad(take.error);
+      const skip = boundedInteger(params, "skip", 0, 1_000_000, 0);
+      if (skip.error !== undefined) return bad(skip.error);
+      const dimensionId = boundedText(params, "dimensionId");
+      if (dimensionId.error !== undefined) return bad(dimensionId.error);
+
+      const dimensions = missionStore.listDimensions(id, { runCount: runCount.value });
+      const scoped = dimensionId.value === undefined
+        ? null
+        : dimensions.find((row) => row.dimensionId === dimensionId.value) ?? null;
+      if (dimensionId.value !== undefined && scoped === null) {
+        // 400 naming the dimensions that exist, never an empty list. An empty
+        // list from a mistyped id is indistinguishable from an empty list from
+        // a dimension that found nothing — and those two want opposite
+        // reactions from the person reading the panel.
+        const known = dimensions.map((row) => row.dimensionId).join(", ");
+        return bad(`mission ${id} has no dimension "${dimensionId.value}" at run ${runCount.value}. It has ${known === "" ? "none yet — s2 has not planned" : known}.`);
+      }
+
+      // take + 1, then trimmed. `listFindings` returns rows and no count, and
+      // the alternative is a second COUNT that can disagree with the page it
+      // describes; one extra row cannot.
+      const page = missionStore.listFindings({
+        missionId: id,
+        dimensionId: dimensionId.value,
+        runCount: runCount.value,
+        verifyState: verifyState.value,
+        attempt: attempt.value,
+        take: take.value + 1,
+        skip: skip.value,
+      });
+      const hasMore = page.length > take.value;
+      const rows = hasMore ? page.slice(0, take.value) : page;
+      const names = new Map(dimensions.map((row) => [row.dimensionId, row.name]));
+
+      // Reported as a histogram over the WHOLE scope, never as a ratio and
+      // never recomputed from the page: a page of 50 out of 137 whose counts
+      // were derived from the page would show the reader a verification rate
+      // that changes as they scroll.
+      const missionCounts = missionStore.verifyStateCounts(id, runCount.value);
+      const { total: missionTotal, ...missionByState } = missionCounts;
+      const hosts = missionStore.uniqueHosts(id, { dimensionId: dimensionId.value, runCount: runCount.value });
+
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          missionId: id,
+          runCount: runCount.value,
+          scope: {
+            dimensionId: dimensionId.value ?? null,
+            verifyState: verifyState.value ?? null,
+            attempt: attempt.value ?? null,
+          },
+          dimension: scoped === null ? null : {
+            dimensionId: scoped.dimensionId,
+            name: scoped.name,
+            rationale: scoped.rationale,
+            facet: scoped.facet,
+            state: scoped.state,
+            attempt: scoped.attempt,
+            grade: scoped.grade,
+            gradeAxes: scoped.gradeAxes,
+            summary: scoped.summary,
+            failureCode: scoped.failureCode,
+            updatedAt: scoped.updatedAt,
+          },
+          findings: rows.map((finding) => projectFinding(finding, { dimensionName: names.get(finding.dimensionId) ?? null })),
+          page: { take: take.value, skip: skip.value, returned: rows.length, hasMore, order: "oldest" },
+          counts: scoped === null
+            ? {
+              total: missionTotal,
+              byState: missionByState,
+              verified: missionByState[COUNTING_VERIFY_STATE] ?? 0,
+              verifiedAbstract: missionByState["verified-abstract"] ?? 0,
+              unchecked: uncheckedTotal(missionByState),
+              uniqueHosts: hosts.length,
+            }
+            : {
+              total: scoped.total,
+              byState: scoped.byState,
+              verified: scoped.verified,
+              verifiedAbstract: scoped.verifiedAbstract,
+              unchecked: scoped.unchecked,
+              uniqueHosts: scoped.uniqueHosts,
+            },
+          // WHICH sites, not how many. "1 个独立站点" told the reader a number
+          // and withheld the only part of it that can be judged.
+          hosts,
+          vocabulary: {
+            verifyStates: VERIFY_STATES,
+            countingState: COUNTING_VERIFY_STATE,
+            fetchBackedStates: FETCH_BACKED_VERIFY_STATES,
+          },
+        },
+      });
+      return true;
+    }
+
+    // ── the trajectory ──────────────────────────────────────────────────
+    //
+    // One ordered list a dense row list renders directly: stage transitions,
+    // tool calls with the arguments they were made with, findings as they were
+    // recorded, and the rest of the event log, merged by timestamp. See
+    // `buildMissionTrace` for why stage rows come out of the event log rather
+    // than out of `mission_stages`, and `TRACE_EVENT_WINDOW` for what bounds it.
+    if (req.method === "GET" && action === "trace" && rest === null) {
+      const mission = missionOr404(id);
+      if (mission === null) return true;
+      const params = paramsOf(req);
+      const stray = strayParams(params, ["kind", "role", "stepId", "dimensionId", "search", "order", "runCount", "take", "skip"]);
+      if (stray !== null) return bad(stray);
+
+      const kind = oneOf(params, "kind", TRACE_KINDS);
+      if (kind.error !== undefined) return bad(kind.error);
+      const role = oneOf(params, "role", TRACE_ROLES);
+      if (role.error !== undefined) return bad(role.error);
+      const order = oneOf(params, "order", TRACE_ORDERS);
+      if (order.error !== undefined) return bad(order.error);
+      const runCount = boundedInteger(params, "runCount", 1, 1_000_000, mission.runCount);
+      if (runCount.error !== undefined) return bad(runCount.error);
+      const take = boundedInteger(params, "take", 1, TRACE_PAGE_MAX, TRACE_PAGE_DEFAULT);
+      if (take.error !== undefined) return bad(take.error);
+      const skip = boundedInteger(params, "skip", 0, 1_000_000, 0);
+      if (skip.error !== undefined) return bad(skip.error);
+      const stepId = boundedText(params, "stepId");
+      if (stepId.error !== undefined) return bad(stepId.error);
+      const dimensionId = boundedText(params, "dimensionId");
+      if (dimensionId.error !== undefined) return bad(dimensionId.error);
+      const search = boundedText(params, "search");
+      if (search.error !== undefined) return bad(search.error);
+
+      const trace = readTrace(missionStore, id, runCount.value);
+      const slice = sliceMissionTrace(trace.rows, {
+        kind: kind.value,
+        role: role.value,
+        stepId: stepId.value,
+        dimensionId: dimensionId.value,
+        search: search.value,
+        order: order.value ?? "newest",
+        take: take.value,
+        skip: skip.value,
+      });
+
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          missionId: id,
+          runCount: runCount.value,
+          rows: slice.rows,
+          page: {
+            order: slice.order,
+            take: slice.take,
+            skip: slice.skip,
+            returned: slice.returned,
+            total: slice.total,
+            hasMore: slice.hasMore,
+            // The whole merged list before filtering, so a search that matches
+            // nothing can say "0 of 431" instead of "0", which is the
+            // difference between an empty filter and an empty mission.
+            unfiltered: trace.rows.length,
+          },
+          filters: {
+            kind: kind.value ?? null,
+            role: role.value ?? null,
+            stepId: stepId.value ?? null,
+            dimensionId: dimensionId.value ?? null,
+            search: search.value ?? null,
+          },
+          window: trace.window,
+          // The banded strip above the list. Already read to annotate the stage
+          // rows, so returning it costs nothing and saves the client a request
+          // it would otherwise make on every page.
+          stages: trace.stages.map((stage) => ({
+            stepId: stage.stepId,
+            ordinal: stage.ordinal,
+            status: stage.status,
+            attempts: stage.attempts,
+            startedAt: stage.startedAt,
+            endedAt: stage.endedAt,
+            durationMs: stage.durationMs,
+            tokens: stage.tokens,
+            degradeNote: stage.degradeNote,
+          })),
+          dimensions: trace.dimensions.map((dimension) => ({
+            dimensionId: dimension.dimensionId,
+            name: dimension.name,
+            state: dimension.state,
+            verified: dimension.verified,
+            total: dimension.total,
+            uniqueHosts: dimension.uniqueHosts,
+          })),
+          lastEventSeq: trace.lastEventSeq,
+          truncation: { detailChars: TRACE_DETAIL_CHARS, resultChars: TRACE_RESULT_CHARS },
+          vocabulary: { kinds: TRACE_KINDS, roles: TRACE_ROLES, orders: TRACE_ORDERS },
+        },
+      });
+      return true;
+    }
+
+    // ── one row of it, whole ────────────────────────────────────────────
+    //
+    // `/missions/<id>/trace/<ref>` — the `ref` a list row carries. A bare
+    // integer is also accepted and means "the row at that `seq`", because the
+    // reference tab this is shaped after is navigated by row number; it is
+    // resolved against a freshly built trajectory and the answer echoes the
+    // `ref` and `at` it landed on, so a caller that paged a while ago can see
+    // that the position moved under it. `ref` is the identity; `seq` is a
+    // position in a snapshot. Prefer `ref`.
+    if (req.method === "GET" && action === "trace" && rest !== null) {
+      const mission = missionOr404(id);
+      if (mission === null) return true;
+      const params = paramsOf(req);
+      const stray = strayParams(params, ["runCount"]);
+      if (stray !== null) return bad(stray);
+      const runCount = boundedInteger(params, "runCount", 1, 1_000_000, mission.runCount);
+      if (runCount.error !== undefined) return bad(runCount.error);
+
+      const trace = readTrace(missionStore, id, runCount.value);
+      const byPosition = /^[0-9]+$/.test(rest);
+      const row = byPosition
+        ? trace.rows[Number(rest) - 1]
+        : trace.rows.find((candidate) => candidate.ref === rest);
+
+      if (row === undefined) {
+        if (!byPosition && parseTraceRef(rest) === null) {
+          return bad(`"${rest}" is not a trajectory reference. They look like event:412, stage:s3-collect@118, tool:2026-01-01T09:00:00.000Z#0 or finding:<id>, and every row of /missions/${id}/trace carries its own in \`ref\`.`);
+        }
+        // 404 that names the BOUND, not just the absence. A row that scrolled
+        // out of the window this page reads and a row that never existed are
+        // different situations, and one message for both is how a bound
+        // becomes invisible.
+        sendJson(res, 404, {
+          success: false,
+          error: byPosition
+            ? `mission ${id} has ${trace.rows.length} trajectory row(s) in the window this page reads; there is no row ${rest}.`
+            : `no trajectory row ${rest} in the window this page reads. The trajectory is assembled from the newest ${TRACE_EVENT_WINDOW} events, ${TRACE_TOOL_WINDOW} tool calls and ${TRACE_FINDING_WINDOW} findings; an older row is on disk but outside it.`,
+          data: { ref: byPosition ? null : rest, window: trace.window },
+        });
+        return true;
+      }
+
+      const parsed = parseTraceRef(row.ref);
+      const source = resolveTraceSource(parsed, trace.streams);
+      if (source === null) {
+        // Reached only if `buildMissionTrace` minted a ref its own inverse
+        // cannot read, which is a bug in this file rather than a bad request.
+        // Said out loud instead of served as an empty panel.
+        sendJson(res, 500, {
+          success: false,
+          error: `trajectory row ${row.ref} could not be resolved back to the rows it was built from. This is a defect in the ref grammar, not in the request.`,
+        });
+        return true;
+      }
+      sendJson(res, 200, { success: true, data: traceDetail({ missionId: id, row, source, trace }) });
       return true;
     }
 
@@ -597,6 +1009,208 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
     return false;
   };
 }
+
+/**
+ * How many findings were never checked, from a verify-state histogram.
+ *
+ * Matched by PREFIX rather than listed, for the reason §4.4 gives: a new
+ * `unchecked-*` state added to the vocabulary must land here automatically, not
+ * silently in the fabrication bucket. A 429 is not a fabrication.
+ * @param byState - `{ [verifyState]: n }`, without `total`.
+ * @returns the number of findings in an `unchecked-` state.
+ */
+function uncheckedTotal(byState) {
+  let n = 0;
+  for (const [state, count] of Object.entries(byState)) {
+    if (state.startsWith("unchecked-")) n += Number(count) || 0;
+  }
+  return n;
+}
+
+/**
+ * Read the three streams the trajectory merges, once, and build it.
+ *
+ * ONE READ SERVES BOTH TRAJECTORY ROUTES. The detail route resolves its `ref`
+ * inside the very streams the list was built from — see `resolveTraceSource` —
+ * rather than issuing a second, narrower query. Two reads would be two windows,
+ * and a row that the list showed but the detail route's window had already
+ * slid past would 404 on a row the reader is looking at.
+ *
+ * `runCount` narrows the FINDINGS and the dimension tallies and nothing else.
+ * `mission_events` and `mission_tool_calls` carry no generation column, so a
+ * rerun's trajectory shows both generations' calls in one ordered list — which
+ * is what actually happened, and saying so here is cheaper than a reader
+ * discovering it from a timestamp that predates the rerun.
+ *
+ * @param missionStore - the MissionStore.
+ * @param missionId - the mission.
+ * @param runCount - the generation whose findings and dimensions are read.
+ * @returns `{ rows, streams, stages, dimensions, lastEventSeq, window }`.
+ */
+function readTrace(missionStore, missionId, runCount) {
+  const events = missionStore.eventTail(missionId, TRACE_EVENT_WINDOW);
+  const toolCalls = missionStore.recentToolCalls(missionId, TRACE_TOOL_WINDOW);
+  const findings = missionStore.listFindings({ missionId, runCount, take: TRACE_FINDING_WINDOW });
+  const stages = missionStore.listStages(missionId);
+  const dimensions = missionStore.listDimensions(missionId, { runCount });
+  const streams = { events, stages, toolCalls, findings, dimensions };
+
+  return {
+    rows: buildMissionTrace(streams),
+    streams,
+    stages,
+    dimensions,
+    lastEventSeq: missionStore.lastEventSeq(missionId),
+    // Reported, never assumed. `saturated` is the honest answer to "is this the
+    // whole history": at the cap, older rows are on disk and outside this page.
+    window: {
+      events: { taken: events.length, cap: TRACE_EVENT_WINDOW, saturated: events.length >= TRACE_EVENT_WINDOW },
+      toolCalls: { taken: toolCalls.length, cap: TRACE_TOOL_WINDOW, saturated: toolCalls.length >= TRACE_TOOL_WINDOW },
+      findings: { taken: findings.length, cap: TRACE_FINDING_WINDOW, saturated: findings.length >= TRACE_FINDING_WINDOW },
+      note: "Each stream is read from its newest end to its own cap. A saturated stream means older rows exist on disk and are not in this trajectory.",
+    },
+  };
+}
+
+/**
+ * Everything a detail panel needs about one trajectory row, untruncated.
+ *
+ * The shape is the SAME for all four kinds — `payload`, `result`, `timing`,
+ * `stage`, `dimension` — so the panel has one renderer rather than four, and
+ * the kind-specific record (`toolCall`, `finding`, `event`) hangs off the side
+ * for anything that wants the raw row. The alternative, a different shape per
+ * kind, is four branches in the client that each have to be kept in step with
+ * this file by somebody who cannot ask.
+ *
+ * WHERE THE TIMING CAME FROM IS PART OF THE ANSWER. `timing.source` names the
+ * column, and where the number is derived rather than stored it says so. A tool
+ * call's `at` is written when the call RETURNS, so its start is `at` minus the
+ * measured latency — a derivation, reported as one, because a start time
+ * presented as recorded when it was computed is the kind of number people build
+ * arguments on.
+ *
+ * @param input - `{ missionId, row, source, trace }`.
+ * @returns the detail record.
+ */
+function traceDetail({ missionId, row, source, trace }) {
+  const { event, stage, toolCall, finding } = source;
+  const dimension = row.dimensionId === null
+    ? null
+    : trace.dimensions.find((entry) => entry.dimensionId === row.dimensionId) ?? null;
+
+  let payload = null;
+  let result = { text: null, format: null, note: null };
+  let timing = { at: row.at, ms: row.ms, startedAt: null, endedAt: null, source: null };
+
+  if (toolCall !== null) {
+    payload = {
+      tool: toolCall.tool,
+      // WHOLE, as stored. `mission_tool_calls.args_text` is itself capped at
+      // 300 characters at insert — an unbounded column on a per-call table is a
+      // library that grows without anybody choosing to — so this is everything
+      // there is, and `argsTextStoredCap` says so rather than leaving the
+      // reader to wonder which layer did the cutting.
+      argsText: toolCall.argsText,
+      argsTextStoredCap: 300,
+      argsHash: toolCall.argsHash,
+      paceKey: toolCall.paceKey,
+      cached: toolCall.cached,
+      stepId: toolCall.stepId,
+      agentId: toolCall.agentId === "" ? null : toolCall.agentId,
+    };
+    result = {
+      text: toolCall.ok ? (toolCall.cached ? "cached" : "ok") : String(toolCall.errorCode ?? "failed"),
+      format: "text",
+      // Said out loud rather than served as an empty Result tab. The ledger
+      // records the VERDICT of a call, not its body: storing every fetched page
+      // twice — once here and once in `mission_documents` — is the duplication
+      // the document cache exists to avoid.
+      note: "mission_tool_calls records the verdict of a call, not its body. A fetched page's text is in mission_documents; a finding's quote is on the finding row.",
+    };
+    const startedMs = Date.parse(String(toolCall.at ?? "")) - Number(toolCall.latencyMs ?? 0);
+    timing = {
+      at: toolCall.at,
+      ms: toolCall.latencyMs,
+      startedAt: Number.isFinite(startedMs) ? new Date(startedMs).toISOString() : null,
+      endedAt: toolCall.at,
+      source: "mission_tool_calls.at is written when the call returns; startedAt is that instant minus the measured latency_ms, and is derived rather than recorded.",
+    };
+  } else if (finding !== null) {
+    payload = projectFinding(finding, { dimensionName: dimension?.name ?? null });
+    result = {
+      // The verbatim quote, whole and untouched. The list row clips it; this is
+      // the only place the reader can read it, which is the entire point.
+      text: finding.evidence,
+      format: "text",
+      note: finding.verifyReason === null ? null : `verifier: ${finding.verifyReason}`,
+    };
+    timing = { at: finding.createdAt, ms: null, startedAt: null, endedAt: finding.createdAt, source: "mission_findings.created_at" };
+  } else if (event !== null) {
+    payload = event.payload;
+    const ended = row.kind === "stage" && row.state !== "started";
+    result = {
+      text: ended && stage?.output != null ? JSON.stringify(stage.output, null, 2) : JSON.stringify(event.payload ?? {}, null, 2),
+      format: "json",
+      note: ended && stage?.output != null ? "mission_stages.output — what the stage returned, as it was recorded." : null,
+    };
+    timing = {
+      at: event.ts,
+      ms: ended ? stage?.durationMs ?? null : null,
+      startedAt: stage?.startedAt ?? null,
+      endedAt: stage?.endedAt ?? null,
+      source: ended
+        ? "mission_stages.duration_ms, measured across the stage; the row's own instant is mission_events.ts."
+        : "mission_events.ts",
+    };
+  }
+
+  return {
+    missionId,
+    ref: row.ref,
+    // Echoed so a caller that navigated by position can see whether the
+    // position it asked for still names the row it thought it did.
+    seq: row.seq,
+    kind: row.kind,
+    role: row.role,
+    at: row.at,
+    ok: row.ok,
+    state: row.state,
+    row,
+    payload,
+    result,
+    timing,
+    stepId: row.stepId,
+    agentId: row.agentId,
+    stage: stage === null || stage === undefined ? null : {
+      stepId: stage.stepId,
+      ordinal: stage.ordinal,
+      status: stage.status,
+      attempts: stage.attempts,
+      startedAt: stage.startedAt,
+      endedAt: stage.endedAt,
+      durationMs: stage.durationMs,
+      tokens: stage.tokens,
+      degradeNote: stage.degradeNote,
+    },
+    dimension: dimension === null ? null : {
+      dimensionId: dimension.dimensionId,
+      name: dimension.name,
+      facet: dimension.facet,
+      state: dimension.state,
+      grade: dimension.grade,
+      summary: dimension.summary,
+      verified: dimension.verified,
+      total: dimension.total,
+      uniqueHosts: dimension.uniqueHosts,
+    },
+    // The raw store rows, for anything the uniform shape above flattens away.
+    // Exactly one of these is non-null, and which one is `kind`.
+    toolCall,
+    finding: finding === null ? null : projectFinding(finding, { dimensionName: dimension?.name ?? null }),
+    event,
+  };
+}
+
 
 /**
  * The p50 / p90 token cost of prior missions at one depth.

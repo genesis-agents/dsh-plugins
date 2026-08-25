@@ -80,6 +80,7 @@ import {
 } from "../lib/mission-runtime.js";
 import { TOOL_CODES, createCircuit } from "../lib/mission-tools.js";
 import { projectMissionView, readMissionViewInput } from "../lib/mission-view.js";
+import { createMissionRoutes } from "../lib/mission-routes.js";
 
 /* ── fixtures ──────────────────────────────────────────────────────────── */
 
@@ -1239,4 +1240,212 @@ test("the chapter count follows the dimensions that found something", () => {
   // And one of anything is still one.
   assert.equal(capOf(1, 1), 1);
   assert.equal(capOf(0, 3), 1, "a mission with no host recorded lost its only chapter");
+});
+
+/* ── the trajectory and the evidence behind it ─────────────────────────── */
+
+/**
+ * Call the mission router as the HTTP layer would, and hand back what it wrote.
+ *
+ * A shim over `sendJson`, not over the store: the point of these tests is the
+ * route's own validation and projection, and a fake store would test neither.
+ * @param {object} missions - a real MissionStore.
+ * @param {string} url - path and query, already prefixed with `/missions/`.
+ * @returns {Promise<object>} `{handled, status, body}`.
+ */
+async function callRoute(missions, url) {
+  const res = {};
+  const handler = createMissionRoutes({
+    missionStore: missions,
+    runtime: { start: () => ({ started: true }), running: () => [], bootId: "boot-1", clock: () => "2026-08-24T01:00:00.000Z" },
+    sendJson: (target, status, body) => { target.status = status; target.body = body; },
+    readJson: async () => ({}),
+  });
+  const handled = await handler({ method: "GET", url }, res, new URL(url, "http://local").pathname);
+  return { handled, status: res.status, body: res.body };
+}
+
+/**
+ * A mission that collected: two dimensions, three findings across three verify
+ * states, three tool calls, and a stage that started and finished.
+ * @param {object} missions - the store to write into.
+ * @returns {string} the mission id.
+ */
+function collectedMission(missions) {
+  const id = mission(missions);
+  missions.upsertDimension({ missionId: id, dimensionId: "d1", name: "制造路径", facet: "technical", at: "2026-08-24T00:00:01.000Z" });
+  missions.upsertDimension({ missionId: id, dimensionId: "d2", name: "监管口径", facet: "policy", at: "2026-08-24T00:00:01.000Z" });
+  missions.startStage(id, "s3-collect", "2026-08-24T00:00:02.000Z", { agentId: "researcher:d1" });
+
+  const url = "https://arxiv.org/abs/2401.00001";
+  missions.putDocument({ url, markdown: "solid electrolyte text ".repeat(40), status: 200, fetchedAt: "2026-08-24T00:00:05.000Z" });
+  missions.insertFinding({
+    missionId: id, dimensionId: "d1", runCount: 1, attempt: 0,
+    claim: "Sulfide electrolytes reached 10 mS/cm in pilot cells.",
+    evidence: "we measured 10 mS/cm at 25 C in a pilot pouch cell, sustained over two hundred cycles",
+    sourceUrl: url, verifyState: "verified-source-text",
+    documentId: documentIdFor(url), spanIndex: 2, createdAt: "2026-08-24T00:00:06.000Z",
+  });
+  missions.insertFinding({
+    missionId: id, dimensionId: "d1", runCount: 1, attempt: 0,
+    claim: "Costs fell forty percent.", evidence: "cost per kWh fell by roughly forty percent",
+    sourceUrl: "https://example.com/report", verifyState: "unverifiable", createdAt: "2026-08-24T00:00:07.000Z",
+  });
+  missions.insertFinding({
+    missionId: id, dimensionId: "d2", runCount: 1, attempt: 0,
+    claim: "Battery passports apply from 2027.", evidence: "the battery passport requirement applies from February 2027",
+    sourceUrl: "https://eur-lex.europa.eu/x", verifyState: "unchecked-rate-limited", createdAt: "2026-08-24T00:00:08.000Z",
+  });
+
+  // TWO CALLS AT THE SAME INSTANT, on purpose: the trajectory's tool ref is
+  // keyed on the instant plus an ordinal, and if that ordinal is wrong these
+  // two are what proves it.
+  missions.insertToolCall({ missionId: id, stepId: "s3-collect", agentId: "researcher:d1", tool: "web.search", paceKey: "web", argsHash: "h1", argsText: '{"q":"solid state battery pilot line yield"}', ok: true, latencyMs: 812, at: "2026-08-24T00:00:04.000Z" });
+  missions.insertToolCall({ missionId: id, stepId: "s3-collect", agentId: "researcher:d1", tool: "web.fetch", paceKey: "fetch", argsHash: "h2", argsText: `{"url":"${url}"}`, ok: false, errorCode: "rate_limited", latencyMs: 30, at: "2026-08-24T00:00:04.000Z" });
+  missions.insertToolCall({ missionId: id, stepId: "s3-collect", agentId: "researcher:d2", tool: "web.search", paceKey: "web", argsHash: "h3", argsText: '{"q":"battery passport regulation"}', ok: true, cached: true, latencyMs: 2, at: "2026-08-24T00:00:09.000Z" });
+
+  missions.finishStage(id, "s3-collect", { status: "done", at: "2026-08-24T00:00:20.000Z", output: { dimensions: 2 }, tokens: 1200 });
+  return id;
+}
+
+test("a dimension's findings can be read, quote and source and all", async (t) => {
+  // THE COMPLAINT, as a test. The card said "已核验 6 · 1 个独立站点" and there was
+  // no route in the product that could return one of those six. A count of
+  // evidence the screen will not show is worse than no count: it asserts the
+  // work happened and withholds the only thing that could check it.
+  const { missions } = library(t);
+  const id = collectedMission(missions);
+
+  const all = await callRoute(missions, `/missions/${id}/findings`);
+  assert.equal(all.status, 200, JSON.stringify(all.body));
+  assert.equal(all.body.data.findings.length, 3);
+  for (const finding of all.body.data.findings) {
+    assert.ok(finding.quote.length > 0, `${finding.id} came back without its quote`);
+    assert.ok(finding.sourceUrl.startsWith("http"), `${finding.id} came back without a source`);
+    assert.ok(finding.verifyState.length > 0, `${finding.id} came back without a verify state`);
+  }
+
+  // Unchecked is not refuted. A 429 must never read as a fabrication, here or
+  // in the column — three values, never two.
+  const byState = new Map(all.body.data.findings.map((f) => [f.verifyState, f.verified]));
+  assert.equal(byState.get("verified-source-text"), true);
+  assert.equal(byState.get("unverifiable"), false);
+  assert.equal(byState.get("unchecked-rate-limited"), null, "a rate limit was reported as a failed claim");
+
+  const one = await callRoute(missions, `/missions/${id}/findings?dimensionId=d2`);
+  assert.equal(one.body.data.findings.length, 1);
+  assert.equal(one.body.data.dimension.name, "监管口径", "the panel header cannot name the dimension it is showing");
+
+  // WHICH sites, not how many. "1 个独立站点" told the reader a number and
+  // withheld the only part of it that can be judged.
+  const hosts = await callRoute(missions, `/missions/${id}/findings?dimensionId=d1`);
+  assert.deepEqual(hosts.body.data.hosts, [{ host: "arxiv.org", findings: 1 }]);
+  assert.equal(hosts.body.data.counts.verified, 1);
+  assert.equal(hosts.body.data.counts.total, 2, "the histogram was recomputed from the page instead of the scope");
+});
+
+test("a query parameter the route does not read is refused by name", async (t) => {
+  // `{"tier":"quick"}` was accepted on create, silently ignored, and cost a
+  // whole run. A query string has exactly that failure mode: `?dimension=d1`
+  // where the parameter is `dimensionId` returns EVERY finding in the mission,
+  // which reads as a filter that works and a dimension with more evidence than
+  // it has.
+  const { missions } = library(t);
+  const id = collectedMission(missions);
+
+  const typo = await callRoute(missions, `/missions/${id}/findings?dimension=d1`);
+  assert.equal(typo.status, 400, "an unknown parameter was silently ignored");
+  assert.match(typo.body.error, /dimensionId/u, "the refusal does not name the parameter that exists");
+
+  const stray = await callRoute(missions, `/missions/${id}/trace?tier=quick`);
+  assert.equal(stray.status, 400);
+  assert.match(stray.body.error, /kind, role, stepId/u);
+
+  // And a mistyped VALUE is still a 400 naming the vocabulary, never an empty list.
+  const badKind = await callRoute(missions, `/missions/${id}/trace?kind=stages`);
+  assert.equal(badKind.status, 400);
+  assert.match(badKind.body.error, /stage, tool, finding, event/u);
+
+  // A dimension that does not exist is named too — an empty list from a typo
+  // and an empty list from a dimension that found nothing want opposite
+  // reactions from the person reading the panel.
+  const badDim = await callRoute(missions, `/missions/${id}/findings?dimensionId=d9`);
+  assert.equal(badDim.status, 400);
+  assert.match(badDim.body.error, /d1, d2/u);
+});
+
+test("the trajectory is one ordered list, and every row of it can be opened", async (t) => {
+  const { missions } = library(t);
+  const id = collectedMission(missions);
+
+  const page = await callRoute(missions, `/missions/${id}/trace?order=oldest`);
+  assert.equal(page.status, 200, JSON.stringify(page.body));
+  const rows = page.body.data.rows;
+
+  // Merged by timestamp across all four streams, not four lists glued together.
+  const stamps = rows.map((row) => Date.parse(row.at));
+  assert.deepEqual(stamps, [...stamps].sort((a, b) => a - b), "the trajectory is not in time order");
+  const kinds = new Set(rows.map((row) => row.kind));
+  for (const kind of ["stage", "tool", "finding", "event"]) {
+    assert.ok(kinds.has(kind), `no ${kind} rows reached the trajectory`);
+  }
+
+  // The two calls recorded at the same instant are distinct rows with distinct
+  // refs. One shared ref would open the same detail panel for both.
+  const sameInstant = rows.filter((row) => row.kind === "tool" && row.at === "2026-08-24T00:00:04.000Z");
+  assert.equal(sameInstant.length, 2);
+  assert.notEqual(sameInstant[0].ref, sameInstant[1].ref, "two calls at one instant share one identity");
+
+  // Every row opens, and what the list truncated comes back whole.
+  for (const row of rows) {
+    const detail = await callRoute(missions, `/missions/${id}/trace/${encodeURIComponent(row.ref)}`);
+    assert.equal(detail.status, 200, `${row.ref} would not open: ${JSON.stringify(detail.body)}`);
+    assert.equal(detail.body.data.ref, row.ref, `${row.ref} opened a different row`);
+    assert.ok(detail.body.data.timing.source !== null || row.kind === "event", `${row.ref} does not say where its timing came from`);
+    if (row.kind === "tool") {
+      assert.equal(detail.body.data.payload.argsText, sameInstantArgs(missions, id, row), "the detail panel lost the arguments");
+    }
+    if (row.kind === "finding") {
+      assert.ok(detail.body.data.result.text.length >= row.result.length, "the whole quote is shorter than its own preview");
+    }
+  }
+
+  const missing = await callRoute(missions, `/missions/${id}/trace/event:9999`);
+  assert.equal(missing.status, 404);
+  assert.match(missing.body.error, /window/u, "a 404 that does not name the bound makes the bound invisible");
+
+  const nonsense = await callRoute(missions, `/missions/${id}/trace/not-a-ref`);
+  assert.equal(nonsense.status, 400);
+  assert.match(nonsense.body.error, /event:412/u, "the refusal does not show what a reference looks like");
+});
+
+/** The `args_text` the store holds for the call one trajectory row names. */
+function sameInstantArgs(missions, id, row) {
+  const at = row.ref.slice("tool:".length, row.ref.lastIndexOf("#"));
+  const ordinal = Number(row.ref.slice(row.ref.lastIndexOf("#") + 1));
+  return [...missions.recentToolCalls(id, 500)].reverse().filter((call) => call.at === at)[ordinal].argsText;
+}
+
+test("a row keeps its number when the mission writes more", async (t) => {
+  // The trajectory is numbered from the OLDEST end for exactly this reason.
+  // Numbered from the newest, every row shifts by one each time the mission
+  // records anything — so a detail panel opened on row 12 would be showing a
+  // different row a second later, and the reader would have no way to notice.
+  const { missions } = library(t);
+  const id = collectedMission(missions);
+
+  const before = await callRoute(missions, `/missions/${id}/trace?order=oldest`);
+  const first = before.body.data.rows[0];
+  const middle = before.body.data.rows[Math.floor(before.body.data.rows.length / 2)];
+
+  missions.appendEvent(id, { type: "gate:passed", at: "2026-08-24T00:01:00.000Z", stepId: "s4-assess", payload: { verified: 1 } });
+
+  const after = await callRoute(missions, `/missions/${id}/trace?order=oldest`);
+  assert.equal(after.body.data.rows.length, before.body.data.rows.length + 1);
+  assert.deepEqual(after.body.data.rows[0], first, "the first row changed under an append");
+  assert.deepEqual(
+    after.body.data.rows.find((row) => row.ref === middle.ref),
+    middle,
+    "a row moved when something newer was written",
+  );
 });

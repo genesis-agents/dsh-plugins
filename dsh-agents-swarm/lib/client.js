@@ -4095,14 +4095,26 @@ window.__ModuleLoader__.load({
 		* `verified` is the only currency the evidence gate spends and "3/4" is
 		* the difference between a dimension that nearly made it and one that
 		* found nothing.
+		*
+		* The card OPENS. This is the part that was called unusable: it printed
+		* "已核验 6 条 · 1 个独立站点" and there was no way, anywhere, to see one of
+		* those six. The counts stay — they are the currency the evidence gate
+		* spends — but they have stopped being all there is.
 		* @param dimension - one card from the view route.
 		* @param zh - whether to write Chinese.
+		* @param expanded - whether this card is showing its evidence.
+		* @param onToggle - open or close it; omitted, the card does not open.
+		* @param children - the evidence list, rendered by the caller when open.
 		*/
-		function MissionDimensionCard({ dimension, zh }) {
+		function MissionDimensionCard({ dimension, zh, expanded, onToggle, children }) {
 			const hue = missionHue(MISSION_DIMENSION_FACES, dimension.state);
 			const axes = dimension.gradeAxes ?? {};
 			const rows = missionVerifyRows(dimension.counts, zh);
 			const chapters = dimension.chapters ?? {};
+			// Every finding this dimension recorded, verified or not. The verified
+			// count alone would make "0 verified, 9 rate-limited" look like a
+			// dimension with nothing behind it to open.
+			const recorded = rows.reduce((sum, row) => sum + row.n, 0);
 
 			return jsxs("div", {
 				style: {
@@ -4110,13 +4122,32 @@ window.__ModuleLoader__.load({
 					border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "10px"
 				},
 				children: [
-					jsxs("div", {
-						style: { display: "flex", alignItems: "center", gap: "8px" },
+					jsxs(onToggle === undefined ? "div" : "button", {
+						type: onToggle === undefined ? undefined : "button",
+						onClick: onToggle,
+						"aria-expanded": onToggle === undefined ? undefined : expanded === true,
+						style: {
+							appearance: "none", width: "100%", boxSizing: "border-box",
+							display: "flex", alignItems: "center", gap: "8px",
+							padding: 0, border: "none", background: "transparent",
+							font: "inherit", textAlign: "left",
+							cursor: onToggle === undefined ? "default" : "pointer"
+						},
 						children: [
+							onToggle === undefined ? null : jsx("span", {
+								style: { flex: "none", width: "10px", color: "var(--dsw-alias-label-secondary)", fontSize: "10px" },
+								children: expanded === true ? "▾" : "▸"
+							}, "caret"),
 							jsx("span", {
 								style: { flex: 1, minWidth: 0, fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
 								children: dimension.name
 							}, "name"),
+							onToggle === undefined ? null : jsx("span", {
+								style: { flex: "none", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+								children: expanded === true
+									? (zh ? "收起证据" : "Hide the evidence")
+									: (zh ? `看这 ${recorded} 条证据` : `Read the ${recorded} finding(s)`)
+							}, "toggle"),
 							jsx("span", {
 								style: {
 									flex: "none", padding: "1px 7px", borderRadius: "5px",
@@ -4163,7 +4194,13 @@ window.__ModuleLoader__.load({
 						// language, verbatim. It is the only sentence that says what
 						// this dimension actually ran into.
 						children: dimension.summary
-					}, "summary")
+					}, "summary"),
+					// The evidence itself, when the card is open. Rendered by the
+					// caller rather than fetched here, so one component owns which
+					// finding is selected and one panel shows it — a card that
+					// fetched and displayed its own detail would be a second
+					// renderer for the same row.
+					expanded !== true ? null : jsx("div", { children }, "findings")
 				]
 			});
 		}
@@ -4314,6 +4351,1086 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 
+		//#region missions trace
+		/**
+		* 轨迹 — everything the mission did, as one ordered list you can click.
+		*
+		* This replaces a detail view whose dimension card printed
+		* "已核验 6 · 1 个独立站点" and offered no way, anywhere in the product, to
+		* see one of those six. The six rows were in `mission_findings` the whole
+		* time — claim, verbatim quote, source URL, source host, verify state —
+		* so the screen was reporting a count of evidence it refused to display.
+		*
+		* The shape is the harness's own 轨迹 tab, deliberately: dense one-line
+		* rows, a role chip, the name, the arguments, an arrow, the result; click
+		* a row and one panel opens beside the list with Summary · Payload ·
+		* Result · Timing. Master-detail IN PLACE — the list stays where it is
+		* and the frame does not move.
+		*
+		* Three routes feed it and nothing here recomputes what they compute:
+		* `/missions/:id/trace` merges stage transitions, tool calls (with the
+		* arguments they were made with), findings and the rest of the event log
+		* by timestamp; `/missions/:id/trace/:ref` returns whatever the list had
+		* to truncate, whole; `/missions/:id/findings` returns a dimension's
+		* evidence. See lib/mission-view.js `buildMissionTrace` for why stage rows
+		* come out of the event log rather than out of `mission_stages`.
+		*/
+		const MISSION_TRACE_TAKE = 120;
+
+		/**
+		* How many findings one dimension shows before it says there are more.
+		*
+		* Bounded because a `deep` mission's dimension can hold hundreds and this
+		* list lives inside a card. The route's `hasMore` is printed rather than
+		* hidden, so a truncated list reads as truncated instead of complete.
+		*/
+		const MISSION_FINDINGS_TAKE = 50;
+
+		/**
+		* Mono where the text is DATA rather than prose.
+		*
+		* A tool name, a JSON argument and a source host are things a person
+		* compares character by character across rows, and a proportional face
+		* makes two nearly-identical queries look identical.
+		*/
+		const MISSION_MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+
+		/**
+		* The chip at the left of a row, keyed by the Host half's `TRACE_ROLES`.
+		*
+		* The English labels are capitals because that is what the reference tab
+		* prints and because a role is a category marker rather than a sentence.
+		* An unknown role falls through `missionFace` to the raw string: a blank
+		* chip and a chip for a row with no role look the same, and only one of
+		* them is a bug.
+		*/
+		const MISSION_ROLE_FACES = {
+			STAGE: { zh: "阶段", en: "STAGE", hue: "2,132,199" },
+			TOOL: { zh: "工具", en: "TOOL", hue: "124,58,237" },
+			EVIDENCE: { zh: "证据", en: "EVIDENCE", hue: "5,150,105" },
+			GATE: { zh: "闸门", en: "GATE", hue: "217,119,6" },
+			SYSTEM: { zh: "系统", en: "SYSTEM", hue: "100,116,139" }
+		};
+
+		/**
+		* The kind filter. Every id but `""` is a member of the route's
+		* `TRACE_KINDS`, because an unknown one is answered with a 400 naming the
+		* four — the right answer, and not one worth provoking from a chip.
+		*
+		* "全部记录" rather than "全部": the mission list has its own 全部 chip and
+		* two controls with one label on one screen is how a person presses the
+		* wrong one.
+		*/
+		const MISSION_TRACE_KINDS = [
+			{ id: "", zh: "全部记录", en: "All rows", hue: "100,116,139" },
+			{ id: "stage", zh: "阶段", en: "Stages", hue: "2,132,199" },
+			{ id: "tool", zh: "工具", en: "Tools", hue: "124,58,237" },
+			{ id: "finding", zh: "发现", en: "Findings", hue: "5,150,105" },
+			{ id: "event", zh: "事件", en: "Events", hue: "217,119,6" }
+		];
+
+		/** The four tabs of the detail panel, in the reference's order. */
+		const MISSION_TRACE_TABS = [
+			{ id: "summary", zh: "摘要", en: "Summary" },
+			{ id: "payload", zh: "载荷", en: "Payload" },
+			{ id: "result", zh: "结果", en: "Result" },
+			{ id: "timing", zh: "计时", en: "Timing" }
+		];
+
+		/**
+		* The wall clock of one row, to the second.
+		*
+		* `formatStamp` stops at the minute, which is right for a feed and wrong
+		* here: one collect stage fires a dozen tool calls inside a single
+		* minute, and a column where all twelve carry the same stamp cannot be
+		* used to order them.
+		* @param iso - an ISO 8601 instant.
+		* @returns `HH:MM:SS`, or "" when there is no instant.
+		*/
+		function missionClock(iso) {
+			const at = Date.parse(iso);
+			if (Number.isNaN(at)) return "";
+			const when = new Date(at);
+			const pad = (value) => String(value).padStart(2, "0");
+			return `${pad(when.getHours())}:${pad(when.getMinutes())}:${pad(when.getSeconds())}`;
+		}
+
+		/**
+		* A tool call's latency, in the unit it was measured in.
+		*
+		* `missionDuration` rounds to seconds, which turns every sub-second call
+		* into "0 秒" — and the whole reason to look at a latency column is to see
+		* that one fetch took 40ms and the next took nine seconds.
+		* @param ms - milliseconds.
+		* @param zh - whether to write Chinese.
+		* @returns the duration, or "" when there is no number.
+		*/
+		function missionLatency(ms, zh) {
+			const value = Number(ms);
+			if (!Number.isFinite(value) || value < 0) return "";
+			if (value < 1000) return `${Math.round(value)}ms`;
+			return missionDuration(value, zh);
+		}
+
+		/**
+		* A row's verdict, in three values rather than two.
+		*
+		* `ok: null` means nobody checked — a fetch that never returned, a host
+		* that rate-limited us, an event type with no registered verdict. Drawing
+		* it as a failure reproduces on screen the collapse the verify-state
+		* column exists to prevent: "4 requests were refused" and "4 quotes were
+		* invented" are the same number in the same place and want opposite
+		* responses.
+		* @param ok - `true` | `false` | `null` from a trajectory row.
+		* @param zh - whether to write Chinese.
+		* @returns `{ mark, hue, label }`.
+		*/
+		function missionOkFace(ok, zh) {
+			if (ok === true) return { mark: "✓", hue: "5,150,105", label: zh ? "通过" : "Passed" };
+			if (ok === false) return { mark: "✗", hue: "220,38,38", label: zh ? "未通过" : "Failed" };
+			return { mark: "·", hue: "100,116,139", label: zh ? "没有判定" : "No verdict was recorded" };
+		}
+
+		/**
+		* What a row prints as its name.
+		*
+		* A stage row's title is a step id and an event row's is an event type —
+		* both are vocabulary this page already has words for, and printing
+		* `s3-collect` beside 采集 everywhere else is two names for one thing. A
+		* tool name and a source host are data and are shown exactly as recorded.
+		* @param row - one row from `/missions/:id/trace`.
+		* @param zh - whether to write Chinese.
+		* @returns `{ text, mono }`; `mono` is true when the text is data.
+		*/
+		function missionRowTitle(row, zh) {
+			if (row.kind === "stage") return { text: missionFace(MISSION_STAGE_FACES, row.title, zh), mono: false };
+			if (row.kind === "event") return { text: missionFace(MISSION_EVENT_FACES, row.title, zh), mono: false };
+			return { text: String(row.title ?? ""), mono: true };
+		}
+
+		/**
+		* A row's state token, spelled out.
+		*
+		* Every kind files its state under a different vocabulary — a stage
+		* transition, a verify state, an event type, a tool error code — and only
+		* the last of those is a string a person can read as it comes.
+		* @param row - one row from `/missions/:id/trace`.
+		* @param zh - whether to write Chinese.
+		* @returns the label, or "" when the row carries no state.
+		*/
+		function missionRowState(row, zh) {
+			const state = String(row?.state ?? "");
+			if (state === "") return "";
+			if (row.kind === "finding") return missionFace(MISSION_VERIFY_FACES, state, zh);
+			if (row.kind === "stage") return missionFace(MISSION_STAGE_STATUS_FACES, state, zh);
+			if (row.kind === "event") return missionFace(MISSION_EVENT_FACES, state, zh);
+			return state;
+		}
+
+		/**
+		* A cheap identity for one page of the trajectory.
+		*
+		* The list is POLLED, and a poll that brought back the same rows must not
+		* replace them: a new array is a new render, a new render resets the
+		* scroll of the list the reader is halfway down, and a mission that
+		* changed nothing for a minute would still twitch every four seconds.
+		* Compared on what a reader can see move — how many rows exist, which
+		* rows these are, and how far the log has got.
+		* @param data - the `data` object from `/missions/:id/trace`.
+		* @returns a string that changes exactly when the page does.
+		*/
+		function missionTraceSignature(data) {
+			const rows = Array.isArray(data?.rows) ? data.rows : [];
+			return [
+				data?.page?.total ?? 0,
+				data?.page?.unfiltered ?? 0,
+				data?.lastEventSeq ?? 0,
+				rows.map((row) => row.ref).join("|")
+			].join("~");
+		}
+
+		/** The same idea for one page of `/missions/:id/findings`. */
+		function missionFindingsSignature(data) {
+			const rows = Array.isArray(data?.findings) ? data.findings : [];
+			return [data?.counts?.total ?? 0, rows.map((row) => row.id).join("|")].join("~");
+		}
+
+		/**
+		* One trajectory row: a chip, a name, the arguments, an arrow, the result.
+		*
+		* One line, always one line. The reference tab's whole value is that a
+		* hundred steps can be scanned without reading any of them, and a row
+		* that wraps when its arguments are long is a row that pushes every row
+		* under it down as the mission runs.
+		* @param row - one row from `/missions/:id/trace`.
+		* @param zh - whether to write Chinese.
+		* @param active - whether this row is the one open in the panel.
+		* @param onOpen - called with the row's `ref`.
+		*/
+		function MissionTraceRow({ row, zh, active, onOpen }) {
+			const hue = missionHue(MISSION_ROLE_FACES, row.role);
+			const verdict = missionOkFace(row.ok, zh);
+			const name = missionRowTitle(row, zh);
+			const took = row.kind === "tool" ? missionLatency(row.ms, zh) : missionDuration(row.ms, zh);
+			const clipped = {
+				flex: "1 1 0", minWidth: 0, overflow: "hidden",
+				textOverflow: "ellipsis", whiteSpace: "nowrap"
+			};
+			return jsxs("button", {
+				type: "button",
+				onClick: () => { onOpen(row.ref); },
+				// The raw identifiers, on hover. `s3-collect` and `mission:started`
+				// are the strings the search box matches and the strings a log grep
+				// uses, so they stay reachable even though the row prints the words.
+				title: `${row.ref} · ${row.title}${row.agentId === null || row.agentId === undefined ? "" : ` · ${row.agentId}`}`,
+				"aria-pressed": active,
+				style: {
+					appearance: "none", width: "100%", boxSizing: "border-box",
+					display: "flex", alignItems: "center", gap: "8px",
+					padding: "3px 8px", borderRadius: "6px",
+					border: "1px solid " + (active ? `rgba(${hue},0.45)` : "transparent"),
+					background: active ? `rgba(${hue},0.10)` : "transparent",
+					color: "var(--dsw-alias-label-secondary)",
+					font: "inherit", fontSize: "12px", lineHeight: "19px",
+					textAlign: "left", cursor: "pointer"
+				},
+				children: [
+					jsx("span", {
+						style: { flex: "none", width: "56px", fontFamily: MISSION_MONO, fontVariantNumeric: "tabular-nums" },
+						children: missionClock(row.at)
+					}, "at"),
+					jsx("span", {
+						style: {
+							flex: "none", width: "58px", textAlign: "center",
+							padding: "0 4px", borderRadius: "4px",
+							background: `rgba(${hue},0.12)`, color: `rgb(${hue})`,
+							fontSize: "10px", fontWeight: 600, letterSpacing: "0.02em",
+							overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+						},
+						children: missionFace(MISSION_ROLE_FACES, row.role, zh)
+					}, "role"),
+					jsx("span", {
+						style: {
+							flex: "none", maxWidth: "170px", overflow: "hidden",
+							textOverflow: "ellipsis", whiteSpace: "nowrap",
+							fontFamily: name.mono ? MISSION_MONO : "inherit",
+							fontWeight: 600, color: "var(--dsw-alias-label-primary)"
+						},
+						children: name.text
+					}, "title"),
+					jsx("span", {
+						style: { ...clipped, flexGrow: 2, fontFamily: MISSION_MONO, opacity: 0.85 },
+						children: row.detail
+					}, "detail"),
+					jsx("span", { style: { flex: "none", opacity: 0.5 }, children: "→" }, "arrow"),
+					jsx("span", {
+						style: { ...clipped, color: `rgb(${verdict.hue})` },
+						children: row.result
+					}, "result"),
+					took === "" ? null : jsx("span", {
+						style: { flex: "none", fontVariantNumeric: "tabular-nums", opacity: 0.7 },
+						children: took
+					}, "took")
+				]
+			});
+		}
+
+		/**
+		* One trajectory row, whole: Summary · Payload · Result · Timing.
+		*
+		* Fetched by `ref` rather than by position. `seq` is a place in a snapshot
+		* assembled from bounded windows over three tables, so a mission that
+		* wrote fifty events between the list request and the click has moved
+		* every position by fifty — and a panel that reopened onto the wrong row
+		* is the most expensive kind of wrong, because it is plausible.
+		*
+		* The same component serves the trajectory list and a dimension's
+		* findings, which is what makes "the same detail panel" true rather than a
+		* resemblance between two renderers that will drift.
+		* @param missionId - the mission.
+		* @param traceRef - the row's `ref`.
+		* @param zh - whether to write Chinese.
+		* @param onClose - close the panel.
+		* @param onOpenSource - open a finding's page in the reader.
+		*/
+		function MissionTraceDetail({ missionId, traceRef, zh, onClose, onOpenSource }) {
+			const [tab, setTab] = useState("summary");
+			const [held, setHeld] = useState(null);
+			const [error, setError] = useState("");
+
+			useEffect(() => {
+				let alive = true;
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/trace/${encodeURIComponent(traceRef)}`)
+					.then(missionData)
+					.then((data) => {
+						if (!alive) return;
+						// Kept as `{ref, data}` and replaced only when the ref moved.
+						// The list around this panel polls; without the guard every
+						// poll would hand back an equal-but-new object and re-render
+						// the panel under the reader.
+						setHeld((previous) => (previous !== null && previous.ref === traceRef ? previous : { ref: traceRef, data }));
+						setError("");
+					})
+					.catch((cause) => {
+						if (!alive) return;
+						setError(String(cause?.message ?? cause));
+					});
+				return () => { alive = false; };
+			}, [missionId, traceRef]);
+
+			const head = jsxs("div", {
+				style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" },
+				children: [
+					jsx("span", {
+						style: {
+							flex: 1, minWidth: 0, fontFamily: MISSION_MONO, fontSize: "11px",
+							overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+							color: "var(--dsw-alias-label-secondary)"
+						},
+						children: traceRef
+					}, "ref"),
+					jsx("button", {
+						type: "button",
+						style: { ...controlStyle(), height: "26px", padding: "0 8px", fontSize: "12px" },
+						onClick: onClose,
+						children: zh ? "关闭" : "Close"
+					}, "close")
+				]
+			}, "head");
+
+			const shell = (body) => jsxs("div", {
+				style: {
+					display: "flex", flexDirection: "column",
+					padding: "10px 12px", borderRadius: "10px",
+					border: "1px solid var(--dsw-alias-border-l1)",
+					background: "var(--dsw-specific-menu)"
+				},
+				children: [head, body]
+			});
+
+			if (held === null || held.ref !== traceRef) {
+				return shell(jsx("div", {
+					style: { fontSize: "12px", lineHeight: "18px", color: error === "" ? "var(--dsw-alias-label-secondary)" : "rgb(217,119,6)" },
+					children: error === ""
+						? (zh ? "读取中…" : "Loading…")
+						// The 404 this route answers names the WINDOW, not just the
+						// absence: a row that scrolled out of the bounded read and a
+						// row that never existed want different reactions. Shown as
+						// it came rather than reduced to "not found".
+						: (zh ? "读不到这一行：" : "Could not read this row: ") + error
+				}, "state"));
+			}
+
+			const detail = held.data;
+			const row = detail.row ?? {};
+			const verdict = missionOkFace(detail.ok, zh);
+			const line = (label, value) => (value === "" || value === null || value === undefined ? null : jsxs("div", {
+				style: { display: "flex", gap: "8px", fontSize: "12px", lineHeight: "19px" },
+				children: [
+					jsx("span", { style: { flex: "none", minWidth: "76px", color: "var(--dsw-alias-label-secondary)" }, children: label }, "k"),
+					jsx("span", { style: { flex: 1, minWidth: 0, color: "var(--dsw-alias-label-primary)", wordBreak: "break-word" }, children: String(value) }, "v")
+				]
+			}, label));
+
+			const block = (text) => jsx("pre", {
+				style: {
+					margin: 0, maxHeight: "340px", overflow: "auto",
+					padding: "8px 10px", borderRadius: "8px",
+					background: "var(--dsw-alias-border-l1)",
+					fontFamily: MISSION_MONO, fontSize: "11px", lineHeight: "17px",
+					whiteSpace: "pre-wrap", wordBreak: "break-word",
+					color: "var(--dsw-alias-label-primary)"
+				},
+				children: text
+			});
+
+			// A finding is the row this whole rebuild exists for, so its summary is
+			// not the generic key/value list: the claim, the WHOLE quote, the source
+			// with a way to open it, and the verify state in words rather than as
+			// the enum a person would otherwise have to go and look up.
+			const finding = detail.kind === "finding" ? (detail.payload ?? {}) : null;
+			const openable = finding !== null && typeof finding.sourceUrl === "string" && finding.sourceUrl !== "";
+
+			const summary = jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: "4px" },
+				children: [
+					finding === null ? null : jsx("div", {
+						style: { fontSize: "13px", lineHeight: "20px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+						children: finding.claim
+					}, "claim"),
+					finding === null ? null : jsx("div", {
+						style: {
+							padding: "8px 10px", margin: "2px 0 6px",
+							borderLeft: `3px solid rgba(${verdict.hue},0.5)`,
+							borderRadius: "0 8px 8px 0",
+							background: `rgba(${verdict.hue},0.06)`,
+							fontSize: "13px", lineHeight: "21px", color: "var(--dsw-alias-label-primary)"
+						},
+						// Verbatim and whole. The list clips it and this is the only
+						// place it can be read, which is the point of the panel.
+						children: `“${finding.quote}”`
+					}, "quote"),
+					finding === null ? null : jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", margin: "0 0 6px", fontSize: "11px" },
+						children: [
+							!openable ? jsx("span", {
+								style: { color: "var(--dsw-alias-label-secondary)" },
+								children: zh ? "这条发现没有带回可打开的地址" : "no openable address travelled with this finding"
+							}, "noUrl") : jsx("button", {
+								type: "button",
+								onClick: () => { onOpenSource?.(finding); },
+								style: {
+									appearance: "none", border: "none", background: "transparent", padding: 0,
+									color: `rgb(${verdict.hue})`, font: "inherit", fontSize: "11px", cursor: "pointer"
+								},
+								// 信源's own reader: the Host half re-fetches the page
+								// and extracts it, which is the only thing that can
+								// answer "does that page still say this".
+								children: (zh ? "在阅读器里打开 · " : "Open in the reader · ")
+									+ ((finding.sourceHost ?? "") === "" ? hostOf(finding.sourceUrl) : finding.sourceHost)
+							}, "open"),
+							!openable ? null : jsx("a", {
+								href: finding.sourceUrl, target: "_blank", rel: "noreferrer noopener",
+								style: { color: "var(--dsw-alias-label-secondary)", textDecoration: "none" },
+								children: zh ? "原始链接" : "Original link"
+							}, "raw")
+						]
+					}, "source"),
+					line(zh ? "结果" : "Verdict", `${verdict.mark} ${verdict.label}`),
+					line(zh ? "状态" : "State", missionRowState(row, zh)),
+					finding === null ? null : line(zh ? "计入证据" : "Counts as evidence", finding.counts === true
+						? (zh ? "是 —— 越过了证据边界" : "yes — it crosses the evidence boundary")
+						: (zh ? "否" : "no")),
+					finding === null || finding.verifyReason === null || finding.verifyReason === undefined
+						? null : line(zh ? "核验说明" : "Verifier", finding.verifyReason),
+					finding === null ? null : line(zh ? "出处" : "Source",
+						[finding.sourceTitle ?? "", finding.sourceHost ?? "", finding.sourceUrl ?? ""].filter((piece) => piece !== "" && piece !== null).join(" · ")),
+					line(zh ? "类别" : "Kind", `${detail.kind} · ${missionFace(MISSION_ROLE_FACES, detail.role, zh)}`),
+					line(zh ? "时刻" : "At", `${formatStamp(detail.at)} ${missionClock(detail.at)}`),
+					detail.stepId === null || detail.stepId === undefined ? null
+						: line(zh ? "阶段" : "Stage", `${missionFace(MISSION_STAGE_FACES, detail.stepId, zh)} (${detail.stepId})`),
+					detail.agentId === null || detail.agentId === undefined ? null : line(zh ? "执行者" : "Agent", detail.agentId),
+					detail.dimension === null || detail.dimension === undefined ? null : line(zh ? "维度" : "Dimension",
+						`${detail.dimension.name} · ${missionFace(MISSION_DIMENSION_FACES, detail.dimension.state, zh)} · `
+						+ (zh
+							? `已核验 ${detail.dimension.verified}/${detail.dimension.total} 条，来自 ${detail.dimension.uniqueHosts} 个站点`
+							: `${detail.dimension.verified}/${detail.dimension.total} verified from ${detail.dimension.uniqueHosts} host(s)`)),
+					detail.stage === null || detail.stage === undefined ? null : line(zh ? "阶段记录" : "Stage row",
+						`${missionFace(MISSION_STAGE_STATUS_FACES, detail.stage.status, zh)} · `
+						+ (zh ? `第 ${detail.stage.attempts} 次尝试` : `attempt ${detail.stage.attempts}`)
+						+ (detail.stage.durationMs === null || detail.stage.durationMs === undefined ? "" : ` · ${missionDuration(detail.stage.durationMs, zh)}`)),
+					(detail.stage?.degradeNote ?? "") === "" ? null : jsx("div", {
+						style: { marginTop: "4px", fontSize: "12px", lineHeight: "18px", color: "rgb(217,119,6)" },
+						children: detail.stage.degradeNote
+					}, "degrade"),
+					// A position, said to be a position. The trajectory is assembled
+					// from bounded windows over three tables, so `seq` slides when the
+					// oldest end falls off; the `ref` above is what survives.
+					jsx("div", {
+						style: { marginTop: "6px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+						children: zh
+							? `第 ${detail.seq} 行 —— 这是当前这份快照里的位置，不是身份；身份是上面那个 ref。`
+							: `Row ${detail.seq} — a position in this snapshot, not an identity. The identity is the ref above.`
+					}, "seqNote")
+				]
+			});
+
+			const result = detail.result ?? {};
+			const timing = detail.timing ?? {};
+
+			return shell(jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: "8px" },
+				children: [
+					jsx("div", {
+						style: { display: "flex", gap: "4px", flexWrap: "wrap" },
+						children: MISSION_TRACE_TABS.map((entry) => jsx("button", {
+							type: "button",
+							role: "tab",
+							"aria-selected": entry.id === tab,
+							style: { ...chipStyle({ hue: "100,116,139" }, entry.id === tab), height: "26px", padding: "0 10px", fontSize: "12px" },
+							onClick: () => { setTab(entry.id); },
+							children: zh ? entry.zh : entry.en
+						}, entry.id))
+					}, "tabs"),
+					tab !== "summary" ? null : summary,
+					tab !== "payload" ? null : jsxs("div", {
+						style: { display: "flex", flexDirection: "column", gap: "6px" },
+						children: [
+							block(JSON.stringify(detail.payload ?? null, null, 2)),
+							detail.kind !== "tool" ? null : jsx("div", {
+								style: { fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+								// The cap is the COLUMN's, not this panel's. Saying which
+								// layer cut the string is the difference between a reader
+								// who goes looking for the rest and one who knows there
+								// is no rest to find.
+								children: zh
+									? `参数在写入时就截到 ${detail.payload?.argsTextStoredCap ?? 300} 个字符 —— 上面已经是存下来的全部。`
+									: `Arguments are capped at ${detail.payload?.argsTextStoredCap ?? 300} characters when the call is recorded; the above is everything that was stored.`
+							}, "cap")
+						]
+					}, "payloadTab"),
+					tab !== "result" ? null : jsxs("div", {
+						style: { display: "flex", flexDirection: "column", gap: "6px" },
+						children: [
+							result.text === null || result.text === undefined || result.text === ""
+								? jsx("div", {
+									style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+									children: zh ? "这一行没有留下结果文本。" : "This row recorded no result text."
+								}, "empty")
+								: block(result.text),
+							result.note === null || result.note === undefined || result.note === "" ? null : jsx("div", {
+								style: { fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+								// The route's own sentence about what the column does and
+								// does not hold. Re-worded here it would become a second
+								// answer to the same question.
+								children: result.note
+							}, "note")
+						]
+					}, "resultTab"),
+					tab !== "timing" ? null : jsxs("div", {
+						style: { display: "flex", flexDirection: "column", gap: "4px" },
+						children: [
+							line(zh ? "记录于" : "Recorded", timing.at === null || timing.at === undefined ? "" : `${formatStamp(timing.at)} ${missionClock(timing.at)}`),
+							line(zh ? "开始" : "Started", timing.startedAt === null || timing.startedAt === undefined ? "" : `${formatStamp(timing.startedAt)} ${missionClock(timing.startedAt)}`),
+							line(zh ? "结束" : "Ended", timing.endedAt === null || timing.endedAt === undefined ? "" : `${formatStamp(timing.endedAt)} ${missionClock(timing.endedAt)}`),
+							line(zh ? "用时" : "Duration", detail.kind === "tool" ? missionLatency(timing.ms, zh) : missionDuration(timing.ms, zh)),
+							timing.source === null || timing.source === undefined || timing.source === "" ? null : jsx("div", {
+								style: { marginTop: "4px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+								// WHERE the number came from. A tool call's start is
+								// computed — the row is written when the call returns —
+								// and a derived instant presented as a recorded one is a
+								// measurement nobody promised.
+								children: (zh ? "这些数字的来源：" : "Where these came from: ") + timing.source
+							}, "source")
+						]
+					}, "timingTab")
+				]
+			}));
+		}
+
+		/**
+		* The trajectory: filters, the dense list, and the panel beside it.
+		*
+		* Polls while the mission is live. When a row is open the poll's answer is
+		* HELD rather than applied — a list that reflows under a reader who has
+		* just clicked something is the failure this panel exists to avoid — and
+		* the fact that there is something newer is said out loud, with a control
+		* that applies it.
+		* @param missionId - the mission.
+		* @param zh - whether to write Chinese.
+		* @param live - whether the mission is still running, which is what polls.
+		* @param timeline - `timeline` from the view route, used only as a fallback.
+		* @param onOpenSource - open a finding's page in the reader.
+		*/
+		function MissionTrace({ missionId, zh, live, timeline, onOpenSource }) {
+			const [kind, setKind] = useState("");
+			const [stepId, setStepId] = useState("");
+			const [dimensionId, setDimensionId] = useState("");
+			const [search, setSearch] = useState("");
+			const [order, setOrder] = useState("newest");
+			const [selected, setSelected] = useState(null);
+			const [page, setPage] = useState(null);
+			const [fresh, setFresh] = useState(null);
+			const [error, setError] = useState("");
+			const [tick, setTick] = useState(0);
+			// The signature of the page the list is currently drawing. Held in a
+			// ref rather than read back from `page`, because the effect below
+			// closes over the state it was created with: the moment the reader
+			// presses "load them", `page` inside the not-yet-recreated effect is
+			// still the page BEFORE the load, and the next poll would offer the
+			// very rows just loaded as though they were new.
+			const applied = useRef("");
+
+			const query = new URLSearchParams();
+			query.set("take", String(MISSION_TRACE_TAKE));
+			query.set("order", order);
+			if (kind !== "") query.set("kind", kind);
+			if (stepId !== "") query.set("stepId", stepId);
+			if (dimensionId !== "") query.set("dimensionId", dimensionId);
+			// Sent to the route rather than filtered here, and sent per keystroke
+			// rather than debounced: the route searches the WHOLE trajectory while
+			// this page holds a window of it, so a local filter would answer
+			// "nothing matches" for a row that is one page away. The read is a
+			// bounded merge over three already-open tables on the same machine, and
+			// a stale answer is dropped by the `alive` guard below.
+			if (search !== "") query.set("search", search);
+			const address = `${apiBase()}/missions/${encodeURIComponent(missionId)}/trace?${query.toString()}`;
+
+			useEffect(() => {
+				let alive = true;
+				fetch(address)
+					.then(missionData)
+					.then((data) => {
+						if (!alive) return;
+						setError("");
+						const signature = missionTraceSignature(data);
+						if (selected === null) {
+							applied.current = signature;
+							setPage((previous) => (previous !== null && previous.signature === signature ? previous : { signature, data }));
+							setFresh(null);
+							return;
+						}
+						// A row is open. Hold the newer page rather than swapping the
+						// list out from under the click that opened it — but only when
+						// it IS newer, or the panel would sit behind a control offering
+						// rows the list is already showing.
+						if (applied.current === signature) {
+							setFresh(null);
+							return;
+						}
+						setFresh((previous) => (previous !== null && previous.signature === signature ? previous : { signature, data }));
+					})
+					.catch((cause) => {
+						if (!alive) return;
+						setError(String(cause?.message ?? cause));
+					});
+				return () => { alive = false; };
+			}, [address, selected, tick]);
+
+			// Closing the panel is consent to move the list, so a held page goes in
+			// by itself rather than leaving a stale list behind a dead button.
+			useEffect(() => {
+				if (selected !== null || fresh === null) return;
+				applied.current = fresh.signature;
+				setPage(fresh);
+				setFresh(null);
+			}, [selected, fresh]);
+
+			// Unref'd for the reason the other two timers are: this module is
+			// rendered in Node by tests/settings.test.mjs, which never unmounts.
+			useEffect(() => {
+				if (!live) return;
+				const timer = setTimeout(() => { setTick((value) => value + 1); }, MISSION_POLL_MS);
+				timer.unref?.();
+				return () => { clearTimeout(timer); };
+			}, [live, tick]);
+
+			const data = page?.data ?? null;
+			const rows = Array.isArray(data?.rows) ? data.rows : [];
+			const stages = Array.isArray(data?.stages) ? data.stages : [];
+			const dimensions = Array.isArray(data?.dimensions) ? data.dimensions : [];
+			const paging = data?.page ?? {};
+			const bounds = data?.window ?? {};
+			const saturated = ["events", "toolCalls", "findings"].filter((stream) => bounds[stream]?.saturated === true);
+			const gained = Math.max(0, Number(fresh?.data?.page?.total ?? 0) - Number(paging.total ?? 0));
+
+			const selectStyle = {
+				appearance: "none", height: "28px", padding: "0 8px", borderRadius: "8px",
+				border: "1px solid var(--dsw-alias-border-l2)", background: "transparent",
+				color: "var(--dsw-alias-label-secondary)", font: "inherit", fontSize: "12px", cursor: "pointer"
+			};
+
+			const filters = jsxs("div", {
+				style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", marginBottom: "8px" },
+				children: [
+					...MISSION_TRACE_KINDS.map((entry) => jsx("button", {
+						type: "button",
+						role: "tab",
+						"aria-selected": entry.id === kind,
+						style: { ...chipStyle(entry, entry.id === kind), height: "28px", padding: "0 10px", fontSize: "12px" },
+						onClick: () => { setKind(entry.id); },
+						children: zh ? entry.zh : entry.en
+					}, entry.id === "" ? "all" : entry.id)),
+					jsx("select", {
+						value: stepId,
+						"aria-label": zh ? "按阶段筛选" : "Filter by stage",
+						style: selectStyle,
+						onChange: (event) => { setStepId(event.target.value); },
+						children: [
+							jsx("option", { value: "", children: zh ? "所有阶段" : "Every stage" }, "any"),
+							...stages.map((stage) => jsx("option", {
+								value: stage.stepId,
+								children: `${missionFace(MISSION_STAGE_FACES, stage.stepId, zh)} · ${missionFace(MISSION_STAGE_STATUS_FACES, stage.status, zh)}`
+							}, stage.stepId))
+						]
+					}, "stage"),
+					jsx("select", {
+						value: dimensionId,
+						"aria-label": zh ? "按维度筛选" : "Filter by dimension",
+						style: selectStyle,
+						onChange: (event) => { setDimensionId(event.target.value); },
+						children: [
+							jsx("option", { value: "", children: zh ? "所有维度" : "Every dimension" }, "any"),
+							...dimensions.map((dimension) => jsx("option", {
+								value: dimension.dimensionId,
+								children: dimension.name
+							}, dimension.dimensionId))
+						]
+					}, "dimension"),
+					jsx("input", {
+						type: "search",
+						value: search,
+						placeholder: zh ? "搜索工具名、参数、结果…" : "Search calls, arguments, results…",
+						"aria-label": zh ? "搜索轨迹" : "Search the trajectory",
+						style: {
+							flex: "1 1 180px", minWidth: "140px", boxSizing: "border-box",
+							height: "28px", padding: "0 10px", borderRadius: "8px",
+							border: "1px solid var(--dsw-alias-border-l2)", background: "transparent",
+							color: "var(--dsw-alias-label-primary)", font: "inherit", fontSize: "12px", outline: "none"
+						},
+						onChange: (event) => { setSearch(event.target.value); }
+					}, "search"),
+					jsx("button", {
+						type: "button",
+						style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px" },
+						onClick: () => { setOrder(order === "newest" ? "oldest" : "newest"); },
+						children: order === "newest" ? (zh ? "最新在前" : "Newest first") : (zh ? "最早在前" : "Oldest first")
+					}, "order")
+				]
+			}, "filters");
+
+			// Three states, not two. `data === null` with no error is a read that
+			// has not come back, and it has exactly the shape of a mission that
+			// recorded nothing — `rows` is `[]` either way. Falling through to the
+			// empty branch made a slow or wedged route say "这个任务还没有留下任何
+			// 轨迹" about a mission that was running fine, which is a claim this
+			// page has not checked. MissionDimensionFindings below already draws
+			// this distinction for its own read; the trajectory now draws it too.
+			const body = data === null && error === ""
+				? jsx("div", {
+					style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+					children: zh ? "正在读取轨迹…" : "Reading the trajectory…"
+				}, "loading")
+				: error !== "" && data === null
+				? jsxs("div", {
+					style: { display: "flex", flexDirection: "column", gap: "8px" },
+					children: [
+						jsx("div", {
+							style: { fontSize: "12px", lineHeight: "18px", color: "rgb(217,119,6)" },
+							children: (zh ? "读不到轨迹：" : "Could not read the trajectory: ") + error
+								+ (zh ? " 下面是视图里带的那一小段事件尾部。" : " What follows is the short event tail the view route carries.")
+						}, "why"),
+						// Not a blank panel. The view route's tail is a fraction of the
+						// trajectory and holds only events, but a mission that cannot
+						// show its trajectory can still show what it was doing — and
+						// saying which of the two you are looking at is the difference
+						// between a fallback and a lie.
+						jsx(MissionTimeline, { timeline, zh }, "fallback")
+					]
+				}, "traceError")
+				: jsxs("div", {
+					style: { display: "flex", alignItems: "flex-start", gap: "12px" },
+					children: [
+						jsx("div", {
+							style: {
+								flex: "1 1 0", minWidth: 0, display: "flex", flexDirection: "column",
+								gap: "2px", maxHeight: "58vh", overflowY: "auto"
+							},
+							children: rows.length === 0
+								? jsx("div", {
+									style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+									// "0" and "0 of 431" are different sentences: the first
+									// says the mission did nothing, the second says this
+									// filter matches nothing.
+									children: Number(paging.unfiltered ?? 0) > 0
+										? (zh ? `这个筛选下没有记录 —— 轨迹里一共有 ${paging.unfiltered} 条。` : `Nothing matches this filter — the trajectory holds ${paging.unfiltered} row(s).`)
+										: (zh ? "这个任务还没有留下任何轨迹。" : "This mission has not recorded a trajectory yet.")
+								}, "empty")
+								: rows.map((row) => jsx(MissionTraceRow, {
+									row, zh,
+									active: row.ref === selected,
+									onOpen: (ref) => { setSelected(ref === selected ? null : ref); }
+								}, row.ref))
+						}, "list"),
+						selected === null ? null : jsx("div", {
+							style: { flex: "0 0 clamp(300px, 44%, 520px)", minWidth: 0, position: "sticky", top: 0 },
+							children: jsx(MissionTraceDetail, {
+								missionId, traceRef: selected, zh,
+								onClose: () => { setSelected(null); },
+								onOpenSource
+							})
+						}, "panel")
+					]
+				}, "master");
+
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column" },
+				children: [
+					filters,
+					fresh === null ? null : jsx("button", {
+						type: "button",
+						style: { ...controlStyle(), height: "26px", marginBottom: "8px", fontSize: "12px", alignSelf: "flex-start" },
+						onClick: () => { applied.current = fresh.signature; setPage(fresh); setFresh(null); },
+						children: gained > 0
+							? (zh ? `又有 ${gained} 条记录 · 点这里更新（正在看的那一行不会动）` : `${gained} more row(s) · load them (the open row stays)`)
+							: (zh ? "轨迹有更新 · 点这里加载" : "The trajectory moved · load it")
+					}, "pending"),
+					// A refresh that failed over a list we already have. Without this
+					// the page keeps drawing the last good answer beside a clock that
+					// never moves, which is the most convincing wrong screen here.
+					error === "" || data === null ? null : jsx("div", {
+						style: { marginBottom: "8px", fontSize: "12px", lineHeight: "18px", color: "rgb(217,119,6)" },
+						children: (zh ? "这一次刷新失败了，下面是上一次读到的轨迹：" : "The latest refresh failed; what follows is the trajectory as it was last read: ") + error
+					}, "stale"),
+					body,
+					data === null ? null : jsx("div", {
+						style: { marginTop: "8px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+						children: [
+							zh ? `显示 ${rows.length} / ${paging.total ?? 0} 条` : `showing ${rows.length} of ${paging.total ?? 0}`,
+							Number(paging.unfiltered ?? 0) === Number(paging.total ?? 0) ? "" : (zh ? `未筛选共 ${paging.unfiltered} 条` : `${paging.unfiltered} unfiltered`),
+							paging.hasMore === true ? (zh ? "还有更多，缩小筛选范围可以看到" : "there is more — narrow the filter to reach it") : "",
+							// The window is the honest answer to "is this the whole
+							// history". A mission that stops at the thousandth event
+							// looks exactly like a mission that stopped working.
+							saturated.length === 0 ? "" : (zh
+								? `已经读到窗口上限（${saturated.join("、")}）—— 更早的记录还在磁盘上，只是不在这一页里`
+								: `the read hit its window (${saturated.join(", ")}) — older rows are on disk, outside this page`)
+						].filter((piece) => piece !== "").join(" · ")
+					}, "bounds")
+				]
+			});
+		}
+
+		/**
+		* One finding, as a row: the mark, the claim, the quote, the state.
+		*
+		* Three lines rather than one, unlike a trajectory row, because a finding
+		* IS the claim and the quote — a list of claims with the quotes hidden
+		* behind a click would be the same withholding this rebuild is undoing,
+		* one level down.
+		* @param finding - one row from `/missions/:id/findings`.
+		* @param zh - whether to write Chinese.
+		* @param active - whether this finding is the one open in the panel.
+		* @param onOpen - called with the finding's trajectory `ref`.
+		*/
+		function MissionFindingRow({ finding, zh, active, onOpen }) {
+			// Three-valued, and `null` is grey rather than red: `unchecked-*` means
+			// the check never happened, and a rate limit drawn as a refuted quote is
+			// the one confusion the verify-state column exists to prevent.
+			const verdict = missionOkFace(finding.verified, zh);
+			return jsxs("button", {
+				type: "button",
+				onClick: () => { onOpen(`finding:${finding.id}`); },
+				"aria-pressed": active,
+				title: finding.sourceUrl ?? "",
+				style: {
+					appearance: "none", width: "100%", boxSizing: "border-box",
+					display: "flex", alignItems: "flex-start", gap: "8px",
+					padding: "5px 8px", borderRadius: "8px",
+					border: "1px solid " + (active ? `rgba(${verdict.hue},0.45)` : "transparent"),
+					background: active ? `rgba(${verdict.hue},0.10)` : "transparent",
+					font: "inherit", textAlign: "left", cursor: "pointer",
+					color: "var(--dsw-alias-label-secondary)"
+				},
+				children: [
+					jsx("span", {
+						style: { flex: "none", color: `rgb(${verdict.hue})`, fontSize: "12px", lineHeight: "19px" },
+						children: verdict.mark
+					}, "mark"),
+					jsxs("span", {
+						style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "1px" },
+						children: [
+							jsx("span", {
+								style: {
+									fontSize: "12px", lineHeight: "19px", color: "var(--dsw-alias-label-primary)",
+									overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+								},
+								children: finding.claim
+							}, "claim"),
+							jsx("span", {
+								style: {
+									fontSize: "11px", lineHeight: "17px",
+									overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+								},
+								children: `“${finding.quote}”`
+							}, "quote"),
+							jsx("span", {
+								style: { fontSize: "10px", lineHeight: "16px", fontFamily: MISSION_MONO },
+								children: [
+									missionFace(MISSION_VERIFY_FACES, finding.verifyState, zh),
+									finding.sourceHost ?? "",
+									zh ? `${finding.quoteChars} 字` : `${finding.quoteChars} chars`
+								].filter((piece) => piece !== "" && piece !== null && piece !== undefined).join(" · ")
+							}, "meta")
+						]
+					}, "body")
+				]
+			});
+		}
+
+		/**
+		* A dimension's evidence, at last.
+		*
+		* `/missions/:id/findings?dimensionId=…` is the route whose absence was the
+		* complaint. The counts stay on the card above; this is the part that
+		* stops them being all there is.
+		*
+		* Read once when the card opens, and not polled. A running mission's
+		* dimension gains findings while it is open, and prepending them would
+		* move the row under the reader's cursor for a gain nobody asked for;
+		* closing and reopening the card reads it again.
+		* @param missionId - the mission.
+		* @param dimensionId - the dimension to list.
+		* @param zh - whether to write Chinese.
+		* @param selected - the `ref` currently open in the panel, if any.
+		* @param onOpen - called with a finding's trajectory `ref`.
+		*/
+		function MissionDimensionFindings({ missionId, dimensionId, zh, selected, onOpen }) {
+			const [held, setHeld] = useState(null);
+			const [error, setError] = useState("");
+
+			useEffect(() => {
+				let alive = true;
+				const query = new URLSearchParams();
+				query.set("dimensionId", dimensionId);
+				query.set("take", String(MISSION_FINDINGS_TAKE));
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/findings?${query.toString()}`)
+					.then(missionData)
+					.then((data) => {
+						if (!alive) return;
+						const signature = missionFindingsSignature(data);
+						setHeld((previous) => (previous !== null && previous.signature === signature ? previous : { signature, data }));
+						setError("");
+					})
+					.catch((cause) => {
+						if (!alive) return;
+						setError(String(cause?.message ?? cause));
+					});
+				return () => { alive = false; };
+			}, [missionId, dimensionId]);
+
+			if (held === null) {
+				return jsx("div", {
+					style: { fontSize: "12px", lineHeight: "18px", color: error === "" ? "var(--dsw-alias-label-secondary)" : "rgb(217,119,6)" },
+					children: error === ""
+						? (zh ? "读取中…" : "Loading…")
+						// The route answers a mistyped dimension with a 400 naming the
+						// dimensions that exist, which is worth far more than the empty
+						// list it could have sent instead.
+						: (zh ? "读不到这个维度的证据：" : "Could not read this dimension's evidence: ") + error
+				});
+			}
+
+			const data = held.data;
+			const findings = Array.isArray(data.findings) ? data.findings : [];
+			const counts = data.counts ?? {};
+			const hosts = Array.isArray(data.hosts) ? data.hosts : [];
+			const paging = data.page ?? {};
+
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" },
+				children: [
+					hosts.length === 0 ? null : jsx("div", {
+						style: { fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+						// WHICH sites, not how many. "1 个独立站点" gave the reader a
+						// number and withheld the only part of it that can be judged.
+						children: (zh ? "站点：" : "Hosts: ")
+							+ hosts.map((host) => `${host.host} (${host.findings})`).join(zh ? "、" : ", ")
+					}, "hosts"),
+					findings.length === 0 ? jsx("div", {
+						style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+						children: zh
+							? "这个维度没有写下任何发现 —— 不是没显示，是确实一条也没有。"
+							: "This dimension recorded no findings at all — nothing is being hidden; there is nothing."
+					}, "none") : jsx("div", {
+						style: { display: "flex", flexDirection: "column", gap: "2px" },
+						children: findings.map((finding) => jsx(MissionFindingRow, {
+							finding, zh,
+							active: selected === `finding:${finding.id}`,
+							onOpen
+						}, finding.id))
+					}, "rows"),
+					paging.hasMore !== true ? null : jsx("div", {
+						style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+						children: zh
+							? `只显示了前 ${paging.returned} 条，这个维度一共 ${counts.total ?? 0} 条。`
+							: `Showing the first ${paging.returned}; this dimension holds ${counts.total ?? 0}.`
+					}, "more")
+				]
+			});
+		}
+
+		/**
+		* The dimension pane: cards that open, and the panel they open into.
+		*
+		* Master-detail, the same arrangement as the trajectory and with the same
+		* component doing the detail, so a finding reached from a dimension and a
+		* finding reached from the trajectory are read in one place rather than in
+		* two renderers that will drift apart.
+		* @param missionId - the mission.
+		* @param dimensions - `dimensions` from the view route.
+		* @param zh - whether to write Chinese.
+		* @param onOpenSource - open a finding's page in the reader.
+		*/
+		function MissionDimensions({ missionId, dimensions, zh, onOpenSource }) {
+			const [openId, setOpenId] = useState(null);
+			const [selected, setSelected] = useState(null);
+
+			return jsxs("div", {
+				style: { display: "flex", alignItems: "flex-start", gap: "12px" },
+				children: [
+					jsx("div", {
+						style: {
+							flex: "1 1 0", minWidth: 0, display: "grid",
+							gridTemplateColumns: selected === null ? "repeat(auto-fit, minmax(260px, 1fr))" : "1fr",
+							gap: "10px"
+						},
+						children: dimensions.map((dimension) => jsx(MissionDimensionCard, {
+							dimension, zh,
+							expanded: dimension.dimensionId === openId,
+							onToggle: () => { setOpenId(dimension.dimensionId === openId ? null : dimension.dimensionId); },
+							children: dimension.dimensionId !== openId ? null : jsx(MissionDimensionFindings, {
+								missionId, dimensionId: dimension.dimensionId, zh, selected,
+								onOpen: (ref) => { setSelected(ref === selected ? null : ref); }
+							})
+						}, dimension.dimensionId))
+					}, "cards"),
+					selected === null ? null : jsx("div", {
+						style: { flex: "0 0 clamp(300px, 44%, 520px)", minWidth: 0, position: "sticky", top: 0 },
+						children: jsx(MissionTraceDetail, {
+							missionId, traceRef: selected, zh,
+							onClose: () => { setSelected(null); },
+							onOpenSource
+						})
+					}, "panel")
+				]
+			});
+		}
+
+		/**
+		* The page behind one quote, read through 信源's own reader.
+		*
+		* The Host half re-fetches the address and extracts it, which is the only
+		* way to answer "does that page still say this" from here. Shared by the
+		* report and the trajectory precisely so there is one answer to that
+		* question rather than two readers that drift.
+		* @param source - anything carrying `sourceUrl`, `sourceTitle`, `quote`, `documentId`.
+		* @param zh - whether to write Chinese.
+		* @param back - the label on the control that leaves.
+		* @param onBack - leave the reader.
+		*/
+		function MissionSourceReader({ source, zh, back, onBack }) {
+			return jsxs("div", {
+				style: { height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: "10px", padding: "0 24px 16px" },
+				children: [
+					jsxs("div", {
+						style: { flex: "none", display: "flex", alignItems: "center", gap: "10px" },
+						children: [
+							jsx("button", { type: "button", style: controlStyle(), onClick: onBack, children: back }, "back"),
+							jsx("span", {
+								style: { flex: 1, minWidth: 0, fontSize: "13px", color: "var(--dsw-alias-label-secondary)" },
+								children: ((source.sourceTitle ?? "") === "" ? hostOf(source.sourceUrl) : source.sourceTitle)
+									+ (zh ? " · 引语：" : " · quote: ") + `“${source.quote}”`
+							}, "which")
+						]
+					}, "bar"),
+					jsx("div", {
+						style: { flex: 1, minHeight: 0 },
+						children: jsx(DocumentView, {
+							// A synthetic row, because `DocumentView` reads a resource
+							// and this is a fetched web page: the mission documents are
+							// not library rows and no route serves them. Everything the
+							// reader actually uses — the url, the title, the display
+							// mode it derives from the url — is here.
+							row: { id: source.documentId ?? source.sourceUrl, title: source.sourceTitle ?? "", sourceUrl: source.sourceUrl, type: "" },
+							kind: MISSION_SOURCE_KIND, zh, wide: true
+						})
+					}, "reader")
+				]
+			});
+		}
+		//#endregion
+
 		//#region missions detail
 		/**
 		* One action's answer, said out loud.
@@ -4374,6 +5491,10 @@ window.__ModuleLoader__.load({
 			const [notice, setNotice] = useState("");
 			const [actionError, setActionError] = useState("");
 			const [reading, setReading] = useState(false);
+			// The page behind a quote, opened from the trajectory or from a
+			// dimension. Switched in place, the way the report does it, so the
+			// frame never moves under the reader.
+			const [source, setSource] = useState(null);
 
 			useEffect(() => {
 				let alive = true;
@@ -4453,6 +5574,14 @@ window.__ModuleLoader__.load({
 							children: (zh ? "读不到这个任务：" : "Could not read this mission: ") + error
 						}, "note")
 					]
+				});
+			}
+
+			if (source !== null) {
+				return jsx(MissionSourceReader, {
+					source, zh,
+					back: zh ? "← 返回任务" : "← Back to the mission",
+					onBack: () => { setSource(null); }
 				});
 			}
 
@@ -4623,13 +5752,11 @@ window.__ModuleLoader__.load({
 						(view.dimensions ?? []).length === 0 ? null : jsx(MissionPanel, {
 							title: zh ? "维度" : "Dimensions",
 							note: zh
-								? `已核验 ${evidence.verified ?? 0} 条 · 共 ${evidence.total ?? 0} 条发现`
-								: `${evidence.verified ?? 0} verified of ${evidence.total ?? 0} findings`,
-							children: jsx("div", {
-								style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "10px" },
-								children: view.dimensions.map((dimension) => jsx(MissionDimensionCard, {
-									dimension, zh
-								}, dimension.dimensionId))
+								? `已核验 ${evidence.verified ?? 0} 条 · 共 ${evidence.total ?? 0} 条发现 · 点开一个维度就能读到它们`
+								: `${evidence.verified ?? 0} verified of ${evidence.total ?? 0} findings — open a dimension to read them`,
+							children: jsx(MissionDimensions, {
+								missionId, dimensions: view.dimensions, zh,
+								onOpenSource: (entry) => { setSource(entry); }
 							})
 						}, "dimensions"),
 
@@ -4656,13 +5783,24 @@ window.__ModuleLoader__.load({
 							children: jsx(MissionTried, { report: noEvidence, zh })
 						}, "tried"),
 
+						// The trajectory, in place of the event tail that used to sit
+						// here. The tail showed one of the four things a mission does
+						// and none of the three that answer "why did this dimension
+						// come back empty" — the tool calls with their arguments, the
+						// findings with their quotes, and the stage transitions those
+						// two happened under.
 						jsx(MissionPanel, {
-							title: zh ? "实况" : "Live tail",
-							note: view.timeline?.bounded === true
-								? (zh ? `只是最近的一段，不是全部日志` : "the latest window, not the whole log")
-								: "",
-							children: jsx(MissionTimeline, { timeline: view.timeline, zh })
-						}, "timeline"),
+							title: zh ? "轨迹" : "Trajectory",
+							note: zh
+								? "阶段、工具调用、发现、事件，按时间排在一起；点一行看它的全部"
+								: "stages, tool calls, findings and events in one order — click a row to read it whole",
+							children: jsx(MissionTrace, {
+								missionId, zh,
+								live: !mission.terminal,
+								timeline: view.timeline,
+								onOpenSource: (entry) => { setSource(entry); }
+							})
+						}, "trace"),
 
 						// The projector's own health. Anomalies are things it had to
 						// repair while reading — a stage still marked running on a
@@ -4832,40 +5970,14 @@ window.__ModuleLoader__.load({
 
 			// The source behind one quote, read through 信源's own reader: the
 			// Host half re-fetches the page and extracts it, which is the only
-			// way to answer "does that page still say this" from here. A second
-			// reader written for missions would be a second answer to that.
+			// way to answer "does that page still say this" from here. One reader,
+			// shared with the mission's own trajectory — a second one written for
+			// missions would be a second answer to that question.
 			if (source !== null) {
-				return jsxs("div", {
-					style: { height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: "10px", padding: "0 24px 16px" },
-					children: [
-						jsxs("div", {
-							style: { flex: "none", display: "flex", alignItems: "center", gap: "10px" },
-							children: [
-								jsx("button", {
-									type: "button", style: controlStyle(), onClick: () => { setSource(null); },
-									children: zh ? "← 返回报告" : "← Back to the report"
-								}, "back"),
-								jsx("span", {
-									style: { flex: 1, minWidth: 0, fontSize: "13px", color: "var(--dsw-alias-label-secondary)" },
-									children: ((source.sourceTitle ?? "") === "" ? hostOf(source.sourceUrl) : source.sourceTitle)
-										+ (zh ? " · 引语：" : " · quote: ") + `“${source.quote}”`
-								}, "which")
-							]
-						}, "bar"),
-						jsx("div", {
-							style: { flex: 1, minHeight: 0 },
-							children: jsx(DocumentView, {
-								// A synthetic row, because `DocumentView` reads a
-								// resource and this is a fetched web page: the mission
-								// documents are not library rows and no route serves
-								// them. Everything the reader actually uses — the url,
-								// the title, the display mode it derives from the url —
-								// is here.
-								row: { id: source.documentId ?? source.sourceUrl, title: source.sourceTitle ?? "", sourceUrl: source.sourceUrl, type: "" },
-								kind: MISSION_SOURCE_KIND, zh, wide: true
-							})
-						}, "reader")
-					]
+				return jsx(MissionSourceReader, {
+					source, zh,
+					back: zh ? "← 返回报告" : "← Back to the report",
+					onBack: () => { setSource(null); }
 				});
 			}
 
@@ -7627,10 +8739,16 @@ window.__ModuleLoader__.load({
 			missionFace, missionHue, missionPillFace, missionDuration, missionMeterLine,
 			missionVerifyRows, missionEventDetail, missionNoEvidence, missionActionNote,
 			missionTierLine, MISSION_FILTERS, MISSION_STAGE_FACES, MISSION_VERIFY_FACES,
+			missionClock, missionLatency, missionOkFace, missionRowTitle, missionRowState,
+			missionTraceSignature, missionFindingsSignature,
+			MISSION_ROLE_FACES, MISSION_TRACE_KINDS, MISSION_TRACE_TABS,
 			SourcesSettings, SwarmPage, PublishTab, ExploreTab,
 			MissionsTab, MissionStarter, MissionListRow, MissionDetail, MissionPanel,
 			MissionStageStrip, MissionCostMeters, MissionDimensionCard, MissionTried,
 			MissionTimeline, MissionReport, MissionEvidenceRow,
+			MissionTrace, MissionTraceRow, MissionTraceDetail,
+			MissionDimensions, MissionDimensionFindings, MissionFindingRow,
+			MissionSourceReader,
 			VersionLine, libraryLine
 		};
 		return module.exports;
