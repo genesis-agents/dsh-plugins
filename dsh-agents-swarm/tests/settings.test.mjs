@@ -1461,7 +1461,21 @@ test("a mission that verified nothing says what it tried", async () => {
     (await pane(view, "证据")).includes("这个维度读了 2 个页面，没有产出任何通过核验的引语。"),
     "the dimension's own account is missing",
   );
-  assert.ok(text.includes("quality_refused"), "the failure code is not shown");
+  // The banner is written to the PERSON: what happened, and what to do. The
+  // runtime's own sentence and its code are behind 详情, where somebody who can
+  // act on them will look — they used to be the largest text on the screen.
+  assert.ok(
+    text.includes("报告写出来了，但没有达到这次任务自己定的标准"),
+    "the failure is reported in the runtime's words rather than the reader's",
+  );
+  assert.ok(!text.includes("quality_refused"), "the raw failure code is still on the face of the page");
+  const detailed = await view.act(() => { button(view.tree, "详情").props.onClick(); })
+    .then(() => textOf(view.tree).join(" "));
+  assert.ok(detailed.includes("quality_refused"), "详情 does not reach the code");
+  assert.ok(
+    detailed.includes("content-guard: citations.length === 0"),
+    "详情 dropped the runtime's own sentence",
+  );
   assert.ok(text.includes("领队读过报告后拒绝签署"), "a refusal to sign is not distinguished from a crash");
 });
 

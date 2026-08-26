@@ -600,6 +600,10 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
           // verified of 0" because run 5 settled without collecting. The
           // evidence was one integer away and the screen said there was none.
           runs: missionStore.findingRuns(id),
+          // Per-dimension counts for the run being shown, so a reader who moved
+          // off the current run does not sit in front of eight cards still
+          // drawing the current run's zeroes.
+          byDimension: missionStore.findingCountsByDimension(id, runCount.value),
           scope: {
             dimensionId: dimensionId.value ?? null,
             verifyState: verifyState.value ?? null,

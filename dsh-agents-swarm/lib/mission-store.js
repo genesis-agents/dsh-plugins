@@ -2902,6 +2902,36 @@ export class MissionStore {
     }));
   }
 
+  /**
+   * Per-dimension counts for ONE run.
+   *
+   * The companion to `findingRuns`: once a reader has chosen a run that is not
+   * the mission's current one, every dimension card on the screen is still
+   * drawing the current run's zeroes. One GROUP BY rather than a request per
+   * card.
+   * @param missionId - the mission.
+   * @param runCount - the run to count.
+   * @returns `{[dimensionId]: {total, verified, hosts}}`.
+   */
+  findingCountsByDimension(missionId, runCount) {
+    const id = assertText(missionId, "missionId");
+    const run = assertCount(runCount, "runCount", 1);
+    const rows = this.db.prepare(`
+      SELECT dimension_id AS dimension_id,
+             COUNT(*) AS total,
+             SUM(CASE WHEN verify_state = ? THEN 1 ELSE 0 END) AS verified,
+             COUNT(DISTINCT CASE WHEN verify_state = ? THEN source_host END) AS hosts
+      FROM mission_findings
+      WHERE mission_id = ? AND run_count = ?
+      GROUP BY dimension_id
+    `).all(COUNTING_VERIFY_STATE, COUNTING_VERIFY_STATE, id, run);
+    const out = {};
+    for (const row of rows) {
+      out[row.dimension_id] = { total: row.total, verified: row.verified ?? 0, hosts: row.hosts ?? 0 };
+    }
+    return out;
+  }
+
   uniqueHosts(missionId, { dimensionId, runCount } = {}) {
     const id = assertText(missionId, "missionId");
     const run = runCount ?? this.db.prepare("SELECT run_count FROM missions WHERE id = ?").get(id)?.run_count ?? 1;

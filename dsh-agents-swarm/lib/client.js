@@ -5617,6 +5617,10 @@ window.__ModuleLoader__.load({
 			const [runs, setRuns] = useState([]);
 			const [run, setRun] = useState(null);
 			const [current, setCurrent] = useState(null);
+			// Per-dimension counts for the run on screen. Without this the cards
+			// keep drawing the CURRENT run's zeroes under a banner that says the
+			// evidence is in an earlier one — the same withholding, one line down.
+			const [byDimension, setByDimension] = useState(null);
 
 			// WHY THIS FETCH EXISTS. Every other reader scopes to the mission's
 			// current run. That is right while a mission runs and wrong the moment
@@ -5633,6 +5637,7 @@ window.__ModuleLoader__.load({
 						const rows = Array.isArray(data?.runs) ? data.runs : [];
 						setRuns(rows);
 						setCurrent(data?.runCount ?? null);
+						setByDimension(data?.byDimension ?? null);
 						setRun((previous) => {
 							if (previous !== null) return previous;
 							const here = rows.find((entry) => entry.runCount === data?.runCount);
@@ -5650,6 +5655,19 @@ window.__ModuleLoader__.load({
 					});
 				return () => { alive = false; };
 			}, [missionId]);
+
+			// A second read, once a run is chosen: the first one answered for the
+			// mission's current run, which is the one the banner is about to say
+			// is empty.
+			useEffect(() => {
+				if (run === null) return undefined;
+				let alive = true;
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/findings?take=1&runCount=${run}`)
+					.then(missionData)
+					.then((data) => { if (alive) setByDimension(data?.byDimension ?? null); })
+					.catch(() => {});
+				return () => { alive = false; };
+			}, [missionId, run]);
 
 			const chosen = runs.find((entry) => entry.runCount === run) ?? null;
 			const elsewhere = current !== null && run !== null && run !== current;
@@ -5705,7 +5723,13 @@ window.__ModuleLoader__.load({
 							gap: "10px"
 						},
 						children: dimensions.map((dimension) => jsx(MissionDimensionCard, {
-							dimension, zh,
+							dimension: byDimension === null ? dimension : {
+								...dimension,
+								verified: byDimension[dimension.dimensionId]?.verified ?? 0,
+								counts: { ...(dimension.counts ?? {}), total: byDimension[dimension.dimensionId]?.total ?? 0 },
+								uniqueHosts: byDimension[dimension.dimensionId]?.hosts ?? 0
+							},
+							zh,
 							expanded: dimension.dimensionId === openId,
 							onToggle: () => { setOpenId(dimension.dimensionId === openId ? null : dimension.dimensionId); },
 							children: dimension.dimensionId !== openId ? null : jsx(MissionDimensionFindings, {
@@ -6238,6 +6262,184 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/**
+		* What each failure code means to the PERSON, and what they can do.
+		*
+		* WHY THIS TABLE EXISTS. The banner used to print the runtime's own
+		* sentence, whole, at the top of the screen in the biggest box on it:
+		*
+		*   "stage_contract_violation · Stage s12-persist broke the stage
+		*    contract: every stage settled but s12-persist wrote no terminal
+		*    state. The mission is not complete and will not be reported as
+		*    such.. This is a bug in the stage, not in your mission; the run
+		*    stopped rather than continuing over it."
+		*
+		* Three things wrong with that, and they compound. It is written to a
+		* maintainer — "stage contract", "terminal state", "s12-persist" are this
+		* codebase's words, not anybody else's. It is English, at the top of a
+		* Chinese screen. And it spends its last clause reassuring the reader that
+		* the bug is not theirs, which is the one thing they already assumed and
+		* the one thing they cannot act on. What a person needs from a failure is
+		* two sentences: what happened to my mission, and what can I do now.
+		*
+		* The runtime's own text is not thrown away — it goes behind 详情, where
+		* it is exactly right, because that is where somebody who can fix it will
+		* look. `next` is the sentence that names the action, and it is separate
+		* from `what` so a screen can show one without the other.
+		*/
+		const MISSION_FAILURE_FACES = {
+			budget_exhausted: {
+				zh: "预算用完了，任务停在半路。",
+				en: "The budget ran out and the mission stopped part-way.",
+				zhNext: "在成本页看是哪一项先见底，提高那一项后重跑，或者换更低的档位。",
+				enNext: "The cost tab names which ceiling ran out first — raise that one and re-run, or run at a lower depth."
+			},
+			wall_time_exceeded: {
+				zh: "跑得太久，超过了这次任务的时间上限。",
+				en: "The mission ran past its wall-clock ceiling.",
+				zhNext: "提高时间上限后重跑，或者换更低的档位。",
+				enNext: "Raise the wall-clock ceiling and re-run, or run at a lower depth."
+			},
+			context_exceeded: {
+				zh: "要读的材料超过了模型一次能装下的量。",
+				en: "The material outgrew what the model can hold in one context.",
+				zhNext: "换上下文窗口更大的模型，或者把课题拆小一点。",
+				enNext: "Route to a model with a larger context window, or narrow the topic."
+			},
+			tool_unavailable: {
+				zh: "任务需要的工具这台机器上没有。",
+				en: "A tool this mission needs is not installed on this machine.",
+				zhNext: "去信源页看看搜索和抓取的插件是不是都装好了。",
+				enNext: "Check the 信源 tab: the search and fetch plugins have to be installed and configured."
+			},
+			rate_limited: {
+				zh: "上游把请求挡回来了 —— 是取不到，不是没有。",
+				en: "An upstream service rate-limited the run — this is unreachable, not absent.",
+				zhNext: "过一会儿再重跑；增量重跑会保留已经拿到的东西。",
+				enNext: "Re-run later. An incremental re-run keeps what was already collected."
+			},
+			model_error: {
+				zh: "模型这一侧报错了。",
+				en: "The model provider returned an error.",
+				zhNext: "先看详情里provider说了什么；换一个模型或稍后重跑。",
+				enNext: "Read what the provider said under 详情, then switch models or re-run later."
+			},
+			no_evidence: {
+				zh: "所有维度都没能找到可核验的证据。",
+				en: "Not one dimension produced checkable evidence.",
+				zhNext: "这有时就是答案：公开材料里可能确实没有。也可以换个说法重开一个任务。",
+				enNext: "Sometimes that is the answer — the public record may not hold it. Otherwise re-open the mission with a differently-worded topic."
+			},
+			runtime_crashed: {
+				zh: "任务跑到一半，进程没了。",
+				en: "The process died mid-mission.",
+				zhNext: "从检查点继续，已经做完的阶段不用重做。",
+				enNext: "Resume from the checkpoint — the stages that finished do not run again."
+			},
+			input_invalid: {
+				zh: "这次任务的输入有问题，走不下去。",
+				en: "The mission was opened with input it cannot run on.",
+				zhNext: "看详情里说的是哪一项，改掉之后重开一个任务。",
+				enNext: "详情 names which field; fix it and open a new mission."
+			},
+			stage_contract_violation: {
+				zh: "某个阶段没有按约定收尾，所以这次运行没有结果。",
+				en: "A stage settled without writing the result it is required to write, so this run has no outcome.",
+				zhNext: "这是系统缺陷，已经记在详情里。已经采到的证据还在，可以直接重跑。",
+				enNext: "That is a defect on our side and the details are recorded below. The evidence already collected is kept; re-running is safe."
+			},
+			no_progress: {
+				zh: "任务原地打转，停了下来。",
+				en: "The mission stopped making progress and was halted.",
+				zhNext: "在轨迹里看它反复在做什么；换个说法重开通常有效。",
+				enNext: "The trajectory shows what it kept repeating. Re-opening with a differently-worded topic usually clears it."
+			},
+			user_cancelled: {
+				zh: "你中止了这次运行。",
+				en: "You cancelled this run.",
+				zhNext: "从检查点继续，或者全新重跑。",
+				enNext: "Resume from the checkpoint, or re-run from scratch."
+			},
+			superseded: {
+				zh: "这次运行被后来的一次接手了。",
+				en: "A later run took over from this one.",
+				zhNext: "看最新那一次运行。",
+				enNext: "Look at the newest run."
+			},
+			shutdown: {
+				zh: "服务停止时，这次运行被一并停下。",
+				en: "The service shut down and took this run with it.",
+				zhNext: "从检查点继续。",
+				enNext: "Resume from the checkpoint."
+			},
+			quality_refused: {
+				zh: "报告写出来了，但没有达到这次任务自己定的标准，领队拒签。",
+				en: "A report was written, but it missed the bar this mission set for itself and the Leader refused to sign it.",
+				zhNext: "报告仍然可读。详情里写着差在哪一项 —— 通常是证据条数或篇幅。",
+				enNext: "The report is still readable. 详情 says which bar it missed — usually the number of findings or the length."
+			}
+		};
+
+		/**
+		* The failure banner: one sentence, one action, and the raw text folded away.
+		* @param code - `missions.failure_code`.
+		* @param message - the runtime's own sentence.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionFailureNote({ code, message, zh }) {
+			const [open, setOpen] = useState(false);
+			const face = MISSION_FAILURE_FACES[code] ?? null;
+			const raw = String(message ?? "");
+			// An unknown code still gets a banner rather than a blank: the codes
+			// are a fixed vocabulary, so a miss here is a code that was added
+			// without a sentence, and saying so is more useful than saying nothing.
+			const what = face === null
+				? (zh ? "这次运行失败了。" : "This run failed.")
+				: (zh ? face.zh : face.en);
+			const next = face === null ? "" : (zh ? face.zhNext : face.enNext);
+			return jsxs("div", {
+				style: {
+					margin: "0 0 8px", padding: "8px 10px", borderRadius: "8px",
+					background: "rgba(220,38,38,0.06)", border: "1px solid rgba(220,38,38,0.25)",
+					fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-primary)"
+				},
+				children: [
+					jsxs("div", {
+						style: { display: "flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap" },
+						children: [
+							jsx("span", { style: { fontWeight: 600 }, children: what }, "what"),
+							next === "" ? null : jsx("span", {
+								style: { color: "var(--dsw-alias-label-secondary)" },
+								children: next
+							}, "next"),
+							raw === "" ? null : jsx("button", {
+								type: "button",
+								style: {
+									appearance: "none", border: "none", background: "transparent", padding: 0,
+									font: "inherit", fontSize: "12px", cursor: "pointer",
+									color: "var(--dsw-alias-state-business-primary)"
+								},
+								onClick: () => { setOpen((was) => !was); },
+								children: open ? (zh ? "收起详情" : "Hide details") : (zh ? "详情" : "Details")
+							}, "toggle")
+						]
+					}, "line"),
+					!open ? null : jsx("pre", {
+						// The runtime's own words, verbatim, where the person who can
+						// act on them will look. Not re-worded: two phrasings of one
+						// failure is the same defect as two names for one method.
+						style: {
+							margin: "8px 0 0", padding: "8px 10px", borderRadius: "6px",
+							background: "var(--dsw-alias-bg-layer-2)",
+							fontFamily: MISSION_MONO, fontSize: "11px", lineHeight: "17px",
+							whiteSpace: "pre-wrap", wordBreak: "break-word",
+							color: "var(--dsw-alias-label-secondary)"
+						},
+						children: (code === null || code === undefined ? "" : `${code}\n\n`) + raw
+					}, "raw")
+				]
+			});
+		}
+		/**
 		* The three panes of one mission, as a tab strip.
 		*
 		* WHY A STRIP AND NOT A LONGER PAGE: the trajectory carries a detail panel
@@ -6554,18 +6756,10 @@ window.__ModuleLoader__.load({
 						// The mission's own failure, with the code beside it. The
 						// code is what makes a failure countable across missions;
 						// the sentence is what makes this one actionable.
-						(mission.errorMessage ?? "") === "" ? null : jsx("div", {
-							// Two lines at most, and the whole sentence on hover. A
-							// four-line banner is not four times as informative; it is
-							// four lines of the list it sits above.
-							style: {
-								margin: "0 0 8px", padding: "6px 10px", borderRadius: "8px",
-								background: "rgba(220,38,38,0.06)", border: "1px solid rgba(220,38,38,0.25)",
-								fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-primary)",
-								display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden"
-							},
-							title: (mission.failureCode === null ? "" : `${mission.failureCode} · `) + mission.errorMessage,
-							children: (mission.failureCode === null ? "" : `${mission.failureCode} · `) + mission.errorMessage
+						(mission.errorMessage ?? "") === "" && (mission.failureCode ?? null) === null ? null : jsx(MissionFailureNote, {
+							code: mission.failureCode ?? null,
+							message: mission.errorMessage ?? "",
+							zh
 						}, "failure"),
 						// Sign-off, when there is one. `signed: null` means s11 never
 						// ran; `false` means the Leader read the report and refused.
