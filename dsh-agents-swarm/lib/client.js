@@ -4052,8 +4052,16 @@ window.__ModuleLoader__.load({
 		* @param stages - `stages` from the view route.
 		* @param zh - whether to write Chinese.
 		*/
-		function MissionStageStrip({ stages, zh }) {
-			const notes = stages.filter((stage) => (stage.degradeNote ?? "") !== "" || stage.status === "failed" || stage.stalled);
+		function MissionStageStrip({ stages, zh, notes: withNotes }) {
+			// The notes are OFF by default. This strip sits above every pane, and
+			// the four degrade paragraphs it used to print under itself were the
+			// third copy of the same text on the screen: the task board carries
+			// each note on its own row, and the drawer holds it whole. Three
+			// copies of a paragraph is not emphasis, it is five lines of the pane
+			// underneath.
+			const notes = withNotes !== true
+				? []
+				: stages.filter((stage) => (stage.degradeNote ?? "") !== "" || stage.status === "failed" || stage.stalled);
 			return jsxs("div", {
 				style: { display: "flex", flexDirection: "column", gap: "10px" },
 				children: [
@@ -4861,7 +4869,7 @@ window.__ModuleLoader__.load({
 			'.swt-span[data-tone="tool"]{background:var(--dsw-alias-state-warn-label);opacity:1}',
 			'.swt-span[data-tone="bad"]{background:var(--dsw-alias-state-error-primary);opacity:1}',
 			".swt-wrap{display:flex;align-items:stretch;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-layer-1)}",
-			".swt-list{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:2px;padding:8px;overflow-y:auto;max-height:74vh}",
+			".swt-list{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:2px;padding:8px}",
 			".swt-pane{position:relative;display:flex;flex:none;flex-direction:column;width:clamp(300px,32%,392px);min-width:0;min-height:0;border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1)}",
 			".swt-panehead{display:flex;flex:none;align-items:center;justify-content:space-between;box-sizing:border-box;height:42px;padding:0 8px 0 12px;border-bottom:1px solid var(--dsw-alias-border-l2);gap:8px}",
 			".swt-panetitle{display:flex;align-items:center;min-width:0;gap:8px;color:var(--dsw-alias-label-primary)}",
@@ -7489,7 +7497,12 @@ window.__ModuleLoader__.load({
 					// report is prose and keeps the cap, because a 1600px line of
 					// text is not a wider report, it is an unreadable one.
 					style: {
-						...(activePane === "trace" || activePane === "cost" ? WIDE_STYLE : CONTENT_STYLE),
+						// Every pane takes the frame. The 1080px cap was written for a
+						// column of prose read on its own; here it leaves a band of dead
+						// page down the right of a screen whose panes are tables, lists
+						// and a two-pane reader. The report keeps its own measure on the
+						// paragraph itself, where a measure belongs.
+						...WIDE_STYLE,
 						padding: "0 24px", height: "100%", minHeight: 0, flex: "1 1 auto",
 						display: "flex", flexDirection: "column"
 					},
@@ -7606,7 +7619,16 @@ window.__ModuleLoader__.load({
 
 						// THE ONE SCROLLER on this screen. Everything above it stays put.
 						jsxs("div", {
-							style: { flex: "1 1 auto", minHeight: 0, overflowY: "auto", padding: "0 0 24px" },
+							// The bar belongs to the FRAME, not to a column inside it. The
+						// scroller sat inside the page's 24px gutter, so its scrollbar
+						// drew 24px in from the right edge — a rail floating in the
+						// middle of the screen with dead page beside it. Negative
+						// margin widens the scroll box to the frame edge; the padding
+						// puts the content back where it was.
+						style: {
+							flex: "1 1 auto", minHeight: 0, overflowY: "auto",
+							marginRight: "-24px", paddingRight: "24px", paddingBottom: "24px"
+						},
 							children: [
 						...(activePane !== "tasks" ? [] : [
 						jsx(MissionPanel, {
@@ -8217,7 +8239,13 @@ window.__ModuleLoader__.load({
 				children: jsxs("div", {
 					style: { ...CONTENT_STYLE, padding: onBack === null || onBack === undefined ? 0 : "0 24px 24px" },
 					children: [
-						jsxs("div", {
+						// The version row only exists when it has something to offer. With
+						// the report a pane rather than a screen there is no back button,
+						// and with one version there is nothing to switch between — so it
+						// rendered as an empty band with a pill parked at the far right.
+						// The version itself moves into the meta line under the title,
+						// where the rest of the facts about this artefact already are.
+						back === null && versions.length <= 1 ? null : jsxs("div", {
 							style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", margin: "0 0 12px" },
 							children: [
 								back,
@@ -8244,6 +8272,7 @@ window.__ModuleLoader__.load({
 								zh ? `${citations.length} 处引用` : `${citations.length} citation(s)`,
 								zh ? `${evidence.length} 条冻结证据` : `${evidence.length} frozen evidence row(s)`,
 								artifact.trigger === null || artifact.trigger === undefined ? "" : String(artifact.trigger),
+								versions.length > 1 ? "" : (zh ? `第 ${artifact.version ?? 1} 版` : `v${artifact.version ?? 1}`),
 								formatStamp(artifact.createdAt)
 							].filter((piece) => piece !== "").join(" · ")
 						}, "meta"),
