@@ -1707,7 +1707,12 @@ test("the panes are separate screens, not one scroll with headings", async () =>
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   const tasks = await open(view, RUNNING.topic);
-  assert.ok(tasks.includes("十二个阶段"), "the task board does not open first");
+  // One row per stage, with the owner and the attempt count beside it —
+  // playground's column shape, not a strip with a paragraph under it.
+  for (const column of ["任务", "负责人", "状态", "用时"]) {
+    assert.ok(tasks.includes(column), `the task board has no ${column} column`);
+  }
+  assert.ok(tasks.includes("看轨迹 →"), "a stage row does not open onto its trajectory");
   assert.ok(!tasks.includes("显示 6 / 6 条"), "the trajectory is rendered under the task board");
   assert.ok(!tasks.includes("已核验 5/3 条"), "the evidence is rendered under the task board");
   assert.ok(!tasks.includes("最紧"), "the spend is rendered under the task board");
@@ -1719,7 +1724,7 @@ test("the panes are separate screens, not one scroll with headings", async () =>
   const trace = await pane(view, "轨迹");
   assert.ok(trace.includes("显示 6 / 6 条"), "the trajectory pane is empty");
   // "立项" is in the trajectory too — it is a value in the stage filter.
-  assert.ok(!trace.includes("十二个阶段"), "the task board is still on screen behind the trajectory");
+  assert.ok(!trace.includes("看轨迹 →"), "the task board is still on screen behind the trajectory");
 
   // Per agent, not one total. "76 of 120 calls" is true of a mission that
   // worked and of one where a researcher burned forty turns re-searching.

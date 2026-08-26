@@ -593,6 +593,13 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
         data: {
           missionId: id,
           runCount: runCount.value,
+          // WHICH RUNS HOLD ANYTHING. Every reader on this table scopes to the
+          // mission's current run, which is right while it runs and wrong the
+          // moment it is re-run. Measured on a real mission: five runs, all
+          // fourteen findings in run 1, and eight dimension cards reading "0
+          // verified of 0" because run 5 settled without collecting. The
+          // evidence was one integer away and the screen said there was none.
+          runs: missionStore.findingRuns(id),
           scope: {
             dimensionId: dimensionId.value ?? null,
             verifyState: verifyState.value ?? null,

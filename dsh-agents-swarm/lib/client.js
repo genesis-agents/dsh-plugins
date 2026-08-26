@@ -4611,7 +4611,7 @@ window.__ModuleLoader__.load({
 			'.swt-span[data-tone="tool"]{background:var(--dsw-alias-state-warn-label);opacity:1}',
 			'.swt-span[data-tone="bad"]{background:var(--dsw-alias-state-error-primary);opacity:1}',
 			".swt-wrap{display:flex;align-items:stretch;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-layer-1)}",
-			".swt-list{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:2px;padding:8px;overflow-y:auto;max-height:70vh}",
+			".swt-list{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:2px;padding:8px;overflow-y:auto;max-height:74vh}",
 			".swt-pane{position:relative;display:flex;flex:none;flex-direction:column;width:clamp(300px,32%,392px);min-width:0;min-height:0;border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1)}",
 			".swt-panehead{display:flex;flex:none;align-items:center;justify-content:space-between;box-sizing:border-box;height:42px;padding:0 8px 0 12px;border-bottom:1px solid var(--dsw-alias-border-l2);gap:8px}",
 			".swt-panetitle{display:flex;align-items:center;min-width:0;gap:8px;color:var(--dsw-alias-label-primary)}",
@@ -4634,6 +4634,9 @@ window.__ModuleLoader__.load({
 			".swt-kv dd{min-width:0;margin:0;overflow:hidden;color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap}",
 			".swt-secthead{margin:0;padding:6px 14px 2px;color:var(--dsw-alias-label-secondary);font-size:13px;font-weight:600;user-select:none}",
 			".swt-code{margin:0 14px;padding:8px 10px;border-radius:6px;overflow:auto;max-height:340px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);font:11px/17px var(--ds-font-family-code,monospace);white-space:pre-wrap;word-break:break-word}",
+			".swt-scrim{position:fixed;inset:0;z-index:40;display:flex;justify-content:flex-end;background:rgba(0,0,0,0.30);backdrop-filter:blur(2px)}",
+			".swt-drawer{display:flex;height:100%;width:100%;max-width:672px;flex-direction:column;overflow:hidden;border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);box-shadow:-10px 0 34px rgba(0,0,0,0.20)}",
+			".swt-drawer .swt-pane{width:100%;max-width:none;border-left:0;height:100%}",
 			".swt-quote{margin:0 14px;padding:10px 12px;border-radius:6px;border-left:2px solid var(--dsw-alias-state-success-primary);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-13);line-height:19px;white-space:pre-wrap;word-break:break-word}"
 		].join("\n");
 
@@ -5158,12 +5161,15 @@ window.__ModuleLoader__.load({
 		* @param timeline - `timeline` from the view route, used only as a fallback.
 		* @param onOpenSource - open a finding's page in the reader.
 		*/
-		function MissionTrace({ missionId, zh, live, timeline, onOpenSource }) {
+		function MissionTrace({ missionId, zh, live, timeline, onOpenSource, focusStep }) {
 			// The stylesheet, before the first row is built. Idempotent, so the
 			// poll and every re-render after it cost one `getElementById`.
 			ensureTraceStyle();
 			const [kind, setKind] = useState("");
-			const [stepId, setStepId] = useState("");
+			// Seeded from the task board: clicking 看轨迹 on a stage opens this
+			// list already filtered to it. A jump that lands on 169 unfiltered
+			// rows is a jump that has not answered the question it was asked.
+			const [stepId, setStepId] = useState(focusStep ?? "");
 			const [dimensionId, setDimensionId] = useState("");
 			const [search, setSearch] = useState("");
 			const [order, setOrder] = useState("newest");
@@ -5372,14 +5378,20 @@ window.__ModuleLoader__.load({
 									onOpen: (ref) => { setSelected(ref === selected ? null : ref); }
 								}, row.ref))
 						}, "list"),
-						selected === null ? null : jsx("div", {
-							style: { flex: "0 0 clamp(300px, 44%, 520px)", minWidth: 0, position: "sticky", top: 0 },
-							children: jsx(MissionTraceDetail, {
+						// Over the list, not beside it. A pane that took a third of
+						// the frame narrowed the very column a reader opened the row
+						// to read: the arguments clipped to "https:…" the moment the
+						// detail appeared. One overlay for every row on this screen,
+						// so the interaction is learnt once.
+						jsx(MissionDrawer, {
+							open: selected !== null,
+							onClose: () => { setSelected(null); },
+							children: selected === null ? null : jsx(MissionTraceDetail, {
 								missionId, traceRef: selected, zh,
 								onClose: () => { setSelected(null); },
 								onOpenSource
 							})
-						}, "panel")
+						}, "drawer")
 					]
 				}, "master");
 
@@ -5506,7 +5518,7 @@ window.__ModuleLoader__.load({
 		* @param selected - the `ref` currently open in the panel, if any.
 		* @param onOpen - called with a finding's trajectory `ref`.
 		*/
-		function MissionDimensionFindings({ missionId, dimensionId, zh, selected, onOpen }) {
+		function MissionDimensionFindings({ missionId, dimensionId, zh, selected, onOpen, runCount }) {
 			const [held, setHeld] = useState(null);
 			const [error, setError] = useState("");
 
@@ -5515,6 +5527,9 @@ window.__ModuleLoader__.load({
 				const query = new URLSearchParams();
 				query.set("dimensionId", dimensionId);
 				query.set("take", String(MISSION_FINDINGS_TAKE));
+				// The run this pane is showing, which is NOT always the mission's
+				// current one — see MissionDimensions.
+				if (runCount !== null && runCount !== undefined) query.set("runCount", String(runCount));
 				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/findings?${query.toString()}`)
 					.then(missionData)
 					.then((data) => {
@@ -5528,7 +5543,7 @@ window.__ModuleLoader__.load({
 						setError(String(cause?.message ?? cause));
 					});
 				return () => { alive = false; };
-			}, [missionId, dimensionId]);
+			}, [missionId, dimensionId, runCount]);
 
 			if (held === null) {
 				return jsx("div", {
@@ -5596,14 +5611,97 @@ window.__ModuleLoader__.load({
 		function MissionDimensions({ missionId, dimensions, zh, onOpenSource }) {
 			const [openId, setOpenId] = useState(null);
 			const [selected, setSelected] = useState(null);
+			// Which run's evidence is on screen, and every run that holds any.
+			// `null` means "not chosen yet", which is what lets the effect below
+			// pick the newest run that actually collected something.
+			const [runs, setRuns] = useState([]);
+			const [run, setRun] = useState(null);
+			const [current, setCurrent] = useState(null);
+
+			// WHY THIS FETCH EXISTS. Every other reader scopes to the mission's
+			// current run. That is right while a mission runs and wrong the moment
+			// it is re-run: measured on a real mission, five runs, all fourteen
+			// findings in run 1, and eight dimension cards reading "0 verified of
+			// 0" because run 5 settled without collecting. The evidence was one
+			// integer away and the screen said there was none.
+			useEffect(() => {
+				let alive = true;
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/findings?take=1`)
+					.then(missionData)
+					.then((data) => {
+						if (!alive) return;
+						const rows = Array.isArray(data?.runs) ? data.runs : [];
+						setRuns(rows);
+						setCurrent(data?.runCount ?? null);
+						setRun((previous) => {
+							if (previous !== null) return previous;
+							const here = rows.find((entry) => entry.runCount === data?.runCount);
+							if (here !== undefined && here.total > 0) return here.runCount;
+							// Newest run that collected anything. Falling back to the
+							// current run when nothing did keeps "this mission found
+							// nothing" sayable — it is sometimes the truth.
+							const best = rows.find((entry) => entry.total > 0);
+							return best === undefined ? (data?.runCount ?? null) : best.runCount;
+						});
+					})
+					.catch(() => {
+						// A picker that cannot load is not a reason to hide the
+						// dimensions; they fall back to the mission's current run.
+					});
+				return () => { alive = false; };
+			}, [missionId]);
+
+			const chosen = runs.find((entry) => entry.runCount === run) ?? null;
+			const elsewhere = current !== null && run !== null && run !== current;
+			const picker = runs.length <= 1 ? null : jsxs("div", {
+				style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", margin: "0 0 10px" },
+				children: [
+					jsx("span", {
+						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						children: zh ? "运行：" : "Run:"
+					}, "label"),
+					...runs.map((entry) => jsx("button", {
+						type: "button",
+						"aria-pressed": entry.runCount === run,
+						style: {
+							...controlStyle(), height: "24px", padding: "0 9px", fontSize: "11px",
+							fontWeight: entry.runCount === run ? 600 : 400,
+							color: entry.total === 0 ? "var(--dsw-alias-label-tertiary)" : undefined
+						},
+						onClick: () => { setRun(entry.runCount); setOpenId(null); setSelected(null); },
+						children: zh
+							? `第 ${entry.runCount} 次 · ${entry.verified}/${entry.total}`
+							: `run ${entry.runCount} · ${entry.verified}/${entry.total}`
+					}, `run-${entry.runCount}`))
+				]
+			}, "runs");
+
+			// Said out loud, not inferred from a highlighted button. A reader who
+			// does not notice the picker must still not believe they are looking
+			// at the latest run.
+			const elsewhereNote = !elsewhere ? null : jsx("div", {
+				style: {
+					margin: "0 0 10px", padding: "6px 10px", borderRadius: "8px",
+					background: "rgba(217,119,6,0.08)", border: "1px solid rgba(217,119,6,0.25)",
+					fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-primary)"
+				},
+				children: zh
+					? `第 ${current} 次运行没有留下任何发现；下面是第 ${run} 次运行的 ${chosen?.total ?? 0} 条（已核验 ${chosen?.verified ?? 0} 条）。`
+					: `Run ${current} recorded no findings. What follows is run ${run}: ${chosen?.total ?? 0} findings, ${chosen?.verified ?? 0} verified.`
+			}, "elsewhere");
 
 			return jsxs("div", {
-				style: { display: "flex", alignItems: "flex-start", gap: "12px" },
 				children: [
+					picker,
+					elsewhereNote,
 					jsx("div", {
+						// The grid does not change when a finding opens. It used to
+						// collapse to a single column to make room for a panel beside
+						// it, so reading one finding re-laid-out every card on the
+						// screen — the cards you were comparing it against.
 						style: {
-							flex: "1 1 0", minWidth: 0, display: "grid",
-							gridTemplateColumns: selected === null ? "repeat(auto-fit, minmax(260px, 1fr))" : "1fr",
+							minWidth: 0, display: "grid",
+							gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
 							gap: "10px"
 						},
 						children: dimensions.map((dimension) => jsx(MissionDimensionCard, {
@@ -5612,18 +5710,20 @@ window.__ModuleLoader__.load({
 							onToggle: () => { setOpenId(dimension.dimensionId === openId ? null : dimension.dimensionId); },
 							children: dimension.dimensionId !== openId ? null : jsx(MissionDimensionFindings, {
 								missionId, dimensionId: dimension.dimensionId, zh, selected,
+								runCount: run,
 								onOpen: (ref) => { setSelected(ref === selected ? null : ref); }
 							})
 						}, dimension.dimensionId))
 					}, "cards"),
-					selected === null ? null : jsx("div", {
-						style: { flex: "0 0 clamp(300px, 44%, 520px)", minWidth: 0, position: "sticky", top: 0 },
-						children: jsx(MissionTraceDetail, {
+					jsx(MissionDrawer, {
+						open: selected !== null,
+						onClose: () => { setSelected(null); },
+						children: selected === null ? null : jsx(MissionTraceDetail, {
 							missionId, traceRef: selected, zh,
 							onClose: () => { setSelected(null); },
 							onOpenSource
 						})
-					}, "panel")
+					}, "drawer")
 				]
 			});
 		}
@@ -5723,6 +5823,312 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @param onBack - return to the list.
 		*/
+		/**
+		* The right-hand slide-over, over the page rather than beside it.
+		*
+		* SPEC TAKEN FROM playground's DrawerShell, not approximated: a fixed
+		* backdrop at `rgba(0,0,0,0.30)` with a 2px blur, the panel right-aligned
+		* at `max-width: 672px` with a left border and a heavy shadow, Escape and
+		* a backdrop click both close, and a click inside does not.
+		*
+		* WHY IT IS AN OVERLAY. The first version was a flex sibling of the table,
+		* so opening a row squeezed every column of the board it was describing —
+		* the arguments column collapsed, rows re-wrapped, and reading the detail
+		* changed the thing you were reading it about. A drawer leaves the table
+		* exactly where it was.
+		*
+		* The trajectory deliberately keeps its side pane. That one is a copy of
+		* the host app's own 轨迹 tab, which is a master-detail with a resizable
+		* divider, and matching it was the instruction.
+		* @param open - whether to render at all.
+		* @param onClose - backdrop click, Escape, or the child's own control.
+		* @param children - the panel body, which draws its own header.
+		*/
+		function MissionDrawer({ open, onClose, children }) {
+			useEffect(() => {
+				if (open !== true) return undefined;
+				const onKey = (event) => { if (event.key === "Escape") onClose?.(); };
+				// Guarded: this module is executed in Node by the render tests
+				// against a hand-written window stub.
+				if (typeof window?.addEventListener !== "function") return undefined;
+				window.addEventListener("keydown", onKey);
+				return () => { window.removeEventListener("keydown", onKey); };
+			}, [open, onClose]);
+
+			if (open !== true) return null;
+			return jsx("div", {
+				className: "swt-scrim",
+				role: "dialog",
+				"aria-modal": "true",
+				onClick: () => { onClose?.(); },
+				children: jsx("div", {
+					className: "swt-drawer",
+					onClick: (event) => { event.stopPropagation(); },
+					children
+				})
+			});
+		}
+		/**
+		* The task board: one row per stage, in playground's column shape.
+		*
+		* TAKEN, NOT INVENTED. gens.team's MissionTodoBoard is a single flat table
+		* — `# · 任务名称 · 负责人 · 模型 · 状态 · 操作`, a grey header, divided
+		* rows, a status colour bar down the left edge, and a row click that opens
+		* the item. What stood here was the stage strip with the degrade notes
+		* printed under it as a paragraph, which is a picture and a wall of text,
+		* not a list of work.
+		*
+		* The columns are OURS where the data is ours: there is no per-stage model
+		* to name, and a stage's attempts and duration are the two numbers that
+		* say whether it struggled. The degrade note rides in the name cell as a
+		* second line, because a stage that finished by lowering its own bar has
+		* said why and that sentence is the most useful text on the screen.
+		*
+		* @param stages - `stages` from the view route, always twelve.
+		* @param agents - `agents` from the view route, for the owner column.
+		* @param zh - whether to write Chinese.
+		* @param onOpenStage - called with a stepId; opens the trajectory on it.
+		*/
+		function MissionTaskBoard({ stages, agents, zh, onOpenStage, selected, onSelect }) {
+			const rows = Array.isArray(stages) ? stages : [];
+			if (rows.length === 0) return null;
+			// Who ran it. `agents` is keyed by role and carries `lastStepId`, so a
+			// stage nobody reached simply has no owner rather than a wrong one.
+			const owner = new Map();
+			for (const agent of Array.isArray(agents) ? agents : []) {
+				if (typeof agent?.lastStepId === "string" && agent.lastStepId !== "") {
+					owner.set(agent.lastStepId, agent);
+				}
+			}
+			const head = {
+				padding: "7px 10px", textAlign: "left", fontSize: "11px", fontWeight: 600,
+				color: "var(--dsw-alias-label-secondary)", whiteSpace: "nowrap"
+			};
+			const cell = { padding: "7px 10px", fontSize: "12px", lineHeight: "18px", verticalAlign: "top" };
+			const columns = [
+				{ id: "idx", label: "#", width: "40px", align: "center" },
+				{ id: "name", label: zh ? "任务" : "Task", width: "42%" },
+				{ id: "owner", label: zh ? "负责人" : "Owner", width: "14%" },
+				{ id: "status", label: zh ? "状态" : "Status", width: "14%" },
+				{ id: "took", label: zh ? "用时" : "Took", width: "10%", align: "right" },
+				{ id: "action", label: zh ? "操作" : "", width: "12%", align: "right" }
+			];
+			const chosen = rows.find((row) => row.stepId === selected) ?? null;
+			const table = jsx("div", {
+				style: {
+					border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "10px",
+					overflow: "hidden", background: "var(--dsw-alias-bg-layer-1)"
+				},
+				children: jsxs("table", {
+					style: { width: "100%", borderCollapse: "collapse", tableLayout: "fixed" },
+					children: [
+						jsx("thead", {
+							children: jsx("tr", {
+								style: { background: "var(--dsw-alias-bg-layer-2)", borderBottom: "1px solid var(--dsw-alias-border-l2)" },
+								children: columns.map((column) => jsx("th", {
+									style: { ...head, width: column.width, textAlign: column.align ?? "left" },
+									children: column.label
+								}, column.id))
+							})
+						}, "head"),
+						jsx("tbody", {
+							children: rows.map((stage, at) => {
+								const face = missionFace(MISSION_STAGE_STATUS_FACES, stage.status, zh);
+								const hue = missionHue(MISSION_STAGE_STATUS_FACES, stage.status);
+								const ran = stage.status !== "pending" && stage.status !== "skipped-by-tier";
+								const who = owner.get(stage.stepId) ?? null;
+								const note = stage.degradeNote ?? "";
+								const open = stage.stepId === selected;
+								return jsxs("tr", {
+									onClick: () => { onSelect?.(open ? null : stage.stepId); },
+									style: {
+										borderBottom: "1px solid var(--dsw-alias-border-l2)",
+										cursor: "pointer",
+										background: open ? "var(--dsw-alias-interactive-bg-hover)" : "transparent",
+										// The status bar down the left edge, which is what
+										// makes the board scannable without reading it.
+										boxShadow: `inset 3px 0 0 0 rgba(${hue},${ran ? 0.9 : 0.25})`
+									},
+									children: [
+										jsx("td", {
+											style: { ...cell, textAlign: "center", color: "var(--dsw-alias-label-tertiary)", fontVariantNumeric: "tabular-nums" },
+											children: String(at + 1)
+										}, "idx"),
+										jsxs("td", {
+											style: { ...cell, display: "flex", alignItems: "center", gap: "8px", minWidth: 0 },
+											children: [
+												jsx("span", {
+													style: {
+														fontWeight: 600, color: "var(--dsw-alias-label-primary)",
+														whiteSpace: "nowrap"
+													},
+													children: missionFace(MISSION_STAGE_FACES, stage.stepId, zh)
+												}, "name"),
+												// The note itself does NOT go in the cell. Two lines of
+												// amber log text under a task name made every row a
+												// different height, wrapped raw provider English into a
+												// table, and turned a board meant to be scanned into a
+												// paragraph with borders. The row says THAT there is a
+												// note; the panel says what it is.
+												note === "" ? null : jsx("span", {
+													style: {
+														flex: "1 1 0", minWidth: 0,
+														overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+														fontSize: "11px", color: "var(--dsw-alias-label-tertiary)"
+													},
+													title: note,
+													children: note
+												}, "note")
+											]
+										}, "name"),
+										jsx("td", {
+											style: { ...cell, fontFamily: MISSION_MONO, fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+											children: who === null ? "—" : (who.agentId ?? who.role ?? "—")
+										}, "owner"),
+										jsxs("td", {
+											style: cell,
+											children: [
+												jsx("span", {
+													style: {
+														display: "inline-block", padding: "1px 7px", borderRadius: "6px",
+														background: `rgba(${hue},0.12)`, color: `rgb(${hue})`,
+														fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap"
+													},
+													children: face
+												}, "pill"),
+												Number(stage.attempts ?? 0) <= 1 ? null : jsx("span", {
+													// Attempts are drawn beside the status because a
+													// stage that succeeded on its third try and one
+													// that succeeded on its first are the same word.
+													style: { marginLeft: "6px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary)" },
+													children: zh ? `第 ${stage.attempts} 次` : `try ${stage.attempts}`
+												}, "attempts")
+											]
+										}, "status"),
+										jsx("td", {
+											style: { ...cell, textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-secondary)" },
+											children: stage.durationMs === null || stage.durationMs === undefined
+												? "—"
+												: missionDuration(stage.durationMs, zh)
+										}, "took"),
+										jsx("td", {
+											style: { ...cell, textAlign: "right" },
+											children: !ran ? null : jsx("button", {
+												type: "button",
+												style: {
+													appearance: "none", border: "none", background: "transparent",
+													padding: 0, cursor: "pointer", font: "inherit", fontSize: "11px",
+													color: "var(--dsw-alias-state-business-primary)"
+												},
+												onClick: (event) => { event.stopPropagation(); onOpenStage?.(stage.stepId); },
+												children: zh ? "看轨迹 →" : "Trajectory →"
+											}, "open")
+										}, "action")
+									]
+								}, stage.stepId ?? String(at));
+							})
+						}, "body")
+					]
+				})
+			});
+			return jsxs("div", {
+				children: [
+					table,
+					jsx(MissionDrawer, {
+						open: chosen !== null,
+						onClose: () => { onSelect?.(null); },
+						children: chosen === null ? null : jsx(MissionStageDetail, {
+							stage: chosen, owner: owner.get(chosen.stepId) ?? null, zh,
+							onClose: () => { onSelect?.(null); },
+							onOpenStage
+						})
+					}, "drawer")
+				]
+			});
+		}
+
+		/**
+		* One task, whole: the same panel the trajectory uses, on a stage.
+		*
+		* Reusing `.swt-pane` rather than inventing a second inspector is the
+		* point. A person who has learnt that clicking a row on this screen opens
+		* a titled panel on the right with a key column at 94px should not have to
+		* learn it twice, and two inspectors drift the moment one of them gains a
+		* field.
+		* @param stage - one row from `stages`.
+		* @param owner - the agent whose `lastStepId` is this stage, or null.
+		* @param zh - whether to write Chinese.
+		* @param onClose - close the panel.
+		* @param onOpenStage - open the trajectory filtered to this stage.
+		*/
+		function MissionStageDetail({ stage, owner, zh, onClose, onOpenStage }) {
+			ensureTraceStyle();
+			const face = missionFace(MISSION_STAGE_STATUS_FACES, stage.status, zh);
+			const note = stage.degradeNote ?? "";
+			const line = (label, value) => (value === "" || value === null || value === undefined ? null : jsxs("div", {
+				children: [
+					jsx("dt", { children: label }, "k"),
+					jsx("dd", { title: String(value), children: String(value) }, "v")
+				]
+			}, label));
+			return jsxs("div", {
+				className: "swt-pane",
+				style: { alignSelf: "flex-start" },
+				children: [
+					jsxs("div", {
+						className: "swt-panehead",
+						children: [
+							jsxs("span", {
+								className: "swt-panetitle",
+								children: [
+									jsx("span", { className: "swt-dot" }, "dot"),
+									jsx("span", { className: "swt-panename", children: missionFace(MISSION_STAGE_FACES, stage.stepId, zh) }, "name"),
+									jsx("span", { className: "swt-paneref", children: stage.stepId }, "ref")
+								]
+							}, "title"),
+							jsx("button", {
+								type: "button", className: "swt-close",
+								"aria-label": zh ? "关闭" : "Close",
+								onClick: onClose,
+								children: "\u00d7"
+							}, "close")
+						]
+					}, "head"),
+					jsxs("div", {
+						className: "swt-panebody",
+						children: [
+							jsxs("dl", {
+								className: "swt-kv",
+								children: [
+									line(zh ? "状态" : "Status", face),
+									line(zh ? "尝试" : "Attempts", stage.attempts),
+									line(zh ? "用时" : "Took", stage.durationMs === null || stage.durationMs === undefined ? null : missionDuration(stage.durationMs, zh)),
+									line(zh ? "负责人" : "Owner", owner === null ? null : (owner.agentId ?? owner.role ?? null)),
+									line(zh ? "令牌" : "Tokens", stage.tokens === null || stage.tokens === undefined ? null : Number(stage.tokens).toLocaleString("en-US")),
+									line(zh ? "开始" : "Started", stage.startedAt === null || stage.startedAt === undefined ? null : `${formatStamp(stage.startedAt)} ${missionClock(stage.startedAt)}`),
+									line(zh ? "结束" : "Ended", stage.endedAt === null || stage.endedAt === undefined ? null : `${formatStamp(stage.endedAt)} ${missionClock(stage.endedAt)}`)
+								]
+							}, "kv"),
+							note === "" ? null : jsx("p", { className: "swt-secthead", children: zh ? "降级说明" : "Why it degraded" }, "noteHead"),
+							// WHOLE, and in a block that is allowed to wrap. This is
+							// the sentence a degraded stage wrote about itself, and it
+							// was being clipped to two lines inside a table cell.
+							note === "" ? null : jsx("div", { className: "swt-quote", children: note }, "note"),
+							jsx("div", {
+								style: { padding: "10px 14px 0" },
+								children: jsx("button", {
+									type: "button",
+									style: { ...controlStyle(), height: "26px", padding: "0 10px", fontSize: "12px" },
+									onClick: () => { onOpenStage?.(stage.stepId); },
+									children: zh ? "在轨迹里看这一步 →" : "See this step in the trajectory →"
+								})
+							}, "jump")
+						]
+					}, "body")
+				]
+			});
+		}
+
 		/**
 		* Who spent the budget, by agent.
 		*
@@ -5916,6 +6322,11 @@ window.__ModuleLoader__.load({
 			// overview, and so a reader who is deep in the trajectory keeps it
 			// across a poll.
 			const [pane, setPane] = useState("tasks");
+			// Which stage the trajectory should open on, when it was reached from
+			// the task board rather than from the tab.
+			const [focusStep, setFocusStep] = useState("");
+			// Which task row is open in the panel beside the board.
+			const [task, setTask] = useState(null);
 			// The page behind a quote, opened from the trajectory or from a
 			// dimension. Switched in place, the way the report does it, so the
 			// frame never moves under the reader.
@@ -6198,10 +6609,18 @@ window.__ModuleLoader__.load({
 
 						...(pane !== "tasks" ? [] : [
 						jsx(MissionPanel, {
-							title: zh ? "阶段" : "Stages",
-							note: zh ? `十二个阶段，本档跳过的也在其中` : "twelve stages, including the ones this tier skips",
-							children: jsx(MissionStageStrip, { stages: view.stages ?? [], zh })
-						}, "stages"),
+							bare: true,
+							title: zh ? "任务" : "Tasks",
+							note: "",
+							children: jsx(MissionTaskBoard, {
+								stages: view.stages ?? [],
+								agents: view.agents ?? [],
+								zh,
+								selected: task,
+								onSelect: (stepId) => { setTask(stepId); },
+								onOpenStage: (stepId) => { setFocusStep(stepId); setPane("trace"); }
+							})
+						}, "board"),
 						preflight === null || (preflight.messages ?? []).length === 0 ? null : jsx(MissionPanel, {
 							title: zh ? "核验风险" : "Verification risk",
 							note: preflight.known
@@ -6284,6 +6703,7 @@ window.__ModuleLoader__.load({
 								missionId, zh,
 								live: !mission.terminal,
 								timeline: view.timeline,
+								focusStep,
 								onOpenSource: (entry) => { setSource(entry); }
 							})
 						}, "trace")

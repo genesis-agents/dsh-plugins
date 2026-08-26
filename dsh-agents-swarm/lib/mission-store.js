@@ -2867,6 +2867,41 @@ export class MissionStore {
    * @param options - `{ dimensionId, runCount }`.
    * @returns the host names, most-cited first.
    */
+  /**
+   * How many findings each RUN of this mission holds.
+   *
+   * WHY THIS EXISTS: every other reader on this table scopes to the mission's
+   * CURRENT `run_count`, which is correct while a mission is running and a lie
+   * the moment it is re-run. Measured on a real mission: five runs, fourteen
+   * verified findings — all of them in run 1 — and a detail screen that read
+   * "0 verified of 0 findings" on all eight dimensions because run 5 had
+   * settled without collecting anything. The evidence was one integer away and
+   * the interface said there was none.
+   *
+   * Newest run first, and runs with nothing are NOT omitted: "run 5 produced
+   * nothing" is the sentence the screen has to be able to say.
+   * @param missionId - the mission.
+   * @returns `[{runCount, total, verified, dimensions}]`, newest run first.
+   */
+  findingRuns(missionId) {
+    const id = assertText(missionId, "missionId");
+    return this.db.prepare(`
+      SELECT run_count AS run_count,
+             COUNT(*) AS total,
+             SUM(CASE WHEN verify_state = ? THEN 1 ELSE 0 END) AS verified,
+             COUNT(DISTINCT dimension_id) AS dimensions
+      FROM mission_findings
+      WHERE mission_id = ?
+      GROUP BY run_count
+      ORDER BY run_count DESC
+    `).all(COUNTING_VERIFY_STATE, id).map((row) => ({
+      runCount: row.run_count,
+      total: row.total,
+      verified: row.verified ?? 0,
+      dimensions: row.dimensions,
+    }));
+  }
+
   uniqueHosts(missionId, { dimensionId, runCount } = {}) {
     const id = assertText(missionId, "missionId");
     const run = runCount ?? this.db.prepare("SELECT run_count FROM missions WHERE id = ?").get(id)?.run_count ?? 1;
