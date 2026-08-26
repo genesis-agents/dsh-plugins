@@ -532,6 +532,18 @@ function deepFreeze(value) {
  * cascade filters by the mission's tier at run time. Writing a tier-specific
  * closure per stage would be four more lists that can drift.
  */
+/**
+ * The stages that spend the writing reserve rather than the collection share.
+ *
+ * `s5-reconcile` and everything after it. NOT `s4-assess`: it holds the back
+ * edge to `s3-collect`, so a mission sitting in s4 may still collect again and
+ * must still be held to the collection ceiling.
+ */
+export const WRITING_STAGES = Object.freeze(new Set([
+  "s5-reconcile", "s6-synthesize", "s7-outline", "s8-write",
+  "s9-verify", "s10-critique", "s11-signoff", "s12-persist",
+]));
+
 export const STAGES = deepFreeze([
   {
     id: "s1-brief",
@@ -2437,6 +2449,26 @@ export async function runMission({
         break;
       }
       registry.markProgress(missionId, startedAt);
+
+      // THE SEAM. Everything from here down writes rather than collects, and
+      // `s5-reconcile` is the first stage no back edge reaches — `s4-assess`
+      // can send the run back to `s3-collect`, so releasing any earlier would
+      // hand the reserve to the phase it is being held back from.
+      //
+      // Measured on a real quick-tier mission before this existed: collection
+      // drained the call pool inside `s3-collect`, `s8-write` opened with
+      // nothing left, and twelve verified findings produced no words at all.
+      if (WRITING_STAGES.has(stage.id)) {
+        const released = budget?.enterWriting?.();
+        // A log line rather than an event: EVENT_TYPES is a closed vocabulary
+        // and `#appendEventRow` throws on a member it does not carry, so an
+        // unregistered type here would take the mission down at the seam. A
+        // `registry.note?.()` would have been worse — a silent no-op that reads
+        // like it records something.
+        if (released?.released === true && logger?.info) {
+          logger.info(`mission ${missionId}: ${stage.id} released the writing reserve on ${released.dimensions.join(", ")}`);
+        }
+      }
 
       let result;
       try {

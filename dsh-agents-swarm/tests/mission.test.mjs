@@ -39,7 +39,9 @@ import { DatabaseSync } from "node:sqlite";
 
 import { SourceStore } from "../lib/store.js";
 import { operativeWordFloor } from "../lib/mission-stages-back.js";
-import { MAX_READ_NOTHING_REFUSALS } from "../lib/mission-stages-front.js";
+import { MAX_READ_NOTHING_REFUSALS, renderCollectInput, priorRound } from "../lib/mission-stages-front.js";
+import { createBudgetPool, WRITING_RESERVE } from "../lib/mission-budget.js";
+import { WRITING_STAGES } from "../lib/mission-runtime.js";
 import { oneHostRefusal } from "../lib/mission-agent.js";
 import {
   FAILURE_CODES as STORE_FAILURE_CODES,
@@ -1954,4 +1956,123 @@ test("the work projection lists finished work and says why each item exists", as
   assert.match(recollect.reason, /cluster/u, "the recollect item does not carry the Leader's rationale");
   assert.ok(recollect.critique.length > 0, "the per-dimension critique was dropped");
   assert.equal(recollect.assignee, "leader");
+});
+
+test("a second collection round is told what the first one already did", async () => {
+  // THE DEFECT: the brief was byte-identical on both rounds — same topic, same
+  // dimension, same target, same instructions — so the same reasoning produced
+  // the same searches and the same pages. The assessor wrote the outcome down
+  // in its own words on a real mission: "the recollect round added no distinct
+  // verified evidence (14 -> 14 distinct source/claim pairs). The second search
+  // found the same sources again." A round that costs a dimension's whole
+  // budget and cannot come back different is a re-run, not a retry.
+  const mission = { topic: "渥太华 Kanata 园区", budget: { maxArxiv: 20, maxWeb: 30, maxFetch: 30 } };
+  const dimension = { dimensionId: "d2", name: "许可证与再分发条款", rationale: "为什么值得一整份预算" };
+  const policy = { findingTarget: 6 };
+  const crossState = {
+    caps: { maxArxiv: 20, maxWeb: 30, maxFetch: 30 },
+    assessment: {
+      decision: "recollect",
+      perDimension: [{ dimensionId: "d2", action: "recollect", critique: "只拿到一个站点，需要一条独立来源。" }],
+    },
+  };
+
+  const first = renderCollectInput({ mission, dimension, policy, crossState, zh: true, level: 0, prior: null });
+
+  const prior = priorRound({
+    store: {
+      listFindings: () => ([
+        { sourceUrl: "https://a.example/one", sourceHost: "a.example", claim: "园区有 802 家企业。" },
+        { sourceUrl: "https://a.example/two", sourceHost: "a.example", claim: "园区支持 6.3 万个岗位。" },
+      ]),
+    },
+    missionId: "m", runCount: 1, dimension, crossState,
+  });
+  const second = renderCollectInput({ mission, dimension, policy, crossState, zh: true, level: 0, prior });
+
+  assert.notEqual(first, second, "the second round is handed the same brief as the first");
+  assert.ok(second.includes("这是第二轮采集"), "the second round is not told it is one");
+  assert.ok(second.includes("https://a.example/one"), "the pages already read are not named");
+  assert.ok(second.includes("a.example"), "the hosts already covered are not named");
+  assert.ok(second.includes("园区有 802 家企业。"), "the claims already recorded are not named");
+  assert.ok(second.includes("只拿到一个站点"), "the Leader's own request for this dimension is not carried");
+  // And the first round is not polluted by any of it.
+  assert.ok(!first.includes("这是第二轮采集"), "a first round is told it is a second one");
+});
+
+test("a re-collect brief survives a dimension that recorded nothing, and a store that throws", async () => {
+  // Both are real: a dimension can be re-collected precisely BECAUSE it found
+  // nothing, and a brief that cannot read the earlier round is still a brief.
+  const dimension = { dimensionId: "d3", name: "空维度" };
+  const crossState = { assessment: { decision: "recollect", perDimension: [] } };
+  assert.equal(
+    priorRound({ store: { listFindings: () => [] }, missionId: "m", runCount: 1, dimension, crossState }),
+    null,
+    "an empty earlier round produces a block with nothing in it",
+  );
+  assert.equal(
+    priorRound({ store: { listFindings: () => { throw new Error("no table"); } }, missionId: "m", runCount: 1, dimension, crossState }),
+    null,
+    "a store that throws takes the dimension with it",
+  );
+});
+
+test("collection cannot spend the allowance the writer needs", async () => {
+  // THE DEFECT, measured on a real quick-tier mission: collection made 43 tool
+  // calls against a ceiling of 40 model calls, the pool drained inside
+  // s3-collect, and s8-write opened with nothing left. Twelve verified
+  // findings — claim, verbatim quote, source, every one of them checked —
+  // produced not one word, and the mission reported budget_exhausted as though
+  // the spend had bought something.
+  const pool = createBudgetPool({
+    caps: { maxTokens: 400_000, maxCalls: 40, maxArxiv: 20, maxWeb: 30, maxFetch: 30 },
+  });
+  const collectionCeiling = 40 - Math.floor(40 * WRITING_RESERVE);
+  assert.equal(collectionCeiling, 30, "the reserve arithmetic moved");
+
+  for (let at = 0; at < collectionCeiling; at += 1) {
+    assert.equal(pool.consume("calls", 1), true, `call ${at + 1} was refused before the collection ceiling`);
+  }
+
+  const refused = pool.consume("calls", 1);
+  assert.notEqual(refused, true, "collection spent past its own ceiling");
+  assert.equal(refused.collectionOnly, true, "a spent collection share is reported as a spent mission");
+  // The sentence has to be actionable: the agent seam reads a refusal and the
+  // difference between "stop and write" and "the mission is over" is the whole
+  // point of the reserve.
+  assert.ok(/reserved for writing/.test(refused.error), "the refusal does not say where the rest went");
+  assert.equal(pool.isExhausted(), false, "a spent collection share reads as a spent mission");
+  assert.equal(pool.isCollectionExhausted(), true, "the collect loop is not told to stop");
+
+  // And the writer gets what was held back.
+  const released = pool.enterWriting();
+  assert.equal(released.released, true, "the seam did not release the reserve");
+  assert.deepEqual(released.dimensions, ["tokens", "calls"], "the reserve covers the wrong pools");
+  assert.equal(pool.isCollectionExhausted(), false, "the reserve stayed shut after the seam");
+  for (let at = 0; at < 10; at += 1) {
+    assert.equal(pool.consume("calls", 1), true, `the writer was refused call ${at + 1} of its reserve`);
+  }
+  assert.equal(pool.isExhausted(), true, "the mission did not end when the whole ceiling was spent");
+  assert.equal(pool.enterWriting().released, false, "enterWriting is not idempotent");
+});
+
+test("the reserve is held back from the shared pools only, and released past the back edge", async () => {
+  // arxiv, web and fetch are collection's OWN tools; nothing below the seam
+  // touches them, so reserving from them would take allowance away from the
+  // only phase that can spend it.
+  const pool = createBudgetPool({
+    caps: { maxTokens: 100_000, maxCalls: 20, maxArxiv: 8, maxWeb: 8, maxFetch: 8 },
+  });
+  for (const key of ["arxiv", "web", "fetch"]) {
+    for (let at = 0; at < 8; at += 1) {
+      assert.equal(pool.consume(key, 1), true, `${key} was reserved against, and it should not be`);
+    }
+  }
+
+  // s4-assess holds the back edge to s3-collect, so a mission sitting in s4 may
+  // still collect again and must still be held to the collection ceiling.
+  assert.equal(WRITING_STAGES.has("s4-assess"), false, "the reserve is released while collection can still happen");
+  assert.equal(WRITING_STAGES.has("s3-collect"), false, "collection releases its own reserve");
+  assert.equal(WRITING_STAGES.has("s5-reconcile"), true, "the first stage past the back edge does not release it");
+  assert.equal(WRITING_STAGES.has("s8-write"), true, "the writer does not get the reserve");
 });

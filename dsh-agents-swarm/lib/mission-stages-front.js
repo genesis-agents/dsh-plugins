@@ -1113,7 +1113,11 @@ export function createS3Collect(deps) {
         stopReason = "cancelled";
         break;
       }
-      if (budget?.isExhausted?.() === true) {
+      // COLLECTION's share, not the mission's. With a writing reserve in place
+      // `isExhausted` stays false while every collection call is being refused,
+      // so this loop would walk to the next dimension and be refused on its
+      // first turn — the same answer, one wasted agent later, per dimension.
+      if (budget?.isExhausted?.() === true || budget?.isCollectionExhausted?.() === true) {
         stopReason = "budget";
         break;
       }
@@ -1123,6 +1127,7 @@ export function createS3Collect(deps) {
         dimension,
         policy,
         zh,
+        recollecting,
       });
       perDimension.push(outcome.summary);
       tokens += outcome.tokens;
@@ -1257,7 +1262,7 @@ export function createS3Collect(deps) {
  * @param options - `{deps, context, dimension, policy, zh}`.
  * @returns `{summary, tokens, stoppedTools, stopStage}`.
  */
-async function collectOneDimension({ deps, context, dimension, policy, zh }) {
+async function collectOneDimension({ deps, context, dimension, policy, zh, recollecting = false }) {
   const { store, sourceStore, chat, circuit, cache, spillDir, config, ctx, logger: log, prompts } = deps;
   const { missionId, runCount, mission, stage, attempt, signal, crossState, budget, now } = context;
 
@@ -1398,7 +1403,22 @@ async function collectOneDimension({ deps, context, dimension, policy, zh }) {
 
   try {
     const brief = `u-${dimension.dimensionId}`;
-    const render = (level) => renderCollectInput({ mission, dimension, policy, crossState, zh, level });
+    // WHAT A RE-COLLECT ROUND KNOWS, and until now did not say.
+    //
+    // The brief was byte-identical on the second round: same topic, same
+    // dimension, same target, same instructions. The same input produced the
+    // same searches and the same pages, and the assessor wrote the result down
+    // in its own words — "the recollect round added no distinct verified
+    // evidence (14 -> 14 distinct source/claim pairs). The second search found
+    // the same sources again." A round that costs a whole dimension's budget
+    // and cannot come back different is not a retry, it is a re-run.
+    //
+    // Three things go in, and each answers a different half of "different how":
+    // the pages already read (do not spend a fetch on them again), the claims
+    // already recorded (a restatement is not a new finding), and the Leader's
+    // own sentence about THIS dimension (what it decided was missing).
+    const prior = recollecting ? priorRound({ store, missionId, runCount, dimension, crossState }) : null;
+    const render = (level) => renderCollectInput({ mission, dimension, policy, crossState, zh, level, prior });
 
     /**
      * The gate that matters, and it is CODE.
@@ -1751,7 +1771,60 @@ async function collectOneDimension({ deps, context, dimension, policy, zh }) {
 }
 
 /** The researcher's brief at one shrink rung. */
-function renderCollectInput({ mission, dimension, policy, crossState, zh, level }) {
+/** How many prior claims and pages a re-collect brief names before it stops. */
+const PRIOR_CLAIMS_LISTED = 12;
+const PRIOR_PAGES_LISTED = 20;
+
+/**
+ * What an earlier round of this dimension already holds.
+ *
+ * Read from `mission_findings` rather than carried in `crossState`, because a
+ * re-collect can also follow a resume — the process that did the first round
+ * may not be this one, and the database is the only thing both of them share.
+ *
+ * `critique` is the Leader's sentence about THIS dimension. `mission_stages`
+ * keeps one row per step, so this is the last assess's words; that is the
+ * decision this round is executing, which is the one that matters here.
+ *
+ * @param options - `{store, missionId, runCount, dimension, crossState}`.
+ * @returns `{urls, hosts, claims, critique}`, or null when there is nothing.
+ */
+export function priorRound({ store, missionId, runCount, dimension, crossState }) {
+  let rows = [];
+  try {
+    rows = store.listFindings({ missionId, dimensionId: dimension.dimensionId, runCount, take: 200 });
+  } catch {
+    // A brief that cannot read the earlier round is still a brief. Losing the
+    // "do not fetch these again" list costs a repeated fetch; throwing here
+    // would cost the dimension.
+    return null;
+  }
+  const urls = [];
+  const hosts = new Set();
+  const claims = [];
+  for (const row of rows) {
+    const url = typeof row?.sourceUrl === "string" ? row.sourceUrl : "";
+    if (url !== "" && !urls.includes(url)) urls.push(url);
+    const host = typeof row?.sourceHost === "string" ? row.sourceHost : "";
+    if (host !== "") hosts.add(host);
+    const claim = typeof row?.claim === "string" ? row.claim.trim() : "";
+    if (claim !== "" && !claims.includes(claim)) claims.push(claim);
+  }
+  // The per-dimension sentence, under either of the two names the assess output
+  // has used. Both are read because both exist in live data.
+  const decisions = Array.isArray(crossState?.assessment?.perDimension)
+    ? crossState.assessment.perDimension
+    : Array.isArray(crossState?.assessment?.dimensions) ? crossState.assessment.dimensions : [];
+  const mine = decisions.find((entry) => entry?.dimensionId === dimension.dimensionId) ?? null;
+  const critique = typeof mine?.critique === "string" && mine.critique.trim() !== ""
+    ? mine.critique.trim()
+    : typeof mine?.rationale === "string" && mine.rationale.trim() !== "" ? mine.rationale.trim() : null;
+
+  if (urls.length === 0 && claims.length === 0 && critique === null) return null;
+  return { urls, hosts: [...hosts], claims, critique };
+}
+
+export function renderCollectInput({ mission, dimension, policy, crossState, zh, level, prior = null }) {
   const caps = crossState.caps ?? mission.budget;
   const lines = [
     zh ? `课题：${mission.topic}` : `TOPIC: ${mission.topic}`,
@@ -1770,6 +1843,40 @@ function renderCollectInput({ mission, dimension, policy, crossState, zh, level 
     lines.push(zh
       ? `本次任务的额度上限：arXiv ${caps.maxArxiv} 次、网页搜索 ${caps.maxWeb} 次、页面抓取 ${caps.maxFetch} 次，全部维度共用。`
       : `MISSION ALLOWANCES, shared across every dimension: ${caps.maxArxiv} arXiv requests, ${caps.maxWeb} web searches, ${caps.maxFetch} page fetches.`);
+  }
+  // The re-collect block, and it goes LAST so it is the closest thing to the
+  // instruction it modifies. Dropped from rung 2 down for the same reason the
+  // allowances line is: at that rung the context is the thing failing.
+  if (prior !== null && level < 2) {
+    lines.push(zh
+      ? "这是第二轮采集 —— 第一轮已经做过了，下面是它的结果。重复第一轮就是浪费这一轮。"
+      : "THIS IS A SECOND COLLECTION ROUND. The first one already ran and its result is below. Repeating it wastes this round.");
+    if (prior.critique !== null) {
+      lines.push(zh
+        ? `领队看过第一轮之后，对这个维度的要求：${prior.critique}`
+        : `WHAT THE LEADER ASKED FOR after reading the first round: ${prior.critique}`);
+    }
+    if (prior.urls.length > 0) {
+      const shown = prior.urls.slice(0, PRIOR_PAGES_LISTED);
+      const more = prior.urls.length - shown.length;
+      lines.push((zh
+        ? `这些页面第一轮已经读过，引语也已经取过，不要再抓一次：\n${shown.join("\n")}`
+        : `ALREADY READ in the first round, and already quoted — do not fetch these again:\n${shown.join("\n")}`)
+        + (more > 0 ? (zh ? `\n（另有 ${more} 个未列出）` : `\n(and ${more} more not listed)`) : ""));
+    }
+    if (prior.hosts.length > 0) {
+      lines.push(zh
+        ? `第一轮的来源集中在这些站点：${prior.hosts.join("、")}。这一轮的价值在于别的站点 —— 换检索词、换语言、换提问角度，而不是把同一批词再搜一遍。`
+        : `The first round's sources came from: ${prior.hosts.join(", ")}. This round is worth its budget only if it reaches different ones — change the terms, the language, or the angle, rather than re-running the same query.`);
+    }
+    if (prior.claims.length > 0) {
+      const shown = prior.claims.slice(0, PRIOR_CLAIMS_LISTED).map((claim, at) => `${at + 1}. ${claim.slice(0, 160)}`);
+      const more = prior.claims.length - shown.length;
+      lines.push((zh
+        ? `第一轮已经写下的主张，换个说法重复一遍不算新发现：\n${shown.join("\n")}`
+        : `ALREADY RECORDED. A restatement of one of these is not a new finding:\n${shown.join("\n")}`)
+        + (more > 0 ? (zh ? `\n（另有 ${more} 条未列出）` : `\n(and ${more} more not listed)`) : ""));
+    }
   }
   lines.push(zh
     ? "读完之后用 finalize 提交：findings（每条含 statement、url、quote）、summary，以及你看过却放弃的来源和原因。"

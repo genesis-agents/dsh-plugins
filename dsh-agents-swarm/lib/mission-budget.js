@@ -41,6 +41,31 @@ import { readUsage } from "./mission-agent.js";
  */
 export const LADDER = Object.freeze({ soften: 0.70, freeze: 0.85, warn: 0.90, stop: 1.00 });
 
+/**
+ * The share of the two shared pools that collection may NOT spend.
+ *
+ * WHY IT EXISTS. Measured on a real quick-tier mission: collection made 43 tool
+ * calls against a ceiling of 40 model calls, the pool drained inside
+ * `s3-collect`, and `s8-write` opened with nothing left. Twelve verified
+ * findings — claim, verbatim quote, source, all of them checked — produced not
+ * one word, and the mission reported `budget_exhausted` as though the money had
+ * bought something. A pipeline whose collection phase can spend the writing
+ * phase's allowance does not have a budget, it has a race.
+ *
+ * TOKENS AND CALLS ONLY. `arxiv`, `web` and `fetch` are collection's own tools;
+ * the stages below the seam do not touch them, so reserving from them would
+ * take allowance away from the only phase that can use it.
+ *
+ * The fraction is deliberately generous to collection. Writing a report from
+ * findings that already exist is cheap next to finding them: it is one pass per
+ * chapter plus verification, and 25% of the ceiling covers that on every tier
+ * the tier table declares.
+ */
+export const WRITING_RESERVE = 0.25;
+
+/** The pool dimensions the reserve applies to. Not the collection tools. */
+export const RESERVED_DIMENSIONS = Object.freeze(["tokens", "calls"]);
+
 /** The five spendable dimensions, in report order. `wall` is not one — see `ratio`. */
 export const POOL_DIMENSIONS = Object.freeze(["tokens", "calls", "arxiv", "web", "fetch"]);
 
@@ -211,6 +236,22 @@ export function createBudgetPool({ caps, used = {}, onCross = null } = {}) {
   /** Ladder rungs already announced, so a notifier fires once per rung. */
   const announced = new Set();
 
+  /**
+   * Which side of the seam the mission is on.
+   *
+   * `collecting` until the runtime says otherwise, because that is the phase
+   * that overspends: a resumed mission that reopens mid-write calls
+   * `enterWriting()` before its first stage runs, and a mission that never
+   * reaches the seam never needed the reserve released.
+   */
+  let writing = false;
+
+  /** What a dimension may spend right now: the ceiling, less the reserve. */
+  const ceilingFor = (key) => {
+    if (writing || !RESERVED_DIMENSIONS.includes(key)) return limits[key];
+    return Math.max(1, limits[key] - Math.floor(limits[key] * WRITING_RESERVE));
+  };
+
   const usedOf = (key) => (key === "tokens" ? spent.tokens + pendingTokens : spent[key]);
 
   /** The tightest dimension, skipping the ones with no ceiling to be tight against. */
@@ -263,7 +304,20 @@ export function createBudgetPool({ caps, used = {}, onCross = null } = {}) {
       if (limit <= 0) {
         return { ok: false, error: `this mission's ${key} ceiling is 0, so ${key} was never available — it was not spent` };
       }
-      if (usedOf(key) + amount > limit) {
+      const ceiling = ceilingFor(key);
+      if (usedOf(key) + amount > ceiling) {
+        // TWO DIFFERENT SENTENCES, because they ask for two different things.
+        // A spent allowance is the end of the mission; a spent COLLECTION
+        // allowance is an instruction to stop collecting and go write, and the
+        // agent seam already knows how to act on a refusal. Saying "spent" for
+        // both is how twelve verified findings produced no report.
+        if (!writing && ceiling < limit) {
+          return {
+            ok: false,
+            error: `this mission's collection allowance for ${key} is spent (${usedOf(key)} of ${ceiling}); the remaining ${limit - ceiling} is reserved for writing the report. Stop collecting and finalize with what you have.`,
+            collectionOnly: true,
+          };
+        }
         return { ok: false, error: `this mission's ${key} allowance is spent (${usedOf(key)} of ${limit})` };
       }
       spent[key] += amount;
@@ -283,7 +337,15 @@ export function createBudgetPool({ caps, used = {}, onCross = null } = {}) {
     estimate(tokens) {
       pendingTokens += Math.max(0, asInteger(tokens) ?? 0);
       cross();
-      if (limits.tokens > 0 && usedOf("tokens") >= limits.tokens) {
+      const ceiling = ceilingFor("tokens");
+      if (limits.tokens > 0 && usedOf("tokens") >= ceiling) {
+        if (!writing && ceiling < limits.tokens) {
+          return {
+            ok: false,
+            error: `this mission's collection allowance for tokens is spent (${usedOf("tokens")} of ${ceiling}, estimated); the remaining ${limits.tokens - ceiling} is reserved for writing the report.`,
+            collectionOnly: true,
+          };
+        }
         return { ok: false, error: `this mission's token allowance is spent (${usedOf("tokens")} of ${limits.tokens}, estimated)` };
       }
       return true;
@@ -323,6 +385,39 @@ export function createBudgetPool({ caps, used = {}, onCross = null } = {}) {
     isExhausted() {
       for (const key of POOL_DIMENSIONS) {
         if (limits[key] > 0 && usedOf(key) >= limits[key]) return true;
+      }
+      return false;
+    },
+
+    /**
+     * Release the writing reserve. Called once, when the run passes the seam.
+     *
+     * IDEMPOTENT AND ONE-WAY. A resumed mission that reopens below the seam
+     * calls this before its first stage, and a mission that goes back to
+     * `s3-collect` on the Leader's re-collect has NOT passed the seam — the
+     * runtime only calls this from `s5-reconcile` onwards, which is the first
+     * stage no back edge reaches.
+     * @returns `{released, dimensions}` — false when it was already released.
+     */
+    enterWriting() {
+      if (writing) return { released: false, dimensions: [] };
+      writing = true;
+      return { released: true, dimensions: [...RESERVED_DIMENSIONS] };
+    },
+
+    /**
+     * Whether COLLECTION may spend any more, which is not the same question as
+     * `isExhausted`.
+     *
+     * The collect stage used to break its dimension loop on `isExhausted`, so
+     * with a reserve in place it would keep walking to the next dimension and
+     * be refused on its first call. Same answer, N wasted turns later.
+     * @returns true when the collection share of any reserved pool is gone.
+     */
+    isCollectionExhausted() {
+      if (writing) return false;
+      for (const key of RESERVED_DIMENSIONS) {
+        if (limits[key] > 0 && usedOf(key) >= ceilingFor(key)) return true;
       }
       return false;
     },
@@ -371,6 +466,12 @@ export function createBudgetPool({ caps, used = {}, onCross = null } = {}) {
         settle(usage) {
           child.settle(usage);
           return pool.settle(usage);
+        },
+        enterWriting() {
+          return pool.enterWriting();
+        },
+        isCollectionExhausted() {
+          return pool.isCollectionExhausted();
         },
         isExhausted() {
           return child.isExhausted() || pool.isExhausted();
