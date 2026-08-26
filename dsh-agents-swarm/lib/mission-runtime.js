@@ -1071,7 +1071,7 @@ export function effectiveStartMs(mission) {
  * @param options - `{mission, now, budget}`; `budget` may be null.
  * @returns `{expired, reason, detail}` where `reason` is an ABORT_REASONS member or null.
  */
-export function checkDeadlines({ mission, now, budget = null }) {
+export function checkDeadlines({ mission, now, budget = null, stage = null }) {
   const elapsedMs = msOf(now, "now") - effectiveStartMs(mission);
   // `budget.wallMs`, not a bare `wall_ms`: the five ceilings are one nested
   // object on the shaped row. Read flat, this was `undefined`, and
@@ -1083,11 +1083,25 @@ export function checkDeadlines({ mission, now, budget = null }) {
     return { expired: true, reason: "wall_time_exceeded", detail: { elapsedMs, capMs, remainingMs: 0 } };
   }
   if (budget && budget.isExhausted()) {
-    // `ratio()` names the dimension that is actually tight. An unnamed scalar
-    // would almost certainly be tokens-only, so a mission that burned 100% of
-    // max_arxiv at 20% of tokens would never warn and never degrade — it would
-    // just start failing tool calls with no explanation.
-    return { expired: true, reason: "budget_exhausted", detail: { elapsedMs, capMs, ...budget.ratio() } };
+    // A STAGE THAT SPENDS NOTHING STILL RUNS. `stage.agent === null` is the
+    // contract's own word for "this stage makes no model calls" — s1-brief and
+    // s12-persist are the two — and s12-persist is the stage that WRITES THE
+    // ARTEFACT. Measured on a real quick-tier mission: collection finished, the
+    // writer produced three chapters, verify and sign-off both ran, and then
+    // the budget guard refused to let the persist gate store any of it. The
+    // report existed and was thrown away at the last step, by the check that
+    // exists to stop the mission spending money it does not have — on a stage
+    // that cannot spend any.
+    //
+    // The wall clock above still kills these stages, because that is a real
+    // deadline rather than an allowance.
+    if (stage === null || stage.agent !== null) {
+      // `ratio()` names the dimension that is actually tight. An unnamed scalar
+      // would almost certainly be tokens-only, so a mission that burned 100% of
+      // max_arxiv at 20% of tokens would never warn and never degrade — it would
+      // just start failing tool calls with no explanation.
+      return { expired: true, reason: "budget_exhausted", detail: { elapsedMs, capMs, ...budget.ratio() } };
+    }
   }
   return { expired: false, reason: null, detail: { elapsedMs, capMs, remainingMs: capMs - elapsedMs } };
 }
@@ -2415,7 +2429,7 @@ export async function runMission({
         break;
       }
 
-      const deadlines = checkDeadlines({ mission: current, now: clock(), budget });
+      const deadlines = checkDeadlines({ mission: current, now: clock(), budget, stage });
       if (deadlines.expired) {
         registry.abort(missionId, deadlines.reason, { runCount: current.runCount });
         stopped = { kind: "deadline", reason: deadlines.reason };

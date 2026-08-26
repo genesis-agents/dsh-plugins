@@ -2076,3 +2076,44 @@ test("the reserve is held back from the shared pools only, and released past the
   assert.equal(WRITING_STAGES.has("s5-reconcile"), true, "the first stage past the back edge does not release it");
   assert.equal(WRITING_STAGES.has("s8-write"), true, "the writer does not get the reserve");
 });
+
+test("the stage that stores the report runs even when the money is gone", async () => {
+  // MEASURED, on a real quick-tier mission after the writing reserve landed:
+  // collection finished, the writer produced three chapters, verify and
+  // sign-off both ran — and then the budget guard refused to let s12-persist
+  // store any of it. The report existed and was discarded at the last step by
+  // the check that exists to stop a mission spending money it does not have,
+  // on a stage that cannot spend any. `agent: null` is the contract's own word
+  // for "makes no model calls".
+  const spent = createBudgetPool({ caps: { maxTokens: 100, maxCalls: 4, maxArxiv: 0, maxWeb: 0, maxFetch: 0 } });
+  spent.enterWriting();
+  for (let at = 0; at < 4; at += 1) spent.consume("calls", 1);
+  assert.equal(spent.isExhausted(), true, "the pool under test is not actually spent");
+
+  const mission = { budget: { wallMs: 60 * 60_000 }, effectiveStartedAt: new Date(Date.now() - 1000).toISOString() };
+  const persist = STAGES.find((entry) => entry.id === "s12-persist");
+  const write = STAGES.find((entry) => entry.id === "s8-write");
+  assert.equal(persist.agent, null, "s12-persist gained an agent; this test's premise moved");
+  assert.notEqual(write.agent, null, "s8-write lost its agent; this test's premise moved");
+
+  const now = new Date().toISOString();
+  assert.equal(
+    checkDeadlines({ mission, now, budget: spent, stage: persist }).expired,
+    false,
+    "the stage that writes the artefact is refused on an empty budget",
+  );
+  assert.equal(
+    checkDeadlines({ mission, now, budget: spent, stage: write }).expired,
+    true,
+    "a stage that spends is allowed to run on an empty budget",
+  );
+  // No stage named at all keeps the old, stricter answer.
+  assert.equal(checkDeadlines({ mission, now, budget: spent }).expired, true, "an unnamed stage stopped being refused");
+
+  // And the wall clock still kills a spend-free stage, because that is a real
+  // deadline rather than an allowance.
+  const late = { budget: { wallMs: 1 }, effectiveStartedAt: new Date(Date.now() - 60_000).toISOString() };
+  const overrun = checkDeadlines({ mission: late, now, budget: spent, stage: persist });
+  assert.equal(overrun.expired, true, "the wall clock stopped applying to spend-free stages");
+  assert.equal(overrun.reason, "wall_time_exceeded", "an overrun is reported as a spent budget");
+});
