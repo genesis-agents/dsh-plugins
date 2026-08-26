@@ -64,22 +64,28 @@ import { concurrencyCap } from "./mission-handlers.js";
 import {
   COUNTING_VERIFY_STATE,
   FETCH_BACKED_VERIFY_STATES,
+  FINDING_ORDERS,
   VERIFY_STATES,
   isMissionId,
 } from "./mission-store.js";
 import {
+  INSIGHT_STAGES,
   TRACE_DETAIL_CHARS,
   TRACE_KINDS,
   TRACE_ORDERS,
   TRACE_RESULT_CHARS,
   TRACE_ROLES,
+  buildBibliography,
   buildMissionTrace,
   parseTraceRef,
+  projectDegradeReason,
   projectFinding,
   projectMissionView,
+  projectStageInsights,
   readMissionViewInput,
   resolveTraceSource,
   sliceMissionTrace,
+  traceVocabulary,
 } from "./mission-view.js";
 import {
   BUDGET_FIELDS,
@@ -220,7 +226,12 @@ function boundedText(params, name) {
 function strayParams(params, known) {
   const stray = [...new Set(params.keys())].filter((key) => !known.includes(key));
   if (stray.length === 0) return null;
-  return `this route does not read ${stray.join(", ")}. It takes ${known.join(", ")}.`;
+  // "It takes ." is not a sentence. A route that reads NO parameters says so,
+  // because the reader's next move — drop the parameter — is different from
+  // the reader's next move when one of several names was mistyped.
+  return known.length === 0
+    ? `this route does not read ${stray.join(", ")}, or any other parameter.`
+    : `this route does not read ${stray.join(", ")}. It takes ${known.join(", ")}.`;
 }
 
 /**
@@ -535,11 +546,17 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
       const mission = missionOr404(id);
       if (mission === null) return true;
       const params = paramsOf(req);
-      const stray = strayParams(params, ["dimensionId", "verifyState", "attempt", "runCount", "take", "skip"]);
+      const stray = strayParams(params, ["dimensionId", "verifyState", "sourceHost", "order", "attempt", "runCount", "take", "skip"]);
       if (stray !== null) return bad(stray);
 
       const verifyState = oneOf(params, "verifyState", VERIFY_STATES);
       if (verifyState.error !== undefined) return bad(verifyState.error);
+      // Validated against the vocabulary, exactly as the trajectory validates
+      // its own `order` against TRACE_ORDERS. The value never reaches a SQL
+      // string: `listFindings` maps a member of FINDING_ORDERS to a literal
+      // clause, so this is a closed set on both sides of the call.
+      const order = oneOf(params, "order", FINDING_ORDERS);
+      if (order.error !== undefined) return bad(order.error);
       const runCount = boundedInteger(params, "runCount", 1, 1_000_000, mission.runCount);
       if (runCount.error !== undefined) return bad(runCount.error);
       const attempt = boundedInteger(params, "attempt", 0, 1000, undefined);
@@ -564,6 +581,24 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
         return bad(`mission ${id} has no dimension "${dimensionId.value}" at run ${runCount.value}. It has ${known === "" ? "none yet — s2 has not planned" : known}.`);
       }
 
+      // WHICH HOSTS EXIST, both ways round. `hosts` is the verified-only
+      // roll-up this route has always returned — it is the independence
+      // number, and counting a host whose only finding failed verification
+      // would inflate it. `allHosts` is every host in scope, and it is what
+      // `sourceHost` is validated against: refusing `kanatanorth.com` because
+      // its one finding is unverified would be a 400 on a host the data holds,
+      // which is indistinguishable from a broken route.
+      const hosts = missionStore.uniqueHosts(id, { dimensionId: dimensionId.value, runCount: runCount.value });
+      const allHosts = missionStore.uniqueHosts(id, { dimensionId: dimensionId.value, runCount: runCount.value, verified: false });
+      const sourceHost = boundedText(params, "sourceHost");
+      if (sourceHost.error !== undefined) return bad(sourceHost.error);
+      if (sourceHost.value !== undefined && !allHosts.some((row) => row.host === sourceHost.value)) {
+        // Named, never an empty list — the same rule `dimensionId` follows two
+        // blocks up, for the same reason.
+        const known = allHosts.map((row) => row.host).join(", ");
+        return bad(`mission ${id} read nothing from "${sourceHost.value}" at run ${runCount.value}. It read from ${known === "" ? "no host yet — s3 has not collected" : known}.`);
+      }
+
       // take + 1, then trimmed. `listFindings` returns rows and no count, and
       // the alternative is a second COUNT that can disagree with the page it
       // describes; one extra row cannot.
@@ -572,7 +607,9 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
         dimensionId: dimensionId.value,
         runCount: runCount.value,
         verifyState: verifyState.value,
+        sourceHost: sourceHost.value,
         attempt: attempt.value,
+        order: order.value,
         take: take.value + 1,
         skip: skip.value,
       });
@@ -586,7 +623,6 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
       // that changes as they scroll.
       const missionCounts = missionStore.verifyStateCounts(id, runCount.value);
       const { total: missionTotal, ...missionByState } = missionCounts;
-      const hosts = missionStore.uniqueHosts(id, { dimensionId: dimensionId.value, runCount: runCount.value });
 
       sendJson(res, 200, {
         success: true,
@@ -607,7 +643,9 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
           scope: {
             dimensionId: dimensionId.value ?? null,
             verifyState: verifyState.value ?? null,
+            sourceHost: sourceHost.value ?? null,
             attempt: attempt.value ?? null,
+            order: order.value ?? "created",
           },
           dimension: scoped === null ? null : {
             dimensionId: scoped.dimensionId,
@@ -623,7 +661,10 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
             updatedAt: scoped.updatedAt,
           },
           findings: rows.map((finding) => projectFinding(finding, { dimensionName: names.get(finding.dimensionId) ?? null })),
-          page: { take: take.value, skip: skip.value, returned: rows.length, hasMore, order: "oldest" },
+          // `order` is the value the SQL actually sorted by, never a literal:
+          // this line said "oldest" regardless of what was asked for, which is
+          // the kind of label that survives a change to the thing it describes.
+          page: { take: take.value, skip: skip.value, returned: rows.length, hasMore, order: order.value ?? "created" },
           counts: scoped === null
             ? {
               total: missionTotal,
@@ -644,10 +685,16 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
           // WHICH sites, not how many. "1 个独立站点" told the reader a number
           // and withheld the only part of it that can be judged.
           hosts,
+          // Every host in scope, verified or not — the legal values for
+          // `sourceHost`, so a control built from this list cannot offer an
+          // option that refuses.
+          allHosts,
           vocabulary: {
             verifyStates: VERIFY_STATES,
             countingState: COUNTING_VERIFY_STATE,
             fetchBackedStates: FETCH_BACKED_VERIFY_STATES,
+            orders: FINDING_ORDERS,
+            sourceHosts: allHosts.map((row) => row.host),
           },
         },
       });
@@ -665,13 +712,21 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
       const mission = missionOr404(id);
       if (mission === null) return true;
       const params = paramsOf(req);
-      const stray = strayParams(params, ["kind", "role", "stepId", "dimensionId", "search", "order", "runCount", "take", "skip"]);
+      const stray = strayParams(params, ["kind", "role", "agentId", "stepId", "dimensionId", "search", "order", "runCount", "take", "skip"]);
       if (stray !== null) return bad(stray);
 
       const kind = oneOf(params, "kind", TRACE_KINDS);
       if (kind.error !== undefined) return bad(kind.error);
       const role = oneOf(params, "role", TRACE_ROLES);
       if (role.error !== undefined) return bad(role.error);
+      // THE REAL AGENT AXIS. `role` is ["STAGE","TOOL","EVIDENCE","GATE",
+      // "SYSTEM"] — a provenance chip, nearly the same axis as `kind` — so
+      // "show me only what the Leader did" had no filter until this one. Not
+      // an `oneOf`: agent ids are minted per dimension (`researcher:d3`), so
+      // there is no fixed vocabulary to check against. `vocabulary.agents`
+      // below is the legal set, measured from the rows themselves.
+      const agentId = boundedText(params, "agentId");
+      if (agentId.error !== undefined) return bad(agentId.error);
       const order = oneOf(params, "order", TRACE_ORDERS);
       if (order.error !== undefined) return bad(order.error);
       const runCount = boundedInteger(params, "runCount", 1, 1_000_000, mission.runCount);
@@ -688,9 +743,15 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
       if (search.error !== undefined) return bad(search.error);
 
       const trace = readTrace(missionStore, id, runCount.value);
+      const vocabulary = traceVocabulary(trace.rows);
+      if (agentId.value !== undefined && !vocabulary.agents.some((row) => row.id === agentId.value)) {
+        const known = vocabulary.agents.map((row) => `${row.id} (${row.rows})`).join(", ");
+        return bad(`no row in mission ${id}'s trajectory was produced by "${agentId.value}". The agents in it are ${known === "" ? "none — nothing has been recorded yet" : known}.`);
+      }
       const slice = sliceMissionTrace(trace.rows, {
         kind: kind.value,
         role: role.value,
+        agentId: agentId.value,
         stepId: stepId.value,
         dimensionId: dimensionId.value,
         search: search.value,
@@ -720,6 +781,7 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
           filters: {
             kind: kind.value ?? null,
             role: role.value ?? null,
+            agentId: agentId.value ?? null,
             stepId: stepId.value ?? null,
             dimensionId: dimensionId.value ?? null,
             search: search.value ?? null,
@@ -749,7 +811,21 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
           })),
           lastEventSeq: trace.lastEventSeq,
           truncation: { detailChars: TRACE_DETAIL_CHARS, resultChars: TRACE_RESULT_CHARS },
-          vocabulary: { kinds: TRACE_KINDS, roles: TRACE_ROLES, orders: TRACE_ORDERS },
+          // `kinds`, `roles` and `orders` are fixed catalogues. `agents` and
+          // `dimensions` are MEASURED FROM `trace.rows`, with counts, so a
+          // control built from them cannot offer an option that matches zero
+          // rows. `data.dimensions` above is the plan's five and is left as it
+          // is — it answers "what was planned", which other readers need; this
+          // answers "what can be filtered", and on a real mission the two
+          // differ by more than half: five planned, three ever recorded, and
+          // 158 of 169 rows carrying no dimension at all.
+          vocabulary: {
+            kinds: TRACE_KINDS,
+            roles: TRACE_ROLES,
+            orders: TRACE_ORDERS,
+            agents: vocabulary.agents,
+            dimensions: vocabulary.dimensions,
+          },
         },
       });
       return true;
@@ -813,9 +889,111 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
       return true;
     }
 
+    // ── what the stages decided ─────────────────────────────────────────
+    //
+    // THE REASONING, READ BACK. Every judgement the pipeline made is in
+    // `mission_stages.output` and has been since the mission ran: the Leader's
+    // per-dimension verdict and the words for it, s5's reconciled fact table
+    // with its conflicts and gaps, s10's blindspots, s11's signature and the
+    // reason it was refused. Until this route the only way to see any of it
+    // was to guess the event `seq` a trajectory ref is keyed on and open one
+    // row's detail panel.
+    //
+    // Read-time only. No writes, no migration, nothing new stored: every field
+    // below already existed on disk for every mission ever run.
+    if (req.method === "GET" && action === "insights") {
+      const mission = missionOr404(id);
+      if (mission === null) return true;
+      const params = paramsOf(req);
+      const stray = strayParams(params, []);
+      if (stray !== null) return bad(stray);
+
+      const insights = projectStageInsights(missionStore.listStageOutputs(id));
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          missionId: id,
+          runCount: mission.runCount,
+          ...insights,
+          // Which stage each block came from, so a null is a stage that did not
+          // run rather than a field this route forgot.
+          stages: INSIGHT_STAGES.map((entry) => ({ key: entry.key, stepId: entry.stepId })),
+        },
+      });
+      return true;
+    }
+
+    // ── one row per SOURCE ──────────────────────────────────────────────
+    //
+    // The references screen asks "what did we read", and the findings route
+    // answers "what did we learn". Fourteen findings over seven pages is seven
+    // rows here and fourteen there; a references list built from the findings
+    // route shows the same page six times and makes a mission look far better
+    // sourced than it is.
+    if (req.method === "GET" && action === "sources") {
+      const mission = missionOr404(id);
+      if (mission === null) return true;
+      const params = paramsOf(req);
+      const stray = strayParams(params, ["runCount", "dimensionId"]);
+      if (stray !== null) return bad(stray);
+
+      const runCount = boundedInteger(params, "runCount", 1, 1_000_000, mission.runCount);
+      if (runCount.error !== undefined) return bad(runCount.error);
+      const dimensionId = boundedText(params, "dimensionId");
+      if (dimensionId.error !== undefined) return bad(dimensionId.error);
+
+      // A run this mission never had is a TYPO, not an empty result. It used to
+      // answer 200 with `sources: []`, which reads as "this mission collected
+      // nothing" — the one sentence this route exists to stop being said
+      // wrongly, and every other parameter here already 400s.
+      const runs = missionStore.findingRuns(id);
+      if (params.has("runCount") && runCount.value > mission.runCount) {
+        const held = runs.length === 0
+          ? "it has no run holding findings"
+          : `runs holding findings: ${runs.map((entry) => entry.runCount).join(", ")}`;
+        return bad(`mission ${id} has run ${runCount.value === mission.runCount ? runCount.value : mission.runCount} at most, so runCount=${runCount.value} does not exist. ${held}.`);
+      }
+
+      const dimensions = missionStore.listDimensions(id, { runCount: runCount.value });
+      if (dimensionId.value !== undefined && !dimensions.some((row) => row.dimensionId === dimensionId.value)) {
+        const known = dimensions.map((row) => row.dimensionId).join(", ");
+        return bad(`mission ${id} has no dimension "${dimensionId.value}" at run ${runCount.value}. It has ${known === "" ? "none yet — s2 has not planned" : known}.`);
+      }
+
+      const sources = missionStore.listSources(id, { runCount: runCount.value, dimensionId: dimensionId.value });
+      let findings = 0;
+      let verified = 0;
+      const hosts = new Set();
+      for (const source of sources) {
+        findings += source.findings;
+        verified += source.verified;
+        hosts.add(source.host);
+      }
+
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          missionId: id,
+          runCount: runCount.value,
+          scope: { dimensionId: dimensionId.value ?? null },
+          sources,
+          totals: { sources: sources.length, hosts: hosts.size, findings, verified },
+          // The SAME run-picker shape the findings route returns, and for the
+          // same reason: every reader on this table scopes to the mission's
+          // current run, which is right while it runs and wrong the moment it
+          // is re-run. Measured on a real mission: five runs, all fourteen
+          // findings in run 1, and a references screen that would show none.
+          runs: missionStore.findingRuns(id),
+          dimensions: dimensions.map((row) => ({ dimensionId: row.dimensionId, name: row.name })),
+        },
+      });
+      return true;
+    }
+
     // ── the artefact ────────────────────────────────────────────────────
     if (req.method === "GET" && action === "artifact") {
-      if (missionOr404(id) === null) return true;
+      const mission = missionOr404(id);
+      if (mission === null) return true;
       const params = paramsOf(req);
       const version = boundedInteger(params, "version", 1, 1_000_000, 0);
       if (version.error !== undefined) return bad(version.error);
@@ -826,7 +1004,16 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
       sendJson(res, 200, {
         success: true,
         data: {
-          artifact,
+          artifact: artifact === undefined ? artifact : {
+            ...artifact,
+            // WHY THIS REPORT IS DEGRADED, on the report. `degraded: true` is a
+            // flag with no sentence attached, and the reader of a report is
+            // exactly the person who needs the sentence. Derived here rather
+            // than written at s12 on purpose: a write-path change would only
+            // help artefacts produced after it, and every artefact that exists
+            // today would keep saying nothing.
+            degradeReason: degradeReasonFor(missionStore, id, mission),
+          },
           // The header list, so the reader can move between runs without a
           // second request. Bodies are deliberately not read: a deep report is
           // tens of thousands of words and this renders on every detail view.
@@ -859,7 +1046,22 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
         return true;
       }
 
-      const markdown = typeof artifact.markdown === "string" ? artifact.markdown : "";
+      const body = typeof artifact.markdown === "string" ? artifact.markdown : "";
+      // THE BIBLIOGRAPHY, APPENDED HERE AND NOT IN `assemble`.
+      //
+      // The export ended mid-prose with eleven numbered references in the text
+      // and nothing anywhere saying what `[7]` was. Both halves of the answer
+      // are already stored on the artefact row — `citations` carries the index,
+      // the url and the finding it came from, and `evidence` carries that
+      // finding's verified quote and fetch stamp — so this is a join, not a
+      // derivation.
+      //
+      // Doing it at the ROUTE means every artefact already on disk exports
+      // correctly. Doing it in `assemble` would fix only reports written after
+      // the change, and would also put the reference list inside the very
+      // `markdown` the content guard counts words over, which quietly moves the
+      // word-count floor.
+      const markdown = body + buildBibliography(artifact, { language: mission.language });
       const filename = `${id}${artifact.version ? `-v${artifact.version}` : ""}.md`;
       res.writeHead(200, {
         "content-type": "text/markdown; charset=utf-8",
@@ -1036,6 +1238,36 @@ function uncheckedTotal(byState) {
     if (state.startsWith("unchecked-")) n += Number(count) || 0;
   }
   return n;
+}
+
+/** The one terminal event, whose payload carries the guard's violations as rows. */
+const FINALIZED_EVENT = "mission:finalized";
+
+/**
+ * Assemble the artefact's `degradeReason` from what is already on disk.
+ *
+ * Three reads, all indexed: the mission row (already in hand), s11's recorded
+ * signature, and the terminal event's payload. The event is preferred over the
+ * prose in `error_message` because s12 puts the SAME violations in both — as
+ * structured `{code, detail}` rows in the payload and as a joined sentence in
+ * the column — and splitting a sentence back apart is a parse, while the
+ * payload is a record. `projectDegradeReason` reports which one it used.
+ *
+ * @param missionStore - the MissionStore.
+ * @param missionId - the mission.
+ * @param mission - the already-shaped missions row.
+ * @returns the degrade reason block.
+ */
+function degradeReasonFor(missionStore, missionId, mission) {
+  const insights = projectStageInsights(missionStore.listStageOutputs(missionId));
+  // Newest first, so a rerun's reason is the reason for the run that ended
+  // last rather than for a generation nobody is looking at.
+  const finalized = missionStore.eventsOfType(FINALIZED_EVENT, { missionId, limit: 1 })[0] ?? null;
+  return projectDegradeReason({
+    mission,
+    signoff: insights.signoff,
+    finalizedPayload: finalized?.payload ?? null,
+  });
 }
 
 /**

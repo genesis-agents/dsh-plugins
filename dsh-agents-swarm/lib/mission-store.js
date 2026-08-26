@@ -240,6 +240,33 @@ export const COUNTING_VERIFY_STATE = "verified-source-text";
  */
 export const FETCH_BACKED_VERIFY_STATES = Object.freeze(["verified-source-text", "verified-adjacent-spans"]);
 
+/**
+ * The orders `listFindings` will sort by, and the only ones.
+ *
+ * A CLOSED vocabulary mapped to a whitelisted `ORDER BY` in `FINDING_ORDER_SQL`,
+ * never a fragment interpolated from the parameter. `?order=created_at; DROP`
+ * is refused by name here rather than reaching a string template, and the same
+ * list is what the route's 400 prints — one vocabulary, two readers, no chance
+ * for them to disagree about what is legal.
+ *
+ * `created` is the default because it is the order the evidence was actually
+ * gathered in, which is the only one that carries information the row itself
+ * does not already print.
+ */
+export const FINDING_ORDERS = Object.freeze(["created", "host", "verifyState"]);
+
+/**
+ * Each order's literal `ORDER BY`. Every one ends in `created_at, id` so the
+ * sort is TOTAL: a page boundary inside a run of equal hosts would otherwise
+ * repeat or drop rows between `skip=0` and `skip=50`, which reads as evidence
+ * appearing and disappearing as the reader scrolls.
+ */
+const FINDING_ORDER_SQL = Object.freeze({
+  created: "created_at, id",
+  host: "source_host, created_at, id",
+  verifyState: "verify_state, created_at, id",
+});
+
 /** Every value `mission_events.class` may hold. */
 export const EVENT_CLASSES = Object.freeze(["business", "lifecycle"]);
 
@@ -2260,6 +2287,40 @@ export class MissionStore {
     return parseJson(row.output, undefined);
   }
 
+  /**
+   * WHAT THE STAGES DECIDED, all of it, in one read.
+   *
+   * `stageOutput` answers for one stage and is what the resume path wants;
+   * this answers for the mission and is what a reader wants. Every judgement
+   * the pipeline made is already on disk in this column — the Leader's
+   * recollect decision and its reasons, the fact table s5 reconciled, the
+   * blindspots s10 named, the signature s11 refused to give — and until now
+   * the only way to see any of it was to guess the event `seq` a trajectory
+   * ref is keyed on.
+   *
+   * The parsed `output` is returned WITH `status` and `attempts`, because
+   * "s4 decided recollect" and "s4 decided recollect on its second attempt
+   * after the first one failed" are different sentences and the second is the
+   * true one. A stage that never ran comes back with `output: null` and its
+   * real status, never as an empty object — an absent decision and a decision
+   * to do nothing must not render the same.
+   *
+   * @param missionId - the mission.
+   * @returns `[{stepId, ordinal, status, attempts, output}]` in catalogue order.
+   */
+  listStageOutputs(missionId) {
+    return this.db.prepare(`
+      SELECT step_id, ordinal, status, attempts, output
+      FROM mission_stages WHERE mission_id = ? ORDER BY ordinal
+    `).all(assertText(missionId, "missionId")).map((row) => ({
+      stepId: row.step_id,
+      ordinal: row.ordinal,
+      status: row.status,
+      attempts: row.attempts,
+      output: parseJson(row.output, null),
+    }));
+  }
+
   // ── dimensions ──────────────────────────────────────────────────────────
 
   /**
@@ -2618,15 +2679,26 @@ export class MissionStore {
 
   /**
    * Findings, filtered.
-   * @param options - `{ missionId, dimensionId, runCount, verifyState, attempt, take, skip }`.
-   * @returns `[finding]`, oldest first so an attempt's order is preserved.
+   *
+   * `order` is a MEMBER of `FINDING_ORDERS`, mapped through `FINDING_ORDER_SQL`
+   * to a literal clause. It is never interpolated from the argument: the one
+   * place a read route's query string could reach a SQL string is here, and a
+   * template that pasted the parameter in would make `?order=` an injection
+   * point on a route whose whole purpose is to be linkable.
+   *
+   * @param options - `{ missionId, dimensionId, runCount, verifyState, sourceHost, attempt, order, take, skip }`.
+   * @returns `[finding]`, oldest first by default so an attempt's order is preserved.
    */
-  listFindings({ missionId, dimensionId, runCount, verifyState, attempt, take = 200, skip = 0 } = {}) {
+  listFindings({ missionId, dimensionId, runCount, verifyState, sourceHost, attempt, order, take = 200, skip = 0 } = {}) {
     const where = ["mission_id = ?"];
     const params = [assertText(missionId, "missionId")];
     if (typeof dimensionId === "string" && dimensionId !== "") {
       where.push("dimension_id = ?");
       params.push(dimensionId);
+    }
+    if (typeof sourceHost === "string" && sourceHost !== "") {
+      where.push("source_host = ?");
+      params.push(sourceHost);
     }
     if (runCount !== undefined && runCount !== null) {
       where.push("run_count = ?");
@@ -2641,10 +2713,12 @@ export class MissionStore {
       where.push("attempt = ?");
       params.push(assertCount(attempt, "attempt", 0));
     }
+    const orderKey = order === undefined || order === null || order === "" ? "created" : String(order);
+    assertMember(orderKey, FINDING_ORDERS, "order");
     return this.db.prepare(`
       SELECT ${FINDING_COLUMNS} FROM mission_findings
       WHERE ${where.join(" AND ")}
-      ORDER BY created_at, id LIMIT ? OFFSET ?
+      ORDER BY ${FINDING_ORDER_SQL[orderKey]} LIMIT ? OFFSET ?
     `).all(...params, clampInt(take, 1, 2000, 200), Math.max(0, clampInt(skip, 0, Number.MAX_SAFE_INTEGER, 0)))
       .map(shapeFinding);
   }
@@ -2932,11 +3006,29 @@ export class MissionStore {
     return out;
   }
 
-  uniqueHosts(missionId, { dimensionId, runCount } = {}) {
+  /**
+   * The hosts a mission's evidence came from, with a row count each.
+   *
+   * `verified` defaults to TRUE — the independence model counts hosts among
+   * findings that passed verification, and every existing caller means that
+   * one. Pass `false` for the complete host set in scope, which is what a
+   * host FILTER must be validated against: a control whose legal values were
+   * the verified-only list would refuse a host that has findings, and a
+   * refusal on a host the data holds is indistinguishable from a broken route.
+   *
+   * @param missionId - the mission.
+   * @param options - `{ dimensionId, runCount, verified = true }`.
+   * @returns `[{host, findings}]`, busiest first.
+   */
+  uniqueHosts(missionId, { dimensionId, runCount, verified = true } = {}) {
     const id = assertText(missionId, "missionId");
     const run = runCount ?? this.db.prepare("SELECT run_count FROM missions WHERE id = ?").get(id)?.run_count ?? 1;
-    const where = ["mission_id = ?", "run_count = ?", "verify_state = ?"];
-    const params = [id, run, COUNTING_VERIFY_STATE];
+    const where = ["mission_id = ?", "run_count = ?"];
+    const params = [id, run];
+    if (verified !== false) {
+      where.push("verify_state = ?");
+      params.push(COUNTING_VERIFY_STATE);
+    }
     if (typeof dimensionId === "string" && dimensionId !== "") {
       where.push("dimension_id = ?");
       params.push(dimensionId);
@@ -2945,6 +3037,85 @@ export class MissionStore {
       SELECT source_host, COUNT(*) AS n FROM mission_findings
       WHERE ${where.join(" AND ")} GROUP BY source_host ORDER BY n DESC, source_host
     `).all(...params).map((row) => ({ host: row.source_host, findings: row.n }));
+  }
+
+  /**
+   * ONE ROW PER SOURCE, not per finding.
+   *
+   * The references screen asks a different question from the evidence screen:
+   * not "what did we learn" but "what did we read". Fourteen findings over
+   * seven pages is seven rows here and fourteen there, and a list that answers
+   * the second question when asked the first shows the same page six times and
+   * makes a mission look far better sourced than it is.
+   *
+   * Grouped by `source_url` and NOT by host: two pages on one site are two
+   * things somebody read. The host roll-up is `uniqueHosts`, and the totals
+   * below carry the host count so a caller never has to derive one from the
+   * other and get a different answer.
+   *
+   * `firstSeenAt` is a MIN over `created_at`, so the ordering a reader
+   * recognises — the order the mission met these pages — is available without a
+   * second query.
+   *
+   * @param missionId - the mission.
+   * @param options - `{ runCount, dimensionId }`.
+   * @returns `[{url, host, title, findings, verified, dimensionIds, verifyStates, firstSeenAt}]`, most findings first.
+   */
+  listSources(missionId, { runCount, dimensionId } = {}) {
+    const id = assertText(missionId, "missionId");
+    const run = runCount ?? this.db.prepare("SELECT run_count FROM missions WHERE id = ?").get(id)?.run_count ?? 1;
+    const where = ["mission_id = ?", "run_count = ?"];
+    const params = [id, assertCount(run, "runCount", 1)];
+    if (typeof dimensionId === "string" && dimensionId !== "") {
+      where.push("dimension_id = ?");
+      params.push(dimensionId);
+    }
+
+    const grouped = this.db.prepare(`
+      SELECT source_url,
+             MIN(source_host)  AS source_host,
+             MAX(source_title) AS source_title,
+             COUNT(*)          AS findings,
+             SUM(CASE WHEN verify_state = ? THEN 1 ELSE 0 END) AS verified,
+             MIN(created_at)   AS first_seen_at
+      FROM mission_findings
+      WHERE ${where.join(" AND ")}
+      GROUP BY source_url
+      ORDER BY findings DESC, first_seen_at, source_url
+    `).all(COUNTING_VERIFY_STATE, ...params);
+
+    // The per-URL breakdowns, as two more GROUP BYs rather than as N queries or
+    // as a GROUP_CONCAT this side would have to split back apart. Both are
+    // small: the outer group is already one row per page read.
+    const states = new Map();
+    for (const row of this.db.prepare(`
+      SELECT source_url, verify_state, COUNT(*) AS n FROM mission_findings
+      WHERE ${where.join(" AND ")} GROUP BY source_url, verify_state
+    `).all(...params)) {
+      let bag = states.get(row.source_url);
+      if (bag === undefined) { bag = {}; states.set(row.source_url, bag); }
+      bag[row.verify_state] = row.n;
+    }
+    const dimensionIds = new Map();
+    for (const row of this.db.prepare(`
+      SELECT source_url, dimension_id FROM mission_findings
+      WHERE ${where.join(" AND ")} GROUP BY source_url, dimension_id ORDER BY dimension_id
+    `).all(...params)) {
+      const list = dimensionIds.get(row.source_url);
+      if (list === undefined) dimensionIds.set(row.source_url, [row.dimension_id]);
+      else list.push(row.dimension_id);
+    }
+
+    return grouped.map((row) => ({
+      url: row.source_url,
+      host: row.source_host,
+      title: row.source_title ?? null,
+      findings: row.findings,
+      verified: row.verified ?? 0,
+      dimensionIds: dimensionIds.get(row.source_url) ?? [],
+      verifyStates: states.get(row.source_url) ?? {},
+      firstSeenAt: row.first_seen_at,
+    }));
   }
 
   /** Verified counts for a page of missions, in one query rather than N. */
@@ -3820,6 +3991,53 @@ export class MissionStore {
       totals[row.pace_key] = { charged: row.charged, cached: row.cached, failed: row.failed };
     }
     return totals;
+  }
+
+  /**
+   * Per-TOOL spend, failure and latency.
+   *
+   * `toolCallTotals` above groups by `pace_key`, which is which CEILING a call
+   * consumed — three buckets for every tool in the product. This groups by the
+   * tool itself, which is the axis a person asks about: not "how much web
+   * quota went", but "which tool failed, and which one was slow".
+   *
+   * `latencyMeasured` IS NOT `calls`, and this method exists at all because
+   * collapsing them is the failure this codebase keeps producing. `latency_ms`
+   * is `NOT NULL DEFAULT 0`, so a call recorded by a path that never measured
+   * one is stored as zero and is indistinguishable, in a SUM, from a call that
+   * genuinely returned instantly. An average over `calls` would report those
+   * unmeasured calls as instantaneous and make a slow tool look fast; an
+   * average over `latencyMeasured` is over the calls that were actually timed.
+   * Both numbers are returned so the caller cannot compute the wrong one
+   * without choosing to.
+   *
+   * NO `runCount` PARAMETER. `mission_tool_calls` carries no generation column
+   * — the same reason `readTrace` gives for showing both generations' calls in
+   * one trajectory — so these totals are for the WHOLE mission, and they match
+   * `cost.waste.toolFailures` / `toolCached`, which are also whole-mission. A
+   * `runCount` argument here would be a filter that silently did nothing.
+   *
+   * @param missionId - the mission.
+   * @returns `[{tool, calls, failures, cached, latencyMs, latencyMeasured}]`, busiest first.
+   */
+  toolTotalsByTool(missionId) {
+    return this.db.prepare(`
+      SELECT tool,
+             COUNT(*)                                        AS calls,
+             SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END)         AS failures,
+             SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END)     AS cached,
+             SUM(latency_ms)                                 AS latency_ms,
+             SUM(CASE WHEN latency_ms > 0 THEN 1 ELSE 0 END) AS latency_measured
+      FROM mission_tool_calls WHERE mission_id = ? GROUP BY tool
+      ORDER BY calls DESC, tool
+    `).all(assertText(missionId, "missionId")).map((row) => ({
+      tool: row.tool,
+      calls: row.calls,
+      failures: row.failures ?? 0,
+      cached: row.cached ?? 0,
+      latencyMs: row.latency_ms ?? 0,
+      latencyMeasured: row.latency_measured ?? 0,
+    }));
   }
 
   /**

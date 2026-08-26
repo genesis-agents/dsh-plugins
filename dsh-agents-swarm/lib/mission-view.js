@@ -199,7 +199,7 @@ const DIMENSION_RESOLVED = Object.freeze(["collected", "degraded", "failed"]);
  * @param {object[]} input.artefacts - `mission_artifacts` rows WITHOUT `markdown` or `evidence`.
  * @param {object[]} input.eventTail - a bounded tail of `mission_events`, any order.
  * @param {object} input.policy - stage catalogue, LADDER, `now`, and resolved policy answers.
- * @returns {object} `{mission, stages, dimensions, agents, todo, cost, artifact, timeline, resume, swept}`.
+ * @returns {object} `{mission, stages, dimensions, agents, todo, work, cost, artifact, timeline, resume, swept}`.
  */
 export function projectMissionView(input) {
   const { row, policy } = input ?? {};
@@ -234,13 +234,19 @@ export function projectMissionView(input) {
   const timeline = projectTimeline({ eventTail, stages, evidence, artifact, input });
   const resume = projectResume({ row, policy, terminal });
   const todo = buildTodo({ stages, dimensions, chapters, terminal, resume });
+  const work = buildWork({ stages, stageRows, dimensions });
 
   const mission = projectMission({
     row, policy, now, terminal, runCount, stages, dimensions, chapters,
     evidence, artifact, cost, swept,
   });
 
-  return { mission, stages, dimensions, agents, todo, cost, artifact, timeline, resume, swept };
+  // `todo` is kept beside `work` for one release rather than deleted with it.
+  // Nothing in lib/client.js reads it — grep returns zero hits — but a field a
+  // route has been returning is a field something outside this repository may
+  // have started reading, and removing it in the same change that adds its
+  // replacement leaves such a reader with no working version to move between.
+  return { mission, stages, dimensions, agents, todo, work, cost, artifact, timeline, resume, swept };
 }
 
 /**
@@ -895,6 +901,30 @@ function projectCost({ row, spendSums, stages, chapters, policy, now }) {
       calls: numberOr(r.calls, 0),
       tokens: numberOr(r.prompt_tok, 0) + numberOr(r.completion_tok, 0) + numberOr(r.cache_read_tok, 0),
     })),
+    // Which TOOL spent, failed and waited. `byStage` and `byAgent` answer
+    // "where did the tokens go"; this answers "which door was slow or broken",
+    // and the two are not the same question — a tool that fails inside a stage
+    // that succeeds is invisible in both of the others.
+    //
+    // `latencyMeasured` travels beside `latencyMs` and is NOT `calls`: see the
+    // note on the query in `readMissionViewInput`. `avgLatencyMs` is therefore
+    // computed over the measured calls and is NULL when none were measured —
+    // never 0, which would read as "instant" about a tool nobody timed.
+    byTool: asArray(spendSums.byTool).map((r) => {
+      const calls = numberOr(r.calls, 0);
+      const latencyMeasured = numberOr(r.latency_measured, 0);
+      const latencyMs = numberOr(r.latency_ms, 0);
+      return {
+        tool: r.tool == null ? null : String(r.tool),
+        calls,
+        failures: numberOr(r.failures, 0),
+        cached: numberOr(r.cached, 0),
+        latencyMs,
+        latencyMeasured,
+        unmeasured: Math.max(0, calls - latencyMeasured),
+        avgLatencyMs: latencyMeasured > 0 ? Math.round(latencyMs / latencyMeasured) : null,
+      };
+    }),
   };
 }
 
@@ -1200,6 +1230,161 @@ function buildTodo({ stages, dimensions, chapters, terminal, resume }) {
   return todo;
 }
 
+/** The stage every dimension of the plan is collected under. */
+const WORK_COLLECT_STAGE = "s3-collect";
+
+/** The stage whose output holds the Leader's per-dimension recollect decisions. */
+const WORK_ASSESS_STAGE = "s4-assess";
+
+/**
+ * EVERY piece of work this mission held, finished work included, each saying
+ * why it exists.
+ *
+ * The replacement for `todo`, which was empty on every mission anybody would
+ * want to read. `buildTodo` returns `[]` for a terminal mission with no resume
+ * on offer — which is nearly all of them — so a finished mission's work
+ * breakdown was the empty list, and nothing in the browser ever read it. A
+ * plan that is only visible while it is unfinished is not a plan, it is a
+ * progress bar.
+ *
+ * THREE ORIGINS, and the origin is the point. A stage exists because the
+ * pipeline declares twelve. A dimension exists because s2 planned it. A
+ * recollect exists because the LEADER read the evidence and decided to spend
+ * again on a dimension that came back thin — and that decision, with the
+ * Leader's own words for it, was written to `mission_stages.output` and had no
+ * reader at all. `reason` carries those words rather than a phrase this file
+ * made up.
+ *
+ * WHAT THE s4 OUTPUT CAN AND CANNOT SAY. `mission_stages` holds ONE row per
+ * step id, so a second attempt overwrites the first attempt's output: these
+ * are the decisions of the LAST assess, and `counts.attempts` on the s4 parent
+ * is how a reader sees that there were earlier ones whose reasons are now only
+ * in the trajectory. Said out loud rather than presented as the whole history.
+ *
+ * @param {object} args - `{stages, stageRows, dimensions}`.
+ * @returns {object[]} parents first, each child directly after its parent.
+ */
+function buildWork({ stages, stageRows, dimensions }) {
+  const items = [];
+  const stageKey = (stepId) => `stage:${stepId}`;
+
+  for (const stage of stages) {
+    items.push({
+      id: stageKey(stage.stepId),
+      parentId: null,
+      origin: "pipeline",
+      title: stage.stepId,
+      state: stage.status,
+      assignee: stage.agent,
+      // Not "outstanding". A resolved stage is still a piece of work that
+      // happened, and the reason says which of the four ways it resolved —
+      // `skipped-by-tier` in particular is a decision the tier made, not a
+      // stage that failed to run.
+      reason: stage.status === "skipped-by-tier"
+        ? "this depth tier does not run this stage; the row was written at s1 so the strip stays twelve long"
+        : stage.rowMissing === true
+          ? "the catalogue declares this stage and mission_stages has no row for it — s1 did not finish its own bookkeeping"
+          : stage.unknownToCatalogue === true
+            ? "this step id is in mission_stages and not in the stage catalogue: pipeline drift"
+            : "one of the twelve stages the pipeline declares",
+      attempts: stage.attempts,
+      counts: {
+        attempts: stage.attempts,
+        tokens: stage.tokens,
+        calls: stage.calls,
+        durationMs: stage.durationMs,
+      },
+    });
+
+    if (stage.stepId === WORK_COLLECT_STAGE) {
+      for (const dimension of dimensions) {
+        items.push({
+          id: `dimension:${dimension.dimensionId}`,
+          parentId: stageKey(WORK_COLLECT_STAGE),
+          origin: "s2-plan",
+          title: dimension.name,
+          state: dimension.state,
+          assignee: `researcher:${dimension.dimensionId}`,
+          // The floor, in the reason, because "collected" over two findings
+          // against a floor of five is not the same fact as "collected", and
+          // a state word alone cannot tell those apart.
+          reason: dimension.floor == null
+            ? `${dimension.rationale ?? "planned by s2"} — floor not derived yet; s3 has not measured supply`
+            : `${dimension.verified}/${dimension.floor} verified across ${dimension.uniqueHosts} independent host(s)`,
+          attempts: dimension.attempt,
+          counts: {
+            attempts: dimension.attempt,
+            verified: dimension.verified,
+            floor: dimension.floor,
+            uniqueHosts: dimension.uniqueHosts,
+            unchecked: dimension.uncheckedTotal,
+            grade: dimension.grade,
+          },
+          failureCode: dimension.failureCode,
+        });
+      }
+    }
+
+    if (stage.stepId === WORK_ASSESS_STAGE) {
+      for (const decision of assessRecollects(stageRows)) {
+        const dimension = dimensions.find((row) => row.dimensionId === decision.dimensionId) ?? null;
+        items.push({
+          id: `recollect:${decision.dimensionId}`,
+          parentId: stageKey(WORK_ASSESS_STAGE),
+          origin: "leader-assess-recollect",
+          title: dimension?.name ?? decision.dimensionId,
+          // The state of the thing the decision was ABOUT. A decision has no
+          // state of its own worth printing; what a reader wants to know is
+          // what the re-collection it ordered came back with.
+          state: dimension?.state ?? "unknown",
+          assignee: "leader",
+          // The Leader's own sentence, verbatim from mission_stages.output.
+          reason: decision.rationale,
+          attempts: dimension?.attempt ?? null,
+          counts: {
+            verified: decision.verified,
+            shortfall: decision.shortfall,
+            uniqueHosts: decision.uniqueHosts,
+          },
+          // What the Leader said about THIS dimension, kept beside the
+          // mission-wide rationale rather than folded into it.
+          critique: decision.critique,
+        });
+      }
+    }
+  }
+
+  return items;
+}
+
+/**
+ * The per-dimension `recollect` decisions in the last s4 output.
+ * @param {object[]} stageRows - raw `mission_stages` rows.
+ * @returns {object[]} one entry per dimension the Leader sent back for more evidence.
+ */
+function assessRecollects(stageRows) {
+  const row = asArray(stageRows).find((entry) => String(entry?.step_id ?? "") === WORK_ASSESS_STAGE);
+  const output = parseJson(row?.output, null);
+  if (!output || typeof output !== "object") return [];
+  const rationale = typeof output.rationale === "string" ? output.rationale : null;
+
+  return asArray(output.perDimension)
+    .filter((entry) => entry && entry.action === "recollect" && typeof entry.dimensionId === "string")
+    .map((entry) => ({
+      dimensionId: entry.dimensionId,
+      rationale,
+      // s4 has called this field `critique` and `rationale` in different
+      // drafts. Both are read rather than one being assumed, because the cost
+      // of guessing wrong is a panel that shows an empty reason on a decision
+      // that has one written down.
+      critique: typeof entry.critique === "string" ? entry.critique
+        : typeof entry.rationale === "string" ? entry.rationale : null,
+      verified: entry.verified == null ? null : numberOr(entry.verified, 0),
+      shortfall: entry.shortfall == null ? null : numberOr(entry.shortfall, 0),
+      uniqueHosts: entry.uniqueHosts == null ? null : numberOr(entry.uniqueHosts, 0),
+    }));
+}
+
 /**
  * The mission header: the pill, the numbers beside it, and the clock.
  * @param {object} args - everything already projected.
@@ -1492,6 +1677,26 @@ export function readMissionViewInput(db, missionId, opts = {}) {
            SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END) AS cached
       FROM mission_tool_calls WHERE mission_id = ?`, [missionId])[0] ?? {};
 
+  // Per TOOL, not per pace key. `toolsByPaceKey` above says which CEILING was
+  // consumed — three buckets for the whole product — and cannot answer "which
+  // tool failed" or "which tool was slow".
+  //
+  // `latency_measured` is counted SEPARATELY from `calls` on purpose. The
+  // column is NOT NULL DEFAULT 0, so a call written by a path that never timed
+  // one is stored as zero; dividing the SUM by `calls` would report every
+  // untimed call as instantaneous, which is a passing number over a broken
+  // measurement. `MissionStore.toolTotalsByTool` runs the same aggregate for
+  // callers outside the view, and tests/mission.test.mjs pins the two together.
+  const byTool = query(db, `
+    SELECT tool,
+           COUNT(*)                                        AS calls,
+           SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END)         AS failures,
+           SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END)     AS cached,
+           SUM(latency_ms)                                 AS latency_ms,
+           SUM(CASE WHEN latency_ms > 0 THEN 1 ELSE 0 END) AS latency_measured
+      FROM mission_tool_calls WHERE mission_id = ? GROUP BY tool
+     ORDER BY calls DESC, tool`, [missionId]);
+
   // DESC + LIMIT is how the tail is taken; the projector sorts it back to
   // reading order. The write side stays unbounded (§4.7).
   const eventTail = query(db, `
@@ -1524,6 +1729,7 @@ export function readMissionViewInput(db, missionId, opts = {}) {
       byAgent,
       toolsByPaceKey,
       toolsByAgent,
+      byTool,
       toolFailures: numberOr(toolTotals.failures, 0),
       toolCached: numberOr(toolTotals.cached, 0),
     },
@@ -1825,14 +2031,20 @@ export function buildMissionTrace(input) {
  * a detail panel that reopened against the wrong row is the most expensive kind
  * of wrong: plausible.
  *
+ * `agentId` IS THE AGENT AXIS, and `role` is not. `TRACE_ROLES` is
+ * ["STAGE","TOOL","EVIDENCE","GATE","SYSTEM"] — a provenance chip, nearly the
+ * same axis as `kind` — so "show me only what the Leader did" had no filter at
+ * all until this one. The rows have carried `agentId` since they were built.
+ *
  * @param {object[]} rows - the output of `buildMissionTrace`.
- * @param {object} [options] - `{kind, role, stepId, dimensionId, search, order, take, skip}`.
+ * @param {object} [options] - `{kind, role, agentId, stepId, dimensionId, search, order, take, skip}`.
  * @returns {object} `{rows, total, order, take, skip, returned, hasMore}`.
  */
 export function sliceMissionTrace(rows, options = {}) {
   const all = asArray(rows);
   const kind = emptyToNull(options.kind);
   const role = emptyToNull(options.role);
+  const agentId = emptyToNull(options.agentId);
   const stepId = emptyToNull(options.stepId);
   const dimensionId = emptyToNull(options.dimensionId);
   const needle = emptyToNull(options.search)?.toLowerCase() ?? null;
@@ -1843,6 +2055,7 @@ export function sliceMissionTrace(rows, options = {}) {
   const matched = all.filter((row) => {
     if (kind !== null && row.kind !== kind) return false;
     if (role !== null && row.role !== role) return false;
+    if (agentId !== null && row.agentId !== agentId) return false;
     if (stepId !== null && row.stepId !== stepId) return false;
     if (dimensionId !== null && row.dimensionId !== dimensionId) return false;
     if (needle === null) return true;
@@ -1863,6 +2076,54 @@ export function sliceMissionTrace(rows, options = {}) {
     skip,
     returned: page.length,
     hasMore: skip + page.length < matched.length,
+  };
+}
+
+/**
+ * The filter values that actually occur in this trajectory, with counts.
+ *
+ * COMPUTED FROM THE ROWS, never from a catalogue, and that is the whole point.
+ * The trajectory route already returns `data.dimensions` — the five the plan
+ * declared — and a filter control built from it offers five options over a
+ * list where 158 of 169 rows carry `dimensionId: null` and only three
+ * dimensions appear at all. Two of those five chips return nothing, and an
+ * empty result from a chip the product offered is indistinguishable from a
+ * broken filter.
+ *
+ * `data.dimensions` is deliberately left alone: it answers "what was planned",
+ * which other readers need. This answers "what can be filtered", which is a
+ * different question with a different answer, and the two are returned side by
+ * side rather than reconciled into one number that is wrong for somebody.
+ *
+ * @param {object[]} rows - the output of `buildMissionTrace`, unfiltered.
+ * @returns {object} `{agents, dimensions}`, each `[{id, name?, rows}]`, busiest first.
+ */
+export function traceVocabulary(rows) {
+  const agents = new Map();
+  const dimensions = new Map();
+
+  for (const row of asArray(rows)) {
+    const agentId = emptyToNull(row?.agentId);
+    if (agentId !== null) agents.set(agentId, (agents.get(agentId) ?? 0) + 1);
+
+    const dimensionId = emptyToNull(row?.dimensionId);
+    if (dimensionId === null) continue;
+    const seen = dimensions.get(dimensionId);
+    if (seen === undefined) {
+      dimensions.set(dimensionId, { dimensionId, name: row?.dimensionName ?? null, rows: 1 });
+    } else {
+      seen.rows += 1;
+      // First non-null name wins rather than the last: a row whose dimension
+      // fell outside the run being read carries a null name, and letting it
+      // overwrite would blank a label that another row already supplied.
+      if (seen.name === null) seen.name = row?.dimensionName ?? null;
+    }
+  }
+
+  const byRows = (a, b) => b.rows - a.rows || (a.id ?? a.dimensionId).localeCompare(b.id ?? b.dimensionId);
+  return {
+    agents: [...agents].map(([id, count]) => ({ id, rows: count })).sort(byRows),
+    dimensions: [...dimensions.values()].sort(byRows),
   };
 }
 
@@ -2209,4 +2470,383 @@ function normaliseCounts(counts) {
   if (!counts || typeof counts !== "object") return out;
   for (const [k, v] of Object.entries(counts)) out[String(k)] = numberOr(v, 0);
   return out;
+}
+
+// ── what the stages decided ──────────────────────────────────────────────────
+
+/**
+ * The four stages whose output IS the mission's reasoning, and the key each is
+ * reshaped under.
+ *
+ * Not every stage: s8 writes prose that the artefact already carries, s12
+ * writes bookkeeping. These four hold judgements that exist nowhere else on
+ * disk — the Leader's per-dimension verdict, the reconciled fact table, the
+ * critic's blindspots, and the signature — and every one of them was
+ * unreachable except by guessing the event `seq` a trajectory ref is keyed on.
+ */
+export const INSIGHT_STAGES = Object.freeze([
+  Object.freeze({ key: "assess", stepId: "s4-assess" }),
+  Object.freeze({ key: "reconcile", stepId: "s5-reconcile" }),
+  Object.freeze({ key: "critique", stepId: "s10-critique" }),
+  Object.freeze({ key: "signoff", stepId: "s11-signoff" }),
+]);
+
+/**
+ * Reshape the four reasoning stages' recorded output into one readable answer.
+ *
+ * READ-TIME ONLY. Nothing here writes, nothing here migrates, and every field
+ * it returns was already in `mission_stages.output` before this function
+ * existed. That is deliberate: a write-path change would only help missions run
+ * after it, and every mission already on disk — including the ones somebody
+ * actually wants to read — would go on saying nothing.
+ *
+ * A MISSING STAGE IS `null` WITH A REASON, NEVER `{}`. An empty object renders
+ * as a panel with headings and no content, which reads as "the Leader had no
+ * blindspots to report" when the truth is "s10 never ran". The two want
+ * opposite reactions, so `sources` carries the stage's real status and a
+ * sentence naming which of the three cases this is: no row, a row that never
+ * produced output, or output this projection could not read.
+ *
+ * @param {object[]} stageOutputs - `MissionStore.listStageOutputs` rows.
+ * @returns {object} `{assess, reconcile, critique, signoff, sources}`.
+ */
+export function projectStageInsights(stageOutputs) {
+  const byStep = new Map();
+  for (const row of asArray(stageOutputs)) {
+    if (row && row.stepId != null) byStep.set(String(row.stepId), row);
+  }
+
+  const out = { assess: null, reconcile: null, critique: null, signoff: null, sources: {} };
+
+  for (const { key, stepId } of INSIGHT_STAGES) {
+    const row = byStep.get(stepId) ?? null;
+    const output = row?.output ?? null;
+    const usable = output !== null && typeof output === "object" && !Array.isArray(output);
+
+    out.sources[key] = {
+      stepId,
+      present: usable,
+      status: row?.status ?? null,
+      attempts: row === null ? null : numberOr(row.attempts, 0),
+      reason: usable
+        ? null
+        : row === null
+          ? `mission_stages has no ${stepId} row for this mission; §4.3 writes twelve at s1, so this mission predates that or s1 did not finish its bookkeeping.`
+          : output === null
+            ? `${stepId} is ${row.status} and recorded no output. There is no decision here to show — this is an absence, not an empty result.`
+            : `${stepId} recorded output that is not an object (${Array.isArray(output) ? "an array" : typeof output}); this projection will not guess at its shape.`,
+      // Only the LAST attempt's output survives in mission_stages — one row per
+      // step id — so a stage that ran twice has one output here and its earlier
+      // reasoning only in the trajectory. Said out loud on every stage that
+      // retried rather than left for a reader to discover.
+      supersededAttempts: row === null ? null : Math.max(0, numberOr(row.attempts, 0) - 1),
+    };
+
+    if (!usable) continue;
+    if (key === "assess") out.assess = shapeAssess(output);
+    if (key === "reconcile") out.reconcile = shapeReconcile(output);
+    if (key === "critique") out.critique = shapeCritique(output);
+    if (key === "signoff") out.signoff = shapeSignoff(output);
+  }
+
+  return out;
+}
+
+/** s4's verdict: what the Leader decided about each dimension, and about the whole. */
+function shapeAssess(output) {
+  return {
+    decision: textOrNull(output.decision),
+    rationale: textOrNull(output.rationale),
+    derivedFloor: output.derivedFloor == null ? null : numberOr(output.derivedFloor, 0),
+    perDimension: asArray(output.perDimension).map((row) => ({
+      dimensionId: textOrNull(row?.dimensionId),
+      action: textOrNull(row?.action),
+      // s4 has written this field under both names across drafts. Both are
+      // read; the field is never left null while a value sits in the other one.
+      rationale: textOrNull(row?.rationale) ?? textOrNull(row?.critique),
+      verified: row?.verified == null ? null : numberOr(row.verified, 0),
+      meetsFloor: typeof row?.meetsFloor === "boolean" ? row.meetsFloor : null,
+      shortfall: row?.shortfall == null ? null : numberOr(row.shortfall, 0),
+      uniqueHosts: row?.uniqueHosts == null ? null : numberOr(row.uniqueHosts, 0),
+    })),
+    weakest: asArray(output.weakest),
+    shrinkRung: output.shrinkRung ?? null,
+  };
+}
+
+/** s5's reconciliation: the fact table, and what it could not reconcile. */
+function shapeReconcile(output) {
+  const facts = asArray(output.facts);
+  const conflicts = asArray(output.conflicts);
+  const overlaps = asArray(output.overlaps);
+  const gaps = asArray(output.gaps);
+  return {
+    facts,
+    conflicts,
+    overlaps,
+    gaps,
+    hypotheses: asArray(output.hypotheses),
+    // The stage's own counts pass through unchanged, and the lengths this
+    // projection actually returned are reported beside them. A disagreement
+    // between the two is a real disagreement worth seeing, not something to
+    // reconcile silently into whichever number is to hand.
+    counts: {
+      ...(output.counts && typeof output.counts === "object" ? output.counts : {}),
+      returnedFacts: facts.length,
+      returnedConflicts: conflicts.length,
+      returnedOverlaps: overlaps.length,
+      returnedGaps: gaps.length,
+    },
+  };
+}
+
+/** s10's critique: what the report cannot see, and where it leans. */
+function shapeCritique(output) {
+  return {
+    blindspots: asArray(output.blindspots),
+    biases: asArray(output.biases),
+    forecastVulnerabilities: asArray(output.forecastVulnerabilities),
+    counts: {
+      blindspots: asArray(output.blindspots).length,
+      biases: asArray(output.biases).length,
+      forecastVulnerabilities: asArray(output.forecastVulnerabilities).length,
+    },
+  };
+}
+
+/** s11's signature: signed or refused, and the words for it. */
+function shapeSignoff(output) {
+  const signature = output.signature && typeof output.signature === "object" ? output.signature : {};
+  return {
+    signature: {
+      // null / true / false, never coerced. `null` means s11 wrote a signature
+      // block with no verdict in it; `false` means the Leader read the report
+      // and refused. Collapsing them loses the only distinction that matters.
+      signed: typeof signature.signed === "boolean" ? signature.signed : null,
+      score: signature.score == null ? null : numberOr(signature.score, 0),
+      verdict: textOrNull(signature.verdict),
+      refusalReason: textOrNull(signature.refusalReason),
+      accountabilityNote: textOrNull(signature.accountabilityNote),
+    },
+    foreword: output.foreword && typeof output.foreword === "object" ? output.foreword : null,
+    // The forced-unsign ladder's corrections. s11 has recorded these both on
+    // the signature and at the top level; both are read and merged, because a
+    // correction that exists and is not shown is the ladder firing invisibly.
+    corrections: [...asArray(signature.corrections), ...asArray(output.corrections)],
+    leaderScore: output.leaderScore == null ? null : numberOr(output.leaderScore, 0),
+  };
+}
+
+/** A string, or null. Never `""` — an empty string renders as a field that exists and says nothing. */
+function textOrNull(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+// ── why an artefact is degraded ──────────────────────────────────────────────
+
+/** The event whose payload carries the guard's violations as structured rows. */
+const FINALIZED_EVENT = "mission:finalized";
+
+/**
+ * WHY this artefact is degraded, said on the artefact itself.
+ *
+ * `degraded: true` is a flag with no sentence attached, and the reader of a
+ * report is exactly the person who needs the sentence. Everything here is
+ * already on disk: the mission row's `failure_code`, `error_message`,
+ * `leader_signed` and `final_score`, plus s11's signature.
+ *
+ * DERIVED AT READ TIME, on purpose. Writing this into the artefact row instead
+ * would help only artefacts produced after the change; every artefact that
+ * exists today would keep saying nothing, which is the whole complaint.
+ *
+ * THE VIOLATIONS COME FROM THE EVENT, NOT FROM THE PROSE. `s12` builds
+ * `error_message` by joining `${code}: ${detail}` with a space, and the same
+ * violations go into the `mission:finalized` payload as structured rows. The
+ * structured ones are used when they are there; splitting the sentence is the
+ * fallback for a mission whose terminal event predates the payload, and the
+ * result says which of the two it used rather than presenting a parse as a
+ * record.
+ *
+ * @param {object} args - `{mission, signoff, finalizedPayload}`.
+ * @returns {object} `{signed, score, verdict, refusalReason, accountabilityNote, guardViolations, guardMessage, guardSource, failureCode, degraded}`.
+ */
+export function projectDegradeReason({ mission, signoff = null, finalizedPayload = null }) {
+  const row = mission ?? {};
+  const signature = signoff?.signature ?? null;
+  const guardMessage = textOrNull(row.errorMessage);
+
+  const structured = asArray(finalizedPayload?.detail?.violations)
+    .filter((entry) => entry && typeof entry.code === "string")
+    .map((entry) => ({ code: entry.code, detail: textOrNull(entry.detail) }));
+  const guardViolations = structured.length > 0 ? structured : splitGuardViolations(guardMessage);
+
+  // The mission row wins on `signed` and `score`: `finalizeMissionRow` writes
+  // the number AFTER the forced-unsign ladder, and s11's own signature is the
+  // Leader's pre-correction one. Where the row carries nothing — a mission that
+  // died before the terminal write — the signature is used and `signedSource`
+  // says so, rather than a null being served as "not signed".
+  const rowSigned = typeof row.leaderSigned === "boolean" ? row.leaderSigned : null;
+  const signatureSigned = typeof signature?.signed === "boolean" ? signature.signed : null;
+
+  return {
+    signed: rowSigned ?? signatureSigned,
+    signedSource: rowSigned !== null ? "missions.leader_signed" : signatureSigned !== null ? "s11-signoff.output.signature.signed" : null,
+    score: row.finalScore ?? signature?.score ?? null,
+    verdict: textOrNull(row.leaderVerdict) ?? signature?.verdict ?? null,
+    refusalReason: signature?.refusalReason ?? null,
+    accountabilityNote: signature?.accountabilityNote ?? null,
+    guardViolations,
+    guardMessage,
+    guardSource: structured.length > 0
+      ? `${FINALIZED_EVENT}.detail.violations`
+      : guardViolations.length > 0
+        ? "split from missions.error_message; the terminal event carried no structured violations"
+        : null,
+    failureCode: textOrNull(row.failureCode),
+    // The three ways an artefact can be degraded, kept apart. A report can fail
+    // the guard while the Leader signs it, and the Leader can refuse a report
+    // that passes every guard.
+    degraded: guardViolations.length > 0 || (rowSigned ?? signatureSigned) === false || textOrNull(row.failureCode) !== null,
+  };
+}
+
+/**
+ * Split `s12`'s joined guard sentence back into the violations it was built
+ * from.
+ *
+ * The FALLBACK, used only when the terminal event carried no structured rows.
+ * It matches on the closed set of guard codes rather than on "a word followed
+ * by a colon", because the details themselves contain colons and a generic
+ * pattern would cut a violation in half at the first one and present the halves
+ * as two findings.
+ *
+ * @param {string|null} message - `missions.error_message`.
+ * @returns {object[]} `[{code, detail}]`, in the order they appear.
+ */
+export function splitGuardViolations(message) {
+  if (typeof message !== "string" || message.trim() === "") return [];
+
+  const hits = [];
+  for (const code of GUARD_CODES) {
+    let from = 0;
+    for (;;) {
+      const at = message.indexOf(`${code}: `, from);
+      if (at < 0) break;
+      // Only at a boundary: `word-count: ` inside a detail sentence is prose,
+      // not the start of the next violation.
+      const before = at === 0 ? "" : message[at - 1];
+      if (at === 0 || before === "：" || before === ":" || before === " " || before === "\n") {
+        hits.push({ code, at });
+      }
+      from = at + code.length;
+    }
+  }
+  hits.sort((a, b) => a.at - b.at);
+
+  return hits.map((hit, index) => {
+    const start = hit.at + hit.code.length + 2;
+    const end = index + 1 < hits.length ? hits[index + 1].at : message.length;
+    return { code: hit.code, detail: textOrNull(message.slice(start, end)) };
+  });
+}
+
+/**
+ * Every code `contentGuard` in lib/mission-stages-back.js can emit.
+ *
+ * A COPY, and named as one. The guard owns the list; this module only has to
+ * recognise the codes inside a sentence it did not build, and importing the
+ * whole stage module into the read model to get a seven-element array would
+ * pull the writer half into every view request. If the guard grows a code and
+ * this list does not, the fallback split misses it — which is why the
+ * structured violations on the terminal event are preferred and this is the
+ * fallback, and why `guardSource` says which one produced the answer.
+ */
+const GUARD_CODES = Object.freeze([
+  "word-count",
+  "empty-chapter",
+  "under-delivered",
+  "no-citations",
+  "section-offsets",
+  "placeholder",
+  "scorecard-empty",
+]);
+
+/**
+ * The bibliography a report.md export ships with.
+ *
+ * Built by joining `artifact.citations` to `artifact.evidence` on `findingId`.
+ * An index that will not join is printed anyway, marked, and never dropped: a
+ * silently omitted citation turns `[7]` in the prose into a dangling reference
+ * to nothing, and the reader has no way to tell that from a numbering mistake.
+ *
+ * @param {object} artifact - the stored artefact row, with `citations` and `evidence`.
+ * @param {object} [options] - `{language}` — "zh" picks the Chinese heading.
+ * @returns {string} the section, starting with a blank line and its heading, or "" when there is nothing to cite.
+ */
+export function buildBibliography(artifact, { language = "zh" } = {}) {
+  const citations = asArray(artifact?.citations);
+  if (citations.length === 0) return "";
+
+  const zh = String(language ?? "zh").toLowerCase().startsWith("zh");
+  const evidence = new Map();
+  for (const row of asArray(artifact?.evidence)) {
+    if (row && typeof row.findingId === "string") evidence.set(row.findingId, row);
+  }
+
+  const lines = [];
+  lines.push("");
+  lines.push(zh ? "## 参考文献" : "## References");
+  lines.push("");
+
+  // Sorted by the index the PROSE uses, not by the order the array happens to
+  // be in, and deduped on it: two citation rows carrying index 3 would
+  // otherwise print `[3]` twice and push every later entry out of step with
+  // the text that refers to it.
+  const seen = new Set();
+  const ordered = [...citations]
+    .map((row, position) => ({ row, index: Number.isInteger(row?.index) ? row.index : position + 1 }))
+    .sort((a, b) => a.index - b.index);
+
+  for (const { row, index } of ordered) {
+    if (seen.has(index)) continue;
+    seen.add(index);
+    const url = typeof row?.url === "string" && row.url !== "" ? row.url : null;
+    const found = typeof row?.findingId === "string" ? evidence.get(row.findingId) ?? null : null;
+
+    if (found === null) {
+      // Printed, marked, never omitted. The metadata is missing; the citation
+      // is not.
+      lines.push(`[${index}] ${zh ? "（引用元数据缺失）" : "(citation metadata missing)"} ${url ?? (zh ? "（无链接）" : "(no url)")}`);
+      const inline = textOrNull(row?.inlineQuote);
+      if (inline !== null) lines.push(`    > ${oneLineQuote(inline)}`);
+      lines.push("");
+      continue;
+    }
+
+    const label = textOrNull(found.sourceTitle) ?? textOrNull(found.sourceHost) ?? (zh ? "（来源不详）" : "(source unknown)");
+    lines.push(`[${index}] ${label} — ${url ?? found.sourceUrl ?? (zh ? "（无链接）" : "(no url)")}`);
+
+    const quote = textOrNull(found.quote) ?? textOrNull(row?.inlineQuote);
+    if (quote !== null) lines.push(`    > ${oneLineQuote(quote)}`);
+
+    // The fetch stamp, which is what makes the quote checkable: it says the
+    // page said this, on this date, with this status. A quote with no stamp is
+    // an assertion about a page that may since have changed.
+    const stamp = [
+      found.fetchedAt == null ? null : `${zh ? "抓取于" : "fetched"} ${found.fetchedAt}`,
+      found.status == null ? null : `HTTP ${found.status}`,
+      textOrNull(found.verifyState),
+    ].filter((part) => part !== null);
+    if (stamp.length > 0) lines.push(`    ${stamp.join(" · ")}`);
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+/** One line of quote, so a multi-paragraph span cannot break the list it sits in. */
+function oneLineQuote(text) {
+  return String(text).replace(/\s+/gu, " ").trim();
 }

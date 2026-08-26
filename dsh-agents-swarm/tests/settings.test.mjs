@@ -378,7 +378,22 @@ const costOf = (used) => ({
   tokensBreakdown: { promptTok: used.tokens, completionTok: 0, cacheReadTok: 0 },
   drift: { estimated: 0, exact: used.tokens, ratio: null, exceeds: null, tolerance: 0.15 },
   waste: { stageRetries: 0, chapterRewrites: 0, underDeliveredChapters: 0, toolFailures: 3, toolCached: 1 },
-  byStage: [], byAgent: [],
+  // Both already computed by `projectCost`, already in the /view payload, and
+  // until now read by nothing. `s3-collect` carries fifty-one calls and zero
+  // tokens, which is the true state of a real ledger and must not be drawn as
+  // a stage that ran for free.
+  byStage: [
+    { stepId: "s3-collect", role: "researcher", calls: 51, tokens: 0 },
+    { stepId: "s2-plan", role: "leader", calls: 4, tokens: 120000 },
+    { stepId: "s1-brief", role: "leader", calls: 2, tokens: 46000 },
+  ],
+  byAgent: [],
+  byTool: [
+    { tool: "web.search", calls: 12, failures: 1, cached: 3, latencyMs: 9840, latencyMeasured: 12, unmeasured: 0, avgLatencyMs: 820 },
+    // Nine calls, four of them failed, and not one of them timed. An average of
+    // 0ms here would read as instant about a door nobody measured.
+    { tool: "fetch_page", calls: 9, failures: 4, cached: 0, latencyMs: 0, latencyMeasured: 0, unmeasured: 9, avgLatencyMs: null },
+  ],
 });
 
 /** A mission part-way through collection. */
@@ -424,6 +439,18 @@ const LIVE_VIEW = {
       chapters: { total: 0, done: 0, writing: 0, pending: 0, failed: 0, underDelivered: 0, rewrites: 0 },
       blocked: true,
     },
+  ],
+  // `work`: the tree the board draws — the twelve stages as parents, and the
+  // decisions somebody made as children under the stage that made them. Absent
+  // from this fixture for a whole release, which is exactly how the projection
+  // shipped with no reader.
+  work: [
+    { id: "stage:s2-plan", parentId: null, origin: "pipeline", title: "s2-plan", state: "done", assignee: "leader", reason: null, counts: { attempts: 1 } },
+    { id: "stage:s3-collect", parentId: null, origin: "pipeline", title: "s3-collect", state: "running", assignee: "researcher", reason: null, counts: { attempts: 1 } },
+    { id: "dimension:d1", parentId: "stage:s3-collect", origin: "s2-plan", title: "推理时序扩展的复现情况", state: "collected", assignee: "researcher:d1", dimensionId: "d1", reason: "s2 规划的维度之一。", counts: { verified: 5, floor: 3, attempts: 1 } },
+    { id: "dimension:d2", parentId: "stage:s3-collect", origin: "s2-plan", title: "许可证与再分发条款", state: "degraded", assignee: "researcher:d2", dimensionId: "d2", reason: "s2 规划的维度之一。", counts: { verified: 1, floor: 3, attempts: 2 } },
+    { id: "stage:s4-assess", parentId: null, origin: "pipeline", title: "s4-assess", state: "done", assignee: "leader", reason: null, counts: { attempts: 2 } },
+    { id: "recollect:d2", parentId: "stage:s4-assess", origin: "leader-assess-recollect", title: "许可证与再分发条款", state: "degraded", assignee: "leader", dimensionId: "d2", reason: "两个维度低于下限，再收一轮。", critique: "这个维度只拿到一个站点，需要一条独立来源。", counts: { verified: 1, floor: 3, attempts: 1 } }
   ],
   // What /view actually returns for a mission that has run agents. An empty
   // array here made the spend pane a total with nobody attached to it, and the
@@ -566,6 +593,23 @@ const ARTIFACTS = {
       kind: undefined,
       markdown: "# 一个什么都没查到的冷门课题\n\n没有可核验的证据。\n",
       evidence: [],
+      // What `projectDegradeReason` returns, violations and all. The screen used
+      // to print one either/or sentence — the guard fired OR the leader refused
+      // — for every degraded version, which says something is wrong and nothing
+      // about what.
+      degradeReason: {
+        signed: false, signedSource: "missions.leader_signed", score: 31, verdict: "refuse",
+        refusalReason: "全文一处引用都没有，签不下去。",
+        accountabilityNote: "失败在采集：四个页面里有三个抓不下来。",
+        guardViolations: [
+          { code: "no-citations", detail: "citations.length === 0" },
+          { code: "scorecard-empty", detail: "quality.total === 0" },
+        ],
+        guardMessage: REFUSED.errorMessage,
+        guardSource: "mission:finalized.detail.violations",
+        failureCode: "quality_refused",
+        degraded: true,
+      },
     },
     versions: DEAD_VIEW.artifact.versions,
   },
@@ -573,9 +617,23 @@ const ARTIFACTS = {
     artifact: {
       missionId: SIGNED.id, version: 2, runCount: 1, trigger: "initial",
       title: "开源推理模型的许可证走向",
-      markdown: "# 开源推理模型的许可证走向\n\n三家实验室同期收敛到同一种做法。\n",
+      // `[1]`, `[2]` and `[9]`, exactly as s8 writes them. Two of the three have
+      // a citation behind them and one does not, which is the distinction the
+      // marker has to draw: a number that leads somewhere and a number that
+      // leads nowhere must not look the same.
+      markdown: "# 开源推理模型的许可证走向\n\n三家实验室同期收敛到同一种做法[1]，第二家实验室报告了同样的曲线[2]。\n\n这一句引的是一个没有留下元数据的编号[9]。\n",
       sections: [{ dimensionId: "d1", chapterIndex: 0, sectionType: "evidenced", heading: "训练侧", start: 0, end: 40 }],
-      citations: [{ index: 1, url: "https://deepmind.google/discover/scaling", findingId: "f1", inlineQuote: "we observe the same scaling behaviour at test time" }],
+      citations: [
+        { index: 1, url: "https://deepmind.google/discover/scaling", findingId: "f1", inlineQuote: "we observe the same scaling behaviour at test time" },
+        // The second one joins on `findingId` and the frozen row it lands on
+        // has no address: the entry still exists, still carries its quote, and
+        // says the address did not survive.
+        { index: 2, url: "", findingId: "f2", inlineQuote: "the replication holds across the two smaller model sizes" },
+        // The third joins nothing at all. It is kept and marked rather than
+        // dropped, because a silently missing entry turns a number in the prose
+        // into a pointer to nothing with no way to tell that from a mistake.
+        { index: 3, url: "https://example.net/withdrawn", findingId: "f-not-frozen", inlineQuote: "" },
+      ],
       evidence: [
         {
           findingId: "f1", dimensionId: "d1",
@@ -600,6 +658,27 @@ const ARTIFACTS = {
       ],
       quality: { evidenced: { total: 4, verified: 3, unverified: 1, unchecked: 0, contradicted: 0 }, interpretive: { total: 2, verified: 2, unverified: 0, unchecked: 0, contradicted: 0 }, unplaced: { total: 0, verified: 0, unverified: 0, unchecked: 0, contradicted: 0 }, total: 6 },
       wordCount: 8200, degraded: false, createdAt: "2026-08-24T10:00:00.000Z",
+    },
+    // The older version, answered as a DIFFERENT document. A stub that served
+    // the newest whatever was asked for would let a download control that sends
+    // the wrong version pass this file.
+    olderVersions: {
+      1: {
+        missionId: SIGNED.id, version: 1, runCount: 1, trigger: "initial",
+        title: "开源推理模型的许可证走向",
+        markdown: "# 开源推理模型的许可证走向\n\n第一版只写了三百字就被闸门拦下了。\n",
+        sections: [], citations: [], evidence: [],
+        quality: { evidenced: { total: 0, verified: 0, unverified: 0, unchecked: 0, contradicted: 0 }, interpretive: { total: 0, verified: 0, unverified: 0, unchecked: 0, contradicted: 0 }, unplaced: { total: 0, verified: 0, unverified: 0, unchecked: 0, contradicted: 0 }, total: 0 },
+        wordCount: 300, degraded: true, createdAt: "2026-08-24T09:50:00.000Z",
+        degradeReason: {
+          signed: null, signedSource: null, score: null, verdict: null,
+          refusalReason: null, accountabilityNote: null,
+          guardViolations: [{ code: "word-count", detail: "300 words against a floor of 2400" }],
+          guardMessage: "word-count: 300 words against a floor of 2400",
+          guardSource: "mission:finalized.detail.violations",
+          failureCode: null, degraded: true,
+        },
+      },
     },
     versions: [
       { version: 2, runCount: 1, trigger: "initial", title: "开源推理模型的许可证走向", wordCount: 8200, degraded: false, citations: 1, createdAt: "2026-08-24T10:00:00.000Z" },
@@ -670,6 +749,20 @@ const LIVE_TRACE_ROWS = [
     dimensionName: "推理时序扩展的训练侧做法",
     paceKey: null, ref: "finding:f1",
   },
+  // The third dimension, with exactly one row to its name. It is here so the
+  // dimension select has something to be honest about: five dimensions were
+  // planned, three ever reached the trajectory, and an option that matches one
+  // row has to say "1" rather than looking like the other two.
+  {
+    seq: 7, at: "2026-08-24T09:14:30.000Z", kind: "finding", role: "EVIDENCE",
+    title: "arxiv.org",
+    detail: "评测侧只留下了一条记录",
+    result: "the evaluation dimension recorded exactly one row",
+    ms: null, ok: true, state: "verified-source-text",
+    stepId: null, agentId: null, dimensionId: "d3",
+    dimensionName: "推理时序扩展的评测侧做法",
+    paceKey: null, ref: "finding:f7",
+  },
 ];
 
 /** The rows of the mission that verified nothing. */
@@ -719,9 +812,15 @@ const DEAD_TRACE_ROWS = [
   },
 ];
 
+// FIVE PLANNED. `data.dimensions` is what s2 wrote down, and it is the list the
+// filter used to be built from — on a real mission five options of which three
+// can ever match, with nothing on screen saying which two were dead ends.
 const LIVE_TRACE_DIMENSIONS = [
   { dimensionId: "d1", name: "推理时序扩展的训练侧做法", state: "collected", verified: 5, total: 5, uniqueHosts: 3 },
   { dimensionId: "d2", name: "推理时序扩展的推理侧做法", state: "collecting", verified: 2, total: 4, uniqueHosts: 2 },
+  { dimensionId: "d3", name: "推理时序扩展的评测侧做法", state: "collecting", verified: 1, total: 1, uniqueHosts: 1 },
+  { dimensionId: "d4", name: "推理时序扩展的成本账", state: "pending", verified: 0, total: 0, uniqueHosts: 0 },
+  { dimensionId: "d5", name: "推理时序扩展的监管面", state: "pending", verified: 0, total: 0, uniqueHosts: 0 },
 ];
 
 const TRACES = {
@@ -865,6 +964,23 @@ const finding = (id, over) => ({
   ...over,
 });
 
+/** `[{host, findings}]` over a list of findings, busiest first. */
+function hostTally(rows) {
+  const seen = new Map();
+  for (const row of rows) {
+    if (typeof row.sourceHost !== "string" || row.sourceHost === "") continue;
+    seen.set(row.sourceHost, (seen.get(row.sourceHost) ?? 0) + 1);
+  }
+  return [...seen].map(([host, findings]) => ({ host, findings })).sort((a, b) => b.findings - a.findings);
+}
+
+/** The nine verify states, as the route's vocabulary carries them. */
+const VERIFY_STATES = [
+  "verified-source-text", "verified-adjacent-spans", "verified-abstract",
+  "misattributed", "unverifiable", "too-short",
+  "unchecked-fetch-failed", "unchecked-rate-limited", "unchecked-stale",
+];
+
 /**
  * `/missions/:id/findings?dimensionId=…`, per mission and dimension.
  *
@@ -898,21 +1014,45 @@ const FINDINGS = {
           sourceHost: "arxiv.org", verifyState: "verified-source-text",
           counts: true, verified: true,
         }),
+        // FIFTY-THREE MORE, so `hasMore` is something a slice actually produces.
+        // `MISSION_FINDINGS_TAKE` is 50: a fixture of two findings with
+        // `hasMore: true` written into it is a fixture agreeing with itself, and
+        // the control that fetches the second page would never be exercised.
+        ...Array.from({ length: 53 }, (_, at) => finding(`f1-${at}`, {
+          dimensionName: "推理时序扩展的训练侧做法",
+          claim: `第 ${at + 3} 条同类记录`,
+          quote: `the ${at + 3}th corroborating span behind the same claim`,
+          quoteChars: 50,
+          sourceUrl: at % 2 === 0
+            ? `https://deepmind.google/discover/scaling-${at}`
+            : `https://arxiv.org/abs/2401.${String(at).padStart(5, "0")}`,
+          sourceHost: at % 2 === 0 ? "deepmind.google" : "arxiv.org",
+          verifyState: "verified-source-text", counts: true, verified: true,
+        })),
       ],
-      // Two of five, and it says so rather than presenting a page as a whole.
-      page: { take: 50, skip: 0, returned: 2, hasMore: true, order: "oldest" },
-      counts: { total: 5, byState: { "verified-source-text": 5 }, verified: 5, verifiedAbstract: 0, unchecked: 0, uniqueHosts: 3 },
-      hosts: [{ host: "deepmind.google", findings: 3 }, { host: "arxiv.org", findings: 2 }],
-      vocabulary: { verifyStates: [], countingState: "verified-source-text", fetchBackedStates: [] },
+      // Filled in by the stub, which pages over `findings` rather than stating
+      // a page that no slice produces.
+      page: { take: 50, skip: 0, returned: 50, hasMore: true, order: "created" },
+      counts: { total: 55, byState: { "verified-source-text": 55 }, verified: 55, verifiedAbstract: 0, unchecked: 0, uniqueHosts: 2 },
+      hosts: [{ host: "deepmind.google", findings: 28 }, { host: "arxiv.org", findings: 27 }],
+      allHosts: [{ host: "deepmind.google", findings: 28 }, { host: "arxiv.org", findings: 27 }],
+      vocabulary: {
+        verifyStates: VERIFY_STATES, countingState: "verified-source-text", fetchBackedStates: [],
+        orders: ["created", "host", "verifyState"],
+        sourceHosts: ["deepmind.google", "arxiv.org"],
+      },
     },
     d2: {
       missionId: RUNNING.id, runCount: 1,
       scope: { dimensionId: "d2", verifyState: null, attempt: null },
       dimension: null, findings: [],
-      page: { take: 50, skip: 0, returned: 0, hasMore: false, order: "oldest" },
+      page: { take: 50, skip: 0, returned: 0, hasMore: false, order: "created" },
       counts: { total: 0, byState: {}, verified: 0, verifiedAbstract: 0, unchecked: 0, uniqueHosts: 0 },
-      hosts: [],
-      vocabulary: { verifyStates: [], countingState: "verified-source-text", fetchBackedStates: [] },
+      hosts: [], allHosts: [],
+      vocabulary: {
+        verifyStates: VERIFY_STATES, countingState: "verified-source-text", fetchBackedStates: [],
+        orders: ["created", "host", "verifyState"], sourceHosts: [],
+      },
     },
   },
   [REFUSED.id]: {
@@ -926,16 +1066,75 @@ const FINDINGS = {
         finding("g3", { claim: "这个课题的第三条线索", quote: "the archive copy has been withdrawn by the author", quoteChars: 48, sourceUrl: "https://example.org/withdrawn", sourceHost: "example.org", verifyState: "unchecked-fetch-failed" }),
         finding("g4", { claim: "这个课题的第四条线索", quote: "a mirror of the same page carries the identical wording", quoteChars: 55, sourceUrl: "https://mirror.example.net/copy", sourceHost: "mirror.example.net", verifyState: "unchecked-rate-limited" }),
       ],
-      page: { take: 50, skip: 0, returned: 4, hasMore: false, order: "oldest" },
+      page: { take: 50, skip: 0, returned: 4, hasMore: false, order: "created" },
       counts: { total: 4, byState: { "unchecked-fetch-failed": 3, "unchecked-rate-limited": 1 }, verified: 0, verifiedAbstract: 0, unchecked: 4, uniqueHosts: 0 },
-      hosts: [{ host: "example.org", findings: 3 }, { host: "mirror.example.net", findings: 1 }],
-      vocabulary: { verifyStates: [], countingState: "verified-source-text", fetchBackedStates: [] },
+      // `hosts` is verified-only and this mission verified nothing, so it is
+      // empty while `allHosts` is not — which is exactly why the host filter is
+      // validated against the second one.
+      hosts: [],
+      allHosts: [{ host: "example.org", findings: 3 }, { host: "mirror.example.net", findings: 1 }],
+      vocabulary: {
+        verifyStates: VERIFY_STATES, countingState: "verified-source-text", fetchBackedStates: [],
+        orders: ["created", "host", "verifyState"],
+        sourceHosts: ["example.org", "mirror.example.net"],
+      },
     },
   },
 };
 
 FINDINGS[ORPHAN.id] = FINDINGS[RUNNING.id];
 FINDINGS[SIGNED.id] = FINDINGS[RUNNING.id];
+
+/**
+ * `/missions/:id/sources`: one row per distinct URL, not per finding.
+ *
+ * Fourteen findings over three pages. The page cited six times is ONE row here
+ * and six rows in the findings route, which is the whole reason this route
+ * exists: a references screen built from findings shows the same address six
+ * times and makes a thinly-sourced mission look well sourced.
+ */
+const SOURCES = {
+  [SIGNED.id]: {
+    missionId: SIGNED.id, runCount: 1, scope: { dimensionId: null },
+    sources: [
+      {
+        url: "https://kanatanorthba.com/about/", host: "kanatanorthba.com",
+        title: "About the Kanata North business association",
+        findings: 6, verified: 4, dimensionIds: ["d1", "d2"],
+        verifyStates: { "verified-source-text": 4, "unchecked-fetch-failed": 2 },
+        firstSeenAt: "2026-08-22T09:20:00.000Z",
+      },
+      {
+        url: "https://deepmind.google/discover/scaling", host: "deepmind.google",
+        title: "Scaling test-time compute",
+        findings: 5, verified: 5, dimensionIds: ["d1"],
+        verifyStates: { "verified-source-text": 5 },
+        firstSeenAt: "2026-08-22T09:22:00.000Z",
+      },
+      {
+        url: "https://arxiv.org/abs/2401.00002", host: "arxiv.org",
+        title: "Replication at two smaller sizes",
+        findings: 3, verified: 2, dimensionIds: ["d2"],
+        verifyStates: { "verified-source-text": 2, "unchecked-rate-limited": 1 },
+        firstSeenAt: "2026-08-22T09:31:00.000Z",
+      },
+    ],
+    totals: { sources: 3, hosts: 3, findings: 14, verified: 11 },
+    runs: [{ runCount: 1, total: 14, verified: 11, dimensions: 2 }],
+    dimensions: [
+      { dimensionId: "d1", name: "推理时序扩展的训练侧做法" },
+      { dimensionId: "d2", name: "推理时序扩展的推理侧做法" },
+    ],
+  },
+  // A mission that has not read a page yet: the pane must say that rather than
+  // drawing an empty rectangle indistinguishable from a crash.
+  [RUNNING.id]: {
+    missionId: RUNNING.id, runCount: 1, scope: { dimensionId: null },
+    sources: [], totals: { sources: 0, hosts: 0, findings: 0, verified: 0 },
+    runs: [{ runCount: 1, total: 0, verified: 0, dimensions: 0 }],
+    dimensions: [],
+  },
+};
 
 /**
  * `/missions/:id/trace`, filtered and ordered the way the route does it.
@@ -947,12 +1146,14 @@ FINDINGS[SIGNED.id] = FINDINGS[RUNNING.id];
 function tracePage(missionId, query, from = TRACES[missionId]) {
   const source = from ?? { rows: [], stages: [], dimensions: [], lastEventSeq: 0, window: {} };
   const kind = query.get("kind");
+  const agentId = query.get("agentId");
   const stepId = query.get("stepId");
   const dimensionId = query.get("dimensionId");
   const needle = (query.get("search") ?? "").toLowerCase();
   const order = query.get("order") ?? "newest";
   const matched = source.rows.filter((row) => {
     if (kind !== null && row.kind !== kind) return false;
+    if (agentId !== null && row.agentId !== agentId) return false;
     if (stepId !== null && row.stepId !== stepId) return false;
     if (dimensionId !== null && row.dimensionId !== dimensionId) return false;
     if (needle === "") return true;
@@ -967,18 +1168,47 @@ function tracePage(missionId, query, from = TRACES[missionId]) {
       returned: rows.length, total: matched.length, hasMore: false,
       unfiltered: source.rows.length,
     },
-    filters: { kind, role: null, stepId, dimensionId, search: needle === "" ? null : needle },
+    filters: { kind, role: null, agentId, stepId, dimensionId, search: needle === "" ? null : needle },
     window: source.window,
     stages: source.stages,
     dimensions: source.dimensions,
     lastEventSeq: source.lastEventSeq,
     truncation: { detailChars: 200, resultChars: 160 },
+    // MEASURED FROM THE ROWS, exactly as `traceVocabulary` does it on the Host
+    // half. Derived here rather than written as a literal, so a fixture whose
+    // rows change cannot go on advertising an option that matches none of them
+    // — which is the whole defect this vocabulary exists to close.
     vocabulary: {
       kinds: ["stage", "tool", "finding", "event"],
       roles: ["STAGE", "TOOL", "EVIDENCE", "GATE", "SYSTEM"],
       orders: ["newest", "oldest"],
+      agents: traceAgents(source.rows),
+      dimensions: traceDimensions(source.rows),
     },
   };
+}
+
+/** `{id, rows}` per agent that produced a row, busiest first. */
+function traceAgents(rows) {
+  const seen = new Map();
+  for (const row of rows) {
+    if (typeof row.agentId !== "string" || row.agentId === "") continue;
+    seen.set(row.agentId, (seen.get(row.agentId) ?? 0) + 1);
+  }
+  return [...seen].map(([id, count]) => ({ id, rows: count }))
+    .sort((a, b) => b.rows - a.rows || a.id.localeCompare(b.id));
+}
+
+/** `{dimensionId, name, rows}` per dimension that appears on a row. */
+function traceDimensions(rows) {
+  const seen = new Map();
+  for (const row of rows) {
+    if (typeof row.dimensionId !== "string" || row.dimensionId === "") continue;
+    const held = seen.get(row.dimensionId);
+    if (held === undefined) seen.set(row.dimensionId, { dimensionId: row.dimensionId, name: row.dimensionName ?? null, rows: 1 });
+    else held.rows += 1;
+  }
+  return [...seen.values()].sort((a, b) => b.rows - a.rows || a.dimensionId.localeCompare(b.dimensionId));
 }
 
 /** `/missions/:id/trace/:ref`, in the shape `traceDetail` builds it. */
@@ -1069,6 +1299,9 @@ function stubFetch(overrides = {}) {
     const view = Object.keys(views).find((id) => address.includes(`/missions/${id}/view`));
     if (view !== undefined) return ok(views[view]);
 
+    const sourced = Object.keys(SOURCES).find((id) => address.includes(`/missions/${id}/sources`));
+    if (sourced !== undefined) return ok(SOURCES[sourced]);
+
     // The three routes the trajectory reads. `/trace/<ref>` is matched before
     // `/trace`, because the ref is a fourth path segment on the same action and
     // a prefix test would answer the detail request with the list.
@@ -1101,8 +1334,8 @@ function stubFetch(overrides = {}) {
       const query = new URLSearchParams(address.slice(address.indexOf("?") + 1));
       const dimensionId = query.get("dimensionId") ?? "";
       const page = FINDINGS[evidenced][dimensionId];
-      return page === undefined
-        ? {
+      if (page === undefined) {
+        return {
           ok: false,
           json: async () => ({
             success: false,
@@ -1111,12 +1344,46 @@ function stubFetch(overrides = {}) {
             // nothing, and those two want opposite reactions.
             error: `mission ${evidenced} has no dimension "${dimensionId}" at run 1. It has ${Object.keys(FINDINGS[evidenced]).join(", ")}.`,
           }),
-        }
-        : ok(page);
+        };
+      }
+      // FILTERED AND PAGED HERE, for the reason `/missions/list` is answered per
+      // status: the interesting question about a control is not whether it
+      // draws, it is whether the list under it changes. A stub that ignored
+      // `verifyState`, `sourceHost`, `order` and `skip` would pass a page that
+      // sends them and throws the answers away.
+      const take = Number(query.get("take") ?? 50);
+      const skip = Number(query.get("skip") ?? 0);
+      const verifyState = query.get("verifyState");
+      const sourceHost = query.get("sourceHost");
+      const order = query.get("order") ?? "created";
+      let rows = page.findings;
+      if (verifyState !== null) rows = rows.filter((row) => row.verifyState === verifyState);
+      if (sourceHost !== null) rows = rows.filter((row) => row.sourceHost === sourceHost);
+      if (order === "host") rows = [...rows].sort((a, b) => String(a.sourceHost).localeCompare(String(b.sourceHost)));
+      if (order === "verifyState") rows = [...rows].sort((a, b) => String(a.verifyState).localeCompare(String(b.verifyState)));
+      const window = rows.slice(skip, skip + take);
+      return ok({
+        ...page,
+        findings: window,
+        page: { take, skip, returned: window.length, hasMore: skip + window.length < rows.length, order },
+        counts: { ...page.counts, total: rows.length },
+        scope: { ...(page.scope ?? {}), verifyState, sourceHost, order },
+      });
     }
 
     const artifact = Object.keys(ARTIFACTS).find((id) => address.includes(`/missions/${id}/artifact`));
-    if (artifact !== undefined) return ok(ARTIFACTS[artifact]);
+    if (artifact !== undefined) {
+      const held = ARTIFACTS[artifact];
+      const query = new URLSearchParams(address.includes("?") ? address.slice(address.indexOf("?") + 1) : "");
+      const asked = Number(query.get("version") ?? 0);
+      if (asked > 0 && held.artifact?.version !== asked) {
+        const older = (held.olderVersions ?? {})[asked];
+        return ok(older === undefined
+          ? { artifact: { kind: "empty-artifact", reason: "no-such-version" }, versions: held.versions }
+          : { artifact: older, versions: held.versions });
+      }
+      return ok(held);
+    }
 
     return ok(
       address.includes("/collect/status") ? STATUS
@@ -1421,7 +1688,7 @@ test("opening a mission shows its twelve stages, its cost and its tail", async (
   // The per-dimension pane, with the floor as a fraction rather than a tick.
   const dims = await pane(view, "证据");
   assert.ok(dims.includes("已核验 5/3 条"), "a dimension does not say how it stands against the floor");
-  assert.ok(dims.includes("读了 6 个页面"), "a dimension does not say how much it read");
+  assert.ok(dims.includes("抓到 6 页"), "a dimension does not say how much it read");
   // Availability and quality are never the same number in the same place.
   assert.ok(dims.includes("被限流"), "a rate-limited dimension does not say so");
   assert.ok(dims.includes("这是取不到，不是没有"), "a blocked dimension reads as an empty one");
@@ -1607,7 +1874,7 @@ test("the trajectory is one dense row per step, whatever the step was", async ()
   assert.ok(text.includes("规划"), "a stage row prints its raw step id");
   assert.ok(text.includes("开始运行"), "an event row prints its raw type");
   // The read is bounded and says how far it got against how much there is.
-  assert.ok(text.includes("显示 6 / 6 条"), "the trajectory does not say how much of itself it is showing");
+  assert.ok(text.includes("显示 7 / 7 条"), "the trajectory does not say how much of itself it is showing");
 });
 
 test("clicking a row opens a panel beside the list, and the list stays put", async () => {
@@ -1684,7 +1951,7 @@ test("the panes are the set playground settled on, in its order", async () => {
   const labels = paneLabels(view.tree);
   assert.deepEqual(
     labels.map((label) => label.replace(/[0-9]/g, "")),
-    ["任务", "轨迹", "报告", "证据", "成本"],
+    ["任务", "轨迹", "报告", "参考文献", "证据", "成本"],
     "the tab strip drifted from playground's set",
   );
 
@@ -1699,18 +1966,60 @@ test("the panes are the set playground settled on, in its order", async () => {
     "a pane offers a back button to a screen it never left",
   );
   // And back out in one click, from inside the report.
-  assert.ok(paneLabels(view.tree).length === 5, "the strip did not survive the report");
+  assert.ok(paneLabels(view.tree).length === 6, "the strip did not survive the report");
 });
 
-test("a mission with no report has no report tab", async () => {
-  // Not a tab that opens onto an apology. A running mission has not written
-  // anything yet, and a strip that offers to show it is a strip that lies.
+test("the report tab never leaves the strip, and a stale pane falls back", async () => {
+  // The strip used to drop 报告 whenever there was no artefact behind it, which
+  // reads as a feature this mission does not have rather than as a report it has
+  // not written yet — and it made the strip a different shape per mission, so
+  // `pane` could hold a value the strip no longer offered.
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   await open(view, RUNNING.topic);
   const labels = paneLabels(view.tree).map((label) => label.replace(/[0-9]/g, ""));
   assert.ok(labels.includes("轨迹"), "the fixture never rendered a tab strip");
-  assert.ok(!labels.includes("报告"), "a mission that has written nothing offers a report tab");
+  assert.ok(labels.includes("报告"), "a mission that has written nothing has no tab to say so on");
+  const text = await pane(view, "报告");
+  assert.ok(text.includes("还没有生成报告"), "the report tab opens onto a blank pane");
+
+  // A pane the strip does not offer must not be a blank body under a strip with
+  // nothing pressed on it.
+  stubFetch();
+  const stale = await render("MissionDetail", {
+    missionId: RUNNING.id, zh: true, onBack: () => {}, initialPane: "图谱分析",
+  });
+  assert.ok(
+    textOf(stale.tree).join(" ").includes("负责人"),
+    "a pane value the strip does not offer renders nothing at all",
+  );
+});
+
+test("the task board shows the work, not only the pipeline that ran it", async () => {
+  // The defect this closes: `view.work` was projected, tested, and had NO
+  // READER. The board painted the twelve pipeline stages — the scaffolding —
+  // while the decisions somebody actually made (a dimension planned, a
+  // re-collect the Leader called for, with the sentence they wrote about it)
+  // sat one field away and were drawn by nothing.
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  const tasks = await open(view, RUNNING.topic);
+  assert.ok(tasks.includes("规划"), "the pipeline rows are gone");
+  assert.ok(tasks.includes("维度"), "a planned dimension is not a row on the board");
+  assert.ok(tasks.includes("领队要求重采"), "the Leader's re-collect decision is not a row on the board");
+  // The Leader's own words about THAT dimension, not the mission-level
+  // rationale repeated under every child.
+  assert.ok(tasks.includes("这个维度只拿到一个站点"), "a re-collect row does not say why it was called for");
+  assert.ok(tasks.includes("已核验 1/3"), "a dimension row does not say how it stands against its floor");
+});
+
+test("a board on a host that has not shipped work yet is still a board", async () => {
+  // Rolling updates: the browser half is newer than the machine that owns the
+  // library. A blank rectangle is indistinguishable from a component that threw.
+  stubFetch({ views: { [RUNNING.id]: { ...LIVE_VIEW, work: [] } } });
+  const view = await render("MissionsTab", { zh: true });
+  const tasks = await open(view, RUNNING.topic);
+  assert.ok(tasks.includes("规划") && tasks.includes("采集"), "the board fell back to nothing");
 });
 
 test("the panes are separate screens, not one scroll with headings", async () => {
@@ -1727,7 +2036,7 @@ test("the panes are separate screens, not one scroll with headings", async () =>
     assert.ok(tasks.includes(column), `the task board has no ${column} column`);
   }
   assert.ok(tasks.includes("看轨迹 →"), "a stage row does not open onto its trajectory");
-  assert.ok(!tasks.includes("显示 6 / 6 条"), "the trajectory is rendered under the task board");
+  assert.ok(!tasks.includes("显示 7 / 7 条"), "the trajectory is rendered under the task board");
   assert.ok(!tasks.includes("已核验 5/3 条"), "the evidence is rendered under the task board");
   assert.ok(!tasks.includes("最紧"), "the spend is rendered under the task board");
 
@@ -1736,7 +2045,7 @@ test("the panes are separate screens, not one scroll with headings", async () =>
   assert.ok(!dims.includes("最紧"), "the spend is still on screen behind the evidence");
 
   const trace = await pane(view, "轨迹");
-  assert.ok(trace.includes("显示 6 / 6 条"), "the trajectory pane is empty");
+  assert.ok(trace.includes("显示 7 / 7 条"), "the trajectory pane is empty");
   // "立项" is in the trajectory too — it is a value in the stage filter.
   assert.ok(!trace.includes("看轨迹 →"), "the task board is still on screen behind the trajectory");
 
@@ -1767,7 +2076,7 @@ test("the kind chips and the search change the list under them", async () => {
   // "0" and "0 of 6" are different sentences: one says the mission did nothing,
   // the other says this filter matches nothing.
   assert.ok(
-    textOf(view.tree).join(" ").includes("轨迹里一共有 6 条"),
+    textOf(view.tree).join(" ").includes("轨迹里一共有 7 条"),
     "an empty filter reads as an empty mission",
   );
 });
@@ -1862,7 +2171,7 @@ test("the trajectory reads in English too, every string paired", async () => {
   await view.act(() => { button(view.tree, RUNNING.topic).props.onClick(); });
   await pane(view, "Trajectory");
   let text = textOf(view.tree).join(" ");
-  for (const piece of ["All rows", "Findings", "TOOL", "EVIDENCE", "web.search", "showing 6 of 6", "Mission started"]) {
+  for (const piece of ["All rows", "Findings", "TOOL", "EVIDENCE", "web.search", "showing 7 of 7", "Mission started"]) {
     assert.ok(text.includes(piece), `the English trajectory is missing ${piece}`);
   }
 
@@ -1896,7 +2205,7 @@ test("an empty trajectory and an empty filter are different sentences", async ()
   await pane(other, "轨迹");
   await other.act(() => { traceSearch(other.tree).props.onChange({ target: { value: "没有这种东西" } }); });
   const filtered = textOf(other.tree).join(" ");
-  assert.ok(filtered.includes("轨迹里一共有 6 条"), "a filter that matches nothing does not say what it filtered");
+  assert.ok(filtered.includes("轨迹里一共有 7 条"), "a filter that matches nothing does not say what it filtered");
   assert.ok(!filtered.includes("还没有留下任何轨迹"), "a filter that matched nothing is reported as a mission that did nothing");
 });
 
@@ -1918,7 +2227,7 @@ test("both empty states read in English as well", async () => {
     find(other.tree, (node) => node.props?.["aria-label"] === "Search the trajectory").props.onChange({ target: { value: "nothing like this" } });
   });
   assert.ok(
-    textOf(other.tree).join(" ").includes("the trajectory holds 6 row(s)"),
+    textOf(other.tree).join(" ").includes("the trajectory holds 7 row(s)"),
     "the English empty filter does not say what it filtered",
   );
 });
@@ -1948,6 +2257,414 @@ test("a trajectory still being read is not a trajectory that came back empty", a
   assert.ok(text.includes("正在读取轨迹"), "a pending read says nothing at all while it is pending");
   // And it must not report a total it has not been told.
   assert.ok(!text.includes("显示 0 / 0 条"), "a pending read prints a count it does not have");
+});
+
+// ── the report's citations ──────────────────────────────────────────────────
+//
+// Eleven numbered markers in the prose and nothing anywhere saying what [7] was.
+// Both halves of the answer were stored on the artefact the whole time —
+// `citations` carries the index and the finding, `evidence` carries that
+// finding's title, quote and fetch stamp — so the list below is a join, not a
+// derivation.
+
+test("a citation marker is a control, and the report ends in a reference list", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, SIGNED.topic);
+  await pane(view, "报告");
+
+  assert.equal(findAll(view.tree, (node) => node.props?.id === "ref-1").length, 1, "the reference list has no entry for [1]");
+  assert.equal(findAll(view.tree, (node) => node.props?.id === "ref-2").length, 1, "the reference list has no entry for [2]");
+
+  const marks = findAll(view.tree, (node) => node.type === "button" && textOf(node).includes("[1]"))
+    .concat(findAll(view.tree, (node) => node.type === "button" && textOf(node).includes("[2]")));
+  assert.equal(marks.length, 2, "the markers in the prose are still two inert characters");
+
+  const text = textOf(view.tree).join(" ");
+  // A real title, a real quote and a real host — not the column of bare
+  // addresses a list built from `citations` alone would be.
+  assert.ok(text.includes("Scaling test-time compute"), "the reference names no source");
+  assert.ok(text.includes("文中 1 处"), "the list does not say how often the prose leans on a source");
+  assert.ok(text.includes("这条引用没有留下地址"), "a citation whose address did not survive is dropped");
+
+  // The marker with nothing behind it: greyed, and saying why.
+  const orphan = find(view.tree, (node) => node.type === "sup");
+  assert.ok(orphan, "a marker with no citation behind it is drawn as a working one");
+  assert.ok(String(orphan.props.title).includes("引用元数据缺失"), "the orphan marker does not say what is missing");
+});
+
+test("a degraded version says which of the two things went wrong", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, REFUSED.topic);
+  const text = await pane(view, "报告");
+
+  assert.ok(text.includes("这一版是降级归档的"), "a degraded artefact does not say it is degraded");
+  // The either/or sentence is gone. Both halves are answerable and both were on
+  // disk: the guard's violations ride on the terminal event and the refusal is
+  // s11's own signature.
+  assert.ok(!text.includes("要么内容闸门有违规"), "the report still guesses at its own degrade reason");
+  assert.ok(text.includes("内容闸门拦下 2 处"), "the guard's violations are not counted");
+  assert.ok(text.includes("全文一处引用都没有"), "a guard code is printed instead of what it means");
+  assert.ok(text.includes("拒绝签署，评分 31"), "the refusal and the score it was refused at are missing");
+  assert.ok(text.includes("失败在采集"), "the leader's accountability note was dropped");
+});
+
+// ── the references pane ─────────────────────────────────────────────────────
+
+test("参考文献 is one row per page read, not one per finding", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, SIGNED.topic);
+  const text = await pane(view, "参考文献");
+
+  assert.ok(text.includes("14 条发现 · 3 个来源 · 3 个站点"), "the totals line does not separate findings from sources");
+  // The page cited six times is ONE row. Counted over the whole tree, because
+  // the failure this pane exists to prevent is the same address six times over.
+  const rendered = textOf(view.tree).join("\u0000");
+  assert.equal(
+    rendered.split("https://kanatanorthba.com/about/").length - 1, 1,
+    "the six-times-cited page is listed more than once",
+  );
+  assert.ok(text.includes("About the Kanata North business association"), "a source is listed as a bare address");
+  assert.ok(text.includes("6 条发现"), "a source does not say how much rests on it");
+  assert.ok(text.includes("已核验 4 条"), "a source does not say how much of what rests on it verified");
+  assert.ok(text.includes("推理时序扩展的训练侧做法"), "a source does not say which dimension it fed");
+
+  await view.act(() => { button(view.tree, "按站点分组").props.onClick(); });
+  assert.ok(
+    textOf(view.tree).join(" ").includes("kanatanorthba.com · 1 页 · 6 条发现"),
+    "grouping by host does not group",
+  );
+  assert.ok(textOf(view.tree).join(" ").includes("按引用次数排"), "the grouping control does not offer the way back");
+});
+
+test("a references pane that cannot load says so rather than looking empty", async () => {
+  stubFetch();
+  const inner = globalThis.fetch;
+  // A read that failed and a mission that read nothing are the same empty list
+  // and opposite problems.
+  globalThis.fetch = async (url, init) => (String(url).includes("/sources")
+    ? { ok: false, json: async () => ({ success: false, error: "the sources query itself failed" }) }
+    : inner(url, init));
+
+  const zh = await render("MissionSources", { missionId: SIGNED.id, zh: true });
+  assert.ok(textOf(zh.tree).join(" ").includes("读不到这次任务的来源清单"), "a failed read draws as an empty pane");
+  const en = await render("MissionSources", { missionId: SIGNED.id, zh: false });
+  assert.ok(textOf(en.tree).join(" ").includes("Could not read this mission's sources"), "the failed read has no English arm");
+});
+
+test("a mission with no dimensions says so on the evidence pane", async () => {
+  // The pane was `length === 0 ? null : …`, which is a blank rectangle — the
+  // same rectangle a component that threw leaves behind.
+  const bare = { ...LIVE_VIEW, dimensions: [] };
+  for (const [zh, label, expected] of [[true, "证据", "还没有维度"], [false, "Evidence", "No dimensions yet"]]) {
+    stubFetch({ views: { [RUNNING.id]: bare } });
+    const view = await render("MissionDetail", { missionId: RUNNING.id, zh, onBack: () => {} });
+    await view.act(() => { button(view.tree, label).props.onClick(); });
+    assert.ok(textOf(view.tree).join(" ").includes(expected), `the empty evidence pane says nothing in ${zh ? "Chinese" : "English"}`);
+  }
+});
+
+test("a degrade note with nothing behind it does not invent a reason", async () => {
+  for (const zh of [true, false]) {
+    // An older Host half sends no reason at all. Printing the either/or sentence
+    // back would be this page claiming to know something it was not told.
+    const none = await render("MissionDegradeNote", { reason: null, zh });
+    assert.ok(
+      textOf(none.tree).join(" ").includes(zh ? "较旧的版本" : "older build"),
+      "a missing reason is presented as a known one",
+    );
+
+    const unsigned = await render("MissionDegradeNote", {
+      zh, reason: { signed: null, guardViolations: [], guardMessage: null, failureCode: null },
+    });
+    assert.ok(
+      textOf(unsigned.tree).join(" ").includes(zh ? "签署阶段没有跑到" : "sign-off stage was never reached"),
+      "never signed and refused are drawn as the same thing",
+    );
+
+    // Flagged degraded with nothing recorded against it: that is a defect, and
+    // saying so beats an empty warning box.
+    const bare2 = await render("MissionDegradeNote", {
+      zh, reason: { signed: true, guardViolations: [], guardMessage: "", failureCode: null },
+    });
+    assert.ok(
+      textOf(bare2.tree).join(" ").includes(zh ? "没有留下任何原因" : "no reason was recorded"),
+      "a degrade flag with no reason renders an empty box",
+    );
+  }
+});
+
+test("a finished pane with nothing in it is a final answer, not a wait", async () => {
+  for (const zh of [true, false]) {
+    const done = await render("MissionEmptyPane", {
+      zh, mission: { terminal: true, failureCode: null, errorMessage: "" },
+      waiting: zh ? "还在等" : "still waiting",
+      finished: zh ? "结束了，这里什么也没有" : "it ended with nothing here",
+    });
+    assert.ok(
+      textOf(done.tree).join(" ").includes(zh ? "结束了，这里什么也没有" : "it ended with nothing here"),
+      "a finished run is told to keep waiting",
+    );
+  }
+});
+
+test("the strip is six panes, and the sixth is the references", async () => {
+  const { tree } = await render("MissionDetailTabs", {
+    pane: "tasks", setPane: () => {}, zh: true,
+    findings: 14, steps: 169, stages: 12, spend: "令牌 412k · 调用 24 次",
+  });
+  assert.equal(findAll(tree, (node) => node.type === "button").length, 6, "the strip is not six panes");
+  const text = textOf(tree).join(" ");
+  assert.ok(text.includes("参考文献"), "the references pane is not on the strip");
+  assert.ok(text.includes("令牌 412k"), "the spend is not on the tab row");
+});
+
+test("a pane with nothing in it says which nothing", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, RUNNING.topic);
+  assert.ok(
+    (await pane(view, "参考文献")).includes("还没有读到任何一页"),
+    "an empty references pane is a blank rectangle",
+  );
+
+  const board = await render("MissionTaskBoard", { stages: [], agents: [], zh: true });
+  const waiting = textOf(board.tree).join(" ");
+  assert.ok(waiting.includes("暂无任务"), "an empty task board renders literally nothing");
+  assert.ok(waiting.includes("等 Leader"), "an empty task board does not say what it is waiting for");
+
+  const dead = await render("MissionTaskBoard", {
+    stages: [], agents: [], zh: true,
+    mission: { terminal: true, failureCode: "budget_exhausted", errorMessage: "calls reached 40 of 40" },
+  });
+  const failed = textOf(dead.tree).join(" ");
+  assert.ok(failed.includes("预算用完了"), "a board empty because the run died says nothing about the death");
+  assert.ok(failed.includes("calls reached 40 of 40"), "the runtime's own sentence was dropped");
+  assert.ok(failed.includes("在成本页看是哪一项先见底"), "a failure with no next action is a dead end");
+
+  const done = await render("MissionTaskBoard", {
+    stages: [], agents: [], zh: true,
+    mission: { terminal: true, failureCode: null, errorMessage: "" },
+  });
+  assert.ok(
+    textOf(done.tree).join(" ").includes("暂无任何一条阶段记录"),
+    "a finished run with an empty board reads as one that has not started",
+  );
+});
+
+// ── the chrome ──────────────────────────────────────────────────────────────
+
+test("the header, the ruler and the strip stay put; only the pane body scrolls", async () => {
+  stubFetch();
+  const view = await render("MissionDetail", { missionId: SIGNED.id, zh: true, onBack: () => {} });
+
+  const scrollers = findAll(view.tree, (node) => node.props?.style?.overflowY === "auto");
+  assert.equal(scrollers.length, 1, `the mission detail has ${scrollers.length} scrollers`);
+  assert.notEqual(scrollers[0], view.tree, "the whole page scrolls, header and all");
+
+  // The twelve-stage ruler, found by the step id in its own tooltip rather than
+  // by its words: the mini-React harness inlines child components, so there is
+  // no node carrying the component to look for.
+  const ruler = (tree) => findAll(tree, (node) => node.type === "span"
+    && typeof node.props?.title === "string" && node.props.title.startsWith("s1-brief · "));
+  assert.equal(ruler(view.tree).length, 1, "the stage ruler is not mounted");
+  await pane(view, "成本");
+  assert.equal(ruler(view.tree).length, 1, "the ruler is only visible on the pane that already had it");
+
+  const text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("令牌 412k"), "the tab row does not carry what has been spent");
+  assert.ok(text.includes("评分 82"), "the tab row does not carry the score");
+});
+
+test("the download follows the version on screen", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, SIGNED.topic);
+  const anchor = (tree) => find(tree, (node) => node.type === "a" && typeof node.props?.download === "string");
+
+  assert.ok(!anchor(view.tree).props.href.includes("version="), "the newest report is asked for by number");
+  assert.ok(anchor(view.tree).props.download.endsWith("-v2.md"), "the filename does not say which version it is");
+
+  await pane(view, "报告");
+  await view.act(() => { chip(view.tree, "第 1 版").props.onClick(); });
+  assert.ok(
+    textOf(view.tree).join(" ").includes("第一版只写了三百字"),
+    "the version picker did not change the document on screen",
+  );
+  // A reader looking at v1 who presses 下载 and receives v3 has been handed a
+  // different document than the one on their screen.
+  assert.ok(anchor(view.tree).props.href.includes("version=1"), "the download still points at the newest version");
+  assert.ok(anchor(view.tree).props.download.endsWith("-v1.md"), "the filename does not follow the version on screen");
+});
+
+// ── the evidence pane's controls ────────────────────────────────────────────
+
+test("the evidence pane sends the filters the route has always accepted", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, RUNNING.topic);
+  const cards = await pane(view, "证据");
+  assert.ok(cards.includes("打分时的数"), "the numbers the grade was computed from are still unrendered");
+  assert.ok(cards.includes("种子目标 5"), "the seed target the grade was measured against is missing");
+
+  await view.act(() => { button(view.tree, "看这 5 条证据").props.onClick(); });
+  assert.ok(
+    textOf(view.tree).join(" ").includes("第 1–50 条，共 55 条"),
+    "a paged list does not say which page of what it is showing",
+  );
+
+  const asked = [];
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { asked.push(String(url)); return inner(url, init); };
+  const control = (label) => {
+    const hit = find(view.tree, (node) => node.props?.["aria-label"] === label);
+    assert.ok(hit, `no ${label} control`);
+    return hit;
+  };
+
+  // Paged first, while there is still a second page to reach: narrowing to one
+  // host leaves twenty-seven rows and no 下一页 at all.
+  await view.act(() => { button(view.tree, "下一页").props.onClick(); });
+  assert.ok(
+    textOf(view.tree).join(" ").includes("第 51–55 条，共 55 条"),
+    "下一页 did not move the window",
+  );
+  await view.act(() => { control("按核验状态筛选").props.onChange({ target: { value: "verified-source-text" } }); });
+  await view.act(() => { control("按站点筛选").props.onChange({ target: { value: "arxiv.org" } }); });
+  await view.act(() => { control("排序").props.onChange({ target: { value: "host" } }); });
+
+  assert.ok(asked.some((url) => url.includes("skip=50")), "下一页 does not page: " + asked.join(" "));
+  assert.ok(asked.some((url) => url.includes("verifyState=verified-source-text")), "the verify state never reached the route");
+  assert.ok(asked.some((url) => url.includes("sourceHost=arxiv.org")), "the host filter never reached the route");
+  assert.ok(asked.some((url) => url.includes("order=host")), "the order never reached the route");
+
+  const text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("已核验 (55)"), "an option does not say how many rows it matches");
+  assert.ok(text.includes("arxiv.org (27)"), "a host option does not say how many rows it matches");
+  assert.ok(!text.includes("deepmind.google/discover/scaling-0"), "the host filter changed the URL and nothing else");
+});
+
+// ── the trajectory's filters ────────────────────────────────────────────────
+
+test("the trajectory filters on what the rows carry, and on who did it", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, RUNNING.topic);
+  await pane(view, "轨迹");
+
+  const dimensionSelect = find(view.tree, (node) => node.props?.["aria-label"] === "按维度筛选");
+  const offered = dimensionSelect.props.children.filter((child) => child !== null && child.props?.value !== "");
+  // Five were planned; three ever reached a row. The select was built from the
+  // plan, so two of its five options could not match anything and nothing on
+  // the screen said which two.
+  assert.equal(offered.length, 3, "the dimension filter still offers options that match nothing");
+  assert.ok(
+    textOf(dimensionSelect).some((piece) => piece.includes("1 条")),
+    "an option that matches one row does not say so",
+  );
+
+  const asked = [];
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { asked.push(String(url)); return inner(url, init); };
+  const agentSelect = find(view.tree, (node) => node.props?.["aria-label"] === "按执行者筛选");
+  assert.ok(agentSelect, "there is no way to see only what one agent did");
+  await view.act(() => { agentSelect.props.onChange({ target: { value: "leader" } }); });
+
+  assert.ok(asked.some((url) => url.includes("agentId=leader")), "the agent filter never reached the route: " + asked.join(" "));
+  const text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("规划"), "filtering to the leader lost the leader's own stage rows");
+  assert.ok(!text.includes("test-time compute scaling laws"), "the agent filter changed the URL and nothing else");
+});
+
+// ── the cost pane ───────────────────────────────────────────────────────────
+
+test("the cost pane says which stage ate it and which tool is failing", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, RUNNING.topic);
+  const text = await pane(view, "成本");
+
+  // Found by the id it carries rather than by the words on it: the ruler above
+  // the strip prints the same step ids in its own tooltips.
+  const stage = find(view.tree, (node) => node.props?.title === "s3-collect · researcher");
+  assert.ok(stage, "the per-stage breakdown is not rendered");
+  assert.ok(
+    textOf(stage).includes("未记账 · 51 次调用"),
+    "a stage with fifty-one calls and no tokens is drawn as a stage that ran for free",
+  );
+  assert.ok(text.includes("这不等于没花钱"), "the gap in the ledger is not explained");
+
+  assert.ok(text.includes("fetch_page"), "the per-tool table is not rendered");
+  assert.ok(text.includes("成功率"), "the tool table does not say how often a tool works");
+  assert.ok(text.includes("56%"), "the tool table does not compute a success rate");
+  assert.ok(text.includes("820ms"), "a measured tool does not print its latency");
+  assert.ok(text.includes("未测量"), "a tool nobody timed is given an average of zero");
+});
+
+test("a big number is shortened without being made smaller", () => {
+  const { missionCompact } = exportsOf();
+  assert.equal(missionCompact(412000), "412k");
+  assert.equal(missionCompact(1480000), "1.5M");
+  assert.equal(missionCompact(24), "24");
+  // Not "0". A missing number and a zero are different facts about a ledger.
+  assert.equal(missionCompact(undefined), "—");
+});
+
+test("everything added here reads in English too", async () => {
+  stubFetch();
+  const view = await render("MissionDetail", { missionId: SIGNED.id, zh: false, onBack: () => {} });
+  const at = async (label) => {
+    await view.act(() => { button(view.tree, label).props.onClick(); });
+    return textOf(view.tree).join(" ");
+  };
+
+  const references = await at("References");
+  assert.ok(references.includes("14 findings · 3 sources · 3 hosts"), "the totals line has no English arm");
+  assert.ok(references.includes("Group by host"), "the grouping control has no English arm");
+  assert.ok(references.includes("5 verified"), "the verified count has no English arm");
+
+  const report = await at("Report");
+  assert.ok(report.includes("References"), "the reference list has no English heading");
+  assert.ok(report.includes("cited 1× in the text"), "the in-text count has no English arm");
+  assert.ok(report.includes("No address was stored for this citation."), "the address-less entry has no English arm");
+
+  // The evidence controls, in English: a select whose options only ever render
+  // in Chinese is half a control.
+  await at("Evidence");
+  await view.act(() => { button(view.tree, "Read the 5 finding(s)").props.onClick(); });
+  const evidence = textOf(view.tree).join(" ");
+  assert.ok(evidence.includes("Every verify state"), "the verify-state filter has no English arm");
+  assert.ok(evidence.includes("Every host"), "the host filter has no English arm");
+  assert.ok(evidence.includes("As recorded"), "the order control has no English arm");
+  assert.ok(evidence.includes("Next"), "the paging control has no English arm");
+  assert.ok(evidence.includes("1–50 of 55"), "the page range has no English arm");
+  assert.ok(evidence.includes("Graded on:"), "the grade's own numbers have no English arm");
+  await view.act(() => { button(view.tree, "Next").props.onClick(); });
+  assert.ok(textOf(view.tree).join(" ").includes("Previous"), "the back-a-page control has no English arm");
+
+  const cost = await at("Cost");
+  assert.ok(cost.includes("not billed"), "未记账 has no English arm");
+  assert.ok(cost.includes("not measured"), "未测量 has no English arm");
+  assert.ok(cost.includes("Mean latency"), "the tool table has no English header");
+
+  stubFetch();
+  const refused = await render("MissionReport", { missionId: REFUSED.id, zh: false, onBack: null });
+  const degraded = textOf(refused.tree).join(" ");
+  assert.ok(degraded.includes("The content guard raised 2:"), "the degrade note has no English arm");
+  assert.ok(degraded.includes("declined to sign it, at 31"), "the refusal has no English arm");
+  assert.ok(degraded.includes("Nothing in the report is cited"), "the guard codes have no English arm");
+
+  stubFetch();
+  const running = await render("MissionDetail", { missionId: RUNNING.id, zh: false, onBack: () => {} });
+  await running.act(() => { button(running.tree, "Report").props.onClick(); });
+  assert.ok(textOf(running.tree).join(" ").includes("No report yet"), "the empty report pane has no English arm");
+  await running.act(() => { button(running.tree, "References").props.onClick(); });
+  assert.ok(textOf(running.tree).join(" ").includes("Nothing has been read yet"), "the empty references pane has no English arm");
+
+  const empty = await render("MissionTaskBoard", { stages: [], agents: [], zh: false });
+  assert.ok(textOf(empty.tree).join(" ").includes("No tasks yet"), "the empty task board has no English arm");
 });
 
 test("the tab no longer says it is unbuilt, and the other two still do", () => {

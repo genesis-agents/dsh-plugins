@@ -972,7 +972,11 @@ window.__ModuleLoader__.load({
 		*/
 
 		/** Inline spans: code first, so a backtick span is never re-scanned for bold. */
-		const INLINE_PATTERN = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(\[[^\]]+\]\([^)\s]+\))/g;
+		const INLINE_PATTERN = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(\[[^\]]+\]\([^)\s]+\))|(\[\d{1,4}\])/g;
+		// The link alternative comes FIRST on purpose: `[1](https://…)` is a
+		// link whose text happens to be a number, and a citation alternative
+		// scanned before it would eat the `[1]` and leave `(https://…)` as bare
+		// text in the middle of a sentence.
 
 		/**
 		* Split one line into React children, honouring inline Markdown.
@@ -980,7 +984,56 @@ window.__ModuleLoader__.load({
 		* @param keyPrefix - key namespace for the produced nodes.
 		* @returns an array of strings and elements.
 		*/
-		function renderInline(text, keyPrefix) {
+		/**
+		* One `[N]` in the prose, as a control rather than as two characters.
+		*
+		* A number in a report body is the only thing tying a sentence to the page
+		* it came from, and until now it was inert text: a reader who wanted to know
+		* what [7] was had nowhere to go, in the browser or in the exported file.
+		*
+		* With a citation behind it this is a button that scrolls the reference list
+		* to that entry. WITHOUT one it is a greyed superscript that says so, because
+		* a marker whose source did not survive and a marker whose source is one
+		* click away must not look identical — that is the whole difference between
+		* a citable report and one that only looks cited.
+		* @param token - the raw `[N]`.
+		* @param key - the key namespace for the node.
+		* @param refs - `{has, jump, zh}` from the report, or null in a chat answer.
+		*/
+		function missionCitationMark(token, key, refs) {
+			const index = Number(token.slice(1, -1));
+			const zh = refs?.zh === true;
+			const known = typeof refs?.has === "function" && refs.has(index);
+			if (!known) {
+				return jsx("sup", {
+					// Said, not hidden. An index with nothing stored behind it is a hole in
+					// the record, and drawing it in the same blue as a working one would
+					// hide the hole behind a click that does nothing.
+					title: zh
+						? "引用元数据缺失：这个编号后面没有留下来源，报告里也查不到它引的是哪一页。"
+						: "Citation metadata missing: nothing was stored behind this number, so the page it points at cannot be named.",
+					style: {
+						fontSize: "10px", verticalAlign: "super", padding: "0 1px",
+						color: "var(--dsw-alias-label-tertiary)", cursor: "help"
+					},
+					children: token
+				}, key);
+			}
+			return jsx("button", {
+				type: "button",
+				title: zh ? `跳到参考文献第 ${index} 条` : `Jump to reference ${index}`,
+				onClick: () => { refs.jump?.(index); },
+				style: {
+					appearance: "none", border: "none", background: "transparent",
+					padding: "0 1px", margin: 0, cursor: "pointer", font: "inherit",
+					fontSize: "10px", lineHeight: 1, verticalAlign: "super",
+					color: "var(--dsw-alias-state-business-primary)"
+				},
+				children: token
+			}, key);
+		}
+
+		function renderInline(text, keyPrefix, refs) {
 			const nodes = [];
 			let cursor = 0;
 			let index = 0;
@@ -1004,6 +1057,12 @@ window.__ModuleLoader__.load({
 					}, key));
 				} else if (token.startsWith("[")) {
 					const split = token.indexOf("](");
+				// `[12]` with no `(` after it is a citation marker, not a broken link.
+				if (split < 0) {
+					nodes.push(missionCitationMark(token, key, refs));
+					cursor = match.index + token.length;
+					continue;
+				}
 					nodes.push(jsx("a", {
 						href: token.slice(split + 2, -1),
 						target: "_blank",
@@ -1041,9 +1100,10 @@ window.__ModuleLoader__.load({
 		* Render a Markdown document as React nodes.
 		* @param source - the raw answer text.
 		* @param variant - `"chat"` for a panel answer, `"article"` for a read.
+		* @param refs - the report's citation index, or null when there is none.
 		* @returns an array of block elements.
 		*/
-		function renderMarkdown(source, variant = "chat") {
+		function renderMarkdown(source, variant = "chat", refs = null) {
 			const article = variant === "article";
 			const block = article ? ARTICLE_BLOCK : MD_BLOCK;
 			const headingSizes = article ? ARTICLE_HEADING_SIZES : MD_HEADING_SIZES;
@@ -1059,7 +1119,7 @@ window.__ModuleLoader__.load({
 				const text = paragraph.join(" ");
 				blocks.push(jsx("p", {
 					style: { ...block, color: article ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)" },
-					children: renderInline(text, `p${key}`)
+					children: renderInline(text, `p${key}`, refs)
 				}, `p${key++}`));
 				paragraph = [];
 			};
@@ -1067,7 +1127,7 @@ window.__ModuleLoader__.load({
 				if (list === null) return;
 				const items = list.items.map((item, at) => jsx("li", {
 					style: article ? { margin: "0 0 8px", lineHeight: "1.7" } : { margin: "0 0 5px" },
-					children: renderInline(item, `l${key}-${at}`)
+					children: renderInline(item, `l${key}-${at}`, refs)
 				}, `l${key}-${at}`));
 				blocks.push(jsx(list.ordered ? "ol" : "ul", {
 					style: { ...block, paddingLeft: "24px", color: article ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)" },
@@ -1123,7 +1183,7 @@ window.__ModuleLoader__.load({
 							...(article && level <= 2 ? { fontFamily: ARTICLE_SERIF } : {}),
 							color: "var(--dsw-alias-label-primary)"
 						},
-						children: renderInline(heading[2], `h${key}`)
+						children: renderInline(heading[2], `h${key}`, refs)
 					}, `h${key++}`));
 					continue;
 				}
@@ -3232,6 +3292,38 @@ window.__ModuleLoader__.load({
 			"unchecked-stale": { zh: "页面过期", en: "Page too old" }
 		};
 
+		/**
+		* The content guard's seven codes, in words a reader can act on.
+		*
+		* A COPY of `GUARD_CODES` in lib/mission-view.js, and named as one: the guard
+		* owns the list, this side only has to say what each one means. A code that
+		* grows on the Host half and not here falls through `missionFace` to its raw
+		* string, which reads badly but never blank.
+		*/
+		const MISSION_GUARD_FACES = {
+			"word-count": { zh: "字数没到下限", en: "Below the word floor" },
+			"empty-chapter": { zh: "有章节是空的", en: "A chapter came back empty" },
+			"under-delivered": { zh: "有章节没写够", en: "A chapter under-delivered" },
+			"no-citations": { zh: "全文一处引用都没有", en: "Nothing in the report is cited" },
+			"section-offsets": { zh: "章节位置和正文对不上", en: "The section offsets do not line up with the body" },
+			placeholder: { zh: "正文里留着占位符", en: "Placeholder text was left in the body" },
+			"scorecard-empty": { zh: "核验记分卡是空的", en: "The scorecard was never filled in" }
+		};
+
+		/**
+		* The three orders `/missions/:id/findings` sorts by.
+		*
+		* `created` is the order the run wrote them in and is the default. The other
+		* two exist because the two questions a reader has about a dimension's
+		* evidence — is this all one site, and did any of it actually verify — are
+		* answered by a sort and not by a scroll.
+		*/
+		const MISSION_FINDING_ORDER_FACES = {
+			created: { zh: "按记录顺序", en: "As recorded" },
+			host: { zh: "按站点", en: "By host" },
+			verifyState: { zh: "按核验状态", en: "By verify state" }
+		};
+
 		/** The six ceilings, named. `wall` is a clock, so it is formatted as one. */
 		const MISSION_METER_FACES = {
 			tokens: { zh: "令牌", en: "Tokens" },
@@ -4006,6 +4098,152 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		* Where the tokens went, by stage.
+		*
+		* `cost.byStage` has been computed, correct and in the /view payload the whole
+		* time, and read by nothing: the pane showed six ceilings and a per-agent
+		* table, which answer "how close to the wall" and "who spent it" and neither
+		* of them "which step ate it".
+		*
+		* A stage with calls and zero tokens prints 未记账 rather than a zero. That is
+		* the true state of the ledger — the call happened and its usage never came
+		* back — and a 0 in a spend column reads as free, which is the one thing it is
+		* not.
+		* @param byStage - `cost.byStage` from the view route.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionStageSpend({ byStage, zh }) {
+			const rows = Array.isArray(byStage) ? byStage : [];
+			const peak = rows.reduce((most, row) => Math.max(most, Number(row.tokens) || 0), 0);
+			const unbilled = rows.filter((row) => (Number(row.calls) || 0) > 0 && (Number(row.tokens) || 0) === 0);
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: "8px" },
+				children: [
+					jsx("div", {
+						style: { display: "flex", flexDirection: "column", gap: "7px" },
+						children: rows.map((row) => {
+							const tokens = Number(row.tokens) || 0;
+							const calls = Number(row.calls) || 0;
+							const missing = calls > 0 && tokens === 0;
+							return jsxs("div", {
+								// The raw step id where a raw step id belongs: on the hover, beside
+								// the name a person reads. The strip above does the same.
+								title: `${row.stepId}${(row.role ?? null) === null ? "" : ` · ${row.role}`}`,
+								style: { display: "flex", flexDirection: "column", gap: "3px" },
+								children: [
+									jsxs("div", {
+										style: { display: "flex", alignItems: "baseline", gap: "8px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+										children: [
+											jsx("span", { style: { flex: 1, minWidth: 0 }, children: missionFace(MISSION_STAGE_FACES, row.stepId, zh) }, "name"),
+											jsx("span", {
+												style: { flex: "none", fontFamily: MISSION_MONO, fontVariantNumeric: "tabular-nums", color: missing ? "rgb(217,119,6)" : undefined },
+												children: (missing ? (zh ? "未记账" : "not billed") : (zh ? `${missionCompact(tokens)} 令牌` : `${missionCompact(tokens)} tokens`))
+													+ (zh ? ` · ${calls} 次调用` : ` · ${calls} calls`)
+											}, "spend")
+										]
+									}, "head"),
+									jsx("div", {
+										style: { height: "5px", borderRadius: "3px", background: "var(--dsw-alias-border-l1)", overflow: "hidden" },
+										children: jsx("div", {
+											style: {
+												width: peak === 0 ? "0%" : `${Math.max(1, Math.round((tokens / peak) * 100))}%`,
+												height: "100%", background: missing ? "rgba(217,119,6,0.45)" : "rgb(2,132,199)"
+											}
+										})
+									}, "bar")
+								]
+							}, row.stepId);
+						})
+					}, "rows"),
+					unbilled.length === 0 ? null : jsx("div", {
+						style: { fontSize: "11px", lineHeight: "17px", color: "rgb(217,119,6)" },
+						children: zh
+							? "标着未记账的阶段确实调用了模型，只是账本上没有留下令牌数 —— 这不等于没花钱。"
+							: "A stage marked not billed did call the model; the ledger simply has no token figure for it. That is not the same as free."
+					}, "unbilled")
+				]
+			});
+		}
+
+		/**
+		* Which door is slow, and which one is broken.
+		*
+		* `byStage` and `byAgent` answer where the tokens went; a tool that fails
+		* inside a stage that succeeds is invisible in both of them. Latency is printed
+		* over the calls that were actually TIMED, and the untimed ones are named:
+		* dividing a partial total by every call produces an average that is quietly
+		* too low, and 0ms reads as instant about a tool nobody measured.
+		* @param byTool - `cost.byTool` from the view route.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionToolTable({ byTool, zh }) {
+			const rows = Array.isArray(byTool) ? byTool : [];
+			const head = {
+				padding: "6px 9px", textAlign: "left", fontSize: "11px", fontWeight: 600,
+				color: "var(--dsw-alias-label-secondary)", whiteSpace: "nowrap"
+			};
+			const cell = { padding: "6px 9px", fontSize: "12px", lineHeight: "18px", fontFamily: MISSION_MONO };
+			const columns = [
+				{ id: "tool", label: zh ? "工具" : "Tool", align: "left" },
+				{ id: "calls", label: zh ? "调用" : "Calls", align: "right" },
+				{ id: "failures", label: zh ? "失败" : "Failed", align: "right" },
+				{ id: "rate", label: zh ? "成功率" : "Success", align: "right" },
+				{ id: "cached", label: zh ? "缓存" : "Cached", align: "right" },
+				{ id: "latency", label: zh ? "平均延迟" : "Mean latency", align: "right" }
+			];
+			return jsx("div", {
+				style: {
+					border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "10px",
+					overflow: "hidden", background: "var(--dsw-alias-bg-layer-1)"
+				},
+				children: jsxs("table", {
+					style: { width: "100%", borderCollapse: "collapse" },
+					children: [
+						jsx("thead", {
+							children: jsx("tr", {
+								style: { background: "var(--dsw-alias-bg-layer-2)", borderBottom: "1px solid var(--dsw-alias-border-l2)" },
+								children: columns.map((column) => jsx("th", {
+									style: { ...head, textAlign: column.align },
+									children: column.label
+								}, column.id))
+							})
+						}, "head"),
+						jsx("tbody", {
+							children: rows.map((row) => {
+								const calls = Number(row.calls) || 0;
+								const failures = Number(row.failures) || 0;
+								const unmeasured = Number(row.unmeasured) || 0;
+								const rate = calls === 0 ? "—" : `${Math.round(((calls - failures) / calls) * 100)}%`;
+								const latency = row.avgLatencyMs === null || row.avgLatencyMs === undefined
+									? (zh ? "未测量" : "not measured")
+									: `${row.avgLatencyMs}ms` + (unmeasured > 0
+										? (zh ? ` · ${unmeasured} 次未测量` : ` · ${unmeasured} not measured`)
+										: "");
+								return jsxs("tr", {
+									style: { borderTop: "1px solid var(--dsw-alias-border-l1)" },
+									children: [
+										jsx("td", { style: { ...cell, color: "var(--dsw-alias-label-primary)" }, children: row.tool ?? "—" }, "tool"),
+										jsx("td", { style: { ...cell, textAlign: "right" }, children: String(calls) }, "calls"),
+										jsx("td", {
+											style: { ...cell, textAlign: "right", color: failures > 0 ? "rgb(220,38,38)" : undefined },
+											children: String(failures)
+										}, "failures"),
+										jsx("td", { style: { ...cell, textAlign: "right" }, children: rate }, "rate"),
+										jsx("td", { style: { ...cell, textAlign: "right" }, children: String(Number(row.cached) || 0) }, "cached"),
+										jsx("td", {
+											style: { ...cell, textAlign: "right", color: unmeasured > 0 ? "rgb(217,119,6)" : undefined },
+											children: latency
+										}, "latency")
+									]
+								}, String(row.tool));
+							})
+						}, "body")
+					]
+				})
+			});
+		}
+
+		/**
 		* The six ceilings, as bars, with the tight one named.
 		*
 		* Named rather than summed: a mission that has burned 100% of its arXiv
@@ -4172,11 +4410,23 @@ window.__ModuleLoader__.load({
 								? (zh ? `已核验 ${dimension.verified} 条 · 门槛还没算出来` : `${dimension.verified} verified · floor not derived yet`)
 								: (zh ? `已核验 ${dimension.verified}/${dimension.floor} 条` : `${dimension.verified}/${dimension.floor} verified`),
 							zh ? `${dimension.uniqueHosts} 个独立站点` : `${dimension.uniqueHosts} independent host(s)`,
-							axes.pagesFetched === undefined ? "" : (zh ? `读了 ${axes.pagesFetched} 个页面` : `${axes.pagesFetched} pages read`),
-							chapters.total > 0 ? (zh ? `章节 ${chapters.done}/${chapters.total}` : `chapters ${chapters.done}/${chapters.total}`) : ""
+								chapters.total > 0 ? (zh ? `章节 ${chapters.done}/${chapters.total}` : `chapters ${chapters.done}/${chapters.total}`) : ""
 						].filter((piece) => piece !== "").join(" · ")
 					}, "counts"),
-					rows.length === 0 ? null : jsx("div", {
+				// THE NUMBERS THE GRADE WAS COMPUTED FROM, which are not the same as the
+				// live counts above them: `gradeAxes` is frozen at the moment s4 judged
+				// this dimension, and a re-collection since then moves one and not the
+				// other. It is present on every live dimension and was rendered nowhere.
+				Object.keys(axes).length === 0 ? null : jsx("div", {
+					style: { fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-tertiary)" },
+					children: (zh ? "打分时的数：" : "Graded on: ") + [
+						axes.verified === undefined ? "" : (zh ? `已核验 ${axes.verified}` : `${axes.verified} verified`),
+						axes.uniqueHosts === undefined ? "" : (zh ? `独立站点 ${axes.uniqueHosts}` : `${axes.uniqueHosts} host(s)`),
+						axes.pagesFetched === undefined ? "" : (zh ? `抓到 ${axes.pagesFetched} 页` : `${axes.pagesFetched} page(s) fetched`),
+						axes.seedTarget === undefined ? "" : (zh ? `种子目标 ${axes.seedTarget}` : `seed target ${axes.seedTarget}`),
+						dimension.grade === null || dimension.grade === undefined ? "" : (zh ? `得分 ${dimension.grade}` : `grade ${dimension.grade}`)
+					].filter((piece) => piece !== "").join(" · ")
+				}, "axes"),					rows.length === 0 ? null : jsx("div", {
 						style: { display: "flex", flexWrap: "wrap", gap: "6px" },
 						children: rows.map((row) => jsx("span", {
 							style: {
@@ -5171,6 +5421,10 @@ window.__ModuleLoader__.load({
 			// rows is a jump that has not answered the question it was asked.
 			const [stepId, setStepId] = useState(focusStep ?? "");
 			const [dimensionId, setDimensionId] = useState("");
+			// WHO DID IT. `role` is a provenance chip — STAGE, TOOL, EVIDENCE, GATE,
+			// SYSTEM — nearly the same axis as `kind`, so "show me only what the
+			// Leader did" had no control at all until this one.
+			const [agentId, setAgentId] = useState("");
 			const [search, setSearch] = useState("");
 			const [order, setOrder] = useState("newest");
 			const [selected, setSelected] = useState(null);
@@ -5192,6 +5446,7 @@ window.__ModuleLoader__.load({
 			if (kind !== "") query.set("kind", kind);
 			if (stepId !== "") query.set("stepId", stepId);
 			if (dimensionId !== "") query.set("dimensionId", dimensionId);
+			if (agentId !== "") query.set("agentId", agentId);
 			// Sent to the route rather than filtered here, and sent per keystroke
 			// rather than debounced: the route searches the WHOLE trajectory while
 			// this page holds a window of it, so a local filter would answer
@@ -5254,6 +5509,17 @@ window.__ModuleLoader__.load({
 			const rows = Array.isArray(data?.rows) ? data.rows : [];
 			const stages = Array.isArray(data?.stages) ? data.stages : [];
 			const dimensions = Array.isArray(data?.dimensions) ? data.dimensions : [];
+			// MEASURED, NOT PLANNED. `data.dimensions` is s2's plan: on a real mission
+			// it offers five options of which three can ever match, because 158 of 169
+			// rows carry no dimension at all — and nothing on the screen said which
+			// two were dead. `vocabulary.dimensions` is derived from the rows
+			// themselves and carries the count, so an option that matches one row says
+			// so before it is chosen.
+			const vocabulary = data?.vocabulary ?? {};
+			const dimensionOptions = Array.isArray(vocabulary.dimensions)
+				? vocabulary.dimensions
+				: dimensions.map((entry) => ({ dimensionId: entry.dimensionId, name: entry.name, rows: null }));
+			const agentOptions = Array.isArray(vocabulary.agents) ? vocabulary.agents : [];
 			const paging = data?.page ?? {};
 			const bounds = data?.window ?? {};
 			const saturated = ["events", "toolCalls", "findings"].filter((stream) => bounds[stream]?.saturated === true);
@@ -5296,12 +5562,26 @@ window.__ModuleLoader__.load({
 						onChange: (event) => { setDimensionId(event.target.value); },
 						children: [
 							jsx("option", { value: "", children: zh ? "所有维度" : "Every dimension" }, "any"),
-							...dimensions.map((dimension) => jsx("option", {
+							...dimensionOptions.map((dimension) => jsx("option", {
 								value: dimension.dimensionId,
-								children: dimension.name
+								children: (dimension.name ?? dimension.dimensionId)
+									+ (typeof dimension.rows === "number" ? (zh ? ` · ${dimension.rows} 条` : ` · ${dimension.rows}`) : "")
 							}, dimension.dimensionId))
 						]
 					}, "dimension"),
+					agentOptions.length === 0 ? null : jsx("select", {
+						value: agentId,
+						"aria-label": zh ? "按执行者筛选" : "Filter by agent",
+						style: selectStyle,
+						onChange: (event) => { setAgentId(event.target.value); },
+						children: [
+							jsx("option", { value: "", children: zh ? "所有执行者" : "Every agent" }, "any"),
+							...agentOptions.map((agent) => jsx("option", {
+								value: agent.id,
+								children: zh ? `${agent.id} · ${agent.rows} 条` : `${agent.id} · ${agent.rows}`
+							}, agent.id))
+						]
+					}, "agent"),
 					jsx("input", {
 						type: "search",
 						value: search,
@@ -5521,6 +5801,15 @@ window.__ModuleLoader__.load({
 		function MissionDimensionFindings({ missionId, dimensionId, zh, selected, onOpen, runCount }) {
 			const [held, setHeld] = useState(null);
 			const [error, setError] = useState("");
+			// THE CONTROLS THE ROUTE HAS BEEN VALIDATING ALL ALONG. Every one of these
+			// is a parameter `/missions/:id/findings` already accepts and already 400s
+			// on a bad value; this pane sent three of them and offered none, so a
+			// dimension of ninety findings was a wall with a dead-end sentence at the
+			// bottom saying the other forty exist somewhere.
+			const [verifyState, setVerifyState] = useState("");
+			const [sourceHost, setSourceHost] = useState("");
+			const [order, setOrder] = useState("");
+			const [skip, setSkip] = useState(0);
 
 			useEffect(() => {
 				let alive = true;
@@ -5530,6 +5819,12 @@ window.__ModuleLoader__.load({
 				// The run this pane is showing, which is NOT always the mission's
 				// current one — see MissionDimensions.
 				if (runCount !== null && runCount !== undefined) query.set("runCount", String(runCount));
+				if (verifyState !== "") query.set("verifyState", verifyState);
+				if (sourceHost !== "") query.set("sourceHost", sourceHost);
+				if (order !== "") query.set("order", order);
+				// Sent only when it is not the first page: a `skip=0` on every request is
+				// noise in the log and one more thing that can be wrong.
+				if (skip > 0) query.set("skip", String(skip));
 				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/findings?${query.toString()}`)
 					.then(missionData)
 					.then((data) => {
@@ -5543,7 +5838,7 @@ window.__ModuleLoader__.load({
 						setError(String(cause?.message ?? cause));
 					});
 				return () => { alive = false; };
-			}, [missionId, dimensionId, runCount]);
+			}, [missionId, dimensionId, runCount, verifyState, sourceHost, order, skip]);
 
 			if (held === null) {
 				return jsx("div", {
@@ -5562,10 +5857,70 @@ window.__ModuleLoader__.load({
 			const counts = data.counts ?? {};
 			const hosts = Array.isArray(data.hosts) ? data.hosts : [];
 			const paging = data.page ?? {};
+			const vocabulary = data.vocabulary ?? {};
+			// The states this dimension ACTUALLY holds, with their counts — not the
+			// nine-value enum. An option that can only ever come back empty teaches a
+			// reader that the control is decorative.
+			const stateOptions = Object.entries(counts.byState ?? {}).filter(([, n]) => n > 0);
+			// Every host in scope, verified or not: `hosts` above is the verified-only
+			// roll-up, and filtering to a host whose findings all failed verification
+			// is exactly what a reader chasing a bad source wants to do.
+			const hostOptions = Array.isArray(data.allHosts) ? data.allHosts : hosts;
+			const orderOptions = Array.isArray(vocabulary.orders) ? vocabulary.orders : [];
+			const filterStyle = {
+				appearance: "none", height: "24px", padding: "0 6px", borderRadius: "6px",
+				border: "1px solid var(--dsw-alias-border-l2)", background: "transparent",
+				color: "var(--dsw-alias-label-secondary)", font: "inherit", fontSize: "11px", cursor: "pointer"
+			};
+			// Any change of filter is a new list, so the page offset goes back to the
+			// top with it. Keeping it would answer "page 3 of a list that now has one
+			// page" with an empty pane and no explanation.
+			const refilter = (apply) => { apply(); setSkip(0); };
 
 			return jsxs("div", {
 				style: { display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" },
 				children: [
+					stateOptions.length === 0 && hostOptions.length === 0 && orderOptions.length === 0 ? null : jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", marginBottom: "4px" },
+						children: [
+							stateOptions.length === 0 ? null : jsx("select", {
+								value: verifyState,
+								"aria-label": zh ? "按核验状态筛选" : "Filter by verify state",
+								style: filterStyle,
+								onChange: (event) => { refilter(() => { setVerifyState(event.target.value); }); },
+								children: [
+									jsx("option", { value: "", children: zh ? "所有核验状态" : "Every verify state" }, "any"),
+									...stateOptions.map(([state, n]) => jsx("option", {
+										value: state,
+										children: `${missionFace(MISSION_VERIFY_FACES, state, zh)} (${n})`
+									}, state))
+								]
+							}, "verifyState"),
+							hostOptions.length === 0 ? null : jsx("select", {
+								value: sourceHost,
+								"aria-label": zh ? "按站点筛选" : "Filter by host",
+								style: filterStyle,
+								onChange: (event) => { refilter(() => { setSourceHost(event.target.value); }); },
+								children: [
+									jsx("option", { value: "", children: zh ? "所有站点" : "Every host" }, "any"),
+									...hostOptions.map((entry) => jsx("option", {
+										value: entry.host,
+										children: `${entry.host} (${entry.findings})`
+									}, entry.host))
+								]
+							}, "sourceHost"),
+							orderOptions.length === 0 ? null : jsx("select", {
+								value: order,
+								"aria-label": zh ? "排序" : "Order",
+								style: filterStyle,
+								onChange: (event) => { refilter(() => { setOrder(event.target.value); }); },
+								children: orderOptions.map((entry) => jsx("option", {
+									value: entry === "created" ? "" : entry,
+									children: missionFace(MISSION_FINDING_ORDER_FACES, entry, zh)
+								}, entry))
+							}, "order")
+						]
+					}, "filters"),
 					hosts.length === 0 ? null : jsx("div", {
 						style: { fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
 						// WHICH sites, not how many. "1 个独立站点" gave the reader a
@@ -5586,11 +5941,31 @@ window.__ModuleLoader__.load({
 							onOpen
 						}, finding.id))
 					}, "rows"),
-					paging.hasMore !== true ? null : jsx("div", {
-						style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
-						children: zh
-							? `只显示了前 ${paging.returned} 条，这个维度一共 ${counts.total ?? 0} 条。`
-							: `Showing the first ${paging.returned}; this dimension holds ${counts.total ?? 0}.`
+					// A PAGE, not a dead end. What stood here said the other forty findings
+					// exist and offered no way to reach them, which is the same as not saying
+					// it: `skip` was a parameter the route took the whole time.
+					paging.hasMore !== true && skip === 0 ? null : jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", marginTop: "2px" },
+						children: [
+							jsx("span", {
+								style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+								children: zh
+									? `第 ${skip + 1}–${skip + (paging.returned ?? 0)} 条，共 ${counts.total ?? 0} 条`
+									: `${skip + 1}–${skip + (paging.returned ?? 0)} of ${counts.total ?? 0}`
+							}, "range"),
+							skip === 0 ? null : jsx("button", {
+								type: "button",
+								style: { ...controlStyle(), height: "24px", padding: "0 9px", fontSize: "11px" },
+								onClick: () => { setSkip(Math.max(0, skip - MISSION_FINDINGS_TAKE)); },
+								children: zh ? "上一页" : "Previous"
+							}, "prev"),
+							paging.hasMore !== true ? null : jsx("button", {
+								type: "button",
+								style: { ...controlStyle(), height: "24px", padding: "0 9px", fontSize: "11px" },
+								onClick: () => { setSkip(skip + MISSION_FINDINGS_TAKE); },
+								children: zh ? "下一页" : "Next"
+							}, "next")
+						]
 					}, "more")
 				]
 			});
@@ -5871,12 +6246,23 @@ window.__ModuleLoader__.load({
 		function MissionDrawer({ open, onClose, children }) {
 			useEffect(() => {
 				if (open !== true) return undefined;
-				const onKey = (event) => { if (event.key === "Escape") onClose?.(); };
+				const onKey = (event) => {
+					if (event.key !== "Escape") return;
+					// STOPPED HERE. The host app closes the whole 智能体 panel on
+					// Escape, so one press with a drawer open closed the drawer AND
+					// the panel behind it — measured: the page went from 1945
+					// characters to 65. A drawer that is open owns the key.
+					event.stopPropagation();
+					if (typeof event.preventDefault === "function") event.preventDefault();
+					onClose?.();
+				};
 				// Guarded: this module is executed in Node by the render tests
 				// against a hand-written window stub.
 				if (typeof window?.addEventListener !== "function") return undefined;
-				window.addEventListener("keydown", onKey);
-				return () => { window.removeEventListener("keydown", onKey); };
+				// Capture phase, so this runs BEFORE the panel's own handler rather
+				// than after it has already closed.
+				window.addEventListener("keydown", onKey, true);
+				return () => { window.removeEventListener("keydown", onKey, true); };
 			}, [open, onClose]);
 
 			if (open !== true) return null;
@@ -5913,9 +6299,38 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @param onOpenStage - called with a stepId; opens the trajectory on it.
 		*/
-		function MissionTaskBoard({ stages, agents, zh, onOpenStage, selected, onSelect }) {
+		function MissionTaskBoard({ stages, agents, zh, onOpenStage, selected, onSelect, mission, work }) {
+			// WHAT A TASK IS HERE, and it took a rebuild to get right. playground's
+			// board deliberately does NOT show system-stage rows: a todo there is a
+			// piece of work somebody decided on — a dimension to research, a gap the
+			// reconciler found, a warning the critic raised. This board showed the
+			// twelve pipeline stages and nothing else, which is the pipeline's
+			// shape, not the mission's work.
+			//
+			// `view.work` carries both, as a tree: the twelve stages as parents and
+			// the real decisions as children under the stage that made them — five
+			// researched dimensions under s3-collect, the Leader's re-collect calls
+			// under s4-assess, each one with the sentence the Leader wrote about it.
+			// The projection existed and had NO READER, which is this codebase's
+			// signature failure: the data was one field away and the screen showed
+			// the scaffolding instead.
+			const tree = Array.isArray(work) ? work : [];
 			const rows = Array.isArray(stages) ? stages : [];
-			if (rows.length === 0) return null;
+			// NOT null. A board with no rows used to render nothing at all, which on
+			// screen is a blank rectangle — the same rectangle a component that threw
+			// leaves behind. The three reasons the board can be empty want three
+			// different reactions, and only one of them is "wait".
+			if (rows.length === 0) {
+				return jsx(MissionEmptyPane, {
+					mission, zh,
+					waiting: zh
+						? "暂无任务：等 Leader 拆完维度，任务会动态出现。"
+						: "No tasks yet: the leader is still breaking the topic into dimensions, and tasks appear as it does.",
+					finished: zh
+						? "这次运行结束时，任务表里暂无任何一条阶段记录 —— 不是没显示，是确实一条也没落下。"
+						: "This run ended with nothing in the task table at all — nothing is being hidden; not one stage row was written."
+				});
+			}
 			// Who ran it. `agents` is keyed by role and carries `lastStepId`, so a
 			// stage nobody reached simply has no owner rather than a wrong one.
 			const owner = new Map();
@@ -5937,6 +6352,33 @@ window.__ModuleLoader__.load({
 				{ id: "took", label: zh ? "用时" : "Took", width: "10%", align: "right" },
 				{ id: "action", label: zh ? "操作" : "", width: "12%", align: "right" }
 			];
+			// Parents in pipeline order with their children directly under them,
+			// which is the order `buildWork` already returns; this only groups so a
+			// stage that gained no children still prints, and a child whose parent
+			// fell out of the window is not silently dropped.
+			// A host that does not serve `work` yet still gets a board. During a
+			// rolling update the browser half is newer than the machine that owns
+			// the library, and a blank rectangle is indistinguishable from a
+			// component that threw.
+			const nodes = tree.length > 0 ? tree : rows.map((row) => ({
+				id: `stage:${row.stepId}`, parentId: null, origin: "pipeline",
+				title: row.stepId, state: row.status, assignee: row.agent ?? null,
+				reason: row.degradeNote ?? null, counts: { attempts: row.attempts ?? 0 }
+			}));
+			const parents = nodes.filter((node) => node.parentId === null || node.parentId === undefined);
+			const kids = new Map();
+			for (const node of nodes) {
+				if (node.parentId === null || node.parentId === undefined) continue;
+				const list = kids.get(node.parentId) ?? [];
+				list.push(node);
+				kids.set(node.parentId, list);
+			}
+			const display = [];
+			for (const parent of parents) {
+				display.push({ node: parent, depth: 0 });
+				for (const kid of kids.get(parent.id) ?? []) display.push({ node: kid, depth: 1 });
+			}
+
 			const chosen = rows.find((row) => row.stepId === selected) ?? null;
 			const table = jsx("div", {
 				style: {
@@ -5956,44 +6398,74 @@ window.__ModuleLoader__.load({
 							})
 						}, "head"),
 						jsx("tbody", {
-							children: rows.map((stage, at) => {
-								const face = missionFace(MISSION_STAGE_STATUS_FACES, stage.status, zh);
-								const hue = missionHue(MISSION_STAGE_STATUS_FACES, stage.status);
-								const ran = stage.status !== "pending" && stage.status !== "skipped-by-tier";
-								const who = owner.get(stage.stepId) ?? null;
-								const note = stage.degradeNote ?? "";
-								const open = stage.stepId === selected;
+							children: display.map((entry, at) => {
+								const node = entry.node;
+								const child = entry.depth > 0;
+								// A parent row IS a stage, so it keeps the stage row's
+								// timings and attempt count. A child is a decision — a
+								// dimension somebody planned, a re-collect the Leader
+								// called for — and carries its own.
+								const stage = child ? null : (rows.find((row) => `stage:${row.stepId}` === node.id) ?? null);
+								const status = stage?.status ?? node.state ?? "pending";
+								const face = missionFace(MISSION_STAGE_STATUS_FACES, status, zh)
+									|| missionFace(MISSION_DIMENSION_FACES, status, zh);
+								const hue = missionHue(MISSION_STAGE_STATUS_FACES, status);
+								const ran = status !== "pending" && status !== "skipped-by-tier";
+								const key = stage === null ? node.id : stage.stepId;
+								// The Leader's sentence about THIS dimension when there is
+								// one. `reason` on a re-collect child is the mission-level
+								// rationale, identical on every child of that decision;
+								// `critique` is what was written about this dimension.
+								const note = child
+									? String(node.critique ?? node.reason ?? "")
+									: String(stage?.degradeNote ?? node.reason ?? "");
+								const who = child ? (node.assignee ?? null) : (owner.get(stage?.stepId)?.agentId ?? owner.get(stage?.stepId)?.role ?? node.assignee ?? null);
+								const attempts = Number(stage?.attempts ?? node.counts?.attempts ?? 0);
+								const open = key === selected;
 								return jsxs("tr", {
-									onClick: () => { onSelect?.(open ? null : stage.stepId); },
+									onClick: () => { onSelect?.(open ? null : key); },
 									style: {
 										borderBottom: "1px solid var(--dsw-alias-border-l2)",
 										cursor: "pointer",
 										background: open ? "var(--dsw-alias-interactive-bg-hover)" : "transparent",
-										// The status bar down the left edge, which is what
-										// makes the board scannable without reading it.
 										boxShadow: `inset 3px 0 0 0 rgba(${hue},${ran ? 0.9 : 0.25})`
 									},
 									children: [
 										jsx("td", {
 											style: { ...cell, textAlign: "center", color: "var(--dsw-alias-label-tertiary)", fontVariantNumeric: "tabular-nums" },
-											children: String(at + 1)
+											children: child ? "" : String(at + 1)
 										}, "idx"),
 										jsxs("td", {
-											style: { ...cell, display: "flex", alignItems: "center", gap: "8px", minWidth: 0 },
+											style: { ...cell, display: "flex", alignItems: "center", gap: "8px", minWidth: 0, paddingLeft: child ? "26px" : "10px" },
 											children: [
+												// The origin, on the child only. "Why does this row
+												// exist" is the whole difference between a plan and a
+												// progress bar, and for a stage the answer is always
+												// "the pipeline declares twelve".
+												!child ? null : jsx("span", {
+													style: {
+														flex: "none", padding: "0 5px", borderRadius: "5px",
+														background: node.origin === "leader-assess-recollect"
+															? "var(--dsw-alias-state-warn-tertiary)"
+															: "var(--dsw-alias-state-business-tertiary)",
+														color: node.origin === "leader-assess-recollect"
+															? "var(--dsw-alias-state-warn-label)"
+															: "var(--dsw-alias-state-business-primary)",
+														fontSize: "10px", fontWeight: 600, whiteSpace: "nowrap"
+													},
+													children: node.origin === "leader-assess-recollect"
+														? (zh ? "领队要求重采" : "re-collect")
+														: (zh ? "维度" : "dimension")
+												}, "origin"),
 												jsx("span", {
 													style: {
-														fontWeight: 600, color: "var(--dsw-alias-label-primary)",
-														whiteSpace: "nowrap"
+														fontWeight: child ? 400 : 600,
+														color: "var(--dsw-alias-label-primary)",
+														whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+														maxWidth: child ? "40%" : "none"
 													},
-													children: missionFace(MISSION_STAGE_FACES, stage.stepId, zh)
+													children: child ? node.title : missionFace(MISSION_STAGE_FACES, stage?.stepId ?? node.title, zh)
 												}, "name"),
-												// The note itself does NOT go in the cell. Two lines of
-												// amber log text under a task name made every row a
-												// different height, wrapped raw provider English into a
-												// table, and turned a board meant to be scanned into a
-												// paragraph with borders. The row says THAT there is a
-												// note; the panel says what it is.
 												note === "" ? null : jsx("span", {
 													style: {
 														flex: "1 1 0", minWidth: 0,
@@ -6006,8 +6478,8 @@ window.__ModuleLoader__.load({
 											]
 										}, "name"),
 										jsx("td", {
-											style: { ...cell, fontFamily: MISSION_MONO, fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
-											children: who === null ? "—" : (who.agentId ?? who.role ?? "—")
+											style: { ...cell, fontFamily: MISSION_MONO, fontSize: "11px", color: "var(--dsw-alias-label-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+											children: who === null || who === undefined ? "—" : who
 										}, "owner"),
 										jsxs("td", {
 											style: cell,
@@ -6020,24 +6492,30 @@ window.__ModuleLoader__.load({
 													},
 													children: face
 												}, "pill"),
-												Number(stage.attempts ?? 0) <= 1 ? null : jsx("span", {
-													// Attempts are drawn beside the status because a
-													// stage that succeeded on its third try and one
-													// that succeeded on its first are the same word.
+												attempts <= 1 ? null : jsx("span", {
 													style: { marginLeft: "6px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary)" },
-													children: zh ? `第 ${stage.attempts} 次` : `try ${stage.attempts}`
-												}, "attempts")
+													children: zh ? `第 ${attempts} 次` : `try ${attempts}`
+												}, "attempts"),
+												// A dimension's own arithmetic, where it is the row's
+												// point: 已核验 N/下限 is what says whether this piece
+												// of work succeeded, and the status word does not.
+												!child || node.counts?.verified === undefined || node.counts?.verified === null ? null : jsx("span", {
+													style: { marginLeft: "6px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary)", fontVariantNumeric: "tabular-nums" },
+													children: node.counts.floor === null || node.counts.floor === undefined
+														? (zh ? `已核验 ${node.counts.verified}` : `${node.counts.verified} verified`)
+														: (zh ? `已核验 ${node.counts.verified}/${node.counts.floor}` : `${node.counts.verified}/${node.counts.floor} verified`)
+												}, "verified")
 											]
 										}, "status"),
 										jsx("td", {
 											style: { ...cell, textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-secondary)" },
-											children: stage.durationMs === null || stage.durationMs === undefined
+											children: stage === null || stage.durationMs === null || stage.durationMs === undefined
 												? "—"
 												: missionDuration(stage.durationMs, zh)
 										}, "took"),
 										jsx("td", {
 											style: { ...cell, textAlign: "right" },
-											children: !ran ? null : jsx("button", {
+											children: !ran || stage === null ? null : jsx("button", {
 												type: "button",
 												style: {
 													appearance: "none", border: "none", background: "transparent",
@@ -6049,7 +6527,7 @@ window.__ModuleLoader__.load({
 											}, "open")
 										}, "action")
 									]
-								}, stage.stepId ?? String(at));
+								}, node.id ?? String(at));
 							})
 						}, "body")
 					]
@@ -6440,7 +6918,267 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/**
-		* The three panes of one mission, as a tab strip.
+		* A big number, short enough to sit on a tab row.
+		*
+		* Rounded, never truncated to look smaller: 412000 is `412k` and 1_480_000 is
+		* `1.5M`, so the trailing slot reads at a glance and still says the same thing
+		* as the meter it summarises.
+		* @param value - the count.
+		* @returns the short form.
+		*/
+		function missionCompact(value) {
+			const n = Number(value);
+			if (!Number.isFinite(n)) return "—";
+			if (Math.abs(n) >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+			if (Math.abs(n) >= 1000) return `${Math.round(n / 1000)}k`;
+			return String(n);
+		}
+
+		/**
+		* A pane with nothing in it, saying WHICH nothing.
+		*
+		* Three panes used to `return null` when their list was empty, which draws a
+		* blank rectangle — and a blank rectangle is exactly what a crashed component
+		* draws too. The three states behind an empty pane want different reactions:
+		* a mission still planning will fill it by itself, a mission that died before
+		* planning never will and the failure is the thing to read, and a finished
+		* mission with an empty pane is a real, final answer.
+		* @param mission - `view.mission`, or undefined when the caller has none.
+		* @param waiting - the sentence for a run that has not got there yet.
+		* @param finished - the sentence for a finished run that produced nothing here.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionEmptyPane({ mission, waiting, finished, zh }) {
+			const failureCode = mission?.failureCode ?? null;
+			const message = mission?.errorMessage ?? "";
+			const failed = failureCode !== null || message !== "";
+			const terminal = mission?.terminal === true;
+			const hue = failed ? "220,38,38" : terminal ? "100,116,139" : "217,119,6";
+			// The same table the failure banner reads, so a pane and the banner over it
+			// cannot name the same code two different ways.
+			const face = failureCode !== null && Object.hasOwn(MISSION_FAILURE_FACES, failureCode)
+				? MISSION_FAILURE_FACES[failureCode]
+				: null;
+			const lines = failed
+				? [
+					zh ? "这一格是空的，因为这次运行没有走到这一步：" : "This pane is empty because the run never got here:",
+					face === null ? "" : (zh ? face.zh : face.en),
+					message === "" ? "" : message,
+					face === null ? "" : (zh ? face.zhNext : face.enNext)
+				].filter((line) => line !== "")
+				: [terminal ? finished : waiting];
+
+			return jsx("div", {
+				style: {
+					padding: "10px 12px", borderRadius: "10px",
+					border: `1px solid rgba(${hue},0.25)`, background: `rgba(${hue},0.06)`,
+					display: "flex", flexDirection: "column", gap: "4px"
+				},
+				children: lines.map((line, at) => jsx("div", {
+					style: {
+						fontSize: "12px", lineHeight: "19px",
+						color: at === 0 ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)"
+					},
+					children: line
+				}, `l${at}`))
+			});
+		}
+
+		/**
+		* Everything this mission read, once each.
+		*
+		* The evidence pane answers "what did we learn" and answers it per finding;
+		* this answers "what did we read" and answers it per page. On a real mission
+		* the two differ by half — fourteen findings over seven pages — and a
+		* references screen built from the findings route shows the same page six times
+		* and makes a thinly-sourced mission look well sourced.
+		*
+		* The run picker is the same one the evidence pane carries, for the same
+		* reason: measured on a real mission, five runs, every finding in run 1, and a
+		* references screen scoped to run 5 that would list nothing at all.
+		* @param missionId - the mission.
+		* @param zh - whether to write Chinese.
+		* @param mission - `view.mission`, for the empty state's sentence.
+		*/
+		function MissionSources({ missionId, zh, mission }) {
+			const [held, setHeld] = useState(null);
+			const [error, setError] = useState("");
+			const [run, setRun] = useState(null);
+			const [byHost, setByHost] = useState(false);
+
+			useEffect(() => {
+				let alive = true;
+				const query = run === null ? "" : `?runCount=${run}`;
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/sources${query}`)
+					.then(missionData)
+					.then((data) => {
+						if (!alive) return;
+						setHeld(data);
+						setError("");
+						setRun((previous) => {
+							if (previous !== null) return previous;
+							const runs = Array.isArray(data?.runs) ? data.runs : [];
+							const here = runs.find((entry) => entry.runCount === data?.runCount);
+							if (here !== undefined && here.total > 0) return here.runCount;
+							// The newest run that read anything. Falling back to the current run
+							// when none did keeps "this mission read nothing" sayable — it is
+							// sometimes the truth, and it is the truth this pane must not hide.
+							const best = runs.find((entry) => entry.total > 0);
+							return best === undefined ? previous : best.runCount;
+						});
+					})
+					.catch((cause) => {
+						if (!alive) return;
+						setError(String(cause?.message ?? cause));
+					});
+				return () => { alive = false; };
+			}, [missionId, run]);
+
+			if (held === null) {
+				return jsx("div", {
+					style: { fontSize: "12px", lineHeight: "18px", color: error === "" ? "var(--dsw-alias-label-secondary)" : "rgb(217,119,6)" },
+					children: error === ""
+						? (zh ? "读取中…" : "Loading…")
+						: (zh ? "读不到这次任务的来源清单：" : "Could not read this mission's sources: ") + error
+				});
+			}
+
+			const sources = Array.isArray(held.sources) ? held.sources : [];
+			const totals = held.totals ?? { sources: 0, hosts: 0, findings: 0, verified: 0 };
+			const runs = Array.isArray(held.runs) ? held.runs : [];
+			const names = new Map((Array.isArray(held.dimensions) ? held.dimensions : []).map((row) => [row.dimensionId, row.name]));
+			const current = held.runCount ?? null;
+
+			const picker = runs.length <= 1 ? null : jsxs("div", {
+				style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", margin: "0 0 10px" },
+				children: [
+					jsx("span", {
+						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						children: zh ? "运行：" : "Run:"
+					}, "label"),
+					...runs.map((entry) => jsx("button", {
+						type: "button",
+						"aria-pressed": entry.runCount === current,
+						style: {
+							...controlStyle(), height: "24px", padding: "0 9px", fontSize: "11px",
+							fontWeight: entry.runCount === current ? 600 : 400,
+							color: entry.total === 0 ? "var(--dsw-alias-label-tertiary)" : undefined
+						},
+						onClick: () => { setRun(entry.runCount); },
+						children: zh
+							? `第 ${entry.runCount} 次 · ${entry.verified}/${entry.total}`
+							: `run ${entry.runCount} · ${entry.verified}/${entry.total}`
+					}, `run-${entry.runCount}`))
+				]
+			}, "runs");
+
+			if (sources.length === 0) {
+				return jsxs("div", { children: [picker, jsx(MissionEmptyPane, {
+					mission, zh,
+					waiting: zh
+						? "还没有读到任何一页 —— 采集阶段一开始，这里就会一条条长出来。"
+						: "Nothing has been read yet. Entries appear here one page at a time once collection starts.",
+					finished: zh
+						? "这次运行结束时，一个来源也没有留下 —— 不是没显示，是确实一页都没读成。"
+						: "This run ended with no sources at all — nothing is being hidden; not one page was read."
+				}, "empty")] });
+			}
+
+			// Sorted by how much each host carried, not alphabetically: the question a
+			// reader has here is whether one site is holding the whole report up.
+			const hosts = new Map();
+			for (const source of sources) {
+				const bag = hosts.get(source.host);
+				if (bag === undefined) hosts.set(source.host, { host: source.host, rows: [source], findings: source.findings });
+				else { bag.rows.push(source); bag.findings += source.findings; }
+			}
+			const grouped = [...hosts.values()].sort((a, b) => b.findings - a.findings);
+
+			const row = (source) => jsxs("div", {
+				style: {
+					display: "flex", flexDirection: "column", gap: "2px",
+					padding: "7px 0", borderTop: "1px solid var(--dsw-alias-border-l1)"
+				},
+				children: [
+					jsx("a", {
+						href: source.url,
+						target: "_blank",
+						rel: "noreferrer noopener",
+						style: { fontSize: "13px", color: "var(--dsw-alias-state-business-primary)", textDecoration: "none" },
+						// The page's own title where it has one. A column of raw addresses is
+						// what this pane looks like without the join, and it is unreadable.
+						children: (source.title ?? "") === "" ? source.url : source.title
+					}, "link"),
+					jsx("div", {
+						style: { fontSize: "11px", lineHeight: "17px", fontFamily: MISSION_MONO, color: "var(--dsw-alias-label-tertiary)" },
+						children: [
+							byHost ? "" : source.host,
+							zh ? `${source.findings} 条发现` : `${source.findings} finding(s)`,
+							// Verified against the page, not merely recorded from it. A source
+							// that produced six findings of which none verified is a source that
+							// carried nothing, and one number cannot say that.
+							zh ? `已核验 ${source.verified} 条` : `${source.verified} verified`,
+							(Array.isArray(source.dimensionIds) ? source.dimensionIds : [])
+								.map((id) => names.get(id) ?? id).join(zh ? "、" : ", "),
+							source.firstSeenAt === null || source.firstSeenAt === undefined ? "" : formatStamp(source.firstSeenAt)
+						].filter((piece) => piece !== "" && piece !== null && piece !== undefined).join(" · ")
+					}, "meta")
+				]
+			}, source.url);
+
+			return jsxs("div", {
+				children: [
+					picker,
+					jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", margin: "0 0 8px" },
+						children: [
+							jsx("span", {
+								style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+								children: zh
+									? `${totals.findings} 条发现 · ${totals.sources} 个来源 · ${totals.hosts} 个站点 · 已核验 ${totals.verified} 条`
+									: `${totals.findings} findings · ${totals.sources} sources · ${totals.hosts} hosts · ${totals.verified} verified`
+							}, "totals"),
+							jsx("span", { style: { flex: 1 } }, "spacer"),
+							jsx("button", {
+								type: "button",
+								"aria-pressed": byHost,
+								style: { ...controlStyle(), height: "26px", padding: "0 10px", fontSize: "12px" },
+								onClick: () => { setByHost(!byHost); },
+								children: byHost ? (zh ? "按引用次数排" : "By citation count") : (zh ? "按站点分组" : "Group by host")
+							}, "group")
+						]
+					}, "head"),
+					!byHost ? jsx("div", { children: sources.map(row) }, "flat") : jsx("div", {
+						style: { display: "flex", flexDirection: "column", gap: "12px" },
+						children: grouped.map((entry) => jsxs("div", {
+							children: [
+								jsx("div", {
+									style: { fontSize: "12px", fontWeight: 600, fontFamily: MISSION_MONO, color: "var(--dsw-alias-label-primary)" },
+									children: zh
+										? `${entry.host} · ${entry.rows.length} 页 · ${entry.findings} 条发现`
+										: `${entry.host} · ${entry.rows.length} page(s) · ${entry.findings} finding(s)`
+								}, "host"),
+								jsx("div", { children: entry.rows.map(row) }, "rows")
+							]
+						}, entry.host))
+					}, "grouped")
+				]
+			});
+		}
+
+		/**
+		* Every pane the strip can offer, in order.
+		*
+		* Named once so the strip and the guard below it cannot disagree. `pane` is
+		* free state and the strip used to change shape underneath it — the report tab
+		* appeared and vanished with `hasReport` — so a rerun that dropped the artefact
+		* left the state pointing at a tab that no longer existed: a pressed-nothing
+		* strip over an empty body, which is a blank screen with chrome on top.
+		*/
+		const MISSION_PANES = ["tasks", "trace", "report", "sources", "dimensions", "cost"];
+
+		/**
+		* The six panes of one mission, as a tab strip.
 		*
 		* WHY A STRIP AND NOT A LONGER PAGE: the trajectory carries a detail panel
 		* beside it, and a panel that opens below two thousand pixels of stage
@@ -6453,7 +7191,7 @@ window.__ModuleLoader__.load({
 		* who assumes it is empty, which is exactly what happened when the numbers
 		* lived only inside the pane they described.
 		*/
-		function MissionDetailTabs({ pane, setPane, zh, dimensions, findings, steps, hasReport, stages }) {
+		function MissionDetailTabs({ pane, setPane, zh, findings, steps, stages, spend }) {
 			// The set gens.team's playground arrived at for the same object, and
 			// it is taken rather than re-derived: 任务列表 · 协作动态 · 输出报告 ·
 			// 参考文献 · 图谱分析 · 算力消耗. Two of those were folded into an
@@ -6464,17 +7202,22 @@ window.__ModuleLoader__.load({
 			// entities and edges this mission never builds, and a tab that opens
 			// onto "no graph data" for every mission is a tab that teaches people
 			// the strip is decorative.
+			// FIXED SHAPE. 报告 stays in the strip whether or not there is an
+			// artefact behind it: a tab that vanishes teaches the reader the strip is
+			// unreliable, and "还没有生成报告" is a better answer than a missing tab —
+			// it says the mission has not written one yet, which a gap cannot.
 			const panes = [
 				{ id: "tasks", label: zh ? "任务" : "Tasks", count: stages },
 				{ id: "trace", label: zh ? "轨迹" : "Trajectory", count: steps },
-				{ id: "report", label: zh ? "报告" : "Report", count: null, off: hasReport !== true },
+				{ id: "report", label: zh ? "报告" : "Report", count: null },
+				{ id: "sources", label: zh ? "参考文献" : "References", count: null },
 				{ id: "dimensions", label: zh ? "证据" : "Evidence", count: findings },
 				{ id: "cost", label: zh ? "成本" : "Cost", count: null }
-			].filter((entry) => entry.off !== true);
-			return jsx("div", {
+			];
+			const strip = jsx("div", {
 				style: {
 					display: "flex", alignItems: "center", gap: "4px",
-					margin: "0 0 14px", padding: "3px",
+					margin: 0, padding: "3px",
 					borderRadius: "9px", background: "var(--dsw-alias-fill-tertiary)",
 					width: "fit-content"
 				},
@@ -6508,9 +7251,27 @@ window.__ModuleLoader__.load({
 					}, entry.id);
 				})
 			});
+			// The spend, ON the strip. It lived one pane away, so "how much has this
+			// cost so far" was a click from every screen except the one that answers
+			// it. A span rather than a control: the strip's buttons are the strip's
+			// buttons, and a seventh clickable thing in that row would be read as a
+			// seventh pane.
+			return jsxs("div", {
+				style: { display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap", margin: "0 0 12px" },
+				children: [
+					strip,
+					(spend ?? "") === "" ? null : jsx("span", {
+						style: {
+							fontSize: "11px", fontFamily: MISSION_MONO, fontVariantNumeric: "tabular-nums",
+							color: "var(--dsw-alias-label-tertiary)"
+						},
+						children: spend
+					}, "spend")
+				]
+			});
 		}
 
-		function MissionDetail({ missionId, zh, onBack }) {
+		function MissionDetail({ missionId, zh, onBack, initialPane }) {
 			const [view, setView] = useState(null);
 			const [state, setState] = useState("loading");
 			const [error, setError] = useState("");
@@ -6523,7 +7284,12 @@ window.__ModuleLoader__.load({
 			// tab bar so that leaving a mission and coming back opens on the
 			// overview, and so a reader who is deep in the trajectory keeps it
 			// across a poll.
-			const [pane, setPane] = useState("tasks");
+			const [pane, setPane] = useState(typeof initialPane === "string" ? initialPane : "tasks");
+			// Which version the report pane is showing, held HERE because the download
+			// control is on the header row one level up. A reader looking at v1 who
+			// presses 下载 and receives v3 has been handed a different document than
+			// the one on their screen, and nothing on either would say so.
+			const [reportVersion, setReportVersion] = useState(0);
 			// Which stage the trajectory should open on, when it was reached from
 			// the task board rather than from the tab.
 			const [focusStep, setFocusStep] = useState("");
@@ -6625,6 +7391,9 @@ window.__ModuleLoader__.load({
 
 
 			const mission = view.mission;
+			// A pane the strip no longer offers falls back to the board rather than
+			// rendering a pressed-nothing strip over an empty body.
+			const activePane = MISSION_PANES.includes(pane) ? pane : "tasks";
 			const face = missionPillFace(mission.pill, zh);
 			const artifact = view.artifact ?? { kind: "empty-artifact", reason: "not-yet-materialized" };
 			const hasReport = artifact.kind === "artifact";
@@ -6632,6 +7401,9 @@ window.__ModuleLoader__.load({
 			const noEvidence = missionNoEvidence(view.timeline);
 			const preflight = view.timeline?.preflight ?? null;
 			const resume = view.resume ?? { offered: false };
+			// The version the download control names. An explicit choice wins; with
+			// none, the artefact the view route says is current.
+			const shownVersion = reportVersion > 0 ? reportVersion : Number(artifact.version ?? 0);
 			const progress = mission.progress ?? {};
 
 			const meta = [
@@ -6646,6 +7418,16 @@ window.__ModuleLoader__.load({
 					: "",
 				zh ? `已用 ${missionDuration(mission.elapsedMs, zh)}` : `${missionDuration(mission.elapsedMs, zh)} elapsed`,
 				formatStamp(mission.startedAt)
+			].filter((piece) => piece !== "").join(" · ");
+
+			// What this run has spent, for the tab row. Compact on purpose: it is a
+			// glance, and the meters one pane over are the reading.
+			const spend = [
+				zh ? `令牌 ${missionCompact(view.cost?.tokens?.used ?? 0)}` : `${missionCompact(view.cost?.tokens?.used ?? 0)} tokens`,
+				zh ? `调用 ${view.cost?.calls?.used ?? 0} 次` : `${view.cost?.calls?.used ?? 0} calls`,
+				mission.score === null || mission.score === undefined
+					? ""
+					: (zh ? `评分 ${mission.score}` : `score ${mission.score}`)
 			].filter((piece) => piece !== "").join(" · ");
 
 			// The mission's four actions, hoisted so they can sit on the header
@@ -6682,22 +7464,35 @@ window.__ModuleLoader__.load({
 					children: zh ? "增量重跑" : "Rerun incrementally"
 				}, "rerunIncremental"),
 				!hasReport ? null : jsx("a", {
-					href: `${apiBase()}/missions/${encodeURIComponent(missionId)}/report.md`,
-					download: `${missionId}.md`,
+					// The version on screen, in the query AND in the filename. Both halves
+					// matter: the query is what makes the file the one being read, and the
+					// filename is what stops three downloads of three versions from
+					// overwriting each other in the downloads folder.
+					href: `${apiBase()}/missions/${encodeURIComponent(missionId)}/report.md`
+						+ (reportVersion > 0 ? `?version=${reportVersion}` : ""),
+					download: `${missionId}${shownVersion > 0 ? `-v${shownVersion}` : ""}.md`,
 					style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px", flex: "none", display: "inline-flex", alignItems: "center", textDecoration: "none" },
 					children: zh ? "下载 .md" : "Download .md"
 				}, "download")
 			].filter((entry) => entry !== null);
 
 			return jsx("div", {
-				style: { height: "100%", minHeight: 0, overflowY: "auto" },
+				// The frame does not scroll. The header row, the notices, the stage ruler
+				// and the tab strip are the reader's fixed point — which mission this is,
+				// how far it got, and how to leave — and they used to scroll away with the
+				// pane under them.
+				style: { height: "100%", minHeight: 0, display: "flex", flexDirection: "column" },
 				children: jsxs("div", {
 					// The trajectory is the two-pane reader this cap was written
 					// for: a list and a panel side by side, both of which lose
 					// their arguments column first when the frame narrows. The
 					// report is prose and keeps the cap, because a 1600px line of
 					// text is not a wider report, it is an unreadable one.
-					style: { ...(pane === "trace" || pane === "cost" ? WIDE_STYLE : CONTENT_STYLE), padding: "0 24px 24px" },
+					style: {
+						...(activePane === "trace" || activePane === "cost" ? WIDE_STYLE : CONTENT_STYLE),
+						padding: "0 24px", height: "100%", minHeight: 0, flex: "1 1 auto",
+						display: "flex", flexDirection: "column"
+					},
 					children: [
 						// ONE ROW: back, title, status, actions. This was four stacked
 						// blocks, and with the banner and the tab strip under them the
@@ -6792,22 +7587,36 @@ window.__ModuleLoader__.load({
 						// strip, the meters and five dimension cards is how it went
 						// unnoticed. Every pane reads the same `view`; switching one does
 						// not refetch.
+						// The twelve-stage ruler, over every pane rather than inside one. The
+						// projector guarantees the count is invariant, so this is a shape a
+						// person learns once and then reads at a glance — which is worth
+						// nothing if it is only visible on the tab they are not on. It was
+						// defined, exported, and rendered nowhere at all.
+						(view.stages ?? []).length === 0 ? null : jsx("div", {
+							style: { margin: "0 0 10px" },
+							children: jsx(MissionStageStrip, { stages: view.stages, zh })
+						}, "ruler"),
 						jsx(MissionDetailTabs, {
-							pane, setPane, zh,
-							dimensions: (view.dimensions ?? []).length,
+							pane: activePane, setPane, zh,
 							findings: evidence.total ?? 0,
 							steps: view.timeline?.lastEventSeq ?? null,
-							hasReport,
-							stages: (view.stages ?? []).length
+							stages: (view.stages ?? []).length,
+							spend
 						}, "panes"),
 
-						...(pane !== "tasks" ? [] : [
+						// THE ONE SCROLLER on this screen. Everything above it stays put.
+						jsxs("div", {
+							style: { flex: "1 1 auto", minHeight: 0, overflowY: "auto", padding: "0 0 24px" },
+							children: [
+						...(activePane !== "tasks" ? [] : [
 						jsx(MissionPanel, {
 							bare: true,
 							title: zh ? "任务" : "Tasks",
 							note: "",
 							children: jsx(MissionTaskBoard, {
+								mission,
 								stages: view.stages ?? [],
+								work: view.work ?? [],
 								agents: view.agents ?? [],
 								zh,
 								selected: task,
@@ -6854,16 +7663,43 @@ window.__ModuleLoader__.load({
 						}, "swept")
 						]),
 
-						...(pane !== "report" || !hasReport ? [] : [
+						...(activePane !== "report" ? [] : [
 						// The deliverable, in the frame rather than instead of it. It
 						// used to replace the whole screen, which meant leaving the
 						// report was leaving the mission — so the evidence behind a
 						// sentence was two navigations away from the sentence.
-						jsx(MissionReport, { missionId, zh, onBack: null }, "report")
+						!hasReport ? jsx(MissionEmptyPane, {
+							mission, zh,
+							waiting: zh
+								? "还没有生成报告 —— 任务还没有走到归档那一步。写好之后会出现在这里。"
+								: "No report yet: the mission has not reached the persist stage. It appears here once it is written.",
+							finished: zh
+								? "还没有生成报告：这次运行结束了，却一版也没有落下 —— 每条结束路径都应该写一版，所以这是失败路径上的一个洞。"
+								: "No report exists: this run ended without storing a version, and every terminal path is supposed to write one, so this is a hole in a failure path."
+						}, "noReport") : jsx(MissionReport, {
+							missionId, zh, onBack: null,
+							version: reportVersion, onVersion: setReportVersion
+						}, "report")
+						]),
+						...(activePane !== "sources" ? [] : [
+						jsx(MissionPanel, {
+							bare: true,
+							title: zh ? "参考文献" : "References",
+							note: "",
+							children: jsx(MissionSources, { missionId, zh, mission })
+						}, "sources")
 						]),
 
-						...(pane !== "dimensions" ? [] : [
-						(view.dimensions ?? []).length === 0 ? null : jsx(MissionPanel, {
+						...(activePane !== "dimensions" ? [] : [
+						(view.dimensions ?? []).length === 0 ? jsx(MissionEmptyPane, {
+							mission, zh,
+							waiting: zh
+								? "还没有维度：等 Leader 把课题拆开，维度和它们的证据会一个个出现。"
+								: "No dimensions yet: once the leader breaks the topic apart, they and their evidence appear here one at a time.",
+							finished: zh
+								? "这次运行没有留下任何维度，也就没有任何证据可看。"
+								: "This run recorded no dimensions at all, so there is no evidence to read."
+						}, "noDimensions") : jsx(MissionPanel, {
 							bare: true,
 							title: zh ? "维度" : "Dimensions",
 							// The counts stay — they are facts about this mission — but
@@ -6879,7 +7715,7 @@ window.__ModuleLoader__.load({
 						}, "dimensions")
 						]),
 
-						...(pane !== "trace" ? [] : [
+						...(activePane !== "trace" ? [] : [
 						// The trajectory, in place of the event tail that used to sit
 						// here. The tail showed one of the four things a mission does
 						// and none of the three that answer "why did this dimension
@@ -6903,12 +7739,26 @@ window.__ModuleLoader__.load({
 						}, "trace")
 						]),
 
-						...(pane !== "cost" ? [] : [
+						...(activePane !== "cost" ? [] : [
 						jsx(MissionPanel, {
 							title: zh ? "额度" : "Allowances",
 							note: zh ? "上限在建立任务时冻结，之后每个阶段都读同一行" : "the ceilings were frozen when the mission was opened",
 							children: jsx(MissionCostMeters, { cost: view.cost ?? {}, zh })
 						}, "cost"),
+						(view.cost?.byStage ?? []).length === 0 ? null : jsx(MissionPanel, {
+							title: zh ? "哪一步花的" : "Which stage spent it",
+							note: zh
+								? "按阶段分解 —— 一份总数说不出是哪一步在烧"
+								: "broken down by stage — one total cannot say which step is burning it",
+							children: jsx(MissionStageSpend, { byStage: view.cost.byStage, zh })
+						}, "byStage"),
+						(view.cost?.byTool ?? []).length === 0 ? null : jsx(MissionPanel, {
+							title: zh ? "哪个工具在失败" : "Which tool is failing",
+							note: zh
+								? "失败和缓存都算在调用里 —— 一次失败的抓取和一次命中缓存都花了额度"
+								: "failures and cache hits are calls too — both spent the allowance",
+							children: jsx(MissionToolTable, { byTool: view.cost.byTool, zh })
+						}, "byTool"),
 						(view.agents ?? []).length === 0 ? null : jsx(MissionPanel, {
 							title: zh ? "谁花的" : "Who spent it",
 							note: zh
@@ -6917,6 +7767,8 @@ window.__ModuleLoader__.load({
 							children: jsx(MissionAgentTable, { agents: view.agents, zh })
 						}, "agents")
 						])
+							]
+						}, "paneBody")
 					]
 				})
 			});
@@ -7023,6 +7875,232 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		* How many times `[N]` stands in the prose.
+		*
+		* A marker followed by `(` is a Markdown link whose text happens to be a
+		* number, not a citation, and counting it would tell the reader this source is
+		* leaned on once more than it is.
+		* @param markdown - the report body.
+		* @param index - the citation number.
+		* @returns the count.
+		*/
+		function missionMarkerCount(markdown, index) {
+			const needle = `[${index}]`;
+			let found = 0;
+			let at = markdown.indexOf(needle);
+			while (at >= 0) {
+				if (markdown[at + needle.length] !== "(") found += 1;
+				at = markdown.indexOf(needle, at + needle.length);
+			}
+			return found;
+		}
+
+		/**
+		* The report's numbered sources, joined from the two halves already stored.
+		*
+		* `artifact.citations` carries the index, the address and the finding it came
+		* from; `artifact.evidence` carries that finding's verified quote, its title and
+		* its fetch stamp. Neither half is a reference list on its own — a list built
+		* from citations alone is a column of bare URLs, which is what a reader gets
+		* today — and the join is on `findingId`, measured 11/11 on a live artefact.
+		*
+		* An index that will not join is kept and marked rather than dropped: a missing
+		* entry turns `[7]` in the prose into a pointer to nothing, and a reader cannot
+		* tell that from a numbering mistake.
+		* @param artifact - the artefact row from `/missions/:id/artifact`.
+		* @returns `[{index, url, host, title, quote, verifyState, fetchedAt, status, joined, inText}]`, in citation order.
+		*/
+		function missionReferences(artifact) {
+			const citations = Array.isArray(artifact?.citations) ? artifact.citations : [];
+			const evidence = Array.isArray(artifact?.evidence) ? artifact.evidence : [];
+			const markdown = typeof artifact?.markdown === "string" ? artifact.markdown : "";
+			const byFinding = new Map();
+			for (const row of evidence) {
+				const id = row?.findingId ?? null;
+				if (id === null || byFinding.has(id)) continue;
+				byFinding.set(id, row);
+			}
+
+			// Keyed by index rather than pushed: s12 writes one citation row per
+			// occurrence, so a source leaned on six times arrives six times and a list
+			// built from the array would print `[3]` six times over.
+			const seen = new Map();
+			for (const citation of citations) {
+				const index = Number(citation?.index);
+				if (!Number.isFinite(index) || seen.has(index)) continue;
+				const backing = byFinding.get(citation?.findingId ?? null) ?? null;
+				const url = String(citation?.url ?? backing?.sourceUrl ?? "");
+				seen.set(index, {
+					index,
+					url,
+					title: (backing?.sourceTitle ?? "") === "" ? "" : backing.sourceTitle,
+					host: (backing?.sourceHost ?? "") === "" ? hostOf(url) : backing.sourceHost,
+					quote: backing?.quote ?? citation?.inlineQuote ?? "",
+					verifyState: backing?.verifyState ?? null,
+					fetchedAt: backing?.fetchedAt ?? null,
+					status: backing?.status ?? null,
+					joined: backing !== null,
+					inText: missionMarkerCount(markdown, index)
+				});
+			}
+			return [...seen.values()].sort((a, b) => a.index - b.index);
+		}
+
+		/**
+		* Why a version was archived degraded, in the words the run itself recorded.
+		*
+		* What stood here was one either/or sentence — the guard fired OR the leader
+		* refused — printed identically for both, which told the reader that something
+		* is wrong and nothing about what. Every field below was already on disk: the
+		* guard's violations ride on the terminal event, the refusal and its reason are
+		* s11's own signature.
+		* @param reason - `artifact.degradeReason`, or null from an older Host half.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionDegradeNote({ reason, zh }) {
+			const lines = [];
+			if (reason === null || reason === undefined) {
+				// Not a guess. An older server sends no reason at all, and inventing the
+				// either/or sentence back would be this page claiming to know something
+				// it was not told.
+				lines.push(zh
+					? "这台机器上的服务端还没有给出降级原因 —— 它跑的是较旧的版本。"
+					: "This server did not say why: it is running an older build.");
+			} else {
+				const violations = Array.isArray(reason.guardViolations) ? reason.guardViolations : [];
+				if (violations.length > 0) {
+					lines.push(zh ? `内容闸门拦下 ${violations.length} 处：` : `The content guard raised ${violations.length}:`);
+					for (const violation of violations) {
+						const detail = (violation?.detail ?? "") === "" ? "" : (zh ? "：" : " — ") + violation.detail;
+						lines.push("· " + missionFace(MISSION_GUARD_FACES, violation?.code, zh) + detail);
+					}
+				}
+				if (reason.signed === false) {
+					lines.push((zh
+						? `领队读过报告后拒绝签署，评分 ${reason.score ?? "—"}。`
+						: `The leader read the report and declined to sign it, at ${reason.score ?? "—"}.`)
+						+ ((reason.refusalReason ?? "") === "" ? "" : (zh ? "理由：" : " Reason: ") + reason.refusalReason));
+				} else if (reason.signed === null || reason.signed === undefined) {
+					lines.push(zh
+						? "签署阶段没有跑到，这份报告没有人签过字。"
+						: "The sign-off stage was never reached, so nobody put their name to this report.");
+				}
+				if ((reason.accountabilityNote ?? "") !== "") {
+					lines.push((zh ? "领队留下的话：" : "The leader's own note: ") + reason.accountabilityNote);
+				}
+				if ((reason.failureCode ?? null) !== null) {
+					lines.push(missionFace(MISSION_FAILURE_FACES, reason.failureCode, zh));
+				}
+				// Nothing matched, and the flag is still set: print the guard's own
+				// sentence rather than an empty warning box.
+				if (lines.length === 0) {
+					lines.push((reason.guardMessage ?? "") === ""
+						? (zh ? "这一版被标成了降级，但归档时没有留下任何原因 —— 这本身是一处缺陷。" : "This version is flagged degraded and no reason was recorded with it, which is itself a defect.")
+						: reason.guardMessage);
+				}
+			}
+			return jsxs("div", {
+				style: {
+					margin: "0 0 12px", padding: "8px 11px", borderRadius: "8px",
+					background: "rgba(217,119,6,0.08)", border: "1px solid rgba(217,119,6,0.25)",
+					fontSize: "12px", lineHeight: "19px", color: "var(--dsw-alias-label-primary)"
+				},
+				children: [
+					jsx("div", {
+						style: { fontWeight: 600, color: "rgb(217,119,6)" },
+						children: zh ? "这一版是降级归档的。" : "This version was stored degraded."
+					}, "lead"),
+					...lines.map((line, at) => jsx("div", { children: line }, `l${at}`)),
+					jsx("div", {
+						style: { color: "var(--dsw-alias-label-secondary)" },
+						children: zh
+							? "报告仍然写出来了，就是为了让你能看见问题出在哪。"
+							: "It was written anyway so the problem is readable."
+					}, "why")
+				]
+			});
+		}
+
+		/**
+		* The report's 参考文献 list: one entry per citation index, with a real source
+		* behind it.
+		*
+		* Each entry carries the id the markers scroll to, so `[3]` in the prose and
+		* the third entry here are the same object as far as the reader is concerned.
+		* The verified quote is printed under the address because that — not the
+		* address — is what a person checks a citation against.
+		* @param references - `missionReferences`'s answer.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionReferenceList({ references, zh }) {
+			return jsxs("div", {
+				style: { maxWidth: "760px", margin: "0 0 18px" },
+				children: [
+					jsx("h3", {
+						style: {
+							margin: "0 0 10px", fontSize: "15px", fontWeight: 700,
+							fontFamily: ARTICLE_SERIF, color: "var(--dsw-alias-label-primary)"
+						},
+						children: zh ? "参考文献" : "References"
+					}, "head"),
+					jsx("div", {
+						style: { display: "flex", flexDirection: "column", gap: "10px" },
+						children: references.map((entry) => jsxs("div", {
+							id: `ref-${entry.index}`,
+							style: {
+								display: "flex", alignItems: "flex-start", gap: "8px",
+								fontSize: "12px", lineHeight: "19px", color: "var(--dsw-alias-label-secondary)"
+							},
+							children: [
+								jsx("span", {
+									style: { flex: "none", minWidth: "26px", fontFamily: MISSION_MONO, color: "var(--dsw-alias-label-primary)" },
+									children: `[${entry.index}]`
+								}, "index"),
+								jsxs("span", {
+									style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "2px" },
+									children: [
+										entry.url === "" ? jsx("span", {
+											style: { color: "var(--dsw-alias-label-tertiary)" },
+											children: zh ? "这条引用没有留下地址。" : "No address was stored for this citation."
+										}, "noUrl") : jsx("a", {
+											href: entry.url,
+											target: "_blank",
+											rel: "noreferrer noopener",
+											style: { color: "var(--dsw-alias-state-business-primary)", textDecoration: "none" },
+											// The title where there is one, the host where there is not — never a
+											// bare address as a name. A column of URLs is what a citation list built
+											// from `citations` alone looks like, and it is unreadable.
+											children: entry.title !== "" ? entry.title : entry.host !== "" ? entry.host : entry.url
+										}, "link"),
+										jsx("div", {
+											style: { fontSize: "11px", fontFamily: MISSION_MONO, color: "var(--dsw-alias-label-tertiary)" },
+											children: [
+												entry.host,
+												zh ? `文中 ${entry.inText} 处` : `cited ${entry.inText}× in the text`,
+												entry.verifyState === null ? "" : missionFace(MISSION_VERIFY_FACES, entry.verifyState, zh),
+												entry.status === null || entry.status === undefined ? "" : `HTTP ${entry.status}`,
+												entry.fetchedAt === null ? "" : formatStamp(entry.fetchedAt)
+											].filter((piece) => piece !== "" && piece !== null && piece !== undefined).join(" · ")
+										}, "meta"),
+										!entry.joined ? jsx("div", {
+											style: { color: "rgb(217,119,6)" },
+											children: zh
+												? "引用元数据缺失：这个编号没有对上任何一条冻结证据，所以引语和核验状态都查不到。"
+												: "Citation metadata missing: this index matched no frozen evidence row, so neither the quote nor its verify state can be shown."
+										}, "unjoined") : entry.quote === "" ? null : jsx("div", {
+											style: { color: "var(--dsw-alias-label-secondary)" },
+											children: `“${entry.quote}”`
+										}, "quote")
+									]
+								}, "body")
+							]
+						}, `ref-${entry.index}`))
+					}, "list")
+				]
+			});
+		}
+
+		/**
 		* The report, its scorecard, and every quote under it.
 		*
 		* The markdown is read from `/missions/:id/artifact` rather than
@@ -7033,8 +8111,15 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @param onBack - return to the detail view.
 		*/
-		function MissionReport({ missionId, zh, onBack }) {
-			const [version, setVersion] = useState(0);
+		function MissionReport({ missionId, zh, onBack, version: pinned, onVersion }) {
+			// WHOSE VERSION THIS IS. The download control lives on the mission's
+			// header row, one frame up, and a reader looking at v1 who presses it and
+			// gets v3 has been handed a different document than the one on screen. So
+			// the frame may own the choice; kept here when it does not, because this
+			// component is also readable on its own.
+			const [ownVersion, setOwnVersion] = useState(0);
+			const version = typeof pinned === "number" ? pinned : ownVersion;
+			const setVersion = typeof onVersion === "function" ? onVersion : setOwnVersion;
 			const [artifact, setArtifact] = useState(null);
 			const [versions, setVersions] = useState([]);
 			const [state, setState] = useState("loading");
@@ -7112,6 +8197,10 @@ window.__ModuleLoader__.load({
 			}
 
 			const quality = artifact.quality ?? {};
+			// Built once, read twice: the markers in the prose ask whether an index has
+			// anything behind it, and the list under the article is the same set.
+			const references = missionReferences(artifact);
+			const numbered = new Set(references.map((entry) => entry.index));
 			const evidence = Array.isArray(artifact.evidence) ? artifact.evidence : [];
 			const citations = Array.isArray(artifact.citations) ? artifact.citations : [];
 			const tallies = [
@@ -7120,10 +8209,13 @@ window.__ModuleLoader__.load({
 				["unplaced", zh ? "无法归章" : "Unplaced"]
 			].filter(([key]) => Number(quality[key]?.total ?? 0) > 0);
 
+			// NOT a scroller. The report is a pane inside the mission frame now, and a
+			// scroller inside a scroller is the arrangement where the header scrolls
+			// away in one pane and stays in the next.
 			return jsx("div", {
-				style: { height: "100%", minHeight: 0, overflowY: "auto" },
+				style: { minHeight: 0 },
 				children: jsxs("div", {
-					style: { ...CONTENT_STYLE, padding: "0 24px 24px" },
+					style: { ...CONTENT_STYLE, padding: onBack === null || onBack === undefined ? 0 : "0 24px 24px" },
 					children: [
 						jsxs("div", {
 							style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", margin: "0 0 12px" },
@@ -7155,12 +8247,7 @@ window.__ModuleLoader__.load({
 								formatStamp(artifact.createdAt)
 							].filter((piece) => piece !== "").join(" · ")
 						}, "meta"),
-						!artifact.degraded ? null : jsx("div", {
-							style: { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "rgb(217,119,6)" },
-							children: zh
-								? "这一版是降级归档的：要么内容闸门有违规，要么领队没有签署。报告仍然写出来了，就是为了让你能看见问题出在哪。"
-								: "This version was stored degraded: either the content guard fired or the leader did not sign it. It was written anyway so the problem is readable."
-						}, "degraded"),
+						!artifact.degraded ? null : jsx(MissionDegradeNote, { reason: artifact.degradeReason ?? null, zh }, "degraded"),
 						// Per section type, never averaged. "Chapter seven has zero
 						// citations" has to stay visible instead of disappearing
 						// into a healthy-looking overall ratio.
@@ -7189,8 +8276,18 @@ window.__ModuleLoader__.load({
 							}, "score"),
 						jsx("div", {
 							style: { maxWidth: "760px", margin: "0 0 18px" },
-							children: renderMarkdown(artifact.markdown ?? "", "article")
+							children: renderMarkdown(artifact.markdown ?? "", "article", {
+								zh,
+								has: (index) => numbered.has(index),
+								// The browser's own anchor, not a router: the list is on this page, and
+								// a marker that navigated would lose the reader's place in the prose.
+								jump: (index) => {
+									if (typeof document?.getElementById !== "function") return;
+									document.getElementById(`ref-${index}`)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+								}
+							})
 						}, "body"),
+						references.length === 0 ? null : jsx(MissionReferenceList, { references, zh }, "references"),
 						jsxs("div", {
 							style: { display: "flex", alignItems: "center", gap: "8px", margin: "0 0 10px" },
 							children: [
@@ -9849,6 +10946,9 @@ window.__ModuleLoader__.load({
 			SourcesSettings, SwarmPage, PublishTab, ExploreTab,
 			MissionsTab, MissionStarter, MissionListRow, MissionDetail, MissionPanel,
 			MissionStageStrip, MissionCostMeters, MissionDimensionCard, MissionTried,
+			MissionDetailTabs, MissionTaskBoard, MissionSources, MissionEmptyPane,
+			MissionStageSpend, MissionToolTable, MissionDegradeNote, MissionReferenceList,
+			missionReferences, missionMarkerCount, missionCompact,
 			MissionTimeline, MissionReport, MissionEvidenceRow,
 			MissionTrace, MissionTraceRow, MissionTraceDetail,
 			MissionDimensions, MissionDimensionFindings, MissionFindingRow,

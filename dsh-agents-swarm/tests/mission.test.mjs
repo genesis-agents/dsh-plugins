@@ -79,7 +79,7 @@ import {
   validateStageDag,
 } from "../lib/mission-runtime.js";
 import { TOOL_CODES, createCircuit } from "../lib/mission-tools.js";
-import { projectMissionView, readMissionViewInput } from "../lib/mission-view.js";
+import { projectMissionView, readMissionViewInput, splitGuardViolations } from "../lib/mission-view.js";
 import { createMissionRoutes } from "../lib/mission-routes.js";
 
 /* ── fixtures ──────────────────────────────────────────────────────────── */
@@ -1254,7 +1254,16 @@ test("the chapter count follows the dimensions that found something", () => {
  * @returns {Promise<object>} `{handled, status, body}`.
  */
 async function callRoute(missions, url) {
-  const res = {};
+  // `writeHead`/`end` as well as `sendJson`, because `report.md` is the one
+  // route that writes a file rather than an envelope, and a shim that only
+  // understood envelopes could not test it at all.
+  const chunks = [];
+  const res = {
+    writeHead(status, headers) { res.status = status; res.headers = headers; },
+    write(chunk) { chunks.push(String(chunk)); },
+    end(chunk) { if (chunk !== undefined) chunks.push(String(chunk)); },
+    on() {},
+  };
   const handler = createMissionRoutes({
     missionStore: missions,
     runtime: { start: () => ({ started: true }), running: () => [], bootId: "boot-1", clock: () => "2026-08-24T01:00:00.000Z" },
@@ -1262,7 +1271,7 @@ async function callRoute(missions, url) {
     readJson: async () => ({}),
   });
   const handled = await handler({ method: "GET", url }, res, new URL(url, "http://local").pathname);
-  return { handled, status: res.status, body: res.body };
+  return { handled, status: res.status, body: res.body, headers: res.headers, text: chunks.join("") };
 }
 
 /**
@@ -1359,7 +1368,7 @@ test("a query parameter the route does not read is refused by name", async (t) =
 
   const stray = await callRoute(missions, `/missions/${id}/trace?tier=quick`);
   assert.equal(stray.status, 400);
-  assert.match(stray.body.error, /kind, role, stepId/u);
+  assert.match(stray.body.error, /kind, role, agentId, stepId/u);
 
   // And a mistyped VALUE is still a 400 naming the vocabulary, never an empty list.
   const badKind = await callRoute(missions, `/missions/${id}/trace?kind=stages`);
@@ -1448,4 +1457,501 @@ test("a row keeps its number when the mission writes more", async (t) => {
     middle,
     "a row moved when something newer was written",
   );
+});
+
+/* ── what the stages decided, and what the report cost ─────────────────── */
+
+/**
+ * A mission that finished BADLY, with everything a reader would want to know
+ * about why written down in the four places it actually lives.
+ *
+ * Shaped after `mission-20260825T165619Z-dbc247bd`, whose stage outputs were
+ * read off the live library before these routes were written: the Leader
+ * assessed, decided `recollect` on the two dimensions that came back empty and
+ * said why; s5 reconciled eleven findings into facts and two conflicts; s10
+ * named blindspots; s11 refused to sign; the content guard fired twice; and
+ * the artefact was written degraded anyway. Every one of those was on disk and
+ * none of it was reachable.
+ *
+ * @param {object} missions - the store to write into.
+ * @returns {string} the mission id.
+ */
+function reasonedMission(missions) {
+  const id = collectedMission(missions);
+
+  // A SECOND collect attempt, so the work projection has a parent that ran
+  // twice — the case where a single `state` word hides half the history.
+  missions.startStage(id, "s3-collect", "2026-08-24T00:00:30.000Z", { agentId: "researcher:d1" });
+  const report = "https://example.com/report";
+  missions.putDocument({ url: report, markdown: "pilot line yield text ".repeat(40), status: 200, fetchedAt: "2026-08-24T00:00:30.500Z" });
+  missions.insertFinding({
+    missionId: id, dimensionId: "d1", runCount: 1, attempt: 1,
+    claim: "A second pilot line opened.", evidence: "a second pilot line opened in March",
+    sourceUrl: report, verifyState: "verified-source-text",
+    documentId: documentIdFor(report), spanIndex: 1, createdAt: "2026-08-24T00:00:31.000Z",
+  });
+  missions.insertFinding({
+    missionId: id, dimensionId: "d1", runCount: 1, attempt: 1,
+    claim: "Yield reached sixty percent.", evidence: "line yield reached sixty percent by the fourth quarter",
+    sourceUrl: report, verifyState: "verified-source-text",
+    documentId: documentIdFor(report), spanIndex: 2, createdAt: "2026-08-24T00:00:32.000Z",
+  });
+  missions.finishStage(id, "s3-collect", { status: "done", at: "2026-08-24T00:00:40.000Z", output: { dimensions: 2 }, tokens: 400 });
+
+  // A call nobody timed. `latency_ms` is NOT NULL DEFAULT 0, so this row is
+  // indistinguishable in a SUM from a call that genuinely returned instantly —
+  // which is exactly why `latencyMeasured` has to be counted separately.
+  missions.insertToolCall({
+    missionId: id, stepId: "s3-collect", agentId: "researcher:d1", tool: "web.fetch", paceKey: "fetch",
+    argsHash: "h4", argsText: '{"url":"https://example.com/report"}', ok: true, latencyMs: 0, at: "2026-08-24T00:00:33.000Z",
+  });
+
+  // s4: the Leader's verdict, in the Leader's words.
+  missions.startStage(id, "s4-assess", "2026-08-24T00:00:50.000Z", { agentId: "leader" });
+  missions.finishStage(id, "s4-assess", {
+    status: "degraded",
+    degradeNote: "two dimensions came back empty",
+    at: "2026-08-24T00:00:55.000Z",
+    output: {
+      decision: "recollect",
+      rationale: "按每维至少 2 条已验证发现的硬下限逐维核对后，cluster 与 d1 未达标；重收只针对最薄弱的两个维度。",
+      derivedFloor: 2,
+      perDimension: [
+        { dimensionId: "d1", action: "recollect", critique: "读了 0 个页面，属于检索覆盖失败，改用 innovation cluster 等检索词。", verified: 0, meetsFloor: false, shortfall: 2, uniqueHosts: 0 },
+        { dimensionId: "d2", action: "accept", critique: "已形成足够证据。", verified: 1, meetsFloor: true, shortfall: 0, uniqueHosts: 1 },
+      ],
+      weakest: [{ dimensionId: "d1", verified: 0 }],
+      shrinkRung: null,
+    },
+  });
+
+  // s5: the fact table, and the two things it could not reconcile.
+  missions.startStage(id, "s5-reconcile", "2026-08-24T00:01:00.000Z", { agentId: "leader" });
+  missions.finishStage(id, "s5-reconcile", {
+    status: "done",
+    at: "2026-08-24T00:01:05.000Z",
+    output: {
+      facts: [
+        { factId: "fact-1", entity: "Kanata North", attribute: "定位", value: "加拿大最大的科技园区", findingIds: ["f1"], dimensionIds: ["d1"] },
+        { factId: "fact-2", entity: "Kanata North", attribute: "企业数量", value: "540+ 会员企业", findingIds: ["f2"], dimensionIds: ["d2"] },
+      ],
+      conflicts: [{ conflictId: "conflict-1", factIds: ["fact-1", "fact-2"], resolution: "kept-both", preferredFactId: null, rationale: "统计对象不同。" }],
+      overlaps: [],
+      gaps: [{ dimensionId: "d1", aspects: ["官方规划文件"], severity: "critical" }],
+      hypotheses: [],
+      counts: { verifiedFindings: 3, facts: 2, conflicts: 1, unresolved: 0 },
+    },
+  });
+
+  // s10: what the report cannot see.
+  missions.startStage(id, "s10-critique", "2026-08-24T00:01:10.000Z", { agentId: "leader" });
+  missions.finishStage(id, "s10-critique", {
+    status: "done",
+    at: "2026-08-24T00:01:15.000Z",
+    output: {
+      blindspots: [{ statement: "报告没有覆盖准确地理边界。", whyItMatters: "读者无法判断指标是否在同一空间口径内。" }],
+      biases: [{ statement: "把组织化连接当作首要竞争力。", evidence: "主要支撑来自协会自述。" }],
+      forecastVulnerabilities: [],
+    },
+  });
+
+  // s11: the refusal, in full.
+  missions.startStage(id, "s11-signoff", "2026-08-24T00:01:20.000Z", { agentId: "leader" });
+  missions.finishStage(id, "s11-signoff", {
+    status: "done",
+    at: "2026-08-24T00:01:25.000Z",
+    output: {
+      signature: {
+        signed: false,
+        score: 15,
+        verdict: "refuse",
+        accountabilityNote: "我拒绝签署：重收没有增加任何独立已验证证据。",
+        refusalReason: "报告在证据数量、独立来源和篇幅上均明显不达标。",
+        corrections: [],
+      },
+      foreword: { howToRead: "这是一份证据审计后的阶段性底稿。", whatRemainsUnclear: ["园区的法定边界"] },
+      leaderScore: 15,
+      corrections: 0,
+    },
+  });
+
+  // The artefact, degraded, with one citation that will not join. An index the
+  // prose refers to and the bibliography drops turns `[3]` into a dangling
+  // reference nobody can distinguish from a numbering mistake.
+  missions.putArtifact({
+    missionId: id,
+    runCount: 1,
+    trigger: "initial",
+    title: "固态电池制造进展",
+    markdown: "第一章说明了中试线的电导率结果。[1] 成本下降的说法尚未核实。[2]\n",
+    sections: [{ heading: "第一章", wordCount: 20, offset: 0 }],
+    citations: [
+      { index: 1, url: "https://arxiv.org/abs/2401.00001", findingId: "finding-a", inlineQuote: "10 mS/cm at 25 C" },
+      { index: 2, url: "https://example.com/report", findingId: "finding-b", inlineQuote: "cost per kWh fell" },
+      { index: 3, url: "https://eur-lex.europa.eu/x", findingId: "finding-gone", inlineQuote: "battery passport" },
+    ],
+    evidence: [
+      {
+        findingId: "finding-a", dimensionId: "d1", claim: "Sulfide electrolytes reached 10 mS/cm.",
+        quote: "we measured 10 mS/cm at 25 C\nin a pilot pouch cell", sourceUrl: "https://arxiv.org/abs/2401.00001",
+        sourceHost: "arxiv.org", sourceTitle: "Solid electrolyte pilot cells", verifyState: "verified-source-text",
+        fetchedAt: "2026-08-24T00:00:05.000Z", status: 200,
+      },
+      {
+        findingId: "finding-b", dimensionId: "d1", claim: "Costs fell forty percent.",
+        quote: "cost per kWh fell by roughly forty percent", sourceUrl: "https://example.com/report",
+        sourceHost: "example.com", sourceTitle: null, verifyState: "unverifiable",
+        fetchedAt: "2026-08-24T00:00:06.000Z", status: 200,
+      },
+    ],
+    quality: { citations: 3, verified: 1 },
+    wordCount: 1008,
+    degraded: true,
+    at: "2026-08-24T00:01:30.000Z",
+  });
+
+  // The terminal write, carrying the guard's violations as structured rows AND
+  // as the joined sentence. Both are real; the routes prefer the rows.
+  missions.finalizeMissionRow({
+    missionId: id,
+    status: "quality-failed",
+    failureCode: "quality_refused",
+    errorMessage: "内容守卫拒绝了这份报告：word-count: 1008 words against a standard floor of 9000; the guard refuses anything under 4500. under-delivered: 1 of 1 chapters are under-delivered, over the one third the guard allows.",
+    leaderSigned: false,
+    finalScore: 15,
+    runCount: 1,
+    origin: "s12-persist",
+    detail: {
+      violations: [
+        { code: "word-count", detail: "1008 words against a standard floor of 9000; the guard refuses anything under 4500." },
+        { code: "under-delivered", detail: "1 of 1 chapters are under-delivered, over the one third the guard allows." },
+      ],
+      artifactVersion: 1,
+      writeError: null,
+    },
+    at: "2026-08-24T00:01:40.000Z",
+  });
+
+  return id;
+}
+
+test("the stages' own decisions can be read back, and a stage that never ran says so", async (t) => {
+  // Every field below was already in `mission_stages.output` and the only way
+  // to see any of it was to guess the event `seq` a trajectory ref is keyed on.
+  const { missions } = library(t);
+  const id = reasonedMission(missions);
+
+  const page = await callRoute(missions, `/missions/${id}/insights`);
+  assert.equal(page.status, 200, JSON.stringify(page.body));
+  const data = page.body.data;
+
+  assert.equal(data.signoff.signature.signed, false);
+  assert.ok(data.signoff.signature.refusalReason.length > 0, "the refusal came back without its reason");
+  assert.equal(data.signoff.signature.verdict, "refuse");
+  assert.ok(data.signoff.signature.accountabilityNote.length > 0);
+  assert.ok(data.signoff.foreword !== null, "the foreword was dropped");
+
+  assert.ok(data.critique.blindspots.length >= 1, "the critic's blindspots did not survive the projection");
+  assert.equal(data.critique.blindspots[0].whyItMatters.length > 0, true);
+  assert.ok(data.reconcile.facts.length >= 1, "the reconciled fact table did not survive the projection");
+  assert.equal(data.reconcile.conflicts.length, 1);
+  // The stage's own counts and the lengths this projection returned, side by
+  // side. A disagreement between them is worth seeing, not worth smoothing.
+  assert.equal(data.reconcile.counts.facts, 2);
+  assert.equal(data.reconcile.counts.returnedFacts, 2);
+
+  assert.equal(data.assess.decision, "recollect");
+  const d1 = data.assess.perDimension.find((row) => row.dimensionId === "d1");
+  assert.equal(d1.action, "recollect");
+  // s4 writes this field as `critique`; the projection must not leave
+  // `rationale` null while a value sits in the other name.
+  assert.ok(d1.rationale.length > 0, "the Leader's per-dimension reason was dropped on a field-name mismatch");
+
+  // AND THE ABSENCE CASE. A mission whose stages never ran must come back with
+  // null and a sentence, never `{}` — an empty object renders as a panel with
+  // headings and no content, which reads as "the Leader had nothing to say".
+  const bare = mission(missions);
+  const empty = await callRoute(missions, `/missions/${bare}/insights`);
+  assert.equal(empty.status, 200);
+  for (const key of ["assess", "reconcile", "critique", "signoff"]) {
+    assert.equal(empty.body.data[key], null, `${key} came back as an empty shape instead of null`);
+    assert.equal(empty.body.data.sources[key].present, false);
+    assert.match(empty.body.data.sources[key].reason, /no output|has no/u, `${key} is null and does not say why`);
+  }
+});
+
+test("a degraded artefact says why it is degraded, on the artefact", async (t) => {
+  const { missions } = library(t);
+  const id = reasonedMission(missions);
+
+  const page = await callRoute(missions, `/missions/${id}/artifact`);
+  assert.equal(page.status, 200, JSON.stringify(page.body));
+  const why = page.body.data.artifact.degradeReason;
+  assert.ok(why !== undefined, "the artefact still carries `degraded: true` and no sentence");
+
+  assert.equal(why.signed, false);
+  assert.equal(why.score, 15);
+  assert.ok(why.refusalReason.length > 0, "the Leader's refusal reason is not on the artefact");
+  assert.equal(why.failureCode, "quality_refused");
+
+  // Two violations, split apart, not one wall of prose. The details themselves
+  // contain colons and semicolons, so a generic `word: ` split would cut the
+  // first one in half and present the halves as two findings.
+  assert.equal(why.guardViolations.length, 2, JSON.stringify(why.guardViolations));
+  assert.deepEqual(why.guardViolations.map((row) => row.code), ["word-count", "under-delivered"]);
+  assert.match(why.guardViolations[0].detail, /9000/u);
+  assert.match(why.guardViolations[1].detail, /one third/u);
+  // And it says which of the two sources produced them, because a parse and a
+  // record are not the same kind of evidence.
+  assert.match(why.guardSource, /mission:finalized/u);
+});
+
+test("the guard sentence splits back into the violations it was built from", () => {
+  // The FALLBACK path, for a mission whose terminal event predates the
+  // structured payload. Exercised directly against the sentence a real mission
+  // wrote, because a colon-splitter looks correct until a detail contains one.
+  const split = splitGuardViolations("内容守卫拒绝了这份报告：word-count: 1008 words against a standard floor of 9000; the guard refuses anything under 4500. under-delivered: 1 of 1 chapters are under-delivered, over the one third the guard allows.");
+  assert.deepEqual(split.map((row) => row.code), ["word-count", "under-delivered"]);
+  assert.match(split[0].detail, /under 4500\.$/u, "the first violation swallowed the second, or was cut at a colon inside itself");
+  assert.match(split[1].detail, /^1 of 1 chapters/u);
+
+  assert.deepEqual(splitGuardViolations(null), []);
+  assert.deepEqual(splitGuardViolations("the Leader read the report and declined to sign."), [], "prose with no guard code produced a violation out of nothing");
+});
+
+test("the references list is one row per source, not one per finding", async (t) => {
+  const { missions } = library(t);
+  const id = reasonedMission(missions);
+
+  const page = await callRoute(missions, `/missions/${id}/sources?runCount=1`);
+  assert.equal(page.status, 200, JSON.stringify(page.body));
+  const data = page.body.data;
+
+  // Five findings over four pages. A references screen built from the findings
+  // route would print example.com/report three times and make the mission look
+  // better sourced than it is.
+  assert.equal(data.totals.findings, 5);
+  assert.ok(data.sources.length < data.totals.findings, "one row per finding is not a source list");
+  const collapsed = data.sources.find((row) => row.url === "https://example.com/report");
+  assert.equal(collapsed.findings, 3, "three findings on one page did not collapse into one row");
+  assert.equal(collapsed.verified, 2, "the row lost the split between verified and not");
+  assert.deepEqual(collapsed.verifyStates, { "verified-source-text": 2, unverifiable: 1 });
+  assert.deepEqual(collapsed.dimensionIds, ["d1"]);
+  assert.ok(collapsed.firstSeenAt.length > 0, "the row cannot be ordered by when the mission met the page");
+
+  // Ordered by weight: the page that carried the most is first.
+  assert.equal(data.sources[0].url, "https://example.com/report");
+  assert.equal(data.totals.hosts, 3);
+  assert.equal(data.totals.sources, data.sources.length);
+
+  // The SAME run-picker the findings route returns, so the references screen
+  // can scope to the run that actually holds the evidence.
+  assert.deepEqual(data.runs, missions.findingRuns(id));
+
+  const scoped = await callRoute(missions, `/missions/${id}/sources?runCount=1&dimensionId=d2`);
+  assert.equal(scoped.body.data.totals.findings, 1);
+  const typo = await callRoute(missions, `/missions/${id}/sources?dimension=d1`);
+  assert.equal(typo.status, 400, "an unknown parameter was silently ignored");
+});
+
+test("findings can be ordered by host and filtered to one", async (t) => {
+  const { missions } = library(t);
+  const id = reasonedMission(missions);
+
+  const byHost = await callRoute(missions, `/missions/${id}/findings?order=host`);
+  assert.equal(byHost.status, 200, JSON.stringify(byHost.body));
+  const hosts = byHost.body.data.findings.map((row) => row.sourceHost);
+  assert.deepEqual(hosts, [...hosts].sort(), "order=host returned rows that are not in host order");
+  assert.equal(byHost.body.data.page.order, "host", "the page reported an order it did not use");
+
+  const one = await callRoute(missions, `/missions/${id}/findings?sourceHost=example.com`);
+  assert.equal(one.status, 200, JSON.stringify(one.body));
+  assert.ok(one.body.data.findings.length > 0);
+  for (const finding of one.body.data.findings) {
+    assert.equal(finding.sourceHost, "example.com", "the host filter let another host through");
+  }
+  // The host list stays the WHOLE scope. A filter that also narrows the list of
+  // things you can filter by is a one-way door.
+  assert.ok(one.body.data.hosts.length >= 1);
+  assert.ok(one.body.data.allHosts.length >= 3, "the legal host set narrowed with the filter");
+
+  // A mistyped ORDER is a 400 naming the vocabulary, never a silent fallback to
+  // the default — a filter that quietly does nothing is the failure this file
+  // is full of.
+  const badOrder = await callRoute(missions, `/missions/${id}/findings?order=host%20DESC`);
+  assert.equal(badOrder.status, 400);
+  assert.match(badOrder.body.error, /created, host, verifyState/u);
+
+  // And a host the mission never read is named too, against the COMPLETE host
+  // set: `hosts` counts only verified findings, so validating against it would
+  // refuse a host whose findings all failed verification — a 400 on data the
+  // mission holds.
+  const badHost = await callRoute(missions, `/missions/${id}/findings?sourceHost=nowhere.example`);
+  assert.equal(badHost.status, 400);
+  assert.match(badHost.body.error, /example\.com/u);
+  const unverifiedHost = await callRoute(missions, `/missions/${id}/findings?sourceHost=eur-lex.europa.eu`);
+  assert.equal(unverifiedHost.status, 200, "a host with only unverified findings was refused as if it did not exist");
+});
+
+test("the trajectory can be filtered by the agent that produced the row", async (t) => {
+  const { missions } = library(t);
+  const id = reasonedMission(missions);
+
+  const all = await callRoute(missions, `/missions/${id}/trace?take=500`);
+  assert.equal(all.status, 200, JSON.stringify(all.body));
+
+  const leader = await callRoute(missions, `/missions/${id}/trace?agentId=leader&take=500`);
+  assert.equal(leader.status, 200, JSON.stringify(leader.body));
+  assert.ok(leader.body.data.page.returned > 0, "the Leader produced rows and the filter returned none");
+  for (const row of leader.body.data.rows) {
+    assert.equal(row.agentId, "leader", "the agent filter let another agent's row through");
+  }
+  assert.ok(
+    leader.body.data.page.returned < all.body.data.page.total,
+    "the agent filter returned everything, which is a filter that does not filter",
+  );
+  assert.equal(leader.body.data.filters.agentId, "leader");
+
+  // THE VOCABULARY IS MEASURED, NOT DECLARED. A control built from
+  // `data.dimensions` — the plan's list — offers dimensions that match zero
+  // rows, and an empty result from an option the product offered is
+  // indistinguishable from a broken filter.
+  const vocabulary = all.body.data.vocabulary;
+  assert.ok(vocabulary.agents.some((row) => row.id === "leader" && row.rows > 0));
+  for (const agent of vocabulary.agents) {
+    const scoped = await callRoute(missions, `/missions/${id}/trace?agentId=${encodeURIComponent(agent.id)}&take=500`);
+    assert.equal(scoped.body.data.page.total, agent.rows, `vocabulary.agents offers ${agent.id} with the wrong count`);
+  }
+  for (const dimension of vocabulary.dimensions) {
+    const scoped = await callRoute(missions, `/missions/${id}/trace?dimensionId=${encodeURIComponent(dimension.dimensionId)}&take=500`);
+    assert.equal(scoped.body.data.page.total, dimension.rows, `vocabulary.dimensions offers ${dimension.dimensionId} with the wrong count`);
+    assert.ok(dimension.rows > 0, "a dimension that matches nothing was offered as a filter option");
+  }
+  // The plan's own list is left alone: it answers a different question and
+  // other readers need it.
+  assert.ok(all.body.data.dimensions.length >= vocabulary.dimensions.length);
+
+  const nobody = await callRoute(missions, `/missions/${id}/trace?agentId=nobody`);
+  assert.equal(nobody.status, 400, "an agent that produced nothing returned an empty list instead of a refusal");
+  assert.match(nobody.body.error, /leader/u);
+});
+
+test("spend, failure and latency are reported per tool, and an untimed call is not reported as instant", async (t) => {
+  const { missions } = library(t);
+  const id = reasonedMission(missions);
+
+  const view = await callRoute(missions, `/missions/${id}/view`);
+  assert.equal(view.status, 200, JSON.stringify(view.body));
+  const byTool = view.body.data.cost.byTool;
+  assert.ok(Array.isArray(byTool) && byTool.length > 0, "cost has no per-tool breakdown");
+
+  let failures = 0;
+  let cached = 0;
+  for (const row of byTool) {
+    for (const key of ["tool", "calls", "failures", "cached", "latencyMs", "latencyMeasured"]) {
+      assert.ok(key in row, `cost.byTool entries have no ${key}`);
+    }
+    failures += row.failures;
+    cached += row.cached;
+  }
+  // The per-tool rows must add up to the mission-wide waste numbers, or one of
+  // the two is describing a different set of calls.
+  assert.equal(failures, view.body.data.cost.waste.toolFailures);
+  assert.equal(cached, view.body.data.cost.waste.toolCached);
+
+  // THE POINT OF THE SEPARATE COUNTER. `latency_ms` is NOT NULL DEFAULT 0, so a
+  // call nobody timed is stored as zero. An average over `calls` would report
+  // it as instantaneous and make a slow tool look fast.
+  const fetch = byTool.find((row) => row.tool === "web.fetch");
+  assert.equal(fetch.calls, 2);
+  assert.equal(fetch.latencyMeasured, 1, "an untimed call was counted as a measurement");
+  assert.equal(fetch.unmeasured, 1);
+  assert.equal(fetch.avgLatencyMs, 30, "the average was taken over rows written with a zero nobody measured");
+
+  // The store method and the view's own query must agree. They are two
+  // statements over one table, and two statements are how they get to disagree.
+  const fromStore = missions.toolTotalsByTool(id);
+  assert.deepEqual(
+    fromStore,
+    byTool.map((row) => ({
+      tool: row.tool, calls: row.calls, failures: row.failures,
+      cached: row.cached, latencyMs: row.latencyMs, latencyMeasured: row.latencyMeasured,
+    })),
+    "MissionStore.toolTotalsByTool and cost.byTool disagree about the same calls",
+  );
+});
+
+test("the report exports with its bibliography, and a citation that will not join is printed, not dropped", async (t) => {
+  const { missions } = library(t);
+  const id = reasonedMission(missions);
+
+  const file = await callRoute(missions, `/missions/${id}/report.md`);
+  assert.equal(file.status, 200);
+  assert.match(file.headers["content-type"], /text\/markdown/u);
+  const text = file.text;
+
+  assert.match(text, /## 参考文献/u, "the export still ends mid-prose with no reference list");
+  for (const index of [1, 2, 3]) {
+    assert.ok(text.includes(`[${index}] `), `citation [${index}] is referenced in the prose and absent from the bibliography`);
+  }
+  // The joined ones carry the source, the verified quote and the fetch stamp —
+  // which is what makes the quote checkable rather than merely quoted.
+  assert.match(text, /\[1\] Solid electrolyte pilot cells — https:\/\/arxiv\.org\/abs\/2401\.00001/u);
+  assert.match(text, /> we measured 10 mS\/cm at 25 C in a pilot pouch cell/u, "the quote kept its newline and broke the list it sits in");
+  assert.match(text, /抓取于 2026-08-24T00:00:05\.000Z · HTTP 200 · verified-source-text/u);
+  // A citation with no evidence row is MARKED, never omitted: dropping it turns
+  // `[3]` in the prose into a dangling reference to nothing.
+  assert.match(text, /\[3\] （引用元数据缺失） https:\/\/eur-lex\.europa\.eu\/x/u);
+
+  // `content-length` is measured over what is actually sent. Appending the
+  // bibliography after the header was computed would truncate the download at
+  // exactly the point the new section begins.
+  assert.equal(Number(file.headers["content-length"]), Buffer.byteLength(text));
+});
+
+test("the work projection lists finished work and says why each item exists", async (t) => {
+  // `todo` returns [] for any terminal mission with no resume on offer, which
+  // is nearly all of them, and nothing in the browser half ever read it. A plan
+  // that is only visible while it is unfinished is a progress bar, not a plan.
+  const { missions } = library(t);
+  const id = reasonedMission(missions);
+
+  const view = await callRoute(missions, `/missions/${id}/view`);
+  assert.equal(view.status, 200, JSON.stringify(view.body));
+  assert.deepEqual(view.body.data.todo, [], "the fixture is not the case this replaces");
+
+  const work = view.body.data.work;
+  assert.ok(Array.isArray(work), "/view returns no work projection");
+  assert.ok(work.length >= STAGE_IDS.length + 2, `expected at least ${STAGE_IDS.length} stages plus a child per dimension, got ${work.length}`);
+
+  for (const item of work) {
+    for (const key of ["id", "parentId", "origin", "title", "state", "assignee", "reason", "counts"]) {
+      assert.ok(key in item, `a work item has no ${key}: ${JSON.stringify(item)}`);
+    }
+    assert.ok(typeof item.reason === "string" && item.reason.length > 0, `${item.id} does not say why it exists`);
+  }
+
+  // The parent that ran twice says so. A single `state` word hides half the
+  // history of a stage that was retried.
+  const collect = work.find((item) => item.id === "stage:s3-collect");
+  assert.equal(collect.attempts, 2, "a stage that ran twice reports one attempt");
+  assert.equal(collect.counts.attempts, 2);
+
+  // The dimensions hang off the stage that collected them, each carrying its
+  // own state rather than the parent's.
+  const children = work.filter((item) => item.parentId === "stage:s3-collect");
+  assert.equal(children.length, 2);
+  for (const child of children) {
+    assert.equal(child.origin, "s2-plan");
+    assert.ok(typeof child.state === "string" && child.state.length > 0);
+  }
+
+  // AND THE ITEM THAT HAD NO HOME AT ALL: the Leader's decision to spend again
+  // on a dimension that came back thin, with the Leader's own words for it.
+  const recollect = work.find((item) => item.origin === "leader-assess-recollect");
+  assert.ok(recollect !== undefined, "the Leader's recollect decision is in mission_stages.output and has no reader");
+  assert.equal(recollect.parentId, "stage:s4-assess");
+  assert.match(recollect.reason, /cluster/u, "the recollect item does not carry the Leader's rationale");
+  assert.ok(recollect.critique.length > 0, "the per-dimension critique was dropped");
+  assert.equal(recollect.assignee, "leader");
 });
