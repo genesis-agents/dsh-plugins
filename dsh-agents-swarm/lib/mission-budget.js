@@ -90,7 +90,19 @@ export const BUDGET_FIELDS = Object.freeze(["maxTokens", "maxCalls", "maxArxiv",
  */
 export const DEPTH_TIER_BUDGETS = Object.freeze({
   quick: Object.freeze({
-    maxTokens: 400_000, maxCalls: 40, maxArxiv: 20, maxWeb: 30, maxFetch: 30, wallMs: 20 * 60_000,
+    // `maxCalls` was 40 and the tier could not finish. MEASURED, twice, on the
+    // same topic after the writing reserve landed — collection 23 calls
+    // (researcher 19, leader 4), below the seam 17 (writer 6, reviewer 6,
+    // verifier 5) — 40 of 40 spent with s11-signoff still to run. The reserve
+    // did its job: writing was guaranteed 10 and took 17. The ceiling was
+    // simply smaller than the pipeline it was meant to pay for, so a quick
+    // mission collected real evidence, wrote real chapters, and then reported
+    // `budget_exhausted` having stored nothing.
+    //
+    // 60 leaves both halves room: 45 for collection against a measured 23, and
+    // 15 reserved for writing against a measured 17-with-headroom. Tokens were
+    // never tight on either run (164k of 400k), so only this one moves.
+    maxTokens: 400_000, maxCalls: 60, maxArxiv: 20, maxWeb: 30, maxFetch: 30, wallMs: 20 * 60_000,
   }),
   standard: Object.freeze({
     maxTokens: 1_500_000, maxCalls: 120, maxArxiv: 60, maxWeb: 120, maxFetch: 100, wallMs: 60 * 60_000,
