@@ -185,6 +185,27 @@ function textOf(node, out = []) {
   return out;
 }
 
+/** Every node whose props match a predicate, in render order. */
+function findAll(node, predicate, out = [], seen = new Set()) {
+  if (node === null || typeof node !== "object" || seen.has(node)) return out;
+  seen.add(node);
+  if (Array.isArray(node)) {
+    for (const child of node) findAll(child, predicate, out, seen);
+    return out;
+  }
+  if (predicate(node)) out.push(node);
+  for (const value of Object.values(node.props ?? {})) findAll(value, predicate, out, seen);
+  return out;
+}
+
+/** The labels on the mission detail's tab strip, in order. */
+function paneLabels(tree) {
+  return findAll(tree, (node) => node.props?.["aria-pressed"] !== undefined && node.props?.onClick !== undefined)
+    // `textOf` walks every prop value, and `type: "button"` is one of them.
+    .map((node) => textOf(node).join("").replace(/^button/, ""))
+    .filter((label) => label !== "");
+}
+
 /** Find the first node whose props match a predicate. */
 function find(node, predicate, seen = new Set()) {
   if (node === null || typeof node !== "object" || seen.has(node)) return null;
@@ -1246,6 +1267,19 @@ async function open(view, topic) {
   return textOf(view.tree).join(" ");
 }
 
+/**
+ * Switch the open mission to one of its panes and return what is on screen.
+ *
+ * The detail is a tab strip rather than one scroll, so "the page shows X" is
+ * now "the pane that owns X shows X". Asserting against the whole document
+ * would pass on a strip that renders every pane at once, which is the bug this
+ * split exists to prevent.
+ */
+async function pane(view, label) {
+  await view.act(() => { button(view.tree, label).props.onClick(); });
+  return textOf(view.tree).join(" ");
+}
+
 test("the tab offers a topic, a tier, and a way to start", async () => {
   stubFetch();
   const { tree } = await render("MissionsTab", { zh: true });
@@ -1370,13 +1404,17 @@ test("opening a mission shows its twelve stages, its cost and its tail", async (
   assert.ok(text.includes("最紧"), "nothing names the tightest ceiling");
 
   // The per-dimension pane, with the floor as a fraction rather than a tick.
-  assert.ok(text.includes("已核验 5/3 条"), "a dimension does not say how it stands against the floor");
-  assert.ok(text.includes("读了 6 个页面"), "a dimension does not say how much it read");
+  const dims = await pane(view, "证据");
+  assert.ok(dims.includes("已核验 5/3 条"), "a dimension does not say how it stands against the floor");
+  assert.ok(dims.includes("读了 6 个页面"), "a dimension does not say how much it read");
   // Availability and quality are never the same number in the same place.
-  assert.ok(text.includes("被限流"), "a rate-limited dimension does not say so");
-  assert.ok(text.includes("这是取不到，不是没有"), "a blocked dimension reads as an empty one");
+  assert.ok(dims.includes("被限流"), "a rate-limited dimension does not say so");
+  assert.ok(dims.includes("这是取不到，不是没有"), "a blocked dimension reads as an empty one");
 
-  assert.ok(text.includes("开始运行"), "the live tail is empty");
+  const trace = await pane(view, "轨迹");
+  assert.ok(trace.includes("开始运行"), "the live tail is empty");
+  // Leaving a pane and coming back is not a refetch and not a reset.
+  assert.ok((await pane(view, "概览")).includes("最紧"), "the overview did not survive a round trip");
   // A running mission has nothing to read yet, and says which of the three
   // reasons it is: not yet, write failed, or ended without one.
   assert.ok(text.includes("报告还没有生成"), "does not say why there is no report");
@@ -1404,7 +1442,10 @@ test("a mission that verified nothing says what it tried", async () => {
   assert.ok(text.includes("没有记检索词本身"), "the page implies it could show the queries it cannot");
 
   // The dimension's own closing note, in the mission's language.
-  assert.ok(text.includes("这个维度读了 2 个页面，没有产出任何通过核验的引语。"), "the dimension's own account is missing");
+  assert.ok(
+    (await pane(view, "证据")).includes("这个维度读了 2 个页面，没有产出任何通过核验的引语。"),
+    "the dimension's own account is missing",
+  );
   assert.ok(text.includes("quality_refused"), "the failure code is not shown");
   assert.ok(text.includes("领队读过报告后拒绝签署"), "a refusal to sign is not distinguished from a crash");
 });
@@ -1441,8 +1482,8 @@ test("the report opens with its evidence, and every quote can be followed", asyn
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   await open(view, SIGNED.topic);
-  assert.ok(textOf(view.tree).join(" ").includes("读报告"), "a finished mission offers no way to read what it wrote");
-  await view.act(() => { button(view.tree, "读报告").props.onClick(); });
+  assert.ok(textOf(view.tree).join(" ").includes("报告"), "a finished mission offers no way to read what it wrote");
+  await pane(view, "报告");
 
   const text = textOf(view.tree).join(" ");
   assert.ok(text.includes("三家实验室同期收敛到同一种做法"), "the report body did not render");
@@ -1466,7 +1507,7 @@ test("an evidence row opens the reader on the whole source", async () => {
   const asked = [];
   const view = await render("MissionsTab", { zh: true });
   await open(view, SIGNED.topic);
-  await view.act(() => { button(view.tree, "读报告").props.onClick(); });
+  await pane(view, "报告");
 
   const inner = globalThis.fetch;
   globalThis.fetch = async (url, init) => { asked.push(String(url)); return inner(url, init); };
@@ -1489,7 +1530,7 @@ test("a scorecard with nothing in it is not a clean bill", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   await open(view, REFUSED.topic);
-  await view.act(() => { button(view.tree, "读报告").props.onClick(); });
+  await pane(view, "报告");
   const text = textOf(view.tree).join(" ");
   // `verified / total` at 0/0 is NaN or, worse, reads as "no failures" — the
   // exact figure the whole pipeline converges on, presenting a mission that
@@ -1519,7 +1560,8 @@ function traceSearch(tree) {
 test("the trajectory is one dense row per step, whatever the step was", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
-  const text = await open(view, RUNNING.topic);
+  await open(view, RUNNING.topic);
+  const text = await pane(view, "轨迹");
 
   // Four kinds in one ordered list. A tail that showed only events answered
   // "what is it doing" and never "why did that dimension come back empty".
@@ -1543,6 +1585,7 @@ test("clicking a row opens a panel beside the list, and the list stays put", asy
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   await open(view, RUNNING.topic);
+  await pane(view, "轨迹");
   await view.act(() => { button(view.tree, "web.search").props.onClick(); });
 
   const text = textOf(view.tree).join(" ");
@@ -1582,7 +1625,8 @@ test("clicking a row opens a panel beside the list, and the list stays put", asy
 test("a finding opens onto the whole quote, with the state in words", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
-  const listed = await open(view, RUNNING.topic);
+  await open(view, RUNNING.topic);
+  const listed = await pane(view, "轨迹");
   // The row clips the quote; that is the display bound, and the whole point of
   // the panel is that the clipped half is reachable.
   assert.ok(!listed.includes("across all three model families"), "the fixture does not clip, so nothing is being proved");
@@ -1600,10 +1644,75 @@ test("a finding opens onto the whole quote, with the state in words", async () =
   assert.ok(link, "the panel does not link to the page the quote was verified against");
 });
 
+test("the panes are a trust ladder, and the report is one of them", async () => {
+  // The order is the design: conclusion, then what it stands on, then what the
+  // machine did. It is asserted because it is a decision — a strip that grew
+  // by appending each new pane would read as an accident, and this one did.
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, SIGNED.topic);
+  const labels = paneLabels(view.tree);
+  assert.deepEqual(
+    labels.map((label) => label.replace(/[0-9]/g, "")),
+    ["概览", "报告", "证据", "轨迹"],
+    "the tab strip is not the trust ladder",
+  );
+
+  // The report is IN the frame. It used to replace the whole screen, so
+  // leaving the report meant leaving the mission, and the evidence behind a
+  // sentence was two navigations from the sentence.
+  const report = await pane(view, "报告");
+  assert.ok(report.includes("轨迹"), "opening the report unmounted the tab strip around it");
+  // Exactly, not as a substring: the detail's own "← 返回任务列表" contains it.
+  assert.ok(
+    findAll(view.tree, (node) => textOf(node).join("").replace(/^button/, "") === "← 返回任务").length === 0,
+    "a pane offers a back button to a screen it never left",
+  );
+  // And back out in one click, from inside the report.
+  assert.ok(paneLabels(view.tree).length === 4, "the strip did not survive the report");
+});
+
+test("a mission with no report has no report tab", async () => {
+  // Not a tab that opens onto an apology. A running mission has not written
+  // anything yet, and a strip that offers to show it is a strip that lies.
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, RUNNING.topic);
+  const labels = paneLabels(view.tree).map((label) => label.replace(/[0-9]/g, ""));
+  assert.ok(labels.includes("轨迹"), "the fixture never rendered a tab strip");
+  assert.ok(!labels.includes("报告"), "a mission that has written nothing offers a report tab");
+});
+
+test("the three panes are three screens, not one scroll with headings", async () => {
+  // The reason the trajectory went unnoticed for a whole release: it was the
+  // last panel of a page that opened on a stage strip, five cost meters and
+  // five dimension cards. A strip that renders every pane at once would pass
+  // every other test in this file and reproduce exactly that.
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  const overview = await open(view, RUNNING.topic);
+  assert.ok(overview.includes("最紧"), "the overview does not open first");
+  assert.ok(!overview.includes("显示 6 / 6 条"), "the trajectory is rendered under the overview");
+  assert.ok(!overview.includes("已核验 5/3 条"), "the dimensions are rendered under the overview");
+
+  const dims = await pane(view, "证据");
+  assert.ok(dims.includes("已核验 5/3 条"), "the dimensions pane is empty");
+  assert.ok(!dims.includes("最紧"), "the overview is still on screen behind the dimensions");
+
+  const trace = await pane(view, "轨迹");
+  assert.ok(trace.includes("显示 6 / 6 条"), "the trajectory pane is empty");
+  assert.ok(!trace.includes("最紧"), "the overview is still on screen behind the trajectory");
+
+  // The count belongs on the tab, not only inside the pane it describes. A
+  // reader who cannot see that there are five dimensions does not open them.
+  assert.ok(trace.includes("维度") && trace.includes("3"), "the tab strip hides how many dimensions there are");
+});
+
 test("the kind chips and the search change the list under them", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   await open(view, RUNNING.topic);
+  await pane(view, "轨迹");
 
   await view.act(() => { chip(view.tree, "发现").props.onClick(); });
   let text = textOf(view.tree).join(" ");
@@ -1628,7 +1737,8 @@ test("the kind chips and the search change the list under them", async () => {
 test("a dimension opens into its findings, and none of them is hidden", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
-  const closed = await open(view, REFUSED.topic);
+  await open(view, REFUSED.topic);
+  const closed = await pane(view, "证据");
   // The state the rebuild started from: a count, and no way to see one of them.
   assert.ok(closed.includes("看这 4 条证据"), "a dimension card does not offer to show its evidence");
   assert.ok(!closed.includes("no follow-up work was published"), "the fixture is already showing the quotes, so nothing is being proved");
@@ -1658,6 +1768,7 @@ test("a finding reached from a dimension opens the same panel, and the reader", 
   const asked = [];
   const view = await render("MissionsTab", { zh: true });
   await open(view, REFUSED.topic);
+  await pane(view, "证据");
   await view.act(() => { button(view.tree, "看这 4 条证据").props.onClick(); });
   await view.act(() => { button(view.tree, "这个课题的第一条线索").props.onClick(); });
 
@@ -1685,12 +1796,14 @@ test("a finding reached from a dimension opens the same panel, and the reader", 
 test("a row outside the window says so, and a saturated read says so too", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
-  const text = await open(view, REFUSED.topic);
+  await open(view, REFUSED.topic);
+  const text = await pane(view, "轨迹");
   // The window is the honest answer to "is this the whole history". A mission
   // that stops at the thousandth event looks exactly like one that stopped
   // working.
   assert.ok(text.includes("已经读到窗口上限"), "a trajectory that hit its ceiling reports as a complete one");
 
+  await pane(view, "证据");
   await view.act(() => { button(view.tree, "看这 4 条证据").props.onClick(); });
   // `/findings` and `/trace` page over different bounds, so a finding the
   // dimension lists can sit outside the trajectory the panel reads. The 404
@@ -1709,6 +1822,7 @@ test("the trajectory reads in English too, every string paired", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: false });
   await view.act(() => { button(view.tree, RUNNING.topic).props.onClick(); });
+  await pane(view, "Trajectory");
   let text = textOf(view.tree).join(" ");
   for (const piece of ["All rows", "Findings", "TOOL", "EVIDENCE", "web.search", "showing 6 of 6", "Mission started"]) {
     assert.ok(text.includes(piece), `the English trajectory is missing ${piece}`);
@@ -1729,7 +1843,8 @@ test("an empty trajectory and an empty filter are different sentences", async ()
   // finished or clears a filter that was never set.
   stubFetch({ traces: { [ORPHAN.id]: EMPTY_TRACE } });
   const view = await render("MissionsTab", { zh: true });
-  const nothing = await open(view, ORPHAN.topic);
+  await open(view, ORPHAN.topic);
+  const nothing = await pane(view, "轨迹");
   assert.ok(nothing.includes("这个任务还没有留下任何轨迹"), "a mission with no trajectory does not say so");
   assert.ok(!nothing.includes("轨迹里一共有"), "an empty mission is reported as a filter that matched nothing");
   // And it does not invent a ceiling it never reached: every window in this
@@ -1740,6 +1855,7 @@ test("an empty trajectory and an empty filter are different sentences", async ()
   // are proved distinct rather than merely present.
   const other = await render("MissionsTab", { zh: true });
   await open(other, RUNNING.topic);
+  await pane(other, "轨迹");
   await other.act(() => { traceSearch(other.tree).props.onChange({ target: { value: "没有这种东西" } }); });
   const filtered = textOf(other.tree).join(" ");
   assert.ok(filtered.includes("轨迹里一共有 6 条"), "a filter that matches nothing does not say what it filtered");
@@ -1753,11 +1869,13 @@ test("both empty states read in English as well", async () => {
   // else on the screen to correct them.
   stubFetch({ traces: { [ORPHAN.id]: EMPTY_TRACE } });
   const view = await render("MissionsTab", { zh: false });
-  const nothing = await open(view, ORPHAN.topic);
+  await open(view, ORPHAN.topic);
+  const nothing = await pane(view, "Trajectory");
   assert.ok(nothing.includes("has not recorded a trajectory yet"), "the English empty mission says nothing");
 
   const other = await render("MissionsTab", { zh: false });
   await open(other, RUNNING.topic);
+  await pane(other, "Trajectory");
   await other.act(() => {
     find(other.tree, (node) => node.props?.["aria-label"] === "Search the trajectory").props.onChange({ target: { value: "nothing like this" } });
   });
@@ -1783,7 +1901,8 @@ test("a trajectory still being read is not a trajectory that came back empty", a
     return inner(url, init);
   };
   const view = await render("MissionsTab", { zh: true });
-  const text = await open(view, RUNNING.topic);
+  await open(view, RUNNING.topic);
+  const text = await pane(view, "轨迹");
   assert.ok(
     !text.includes("这个任务还没有留下任何轨迹"),
     "a read that has not come back yet is reported as a mission that recorded nothing",

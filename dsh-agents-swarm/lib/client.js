@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 		* both is how "deployed but apparently absent" becomes legible instead
 		* of costing an afternoon.
 		*/
-		const CLIENT_VERSION = "0.6.0";
+		const CLIENT_VERSION = "0.6.2";
 
 		//#region locale + mark
 		/**
@@ -4555,84 +4555,200 @@ window.__ModuleLoader__.load({
 			return [data?.counts?.total ?? 0, rows.map((row) => row.id).join("|")].join("~");
 		}
 
+		//#region trajectory stylesheet
 		/**
-		* One trajectory row: a chip, a name, the arguments, an arrow, the result.
+		* The trajectory's stylesheet, injected once.
 		*
-		* One line, always one line. The reference tab's whole value is that a
-		* hundred steps can be scanned without reading any of them, and a row
-		* that wraps when its arguments are long is a row that pushes every row
-		* under it down as the mission runs.
+		* WHY A REAL STYLESHEET AND NOT INLINE STYLES: three of the reference
+		* tab's design decisions cannot be expressed as a style object at all —
+		* the 2px underline under the active detail tab is an `::after`, the row
+		* and tab hovers are `:hover`, and the keyboard ring is `:focus-visible`.
+		* Emulating those with JavaScript state produced a tab strip that looked
+		* like the reference and behaved like a mock.
+		*
+		* Every value here is READ FROM `packages/client/ui-trajectory`, not
+		* invented beside it: 38px rows, a fixed tag slot, a 24px index column, a
+		* right-aligned trailing block, a 50px timeline over a 44px label column,
+		* and a detail pane of clamp(320px, 38%, 440px). Matching the host app's
+		* geometry is the point — a second trajectory with its own proportions
+		* reads as a different app bolted on, which is what the first attempt was.
+		*/
+		const TRACE_STYLE_ID = "dsw-swarm-trace-style";
+		const TRACE_CSS = [
+			".swt-row{display:flex;align-items:center;box-sizing:border-box;height:38px;padding:0 8px 0 10px;gap:12px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);min-width:0;width:100%;appearance:none;font:inherit;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary)}",
+			".swt-row:hover{background:var(--dsw-alias-interactive-bg-hover)}",
+			'.swt-row[aria-pressed="true"]{border-color:transparent;box-shadow:inset 0 0 0 2px var(--dsw-alias-state-business-primary)}',
+			".swt-row:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}",
+			".swt-idx{flex:none;width:24px;font:var(--dsw-font-xs-13);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}",
+			".swt-clock{flex:none;width:58px;font:11px/16px var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}",
+			".swt-tagslot{flex:none;width:64px;display:flex;align-items:center;min-width:0}",
+			".swt-tag{display:inline-flex;align-items:center;box-sizing:border-box;height:22px;max-width:100%;padding:0 6px;border-radius:6px;font-size:11px;font-weight:600;line-height:22px;white-space:nowrap}",
+			".swt-title{flex:none;width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 12px/16px var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-primary)}",
+			".swt-text{flex:2 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}",
+			".swt-arrow{flex:none;color:var(--dsw-alias-label-caption)}",
+			".swt-res{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}",
+			".swt-trail{flex:none;display:flex;align-items:center;justify-content:flex-end;width:72px;min-width:0}",
+			".swt-metric{flex:none;width:69px;text-align:right;font:var(--dsw-font-xs-13);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+			".swt-band{flex:none;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;overflow:hidden;user-select:none;margin-bottom:10px}",
+			".swt-plot{display:grid;grid-template-columns:44px minmax(0,1fr);height:50px;overflow:hidden;background:var(--dsw-alias-bg-layer-2)}",
+			".swt-lanelabels{position:relative;border-right:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-caption);font-size:10px;line-height:1}",
+			".swt-lanelabels span{position:absolute;right:4px;display:flex;align-items:center;justify-content:flex-end;height:8px}",
+			".swt-lanelabels span:nth-child(1){top:7px}",
+			".swt-lanelabels span:nth-child(2){top:21px}",
+			".swt-lanelabels span:nth-child(3){top:35px}",
+			".swt-track{position:relative;overflow:hidden}",
+			".swt-span{position:absolute;height:8px;min-width:2px;border-radius:1px;opacity:.85}",
+			'.swt-span[data-lane="0"]{top:7px}',
+			'.swt-span[data-lane="1"]{top:21px}',
+			'.swt-span[data-lane="2"]{top:35px}',
+			'.swt-span[data-tone="stage"]{background:var(--dsw-alias-state-business-primary)}',
+			'.swt-span[data-tone="finding"]{background:var(--dsw-alias-state-success-primary)}',
+			'.swt-span[data-tone="tool"]{background:var(--dsw-alias-state-warn-label);opacity:1}',
+			'.swt-span[data-tone="bad"]{background:var(--dsw-alias-state-error-primary);opacity:1}',
+			".swt-wrap{display:flex;align-items:stretch;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-layer-1)}",
+			".swt-list{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:2px;padding:8px;overflow-y:auto;max-height:70vh}",
+			".swt-pane{position:relative;display:flex;flex:none;flex-direction:column;width:clamp(300px,32%,392px);min-width:0;min-height:0;border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1)}",
+			".swt-panehead{display:flex;flex:none;align-items:center;justify-content:space-between;box-sizing:border-box;height:42px;padding:0 8px 0 12px;border-bottom:1px solid var(--dsw-alias-border-l2);gap:8px}",
+			".swt-panetitle{display:flex;align-items:center;min-width:0;gap:8px;color:var(--dsw-alias-label-primary)}",
+			".swt-dot{flex:none;width:5px;height:5px;border-radius:50%;background:var(--dsw-alias-label-secondary)}",
+			".swt-panename{flex:none;font:500 12px/16px var(--ds-font-family-code,monospace)}",
+			".swt-paneref{min-width:0;overflow:hidden;color:var(--dsw-alias-label-tertiary);font:11px/16px var(--ds-font-family-code,monospace);text-overflow:ellipsis;white-space:nowrap}",
+			".swt-close{display:inline-flex;flex:none;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer;font-size:18px;line-height:18px}",
+			".swt-close:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}",
+			".swt-tabs{display:flex;flex:none;box-sizing:border-box;width:100%;height:34px;padding:0 8px;overflow-x:auto;overflow-y:hidden;gap:1px;border-bottom:1px solid var(--dsw-alias-border-l2);white-space:nowrap;scrollbar-width:none}",
+			".swt-tabs::-webkit-scrollbar{display:none}",
+			".swt-tab{position:relative;flex:none;padding:0 9px;border:0;color:var(--dsw-alias-label-tertiary);background:transparent;cursor:pointer;font:var(--dsw-font-xs-13)}",
+			".swt-tab:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}",
+			'.swt-tab[aria-selected="true"]{color:var(--dsw-alias-state-business-primary)}',
+			'.swt-tab[aria-selected="true"]::after{position:absolute;right:9px;bottom:0;left:9px;height:2px;border-radius:1px 1px 0 0;background:var(--dsw-alias-state-business-primary);content:""}',
+			".swt-tab:focus-visible,.swt-close:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}",
+			".swt-panebody{flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;padding-bottom:12px}",
+			".swt-kv{margin:0;padding:8px 0;font:var(--dsw-font-xs-13)}",
+			".swt-kv>div{display:grid;grid-template-columns:94px minmax(0,1fr);min-height:22px;padding:0 14px;align-items:center;gap:8px}",
+			".swt-kv dt{color:var(--dsw-alias-label-tertiary);margin:0}",
+			".swt-kv dd{min-width:0;margin:0;overflow:hidden;color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap}",
+			".swt-secthead{margin:0;padding:6px 14px 2px;color:var(--dsw-alias-label-secondary);font-size:13px;font-weight:600;user-select:none}",
+			".swt-code{margin:0 14px;padding:8px 10px;border-radius:6px;overflow:auto;max-height:340px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);font:11px/17px var(--ds-font-family-code,monospace);white-space:pre-wrap;word-break:break-word}",
+			".swt-quote{margin:0 14px;padding:10px 12px;border-radius:6px;border-left:2px solid var(--dsw-alias-state-success-primary);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-13);line-height:19px;white-space:pre-wrap;word-break:break-word}"
+		].join("\n");
+
+		/**
+		* Put the stylesheet in the document, at most once.
+		*
+		* Guarded rather than assumed: this module is executed in Node by
+		* tests/settings.test.mjs against a hand-written `document` stub, and a
+		* bundle that throws at load time there is a bundle nobody can test.
+		*/
+		function ensureTraceStyle() {
+			try {
+				if (typeof document?.getElementById !== "function") return;
+				if (document.getElementById(TRACE_STYLE_ID) !== null) return;
+				const node = document.createElement("style");
+				node.id = TRACE_STYLE_ID;
+				node.textContent = TRACE_CSS;
+				const host = document.head ?? document.documentElement;
+				if (typeof host?.appendChild === "function") host.appendChild(node);
+			} catch {
+				// A host that will not take a stylesheet still gets a working
+				// trajectory: every rule above is presentation, and the geometry
+				// it carries degrades to the browser's own box model rather than
+				// to a blank screen.
+			}
+		}
+		//#endregion
+		/**
+		* The eight columns of one trajectory row, in the reference tab's geometry.
+		*
+		* 38px tall, and the columns are FIXED rather than content-sized: an index,
+		* a clock, a 64px tag slot, the name, the arguments, an arrow, the result,
+		* and a right-aligned trailing block. Fixed columns are what make a hundred
+		* rows scannable — a tag that grows with its longest word puts every name
+		* on the page at a different x, and the eye has to read each one to find
+		* the next.
+		*
+		* Everything visual lives in `.swt-*` in TRACE_CSS, so the hover, the
+		* selected ring and the focus ring exist at all. They cannot be expressed
+		* as inline style objects, and the first draft simply did without them.
 		* @param row - one row from `/missions/:id/trace`.
 		* @param zh - whether to write Chinese.
 		* @param active - whether this row is the one open in the panel.
 		* @param onOpen - called with the row's `ref`.
 		*/
 		function MissionTraceRow({ row, zh, active, onOpen }) {
-			const hue = missionHue(MISSION_ROLE_FACES, row.role);
-			const verdict = missionOkFace(row.ok, zh);
+			const face = missionTagFace(row);
 			const name = missionRowTitle(row, zh);
+			const verdict = missionOkFace(row.ok, zh);
 			const took = row.kind === "tool" ? missionLatency(row.ms, zh) : missionDuration(row.ms, zh);
-			const clipped = {
-				flex: "1 1 0", minWidth: 0, overflow: "hidden",
-				textOverflow: "ellipsis", whiteSpace: "nowrap"
-			};
 			return jsxs("button", {
 				type: "button",
+				className: "swt-row",
 				onClick: () => { onOpen(row.ref); },
 				// The raw identifiers, on hover. `s3-collect` and `mission:started`
 				// are the strings the search box matches and the strings a log grep
 				// uses, so they stay reachable even though the row prints the words.
 				title: `${row.ref} · ${row.title}${row.agentId === null || row.agentId === undefined ? "" : ` · ${row.agentId}`}`,
 				"aria-pressed": active,
-				style: {
-					appearance: "none", width: "100%", boxSizing: "border-box",
-					display: "flex", alignItems: "center", gap: "8px",
-					padding: "3px 8px", borderRadius: "6px",
-					border: "1px solid " + (active ? `rgba(${hue},0.45)` : "transparent"),
-					background: active ? `rgba(${hue},0.10)` : "transparent",
-					color: "var(--dsw-alias-label-secondary)",
-					font: "inherit", fontSize: "12px", lineHeight: "19px",
-					textAlign: "left", cursor: "pointer"
-				},
 				children: [
+					jsx("span", { className: "swt-idx", children: String(row.seq) }, "seq"),
+					jsx("span", { className: "swt-clock", children: missionClock(row.at) }, "at"),
 					jsx("span", {
-						style: { flex: "none", width: "56px", fontFamily: MISSION_MONO, fontVariantNumeric: "tabular-nums" },
-						children: missionClock(row.at)
-					}, "at"),
-					jsx("span", {
-						style: {
-							flex: "none", width: "58px", textAlign: "center",
-							padding: "0 4px", borderRadius: "4px",
-							background: `rgba(${hue},0.12)`, color: `rgb(${hue})`,
-							fontSize: "10px", fontWeight: 600, letterSpacing: "0.02em",
-							overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
-						},
-						children: missionFace(MISSION_ROLE_FACES, row.role, zh)
+						className: "swt-tagslot",
+						children: jsx("span", {
+							className: "swt-tag",
+							style: { color: face.fg, background: face.bg },
+							children: missionFace(MISSION_ROLE_FACES, row.role, zh)
+						}, "tag")
 					}, "role"),
 					jsx("span", {
-						style: {
-							flex: "none", maxWidth: "170px", overflow: "hidden",
-							textOverflow: "ellipsis", whiteSpace: "nowrap",
-							fontFamily: name.mono ? MISSION_MONO : "inherit",
-							fontWeight: 600, color: "var(--dsw-alias-label-primary)"
-						},
+						className: "swt-title",
+						style: name.mono ? undefined : { fontFamily: "inherit", fontWeight: 600 },
 						children: name.text
 					}, "title"),
+					jsx("span", { className: "swt-text", children: row.detail }, "detail"),
+					jsx("span", { className: "swt-arrow", children: "→" }, "arrow"),
 					jsx("span", {
-						style: { ...clipped, flexGrow: 2, fontFamily: MISSION_MONO, opacity: 0.85 },
-						children: row.detail
-					}, "detail"),
-					jsx("span", { style: { flex: "none", opacity: 0.5 }, children: "→" }, "arrow"),
-					jsx("span", {
-						style: { ...clipped, color: `rgb(${verdict.hue})` },
+						// The verdict is CARRIED BY the result rather than repeated
+						// beside it. A separate 通过/未通过 column said the same thing
+						// twice and cost 81px of the arguments column, which is the
+						// column that answers "why did that search find nothing".
+						className: "swt-res",
+						title: `${verdict.mark} ${verdict.label}`,
+						style: row.ok === false
+							? { color: "var(--dsw-alias-state-error-primary)" }
+							: row.ok === true ? { color: "var(--dsw-alias-state-success-primary)" } : undefined,
 						children: row.result
 					}, "result"),
-					took === "" ? null : jsx("span", {
-						style: { flex: "none", fontVariantNumeric: "tabular-nums", opacity: 0.7 },
-						children: took
-					}, "took")
+					jsx("span", {
+						className: "swt-trail",
+						children: jsx("span", { className: "swt-metric", children: took }, "took")
+					}, "trail")
 				]
 			});
+		}
+
+		/**
+		* The two colours of one row's tag, from the host app's own state tokens.
+		*
+		* Not a hue triple: the reference tab draws every tag as a token pair, and
+		* a plugin that mixes its own rgb() beside them is the plugin that looks
+		* almost right in light mode and wrong in dark. Tokens follow the theme;
+		* literals do not.
+		* @param row - one trajectory row.
+		*/
+		function missionTagFace(row) {
+			if (row.ok === false) {
+				return { fg: "var(--dsw-alias-state-error-primary)", bg: "var(--dsw-alias-state-error-tertiary, rgba(220,38,38,0.12))" };
+			}
+			if (row.kind === "tool") {
+				return { fg: "var(--dsw-alias-state-warn-label)", bg: "var(--dsw-alias-state-warn-tertiary)" };
+			}
+			if (row.kind === "finding") {
+				return { fg: "var(--dsw-alias-state-success-primary)", bg: "var(--dsw-alias-state-success-tertiary)" };
+			}
+			if (row.kind === "stage") {
+				return { fg: "var(--dsw-alias-state-business-primary)", bg: "var(--dsw-alias-state-business-tertiary)" };
+			}
+			return { fg: "var(--dsw-alias-label-secondary)", bg: "var(--dsw-alias-bg-module-platform)" };
 		}
 
 		/**
@@ -4678,34 +4794,53 @@ window.__ModuleLoader__.load({
 				return () => { alive = false; };
 			}, [missionId, traceRef]);
 
+			// 42px, the reference tab's header: a dot, the row's own name in the
+			// code face, the ref beside it in a lighter one, and a ✕. The ref is
+			// the identity a reader can quote back, so it is on screen rather
+			// than in a tooltip.
 			const head = jsxs("div", {
-				style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" },
+				className: "swt-panehead",
 				children: [
-					jsx("span", {
-						style: {
-							flex: 1, minWidth: 0, fontFamily: MISSION_MONO, fontSize: "11px",
-							overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-							color: "var(--dsw-alias-label-secondary)"
-						},
-						children: traceRef
-					}, "ref"),
+					jsxs("span", {
+						className: "swt-panetitle",
+						children: [
+							jsx("span", { className: "swt-dot" }, "dot"),
+							jsx("span", { className: "swt-panename", children: String(traceRef).split(":")[0] }, "kind"),
+							jsx("span", { className: "swt-paneref", children: traceRef }, "ref")
+						]
+					}, "title"),
 					jsx("button", {
 						type: "button",
-						style: { ...controlStyle(), height: "26px", padding: "0 8px", fontSize: "12px" },
+						className: "swt-close",
+						"aria-label": zh ? "关闭" : "Close",
 						onClick: onClose,
-						children: zh ? "关闭" : "Close"
+						children: "\u00d7"
 					}, "close")
 				]
 			}, "head");
 
-			const shell = (body) => jsxs("div", {
-				style: {
-					display: "flex", flexDirection: "column",
-					padding: "10px 12px", borderRadius: "10px",
-					border: "1px solid var(--dsw-alias-border-l1)",
-					background: "var(--dsw-specific-menu)"
-				},
-				children: [head, body]
+			// Header, tab strip, scrolling body — three fixed rows, the middle one
+			// 34px with a 2px underline under the active tab. `tabs` is false on
+			// the loading and error paths: a tab strip over a panel that has
+			// nothing to show is four controls that do nothing.
+			const shell = (body, tabs) => jsxs("div", {
+				className: "swt-pane",
+				children: [
+					head,
+					tabs !== true ? null : jsx("div", {
+						className: "swt-tabs",
+						role: "tablist",
+						children: MISSION_TRACE_TABS.map((entry) => jsx("button", {
+							type: "button",
+							role: "tab",
+							className: "swt-tab",
+							"aria-selected": entry.id === tab,
+							onClick: () => { setTab(entry.id); },
+							children: zh ? entry.zh : entry.en
+						}, entry.id))
+					}, "tabs"),
+					jsx("div", { className: "swt-panebody", children: body }, "body")
+				]
 			});
 
 			if (held === null || held.ref !== traceRef) {
@@ -4724,25 +4859,18 @@ window.__ModuleLoader__.load({
 			const detail = held.data;
 			const row = detail.row ?? {};
 			const verdict = missionOkFace(detail.ok, zh);
+			// One row of the 94px key column. A grid rather than a flex pair so
+			// every value in the panel starts at the same x — the whole reason
+			// the reference reads as a specification sheet and the first draft
+			// read as a paragraph with bold words in it.
 			const line = (label, value) => (value === "" || value === null || value === undefined ? null : jsxs("div", {
-				style: { display: "flex", gap: "8px", fontSize: "12px", lineHeight: "19px" },
 				children: [
-					jsx("span", { style: { flex: "none", minWidth: "76px", color: "var(--dsw-alias-label-secondary)" }, children: label }, "k"),
-					jsx("span", { style: { flex: 1, minWidth: 0, color: "var(--dsw-alias-label-primary)", wordBreak: "break-word" }, children: String(value) }, "v")
+					jsx("dt", { children: label }, "k"),
+					jsx("dd", { title: String(value), children: String(value) }, "v")
 				]
 			}, label));
 
-			const block = (text) => jsx("pre", {
-				style: {
-					margin: 0, maxHeight: "340px", overflow: "auto",
-					padding: "8px 10px", borderRadius: "8px",
-					background: "var(--dsw-alias-border-l1)",
-					fontFamily: MISSION_MONO, fontSize: "11px", lineHeight: "17px",
-					whiteSpace: "pre-wrap", wordBreak: "break-word",
-					color: "var(--dsw-alias-label-primary)"
-				},
-				children: text
-			});
+			const block = (text) => jsx("pre", { className: "swt-code", children: missionColourJson(text) });
 
 			// A finding is the row this whole rebuild exists for, so its summary is
 			// not the generic key/value list: the claim, the WHOLE quote, the source
@@ -4751,21 +4879,18 @@ window.__ModuleLoader__.load({
 			const finding = detail.kind === "finding" ? (detail.payload ?? {}) : null;
 			const openable = finding !== null && typeof finding.sourceUrl === "string" && finding.sourceUrl !== "";
 
-			const summary = jsxs("div", {
-				style: { display: "flex", flexDirection: "column", gap: "4px" },
+			const summary = jsxs("dl", {
+				className: "swt-kv",
 				children: [
 					finding === null ? null : jsx("div", {
-						style: { fontSize: "13px", lineHeight: "20px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+						style: {
+							padding: "10px 14px 6px", fontSize: "13px", lineHeight: "20px",
+							fontWeight: 600, color: "var(--dsw-alias-label-primary)"
+						},
 						children: finding.claim
 					}, "claim"),
 					finding === null ? null : jsx("div", {
-						style: {
-							padding: "8px 10px", margin: "2px 0 6px",
-							borderLeft: `3px solid rgba(${verdict.hue},0.5)`,
-							borderRadius: "0 8px 8px 0",
-							background: `rgba(${verdict.hue},0.06)`,
-							fontSize: "13px", lineHeight: "21px", color: "var(--dsw-alias-label-primary)"
-						},
+						className: "swt-quote",
 						// Verbatim and whole. The list clips it and this is the only
 						// place it can be read, which is the point of the panel.
 						children: `“${finding.quote}”`
@@ -4841,17 +4966,6 @@ window.__ModuleLoader__.load({
 			return shell(jsxs("div", {
 				style: { display: "flex", flexDirection: "column", gap: "8px" },
 				children: [
-					jsx("div", {
-						style: { display: "flex", gap: "4px", flexWrap: "wrap" },
-						children: MISSION_TRACE_TABS.map((entry) => jsx("button", {
-							type: "button",
-							role: "tab",
-							"aria-selected": entry.id === tab,
-							style: { ...chipStyle({ hue: "100,116,139" }, entry.id === tab), height: "26px", padding: "0 10px", fontSize: "12px" },
-							onClick: () => { setTab(entry.id); },
-							children: zh ? entry.zh : entry.en
-						}, entry.id))
-					}, "tabs"),
 					tab !== "summary" ? null : summary,
 					tab !== "payload" ? null : jsxs("div", {
 						style: { display: "flex", flexDirection: "column", gap: "6px" },
@@ -4905,9 +5019,126 @@ window.__ModuleLoader__.load({
 						]
 					}, "timingTab")
 				]
-			}));
+			}), true);
 		}
 
+		/**
+		* Colour a JSON payload: keys, strings, numbers.
+		*
+		* Returns an array of spans rather than HTML, because the panel renders
+		* through the runtime's `jsx` and never touches innerHTML — a payload is
+		* text a remote page put in front of us, and the one place it must not be
+		* able to become markup is the panel that exists to show it safely.
+		*
+		* Not a parser. It tokenizes the string form, so a result that is NOT
+		* JSON — a plain sentence, an error message — comes back as one plain
+		* span rather than as a failure.
+		* @param text - the payload, already stringified.
+		*/
+		function missionColourJson(text) {
+			const source = typeof text === "string" ? text : String(text ?? "");
+			if (source === "") return source;
+			// Cheap guard: anything that does not look like JSON stays plain, and
+			// so does anything long enough that colouring it would cost more than
+			// reading it.
+			const head = source.trimStart().charAt(0);
+			if ((head !== "{" && head !== "[") || source.length > 20000) return source;
+			const out = [];
+			const pattern = /("(?:[^"\\]|\\.)*")(\s*:)?|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|(\btrue\b|\bfalse\b|\bnull\b)/g;
+			let at = 0;
+			let key = 0;
+			let match = pattern.exec(source);
+			while (match !== null) {
+				if (match.index > at) out.push(source.slice(at, match.index));
+				if (match[1] !== undefined) {
+					// A string followed by a colon is a key; the colon is punctuation
+					// and stays uncoloured, which is what makes the key column read.
+					out.push(jsx("span", { className: match[2] === undefined ? "s" : "k", children: match[1] }, `t${key}`));
+					key += 1;
+					if (match[2] !== undefined) out.push(match[2]);
+				} else if (match[3] !== undefined) {
+					out.push(jsx("span", { className: "n", children: match[3] }, `t${key}`));
+					key += 1;
+				} else {
+					out.push(jsx("span", { className: "n", children: match[4] }, `t${key}`));
+					key += 1;
+				}
+				at = match.index + match[0].length;
+				match = pattern.exec(source);
+			}
+			if (at < source.length) out.push(source.slice(at));
+			return out;
+		}
+
+		/**
+		* The three-lane band over the trajectory: 阶段 · 工具 · 证据.
+		*
+		* WHAT IT ANSWERS that no list can: where the time went. A mission that
+		* spent forty of its forty-three collection seconds inside one fetch is
+		* indistinguishable, row by row, from one that spread them evenly — and
+		* the two have completely different problems.
+		*
+		* The domain is the mission's own span, from the first row to the last,
+		* NOT wall-clock now: a finished mission whose band kept stretching would
+		* squash its own history into the left edge as the page sat open.
+		*
+		* Rows with no duration still get a mark. A tool call that took 3ms and a
+		* finding that took no time at all are events, and a band that only draws
+		* what lasted is a band with holes exactly where the fast things happened.
+		* @param rows - the trajectory rows currently loaded.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionTraceBand({ rows, zh }) {
+			const points = [];
+			for (const row of rows) {
+				const at = Date.parse(row.at);
+				if (!Number.isFinite(at)) continue;
+				const ms = Number.isFinite(row.ms) && row.ms > 0 ? row.ms : 0;
+				const lane = row.kind === "stage" ? 0 : row.kind === "finding" ? 2 : 1;
+				const tone = row.ok === false ? "bad" : row.kind === "stage" ? "stage" : row.kind === "finding" ? "finding" : "tool";
+				points.push({ at, ms, lane, tone, title: `${row.title} · ${missionClock(row.at)}` });
+			}
+			if (points.length === 0) return null;
+			let first = points[0].at;
+			let last = points[0].at;
+			for (const point of points) {
+				if (point.at < first) first = point.at;
+				if (point.at + point.ms > last) last = point.at + point.ms;
+			}
+			// A mission whose rows all share one timestamp has no span to divide
+			// by. One second is an arbitrary denominator, said to be arbitrary:
+			// every mark then lands at the left edge, which is true.
+			const span = Math.max(1, last - first);
+			return jsx("div", {
+				className: "swt-band",
+				children: jsxs("div", {
+					className: "swt-plot",
+					children: [
+						jsxs("div", {
+							className: "swt-lanelabels",
+							children: [
+								jsx("span", { children: zh ? "阶段" : "Stages" }, "l0"),
+								jsx("span", { children: zh ? "工具" : "Tools" }, "l1"),
+								jsx("span", { children: zh ? "证据" : "Evidence" }, "l2")
+							]
+						}, "labels"),
+						jsx("div", {
+							className: "swt-track",
+							children: points.map((point, at) => jsx("span", {
+								className: "swt-span",
+								"data-lane": String(point.lane),
+								"data-tone": point.tone,
+								title: point.title,
+								style: {
+									left: `${((point.at - first) / span) * 100}%`,
+									width: `${Math.max(0.25, (point.ms / span) * 100)}%`
+								}
+							}, `p${at}`))
+						}, "track")
+					]
+				}, "plot")
+			});
+		}
 		/**
 		* The trajectory: filters, the dense list, and the panel beside it.
 		*
@@ -4923,6 +5154,9 @@ window.__ModuleLoader__.load({
 		* @param onOpenSource - open a finding's page in the reader.
 		*/
 		function MissionTrace({ missionId, zh, live, timeline, onOpenSource }) {
+			// The stylesheet, before the first row is built. Idempotent, so the
+			// poll and every re-render after it cost one `getElementById`.
+			ensureTraceStyle();
 			const [kind, setKind] = useState("");
 			const [stepId, setStepId] = useState("");
 			const [dimensionId, setDimensionId] = useState("");
@@ -5109,13 +5343,14 @@ window.__ModuleLoader__.load({
 					]
 				}, "traceError")
 				: jsxs("div", {
-					style: { display: "flex", alignItems: "flex-start", gap: "12px" },
+					// One bordered surface, list and panel inside it sharing a
+					// hairline. Two floating boxes with a gap between them was the
+					// arrangement that made the panel read as a tooltip rather than
+					// as the other half of a master-detail.
+					className: "swt-wrap",
 					children: [
 						jsx("div", {
-							style: {
-								flex: "1 1 0", minWidth: 0, display: "flex", flexDirection: "column",
-								gap: "2px", maxHeight: "58vh", overflowY: "auto"
-							},
+							className: "swt-list",
 							children: rows.length === 0
 								? jsx("div", {
 									style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
@@ -5162,6 +5397,7 @@ window.__ModuleLoader__.load({
 						style: { marginBottom: "8px", fontSize: "12px", lineHeight: "18px", color: "rgb(217,119,6)" },
 						children: (zh ? "这一次刷新失败了，下面是上一次读到的轨迹：" : "The latest refresh failed; what follows is the trajectory as it was last read: ") + error
 					}, "stale"),
+					rows.length === 0 ? null : jsx(MissionTraceBand, { rows, zh }, "band"),
 					body,
 					data === null ? null : jsx("div", {
 						style: { marginTop: "8px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
@@ -5482,6 +5718,70 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @param onBack - return to the list.
 		*/
+		/**
+		* The three panes of one mission, as a tab strip.
+		*
+		* WHY A STRIP AND NOT A LONGER PAGE: the trajectory carries a detail panel
+		* beside it, and a panel that opens below two thousand pixels of stage
+		* strip, cost meters and dimension cards is a panel nobody finds. Each
+		* pane reads the same `view` that is already in memory, so switching is
+		* free and no pane can show a different mission than its neighbour.
+		*
+		* The counts are on the tabs on purpose. "维度 5" and "发现 11" said on the
+		* strip is the difference between a reader who opens the pane and a reader
+		* who assumes it is empty, which is exactly what happened when the numbers
+		* lived only inside the pane they described.
+		*/
+		function MissionDetailTabs({ pane, setPane, zh, dimensions, findings, steps, hasReport }) {
+			// The order is a trust ladder, and it is the whole design: what did it
+			// conclude, what is that standing on, and what did the machine
+			// actually do. Each tab down is one degree less trust in the one
+			// above it, which is also the order a person asks the questions in.
+			const panes = [
+				{ id: "overview", label: zh ? "概览" : "Overview", count: null },
+				{ id: "report", label: zh ? "报告" : "Report", count: null, off: hasReport !== true },
+				{ id: "dimensions", label: zh ? "证据" : "Evidence", count: findings },
+				{ id: "trace", label: zh ? "轨迹" : "Trajectory", count: steps }
+			].filter((entry) => entry.off !== true);
+			return jsx("div", {
+				style: {
+					display: "flex", alignItems: "center", gap: "4px",
+					margin: "0 0 14px", padding: "3px",
+					borderRadius: "9px", background: "var(--dsw-alias-fill-tertiary)",
+					width: "fit-content"
+				},
+				children: panes.map((entry) => {
+					const on = entry.id === pane;
+					return jsxs("button", {
+						type: "button",
+						"aria-pressed": on,
+						onClick: () => { setPane(entry.id); },
+						style: {
+							appearance: "none", border: "none", cursor: "pointer",
+							display: "flex", alignItems: "center", gap: "6px",
+							height: "28px", padding: "0 14px", borderRadius: "7px",
+							font: "inherit", fontSize: "13px",
+							fontWeight: on ? 600 : 400,
+							background: on ? "var(--dsw-alias-bg-primary)" : "transparent",
+							color: on ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)",
+							boxShadow: on ? "0 1px 2px rgba(0,0,0,0.06)" : "none"
+						},
+						children: [
+							jsx("span", { children: entry.label }, "label"),
+							entry.count === null || entry.count === 0 ? null : jsx("span", {
+								style: {
+									fontFamily: MISSION_MONO, fontSize: "11px",
+									fontVariantNumeric: "tabular-nums",
+									color: "var(--dsw-alias-label-tertiary)"
+								},
+								children: String(entry.count)
+							}, "count")
+						]
+					}, entry.id);
+				})
+			});
+		}
+
 		function MissionDetail({ missionId, zh, onBack }) {
 			const [view, setView] = useState(null);
 			const [state, setState] = useState("loading");
@@ -5490,7 +5790,12 @@ window.__ModuleLoader__.load({
 			const [busy, setBusy] = useState("");
 			const [notice, setNotice] = useState("");
 			const [actionError, setActionError] = useState("");
-			const [reading, setReading] = useState(false);
+
+			// Which of the three panes is showing. Held here rather than in the
+			// tab bar so that leaving a mission and coming back opens on the
+			// overview, and so a reader who is deep in the trajectory keeps it
+			// across a poll.
+			const [pane, setPane] = useState("overview");
 			// The page behind a quote, opened from the trajectory or from a
 			// dimension. Switched in place, the way the report does it, so the
 			// frame never moves under the reader.
@@ -5585,9 +5890,6 @@ window.__ModuleLoader__.load({
 				});
 			}
 
-			if (reading) {
-				return jsx(MissionReport, { missionId, zh, onBack: () => { setReading(false); } });
-			}
 
 			const mission = view.mission;
 			const face = missionPillFace(mission.pill, zh);
@@ -5616,7 +5918,12 @@ window.__ModuleLoader__.load({
 			return jsx("div", {
 				style: { height: "100%", minHeight: 0, overflowY: "auto" },
 				children: jsxs("div", {
-					style: { ...CONTENT_STYLE, padding: "0 24px 24px" },
+					// The trajectory is the two-pane reader this cap was written
+					// for: a list and a panel side by side, both of which lose
+					// their arguments column first when the frame narrows. The
+					// report is prose and keeps the cap, because a 1600px line of
+					// text is not a wider report, it is an unreadable one.
+					style: { ...(pane === "trace" ? WIDE_STYLE : CONTENT_STYLE), padding: "0 24px 24px" },
 					children: [
 						jsxs("div", {
 							style: { display: "flex", alignItems: "center", gap: "10px", margin: "0 0 12px" },
@@ -5675,12 +5982,6 @@ window.__ModuleLoader__.load({
 									onClick: () => { void act("rerun", { mode: "incremental" }); },
 									children: zh ? "增量重跑" : "Rerun incrementally"
 								}, "rerunIncremental"),
-								!hasReport ? null : jsx("button", {
-									type: "button",
-									style: controlStyle(),
-									onClick: () => { setReading(true); },
-									children: zh ? "读报告" : "Read the report"
-								}, "read"),
 								!hasReport ? null : jsx("a", {
 									href: `${apiBase()}/missions/${encodeURIComponent(missionId)}/report.md`,
 									download: `${missionId}.md`,
@@ -5737,29 +6038,31 @@ window.__ModuleLoader__.load({
 								: (zh ? "报告还没有生成 —— 任务还没有走到归档那一步。" : "No report yet — the mission has not reached the persist stage.")
 						}, "noArtifact") : null,
 
+
+						// The detail is four screens, not one scroll. The trajectory needs
+						// the height its side panel takes, and burying it under the stage
+						// strip, the meters and five dimension cards is how it went
+						// unnoticed. Every pane reads the same `view`; switching one does
+						// not refetch.
+						jsx(MissionDetailTabs, {
+							pane, setPane, zh,
+							dimensions: (view.dimensions ?? []).length,
+							findings: evidence.total ?? 0,
+							steps: view.timeline?.lastEventSeq ?? null,
+							hasReport
+						}, "panes"),
+
+						...(pane !== "overview" ? [] : [
 						jsx(MissionPanel, {
 							title: zh ? "阶段" : "Stages",
 							note: zh ? `十二个阶段，本档跳过的也在其中` : "twelve stages, including the ones this tier skips",
 							children: jsx(MissionStageStrip, { stages: view.stages ?? [], zh })
 						}, "stages"),
-
 						jsx(MissionPanel, {
 							title: zh ? "花费" : "Cost",
 							note: zh ? "上限在建立任务时冻结，之后每个阶段都读同一行" : "the ceilings were frozen when the mission was opened",
 							children: jsx(MissionCostMeters, { cost: view.cost ?? {}, zh })
 						}, "cost"),
-
-						(view.dimensions ?? []).length === 0 ? null : jsx(MissionPanel, {
-							title: zh ? "维度" : "Dimensions",
-							note: zh
-								? `已核验 ${evidence.verified ?? 0} 条 · 共 ${evidence.total ?? 0} 条发现 · 点开一个维度就能读到它们`
-								: `${evidence.verified ?? 0} verified of ${evidence.total ?? 0} findings — open a dimension to read them`,
-							children: jsx(MissionDimensions, {
-								missionId, dimensions: view.dimensions, zh,
-								onOpenSource: (entry) => { setSource(entry); }
-							})
-						}, "dimensions"),
-
 						preflight === null || (preflight.messages ?? []).length === 0 ? null : jsx(MissionPanel, {
 							title: zh ? "核验风险" : "Verification risk",
 							note: preflight.known
@@ -5782,7 +6085,45 @@ window.__ModuleLoader__.load({
 							note: zh ? "零条通过核验时留下的采集诊断" : "the collection diagnostics frozen when nothing verified",
 							children: jsx(MissionTried, { report: noEvidence, zh })
 						}, "tried"),
+						// The projector's own health. Anomalies are things it had to
+						// repair while reading — a stage still marked running on a
+						// finished mission, a stage id the catalogue does not know —
+						// and they are shown rather than silently smoothed over.
+						(view.swept ?? []).length === 0 ? null : jsx(MissionPanel, {
+							title: zh ? "读取时修正的异常" : "Anomalies repaired while reading",
+							note: zh ? "这些是显示层的修补，不是任务本身的输出" : "display-time repairs, not the mission's own output",
+							children: jsx("div", {
+								style: { display: "flex", flexDirection: "column", gap: "6px" },
+								children: view.swept.map((entry, at) => jsx("div", {
+									style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+									children: `${entry.kind} · ${entry.key} · ${entry.reason}`
+								}, `${entry.kind}-${entry.key}-${at}`))
+							})
+						}, "swept")
+						]),
 
+						...(pane !== "report" || !hasReport ? [] : [
+						// The deliverable, in the frame rather than instead of it. It
+						// used to replace the whole screen, which meant leaving the
+						// report was leaving the mission — so the evidence behind a
+						// sentence was two navigations away from the sentence.
+						jsx(MissionReport, { missionId, zh, onBack: null }, "report")
+						]),
+
+						...(pane !== "dimensions" ? [] : [
+						(view.dimensions ?? []).length === 0 ? null : jsx(MissionPanel, {
+							title: zh ? "维度" : "Dimensions",
+							note: zh
+								? `已核验 ${evidence.verified ?? 0} 条 · 共 ${evidence.total ?? 0} 条发现 · 点开一个维度就能读到它们`
+								: `${evidence.verified ?? 0} verified of ${evidence.total ?? 0} findings — open a dimension to read them`,
+							children: jsx(MissionDimensions, {
+								missionId, dimensions: view.dimensions, zh,
+								onOpenSource: (entry) => { setSource(entry); }
+							})
+						}, "dimensions")
+						]),
+
+						...(pane !== "trace" ? [] : [
 						// The trajectory, in place of the event tail that used to sit
 						// here. The tail showed one of the four things a mission does
 						// and none of the three that answer "why did this dimension
@@ -5800,23 +6141,8 @@ window.__ModuleLoader__.load({
 								timeline: view.timeline,
 								onOpenSource: (entry) => { setSource(entry); }
 							})
-						}, "trace"),
-
-						// The projector's own health. Anomalies are things it had to
-						// repair while reading — a stage still marked running on a
-						// finished mission, a stage id the catalogue does not know —
-						// and they are shown rather than silently smoothed over.
-						(view.swept ?? []).length === 0 ? null : jsx(MissionPanel, {
-							title: zh ? "读取时修正的异常" : "Anomalies repaired while reading",
-							note: zh ? "这些是显示层的修补，不是任务本身的输出" : "display-time repairs, not the mission's own output",
-							children: jsx("div", {
-								style: { display: "flex", flexDirection: "column", gap: "6px" },
-								children: view.swept.map((entry, at) => jsx("div", {
-									style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
-									children: `${entry.kind} · ${entry.key} · ${entry.reason}`
-								}, `${entry.kind}-${entry.key}-${at}`))
-							})
-						}, "swept")
+						}, "trace")
+						])
 					]
 				})
 			});
@@ -5963,7 +6289,11 @@ window.__ModuleLoader__.load({
 				return () => { alive = false; };
 			}, [missionId, version]);
 
-			const back = jsx("button", {
+			// Null when the report is a PANE rather than a screen: there is
+			// nothing to go back to, because the mission is still around it. A
+			// back button that unmounts the tab strip it lives under is worse
+			// than no back button.
+			const back = onBack === null || onBack === undefined ? null : jsx("button", {
 				type: "button", style: controlStyle(), onClick: onBack,
 				children: zh ? "← 返回任务" : "← Back to the mission"
 			}, "back");
