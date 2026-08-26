@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 		* both is how "deployed but apparently absent" becomes legible instead
 		* of costing an afternoon.
 		*/
-		const CLIENT_VERSION = "0.6.2";
+		const CLIENT_VERSION = "0.6.3";
 
 		//#region locale + mark
 		/**
@@ -3921,14 +3921,19 @@ window.__ModuleLoader__.load({
 
 		//#region missions detail panels
 		/** A small section heading, so the detail view reads as panels rather than as one column of text. */
-		function MissionPanel({ title, note, children }) {
+		function MissionPanel({ title, note, children, bare }) {
 			return jsxs("section", {
-				style: { ...CARD_STYLE, display: "flex", flexDirection: "column", gap: "10px", padding: "16px" },
+				// `bare` drops the card entirely. A pane whose only child is a
+				// panel titled the same as the tab above it is a border, a title
+				// and 28px of padding spent restating the tab.
+				style: bare === true
+					? { display: "flex", flexDirection: "column", gap: "6px" }
+					: { ...CARD_STYLE, display: "flex", flexDirection: "column", gap: "8px", padding: "12px" },
 				children: [
 					jsxs("div", {
 						style: { display: "flex", alignItems: "baseline", gap: "10px", flexWrap: "wrap" },
 						children: [
-							jsx("h3", {
+							bare === true ? null : jsx("h3", {
 								style: { margin: 0, fontSize: "13px", fontWeight: 600, letterSpacing: "0.02em", color: "var(--dsw-alias-label-primary)" },
 								children: title
 							}, "title"),
@@ -5719,6 +5724,114 @@ window.__ModuleLoader__.load({
 		* @param onBack - return to the list.
 		*/
 		/**
+		* Who spent the budget, by agent.
+		*
+		* WHAT ONE TOTAL CANNOT SAY: "76 of 120 calls" is true of a mission that
+		* worked and of a mission where one researcher burned forty turns
+		* re-searching a dimension that was never going to yield. The per-agent
+		* row is the difference — the columns that separate them are `toolFailures`
+		* and `toolCached`, which is why they are columns rather than a footnote.
+		*
+		* Sorted by tokens, descending: the biggest spender is the one worth
+		* looking at, and a table in agent-id order buries it alphabetically.
+		* @param agents - `agents` from the view route.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionAgentTable({ agents, zh }) {
+			const rows = [...(Array.isArray(agents) ? agents : [])]
+				.sort((a, b) => (Number(b?.tokens ?? 0) - Number(a?.tokens ?? 0)));
+			if (rows.length === 0) return null;
+			const totals = rows.reduce((sum, row) => ({
+				calls: sum.calls + Number(row?.calls ?? 0),
+				tokens: sum.tokens + Number(row?.tokens ?? 0),
+				toolCalls: sum.toolCalls + Number(row?.toolCalls ?? 0),
+				toolFailures: sum.toolFailures + Number(row?.toolFailures ?? 0),
+				toolCached: sum.toolCached + Number(row?.toolCached ?? 0)
+			}), { calls: 0, tokens: 0, toolCalls: 0, toolFailures: 0, toolCached: 0 });
+
+			const head = { fontSize: "11px", color: "var(--dsw-alias-label-tertiary)", fontWeight: 400, textAlign: "right", padding: "0 0 6px" };
+			const cell = {
+				fontSize: "12px", lineHeight: "26px", textAlign: "right",
+				fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-primary)"
+			};
+			const name = { ...cell, textAlign: "left", fontFamily: MISSION_MONO };
+			const columns = [
+				{ id: "calls", label: zh ? "模型调用" : "Calls", of: (row) => row.calls },
+				{ id: "tokens", label: zh ? "令牌" : "Tokens", of: (row) => row.tokens },
+				{ id: "toolCalls", label: zh ? "工具调用" : "Tool calls", of: (row) => row.toolCalls },
+				// Failures and cache hits are drawn apart from the counts they
+				// came out of. A run whose tool calls were 40% cached and one
+				// whose tool calls were 40% failures cost the same and mean
+				// opposite things.
+				{ id: "toolFailures", label: zh ? "失败" : "Failed", of: (row) => row.toolFailures, bad: true },
+				{ id: "toolCached", label: zh ? "命中缓存" : "Cached", of: (row) => row.toolCached, good: true }
+			];
+
+			return jsx("div", {
+				style: { overflowX: "auto" },
+				children: jsxs("table", {
+					style: { width: "100%", borderCollapse: "collapse", minWidth: "620px" },
+					children: [
+						jsx("thead", {
+							children: jsxs("tr", {
+								style: { borderBottom: "1px solid var(--dsw-alias-border-l2)" },
+								children: [
+									jsx("th", { style: { ...head, textAlign: "left" }, children: zh ? "执行者" : "Agent" }, "agent"),
+									jsx("th", { style: { ...head, textAlign: "left" }, children: zh ? "停在" : "Last step" }, "step"),
+									...columns.map((column) => jsx("th", { style: head, children: column.label }, column.id))
+								]
+							})
+						}, "head"),
+						jsx("tbody", {
+							children: rows.map((row, at) => jsxs("tr", {
+								style: { borderBottom: "1px solid var(--dsw-alias-border-l2)" },
+								children: [
+									// `agentId` is null until an agent actually runs; `role` is
+									// what the planner named it. A table of "?" for every
+									// agent the tier skipped is a table that looks broken.
+									jsx("td", { style: name, children: row.agentId ?? row.role ?? "—" }, "agent"),
+									jsx("td", {
+										style: { ...cell, textAlign: "left", color: "var(--dsw-alias-label-secondary)" },
+										children: row.lastStepId === null || row.lastStepId === undefined
+											? "—"
+											: `${missionFace(MISSION_STAGE_FACES, row.lastStepId, zh)} · ${missionFace(MISSION_STAGE_STATUS_FACES, row.state, zh)}`
+									}, "step"),
+									...columns.map((column) => {
+										const value = Number(column.of(row) ?? 0);
+										return jsx("td", {
+											style: {
+												...cell,
+												color: value === 0
+													? "var(--dsw-alias-label-tertiary)"
+													: column.bad === true
+														? "var(--dsw-alias-state-error-primary)"
+														: column.good === true
+															? "var(--dsw-alias-state-success-primary)"
+															: cell.color
+											},
+											children: value.toLocaleString("en-US")
+										}, column.id);
+									})
+								]
+							}, `${row.agentId ?? "?"}-${at}`))
+						}, "body"),
+						jsx("tfoot", {
+							children: jsxs("tr", {
+								children: [
+									jsx("td", { style: { ...cell, textAlign: "left", color: "var(--dsw-alias-label-secondary)" }, children: zh ? "合计" : "Total" }, "agent"),
+									jsx("td", { style: cell, children: "" }, "step"),
+									...columns.map((column) => jsx("td", {
+										style: { ...cell, fontWeight: 600 },
+										children: Number(totals[column.id] ?? 0).toLocaleString("en-US")
+									}, column.id))
+								]
+							})
+						}, "foot")
+					]
+				})
+			});
+		}
+		/**
 		* The three panes of one mission, as a tab strip.
 		*
 		* WHY A STRIP AND NOT A LONGER PAGE: the trajectory carries a detail panel
@@ -5732,16 +5845,23 @@ window.__ModuleLoader__.load({
 		* who assumes it is empty, which is exactly what happened when the numbers
 		* lived only inside the pane they described.
 		*/
-		function MissionDetailTabs({ pane, setPane, zh, dimensions, findings, steps, hasReport }) {
-			// The order is a trust ladder, and it is the whole design: what did it
-			// conclude, what is that standing on, and what did the machine
-			// actually do. Each tab down is one degree less trust in the one
-			// above it, which is also the order a person asks the questions in.
+		function MissionDetailTabs({ pane, setPane, zh, dimensions, findings, steps, hasReport, stages }) {
+			// The set gens.team's playground arrived at for the same object, and
+			// it is taken rather than re-derived: 任务列表 · 协作动态 · 输出报告 ·
+			// 参考文献 · 图谱分析 · 算力消耗. Two of those were folded into an
+			// "overview" here, and folding them is what made the overview a
+			// drawer with the trajectory buried under it.
+			//
+			// 图谱分析 is the one deliberately absent. A knowledge graph needs
+			// entities and edges this mission never builds, and a tab that opens
+			// onto "no graph data" for every mission is a tab that teaches people
+			// the strip is decorative.
 			const panes = [
-				{ id: "overview", label: zh ? "概览" : "Overview", count: null },
+				{ id: "tasks", label: zh ? "任务" : "Tasks", count: stages },
+				{ id: "trace", label: zh ? "轨迹" : "Trajectory", count: steps },
 				{ id: "report", label: zh ? "报告" : "Report", count: null, off: hasReport !== true },
 				{ id: "dimensions", label: zh ? "证据" : "Evidence", count: findings },
-				{ id: "trace", label: zh ? "轨迹" : "Trajectory", count: steps }
+				{ id: "cost", label: zh ? "成本" : "Cost", count: null }
 			].filter((entry) => entry.off !== true);
 			return jsx("div", {
 				style: {
@@ -5795,7 +5915,7 @@ window.__ModuleLoader__.load({
 			// tab bar so that leaving a mission and coming back opens on the
 			// overview, and so a reader who is deep in the trajectory keeps it
 			// across a poll.
-			const [pane, setPane] = useState("overview");
+			const [pane, setPane] = useState("tasks");
 			// The page behind a quote, opened from the trajectory or from a
 			// dimension. Switched in place, the way the report does it, so the
 			// frame never moves under the reader.
@@ -5915,6 +6035,47 @@ window.__ModuleLoader__.load({
 				formatStamp(mission.startedAt)
 			].filter((piece) => piece !== "").join(" · ");
 
+			// The mission's four actions, hoisted so they can sit on the header
+			// row rather than under it. They were a row of their own, which cost
+			// 34px plus its margin above a list whose value is how many rows fit.
+			const missionActions = [
+				mission.terminal ? null : jsx("button", {
+					type: "button",
+					disabled: busy !== "",
+					style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px", flex: "none" },
+					onClick: () => { void act("cancel"); },
+					children: busy === "cancel" ? (zh ? "正在中止…" : "Cancelling…") : (zh ? "中止" : "Cancel")
+				}, "cancel"),
+				!resume.offered ? null : jsx("button", {
+					type: "button",
+					disabled: busy !== "",
+					title: resume.detail ?? "",
+					style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px", flex: "none" },
+					onClick: () => { void act("resume"); },
+					children: busy === "resume" ? (zh ? "正在继续…" : "Resuming…") : (zh ? "从检查点继续" : "Resume")
+				}, "resume"),
+				!mission.terminal ? null : jsx("button", {
+					type: "button",
+					disabled: busy !== "",
+					style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px", flex: "none" },
+					onClick: () => { void act("rerun", { mode: "fresh" }); },
+					children: busy === "rerun" ? (zh ? "正在重跑…" : "Rerunning…") : (zh ? "全新重跑" : "Rerun from scratch")
+				}, "rerun"),
+				!mission.terminal ? null : jsx("button", {
+					type: "button",
+					disabled: busy !== "",
+					style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px", flex: "none" },
+					onClick: () => { void act("rerun", { mode: "incremental" }); },
+					children: zh ? "增量重跑" : "Rerun incrementally"
+				}, "rerunIncremental"),
+				!hasReport ? null : jsx("a", {
+					href: `${apiBase()}/missions/${encodeURIComponent(missionId)}/report.md`,
+					download: `${missionId}.md`,
+					style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px", flex: "none", display: "inline-flex", alignItems: "center", textDecoration: "none" },
+					children: zh ? "下载 .md" : "Download .md"
+				}, "download")
+			].filter((entry) => entry !== null);
+
 			return jsx("div", {
 				style: { height: "100%", minHeight: 0, overflowY: "auto" },
 				children: jsxs("div", {
@@ -5923,73 +6084,46 @@ window.__ModuleLoader__.load({
 					// their arguments column first when the frame narrows. The
 					// report is prose and keeps the cap, because a 1600px line of
 					// text is not a wider report, it is an unreadable one.
-					style: { ...(pane === "trace" ? WIDE_STYLE : CONTENT_STYLE), padding: "0 24px 24px" },
+					style: { ...(pane === "trace" || pane === "cost" ? WIDE_STYLE : CONTENT_STYLE), padding: "0 24px 24px" },
 					children: [
+						// ONE ROW: back, title, status, actions. This was four stacked
+						// blocks, and with the banner and the tab strip under them the
+						// first row of actual content began 396px down a 1050px
+						// screen — thirty-eight per cent of the window spent on
+						// chrome, above a list whose whole value is how many rows fit.
 						jsxs("div", {
-							style: { display: "flex", alignItems: "center", gap: "10px", margin: "0 0 12px" },
+							style: { display: "flex", alignItems: "center", gap: "8px", margin: "0 0 4px", minHeight: "30px" },
 							children: [
 								jsx("button", {
-									type: "button", style: controlStyle(), onClick: onBack,
-									children: zh ? "← 返回任务列表" : "← Back to missions"
+									type: "button",
+									style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px", flex: "none" },
+									onClick: onBack,
+									children: zh ? "← 任务" : "← Missions"
 								}, "back"),
-								jsx("span", { style: { flex: 1 } }, "spacer"),
+								jsx("h2", {
+									style: {
+										margin: 0, flex: "0 1 auto", minWidth: "60px",
+										overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+										fontSize: "16px", lineHeight: "24px", fontWeight: 600,
+										color: "var(--dsw-alias-label-primary)"
+									},
+									title: mission.topic,
+									children: mission.topic
+								}, "topic"),
 								jsx("span", {
 									style: {
-										padding: "2px 9px", borderRadius: "6px",
+										flex: "none", padding: "1px 8px", borderRadius: "6px",
 										background: `rgba(${face.hue},0.12)`, color: `rgb(${face.hue})`,
-										fontSize: "12px", fontWeight: 600
+										fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap"
 									},
 									children: face.note === "" ? face.label : `${face.label} · ${face.note}`
-								}, "pill")
+								}, "pill"),
+								jsx("span", { style: { flex: 1, minWidth: "8px" } }, "spacer"),
+								...missionActions
 							]
 						}, "bar"),
-						jsx("h2", {
-							style: { margin: "0 0 6px", fontSize: "18px", lineHeight: "26px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
-							children: mission.topic
-						}, "topic"),
-						jsx("div", { style: { ...META_STYLE, margin: "0 0 14px" }, children: meta }, "meta"),
+						jsx("div", { style: { ...META_STYLE, margin: "0 0 8px" }, children: meta }, "meta"),
 
-						// The four actions, and every one of them says what it did.
-						jsxs("div", {
-							style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", margin: "0 0 14px" },
-							children: [
-								mission.terminal ? null : jsx("button", {
-									type: "button",
-									disabled: busy !== "",
-									style: controlStyle(),
-									onClick: () => { void act("cancel"); },
-									children: busy === "cancel" ? (zh ? "正在中止…" : "Cancelling…") : (zh ? "中止" : "Cancel")
-								}, "cancel"),
-								!resume.offered ? null : jsx("button", {
-									type: "button",
-									disabled: busy !== "",
-									title: resume.detail ?? "",
-									style: controlStyle(),
-									onClick: () => { void act("resume"); },
-									children: busy === "resume" ? (zh ? "正在继续…" : "Resuming…") : (zh ? "从检查点继续" : "Resume")
-								}, "resume"),
-								!mission.terminal ? null : jsx("button", {
-									type: "button",
-									disabled: busy !== "",
-									style: controlStyle(),
-									onClick: () => { void act("rerun", { mode: "fresh" }); },
-									children: busy === "rerun" ? (zh ? "正在重跑…" : "Rerunning…") : (zh ? "全新重跑" : "Rerun from scratch")
-								}, "rerun"),
-								!mission.terminal ? null : jsx("button", {
-									type: "button",
-									disabled: busy !== "",
-									style: controlStyle(),
-									onClick: () => { void act("rerun", { mode: "incremental" }); },
-									children: zh ? "增量重跑" : "Rerun incrementally"
-								}, "rerunIncremental"),
-								!hasReport ? null : jsx("a", {
-									href: `${apiBase()}/missions/${encodeURIComponent(missionId)}/report.md`,
-									download: `${missionId}.md`,
-									style: { ...controlStyle(), display: "inline-flex", alignItems: "center", textDecoration: "none" },
-									children: zh ? "下载 .md" : "Download .md"
-								}, "download")
-							]
-						}, "actions"),
 						notice === "" ? null : jsx("div", {
 							style: { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
 							children: notice
@@ -6010,11 +6144,16 @@ window.__ModuleLoader__.load({
 						// code is what makes a failure countable across missions;
 						// the sentence is what makes this one actionable.
 						(mission.errorMessage ?? "") === "" ? null : jsx("div", {
+							// Two lines at most, and the whole sentence on hover. A
+							// four-line banner is not four times as informative; it is
+							// four lines of the list it sits above.
 							style: {
-								margin: "0 0 14px", padding: "10px 12px", borderRadius: "10px",
+								margin: "0 0 8px", padding: "6px 10px", borderRadius: "8px",
 								background: "rgba(220,38,38,0.06)", border: "1px solid rgba(220,38,38,0.25)",
-								fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-primary)"
+								fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-primary)",
+								display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden"
 							},
+							title: (mission.failureCode === null ? "" : `${mission.failureCode} · `) + mission.errorMessage,
 							children: (mission.failureCode === null ? "" : `${mission.failureCode} · `) + mission.errorMessage
 						}, "failure"),
 						// Sign-off, when there is one. `signed: null` means s11 never
@@ -6026,7 +6165,11 @@ window.__ModuleLoader__.load({
 								? (zh ? `领队已签署，评分 ${mission.score ?? "—"}${(mission.verdict ?? "") === "" ? "" : `（${mission.verdict}）`}。` : `Signed off by the leader at ${mission.score ?? "—"}${(mission.verdict ?? "") === "" ? "" : ` (${mission.verdict})`}.`)
 								: (zh ? `领队读过报告后拒绝签署，评分 ${mission.score ?? "—"}。报告仍然可读。` : `The leader read the report and declined to sign it, at ${mission.score ?? "—"}. The report is still readable.`)
 						}, "signature"),
-						!hasReport ? jsx("div", {
+						// Not when the banner above already said why. "The mission
+						// ended without a report" under "budget_exhausted: calls
+						// reached 40 of 40" is the same sentence twice, and the
+						// second one costs a row of the list below it.
+						hasReport || (mission.errorMessage ?? "") !== "" ? null : jsx("div", {
 							style: { margin: "0 0 14px", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
 							// Three reasons, three sentences. A sentinel that means
 							// both "not yet" and "we tried and it did not land" is a
@@ -6036,7 +6179,7 @@ window.__ModuleLoader__.load({
 								: artifact.reason === "terminal-without-artifact"
 								? (zh ? "任务结束了，却没有留下报告 —— 每条结束路径都应该写一版，所以这是失败路径上的一个洞。" : "The mission ended without an artefact. Every terminal path is supposed to write one, so this is a hole in a failure path.")
 								: (zh ? "报告还没有生成 —— 任务还没有走到归档那一步。" : "No report yet — the mission has not reached the persist stage.")
-						}, "noArtifact") : null,
+						}, "noArtifact"),
 
 
 						// The detail is four screens, not one scroll. The trajectory needs
@@ -6049,20 +6192,16 @@ window.__ModuleLoader__.load({
 							dimensions: (view.dimensions ?? []).length,
 							findings: evidence.total ?? 0,
 							steps: view.timeline?.lastEventSeq ?? null,
-							hasReport
+							hasReport,
+							stages: (view.stages ?? []).length
 						}, "panes"),
 
-						...(pane !== "overview" ? [] : [
+						...(pane !== "tasks" ? [] : [
 						jsx(MissionPanel, {
 							title: zh ? "阶段" : "Stages",
 							note: zh ? `十二个阶段，本档跳过的也在其中` : "twelve stages, including the ones this tier skips",
 							children: jsx(MissionStageStrip, { stages: view.stages ?? [], zh })
 						}, "stages"),
-						jsx(MissionPanel, {
-							title: zh ? "花费" : "Cost",
-							note: zh ? "上限在建立任务时冻结，之后每个阶段都读同一行" : "the ceilings were frozen when the mission was opened",
-							children: jsx(MissionCostMeters, { cost: view.cost ?? {}, zh })
-						}, "cost"),
 						preflight === null || (preflight.messages ?? []).length === 0 ? null : jsx(MissionPanel, {
 							title: zh ? "核验风险" : "Verification risk",
 							note: preflight.known
@@ -6112,10 +6251,14 @@ window.__ModuleLoader__.load({
 
 						...(pane !== "dimensions" ? [] : [
 						(view.dimensions ?? []).length === 0 ? null : jsx(MissionPanel, {
+							bare: true,
 							title: zh ? "维度" : "Dimensions",
+							// The counts stay — they are facts about this mission — but
+							// the instruction ("open a dimension to read them") does
+							// not: the cards say 看这 N 条证据 on themselves.
 							note: zh
-								? `已核验 ${evidence.verified ?? 0} 条 · 共 ${evidence.total ?? 0} 条发现 · 点开一个维度就能读到它们`
-								: `${evidence.verified ?? 0} verified of ${evidence.total ?? 0} findings — open a dimension to read them`,
+								? `已核验 ${evidence.verified ?? 0} 条 · 共 ${evidence.total ?? 0} 条发现`
+								: `${evidence.verified ?? 0} verified of ${evidence.total ?? 0} findings`,
 							children: jsx(MissionDimensions, {
 								missionId, dimensions: view.dimensions, zh,
 								onOpenSource: (entry) => { setSource(entry); }
@@ -6131,10 +6274,12 @@ window.__ModuleLoader__.load({
 						// findings with their quotes, and the stage transitions those
 						// two happened under.
 						jsx(MissionPanel, {
+							bare: true,
 							title: zh ? "轨迹" : "Trajectory",
-							note: zh
-								? "阶段、工具调用、发现、事件，按时间排在一起；点一行看它的全部"
-								: "stages, tool calls, findings and events in one order — click a row to read it whole",
+							// The sentence explaining what a trajectory is belongs on
+							// the tab that opens it, not on a line above it that is
+							// re-read every single visit.
+							note: "",
 							children: jsx(MissionTrace, {
 								missionId, zh,
 								live: !mission.terminal,
@@ -6142,6 +6287,21 @@ window.__ModuleLoader__.load({
 								onOpenSource: (entry) => { setSource(entry); }
 							})
 						}, "trace")
+						]),
+
+						...(pane !== "cost" ? [] : [
+						jsx(MissionPanel, {
+							title: zh ? "额度" : "Allowances",
+							note: zh ? "上限在建立任务时冻结，之后每个阶段都读同一行" : "the ceilings were frozen when the mission was opened",
+							children: jsx(MissionCostMeters, { cost: view.cost ?? {}, zh })
+						}, "cost"),
+						(view.agents ?? []).length === 0 ? null : jsx(MissionPanel, {
+							title: zh ? "谁花的" : "Who spent it",
+							note: zh
+								? "按执行者分解 —— 一份总数说不出哪个维度在返工"
+								: "broken down by agent — one total cannot say which dimension was redoing its work",
+							children: jsx(MissionAgentTable, { agents: view.agents, zh })
+						}, "agents")
 						])
 					]
 				})

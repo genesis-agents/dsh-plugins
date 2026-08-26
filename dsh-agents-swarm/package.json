@@ -1,6 +1,6 @@
 {
   "name": "@ai4gensteam/dsh-agents-swarm",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "A source library for DeepSeek Harness: 72 feeds on an hourly timer, a reader with transcripts and translation, and a publisher that turns what it collects into a podcast, a digest, or a report",
   "keywords": [
     "dsh",

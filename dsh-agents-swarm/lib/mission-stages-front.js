@@ -40,6 +40,7 @@ import {
   finalizeToolFor,
   quoteIssue,
   readUsage,
+  readSettlement,
 } from "./mission-agent.js";
 import { budgetGate, computeWallFloorMs } from "./mission-runtime.js";
 import { FACETS, documentIdFor } from "./mission-store.js";
@@ -347,16 +348,25 @@ function promptsOf(deps) {
  */
 function spendRecorder({ store, missionId, stage, now, logger }) {
   return (usage) => {
-    // `readUsage` is mission-agent.js's reader, and it REPORTS a usage shape it
+    // `readSettlement` is mission-agent.js's reader for the RECORD the seam
+    // sends, and it REPORTS a shape it did not recognise instead of absorbing it
     // did not recognise instead of absorbing it into a silent zero — a mission
     // that cost real money rendering as free is what makes the estimator
     // permanently untunable.
-    const counts = readUsage(usage);
+    const counts = readSettlement(usage);
     if (counts === null) {
       logger?.warn?.(`mission ${missionId}: ${stage.id} received no usage object, so no spend row was written for that call`);
       return;
     }
-    if (counts.source !== "fields") logger?.warn?.(`mission ${missionId}: ${stage.id} usage — ${counts.source}`);
+    if (counts.source !== "settlement record" && counts.source !== "fields") {
+      logger?.warn?.(`mission ${missionId}: ${stage.id} usage — ${counts.source}`);
+    }
+    // A settled call that cost NOTHING is not a discount. Zero survived here
+    // for a whole release precisely because nothing said it was strange, and
+    // the ledger it lands in is the one the token ceiling is read from.
+    if (counts.total === 0) {
+      logger?.warn?.(`mission ${missionId}: ${stage.id} settled a model call priced at zero tokens — the ledger will understate this mission and the token ceiling cannot bind on it`);
+    }
     store.withTx(() => {
       store.insertSpend({
         missionId,
@@ -366,8 +376,8 @@ function spendRecorder({ store, missionId, stage, now, logger }) {
         promptTok: counts.prompt,
         completionTok: counts.completion,
         cacheReadTok: counts.cacheRead,
-        estimatedTok: 0,
-        calls: 1,
+        estimatedTok: counts.estimated,
+        calls: counts.calls,
         at: now(),
       });
     });

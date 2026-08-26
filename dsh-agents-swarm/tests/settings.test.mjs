@@ -425,7 +425,14 @@ const LIVE_VIEW = {
       blocked: true,
     },
   ],
-  agents: [], todo: [],
+  // What /view actually returns for a mission that has run agents. An empty
+  // array here made the spend pane a total with nobody attached to it, and the
+  // fixture was the only thing saying that was normal.
+  agents: [
+    { agentId: "researcher:d1", role: "researcher", state: "done", lastStepId: "s3-collect", dimensionId: "d1", calls: 9, promptTok: 41000, completionTok: 6200, cacheReadTok: 0, tokens: 47200, toolCalls: 21, toolFailures: 2, toolCached: 5 },
+    { agentId: "leader", role: "leader", state: "running", lastStepId: "s4-assess", dimensionId: null, calls: 4, promptTok: 12000, completionTok: 2100, cacheReadTok: 0, tokens: 14100, toolCalls: 0, toolFailures: 0, toolCached: 0 }
+  ],
+  todo: [],
   cost: costOf({ tokens: 412000, calls: 24 }),
   artifact: { kind: "empty-artifact", reason: "not-yet-materialized", detail: "The mission has not reached s12." },
   timeline: {
@@ -473,7 +480,14 @@ const DEAD_VIEW = {
       unchecked: { "unchecked-fetch-failed": 3, "unchecked-rate-limited": 1 }, uncheckedTotal: 4,
     },
   ],
-  agents: [], todo: [],
+  // What /view actually returns for a mission that has run agents. An empty
+  // array here made the spend pane a total with nobody attached to it, and the
+  // fixture was the only thing saying that was normal.
+  agents: [
+    { agentId: "researcher:d1", role: "researcher", state: "done", lastStepId: "s3-collect", dimensionId: "d1", calls: 9, promptTok: 41000, completionTok: 6200, cacheReadTok: 0, tokens: 47200, toolCalls: 21, toolFailures: 2, toolCached: 5 },
+    { agentId: "leader", role: "leader", state: "running", lastStepId: "s4-assess", dimensionId: null, calls: 4, promptTok: 12000, completionTok: 2100, cacheReadTok: 0, tokens: 14100, toolCalls: 0, toolFailures: 0, toolCached: 0 }
+  ],
+  todo: [],
   cost: costOf({ tokens: 190000, calls: 18 }),
   artifact: {
     kind: "artifact", version: 1, runCount: 1, stale: false, trigger: "initial",
@@ -1397,11 +1411,12 @@ test("opening a mission shows its twelve stages, its cost and its tail", async (
   for (const stage of ["立项", "规划", "采集", "评估", "归一", "综合", "拟纲", "撰写", "核验", "复盘", "签署", "归档"]) {
     assert.ok(text.includes(stage), `the stage strip is missing ${stage}`);
   }
-  assert.ok(text.includes("令牌") && text.includes("412000 / 1500000"), "the cost meters are not on the page");
+  const cost = await pane(view, "成本");
+  assert.ok(cost.includes("令牌") && cost.includes("412000 / 1500000"), "the cost meters are not on the page");
   // Named, not summed. A mission at 100% of its arXiv allowance and 20% of its
   // tokens is about to start failing tool calls, and one blended percentage
   // would say it is fine right up until it stops working.
-  assert.ok(text.includes("最紧"), "nothing names the tightest ceiling");
+  assert.ok(cost.includes("最紧"), "nothing names the tightest ceiling");
 
   // The per-dimension pane, with the floor as a fraction rather than a tick.
   const dims = await pane(view, "证据");
@@ -1414,7 +1429,7 @@ test("opening a mission shows its twelve stages, its cost and its tail", async (
   const trace = await pane(view, "轨迹");
   assert.ok(trace.includes("开始运行"), "the live tail is empty");
   // Leaving a pane and coming back is not a refetch and not a reset.
-  assert.ok((await pane(view, "概览")).includes("最紧"), "the overview did not survive a round trip");
+  assert.ok((await pane(view, "成本")).includes("最紧"), "the cost pane did not survive a round trip");
   // A running mission has nothing to read yet, and says which of the three
   // reasons it is: not yet, write failed, or ended without one.
   assert.ok(text.includes("报告还没有生成"), "does not say why there is no report");
@@ -1644,18 +1659,19 @@ test("a finding opens onto the whole quote, with the state in words", async () =
   assert.ok(link, "the panel does not link to the page the quote was verified against");
 });
 
-test("the panes are a trust ladder, and the report is one of them", async () => {
-  // The order is the design: conclusion, then what it stands on, then what the
-  // machine did. It is asserted because it is a decision — a strip that grew
-  // by appending each new pane would read as an accident, and this one did.
+test("the panes are the set playground settled on, in its order", async () => {
+  // Taken rather than re-derived. gens.team runs the same object through
+  // 任务列表 · 协作动态 · 输出报告 · 参考文献 · 图谱分析 · 算力消耗, and the two
+  // this codebase had folded into an "overview" — the task board and the
+  // spend — are exactly the two that made the overview a drawer.
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   await open(view, SIGNED.topic);
   const labels = paneLabels(view.tree);
   assert.deepEqual(
     labels.map((label) => label.replace(/[0-9]/g, "")),
-    ["概览", "报告", "证据", "轨迹"],
-    "the tab strip is not the trust ladder",
+    ["任务", "轨迹", "报告", "证据", "成本"],
+    "the tab strip drifted from playground's set",
   );
 
   // The report is IN the frame. It used to replace the whole screen, so
@@ -1669,7 +1685,7 @@ test("the panes are a trust ladder, and the report is one of them", async () => 
     "a pane offers a back button to a screen it never left",
   );
   // And back out in one click, from inside the report.
-  assert.ok(paneLabels(view.tree).length === 4, "the strip did not survive the report");
+  assert.ok(paneLabels(view.tree).length === 5, "the strip did not survive the report");
 });
 
 test("a mission with no report has no report tab", async () => {
@@ -1683,29 +1699,32 @@ test("a mission with no report has no report tab", async () => {
   assert.ok(!labels.includes("报告"), "a mission that has written nothing offers a report tab");
 });
 
-test("the three panes are three screens, not one scroll with headings", async () => {
+test("the panes are separate screens, not one scroll with headings", async () => {
   // The reason the trajectory went unnoticed for a whole release: it was the
   // last panel of a page that opened on a stage strip, five cost meters and
   // five dimension cards. A strip that renders every pane at once would pass
   // every other test in this file and reproduce exactly that.
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
-  const overview = await open(view, RUNNING.topic);
-  assert.ok(overview.includes("最紧"), "the overview does not open first");
-  assert.ok(!overview.includes("显示 6 / 6 条"), "the trajectory is rendered under the overview");
-  assert.ok(!overview.includes("已核验 5/3 条"), "the dimensions are rendered under the overview");
+  const tasks = await open(view, RUNNING.topic);
+  assert.ok(tasks.includes("十二个阶段"), "the task board does not open first");
+  assert.ok(!tasks.includes("显示 6 / 6 条"), "the trajectory is rendered under the task board");
+  assert.ok(!tasks.includes("已核验 5/3 条"), "the evidence is rendered under the task board");
+  assert.ok(!tasks.includes("最紧"), "the spend is rendered under the task board");
 
   const dims = await pane(view, "证据");
-  assert.ok(dims.includes("已核验 5/3 条"), "the dimensions pane is empty");
-  assert.ok(!dims.includes("最紧"), "the overview is still on screen behind the dimensions");
+  assert.ok(dims.includes("已核验 5/3 条"), "the evidence pane is empty");
+  assert.ok(!dims.includes("最紧"), "the spend is still on screen behind the evidence");
 
   const trace = await pane(view, "轨迹");
   assert.ok(trace.includes("显示 6 / 6 条"), "the trajectory pane is empty");
-  assert.ok(!trace.includes("最紧"), "the overview is still on screen behind the trajectory");
+  // "立项" is in the trajectory too — it is a value in the stage filter.
+  assert.ok(!trace.includes("十二个阶段"), "the task board is still on screen behind the trajectory");
 
-  // The count belongs on the tab, not only inside the pane it describes. A
-  // reader who cannot see that there are five dimensions does not open them.
-  assert.ok(trace.includes("维度") && trace.includes("3"), "the tab strip hides how many dimensions there are");
+  // Per agent, not one total. "76 of 120 calls" is true of a mission that
+  // worked and of one where a researcher burned forty turns re-searching.
+  const cost = await pane(view, "成本");
+  assert.ok(cost.includes("谁花的"), "the spend is a total with nobody attached to it");
 });
 
 test("the kind chips and the search change the list under them", async () => {

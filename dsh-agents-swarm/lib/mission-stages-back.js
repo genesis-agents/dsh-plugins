@@ -34,7 +34,7 @@
 
 import { COUNTING_VERIFY_STATE, MIN_DOCUMENT_CHARS, documentIdFor } from "./mission-store.js";
 import { createSqliteLedger } from "./mission-tools.js";
-import { finalizeToolFor, readUsage } from "./mission-agent.js";
+import { finalizeToolFor, readSettlement } from "./mission-agent.js";
 // `s1` is the one stage that resolves policy and `s7`/`s8` own the one
 // assembler, so both live where they are resolved and this file READS them.
 // Importing rather than re-deriving is the whole point: a second `assemble`
@@ -389,15 +389,23 @@ function tierPolicyOf(crossState, tier, zh) {
  */
 function spendRecorder({ store, missionId, stage, now, logger }) {
   return (usage) => {
-    // `readUsage` REPORTS a usage shape it did not recognise instead of
+    // `readSettlement` REPORTS a shape it did not recognise instead of
     // absorbing it into a silent zero: a mission that cost real money rendering
     // as free is what makes the estimator permanently untunable.
-    const counts = readUsage(usage);
+    const counts = readSettlement(usage);
     if (counts === null) {
       logger?.warn?.(`mission ${missionId}: ${stage.id} received no usage object, so no spend row was written for that call`);
       return;
     }
-    if (counts.source !== "fields") logger?.warn?.(`mission ${missionId}: ${stage.id} usage — ${counts.source}`);
+    if (counts.source !== "settlement record" && counts.source !== "fields") {
+      logger?.warn?.(`mission ${missionId}: ${stage.id} usage — ${counts.source}`);
+    }
+    // A settled call that cost NOTHING is not a discount. Zero survived here
+    // for a whole release precisely because nothing said it was strange, and
+    // the ledger it lands in is the one the token ceiling is read from.
+    if (counts.total === 0) {
+      logger?.warn?.(`mission ${missionId}: ${stage.id} settled a model call priced at zero tokens — the ledger will understate this mission and the token ceiling cannot bind on it`);
+    }
     store.withTx(() => {
       store.insertSpend({
         missionId,
@@ -407,8 +415,8 @@ function spendRecorder({ store, missionId, stage, now, logger }) {
         promptTok: counts.prompt,
         completionTok: counts.completion,
         cacheReadTok: counts.cacheRead,
-        estimatedTok: 0,
-        calls: 1,
+        estimatedTok: counts.estimated,
+        calls: counts.calls,
         at: now(),
       });
     });

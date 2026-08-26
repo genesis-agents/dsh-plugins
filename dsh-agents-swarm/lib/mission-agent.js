@@ -962,6 +962,61 @@ export function readUsage(raw) {
 }
 
 /**
+ * Read ONE SETTLEMENT — the record the seam hands `onUsage` — into the four
+ * counts `mission_spend` stores.
+ *
+ * WHY THIS EXISTS AND WHAT IT COST NOT TO HAVE IT: the seam calls `onUsage`
+ * with a RECORD — `{missionId, stepId, promptTok, completionTok, cacheReadTok,
+ * estimatedTok, calls, usage}` — and two of the three recorders passed that
+ * record straight to `readUsage`, which looks for `promptTokens` /
+ * `inputTokens` and finds neither on a record. Every collection turn was
+ * therefore priced at ZERO. Measured on a real mission: 25 researcher calls and
+ * 6 leader calls recorded 0 tokens between them, so the token ceiling — the
+ * one allowance meant to bound the most expensive stage — could never bind.
+ *
+ * Three shapes are accepted, in this order, because all three exist in the
+ * codebase and picking one and breaking the others is how this was introduced:
+ *   1. the settlement record (`promptTok`, …) — what the seam actually sends
+ *   2. a record carrying the adapter's own object under `usage`
+ *   3. a bare adapter usage object — what `readUsage` was written for
+ *
+ * @param record - the settlement record, or a raw usage object.
+ * @returns `{prompt, completion, cacheRead, estimated, calls, total, source, raw}`, or null.
+ */
+export function readSettlement(record) {
+  if (record === undefined || record === null || typeof record !== "object") return null;
+  const counted = (value) => (Number.isFinite(value) ? Math.max(0, Math.round(value)) : null);
+  const prompt = counted(record.promptTok);
+  const completion = counted(record.completionTok);
+  const cacheRead = counted(record.cacheReadTok);
+  if (prompt !== null || completion !== null || cacheRead !== null) {
+    const total = (prompt ?? 0) + (completion ?? 0) + (cacheRead ?? 0);
+    return {
+      prompt: prompt ?? 0,
+      completion: completion ?? 0,
+      cacheRead: cacheRead ?? 0,
+      estimated: counted(record.estimatedTok) ?? 0,
+      calls: counted(record.calls) ?? 1,
+      total,
+      source: "settlement record",
+      raw: record.usage ?? record,
+    };
+  }
+  const inner = readUsage(record.usage ?? record);
+  if (inner === null) return null;
+  return {
+    prompt: inner.prompt,
+    completion: inner.completion,
+    cacheRead: inner.cacheRead,
+    estimated: counted(record.estimatedTok) ?? 0,
+    calls: counted(record.calls) ?? 1,
+    total: inner.total,
+    source: inner.source,
+    raw: inner.raw,
+  };
+}
+
+/**
  * Resolve the tool catalogue for this call.
  *
  * `recallTools` runs PER CALL rather than once at build, because the web seam
