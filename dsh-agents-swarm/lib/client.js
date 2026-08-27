@@ -10413,6 +10413,15 @@ window.__ModuleLoader__.load({
 								title: dimension?.name ?? "",
 								children: dimension?.name ?? ""
 							}, "name"),
+							// THE STATE, AND IT IS NOT DECORATION. A drawer with no findings
+							// in it says nothing at all unless it says WHY there are none,
+							// and "not collected yet" and "collected nothing" are the same
+							// blank rectangle.
+							detail === null ? null : Chip({
+								tone: missionHue(MISSION_DIMENSION_FACES, detail.state),
+								icon: missionIcon(MISSION_DIMENSION_FACES, detail.state),
+								label: missionFace(MISSION_DIMENSION_FACES, detail.state, zh)
+							}, "state"),
 							verified === null ? null : Chip({
 								tone: !hasFloor ? TONE.neutral : verified >= floor ? TONE.success : TONE.warn,
 								icon: !hasFloor ? undefined : verified >= floor ? "check" : "alert",
@@ -10451,14 +10460,41 @@ window.__ModuleLoader__.load({
 											children: detail.summary
 										}, "account"),
 										findings.length === 0
-											? jsx("div", {
-												style: { font: FONT.small, color: INK.secondary },
-												// An absence WITH A REASON, never an empty box: "we
-												// verified nothing" and "we have not looked yet" render
-												// as the same blank rectangle and want opposite reactions.
-												children: detail?.state === "pending"
-													? (zh ? "还没有采集这个维度。" : "This dimension has not been collected yet.")
-													: (zh ? "这个维度没有留下任何发现。" : "This dimension recorded no findings.")
+											? jsxs("div", {
+												style: { display: "flex", flexDirection: "column", gap: SPACE.xs, font: FONT.small, color: INK.secondary },
+												children: [
+													// AN ABSENCE WITH A REASON, AND THE REASON IS THE STATE.
+													// This was a two-way ternary on `pending`, so a dimension
+													// being collected RIGHT NOW read as "recorded no
+													// findings" — we looked and there was nothing — while
+													// the truth was that s3 had not reached it. Five states,
+													// five answers; a value this table does not know says so
+													// rather than picking the pessimistic one.
+													jsx("div", {
+														children: detail === null
+															? (zh ? "读不到这个维度的状态。" : "This dimension's state could not be read.")
+															: detail.state === "pending"
+																? (zh ? "还没轮到这个维度 —— 采集阶段开始后，发现会一条条落到这里。" : "Collection has not reached this dimension yet; findings land here one at a time once it does.")
+																: detail.state === "collecting"
+																	? (zh ? "正在采集 —— 还没有发现落库。" : "Collecting now; no finding has landed yet.")
+																	: detail.state === "failed"
+																		? (zh ? "这个维度采集失败了，所以一条发现也没有。" : "Collection failed for this dimension, so there is no finding at all.")
+																		: (zh ? "采集跑完了，但没有产出任何发现。" : "Collection finished and produced no finding.")
+													}, "why"),
+													// WHAT IT DID DO, when it did anything. A dimension that
+													// fetched four pages and verified nothing is a different
+													// answer from one that fetched none, and the drawer was
+													// silent about both.
+													(detail?.gradeAxes?.pagesFetched ?? 0) === 0 ? null : jsx("div", {
+														children: zh
+															? `抓到 ${detail.gradeAxes.pagesFetched} 页，来自 ${detail.gradeAxes.uniqueHosts ?? 0} 个独立站点。`
+															: `${detail.gradeAxes.pagesFetched} page(s) fetched across ${detail.gradeAxes.uniqueHosts ?? 0} independent host(s).`
+													}, "read"),
+													(detail?.failureCode ?? null) === null ? null : jsx("div", {
+														style: { color: `rgb(${TONE.warn})` },
+														children: missionFace(MISSION_FAILURE_FACES, detail.failureCode, zh)
+													}, "code")
+												]
 											}, "none")
 											: jsx("div", {
 												style: { display: "flex", flexDirection: "column", gap: SPACE.md },
@@ -15163,7 +15199,7 @@ window.__ModuleLoader__.load({
 			missionReferences, missionMarkerCount, missionCompact,
 			MissionTimeline, MissionReport, MissionEvidenceRow,
 			MissionTrace, MissionTraceRow, MissionTraceDetail,
-			MissionSourceReader, MissionClamp, MissionRework, MissionGoals, MissionSignoffCard,
+			MissionSourceReader, MissionClamp, MissionDimensionDrawer, MissionRework, MissionGoals, MissionSignoffCard,
 			VersionLine, libraryLine
 		};
 		return module.exports;

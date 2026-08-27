@@ -3157,3 +3157,48 @@ test("a dimension row on the task board opens, the way a stage row does", async 
     "the drawer will not close",
   );
 });
+
+test("an empty dimension says WHICH empty it is", async () => {
+  // THE SENTENCE THAT SHIPPED WRONG. The drawer picked its empty text with a
+  // two-way ternary on `pending`, so a dimension being collected RIGHT NOW
+  // read as "collection finished and produced no finding" — we looked and
+  // there was nothing — while s3 had simply not reached it. On a mission at
+  // stage 2 of 12 that is every dimension on the board, and the drawer is the
+  // one screen that could have said so.
+  //
+  // Five states, five answers. A drawer with nothing in it is only useful if
+  // it says why there is nothing.
+  const dimension = (state) => ({
+    dimensionId: "d9", name: "空的维度", rationale: "为什么要看这一面", facet: "technical",
+    state, attempt: 1, grade: null, gradeAxes: { pagesFetched: 4, uniqueHosts: 2 },
+    summary: null, failureCode: null,
+  });
+  for (const [state, want, notWant] of [
+    ["pending", "还没轮到", "采集跑完了"],
+    ["collecting", "正在采集", "采集跑完了"],
+    ["failed", "采集失败", "还没轮到"],
+    ["collected", "采集跑完了", "还没轮到"],
+  ]) {
+    globalThis.fetch = async () => ({
+      ok: true, status: 200,
+      json: async () => ({ success: true, data: { findings: [], dimension: dimension(state), counts: { verified: 0 } } }),
+    });
+    const drawer = await render("MissionDimensionDrawer", {
+      missionId: "m1", dimension: { id: "d9", name: "空的维度" }, runCount: 1, zh: true,
+      onClose: () => {},
+    });
+    const text = textOf(drawer.tree).join(" ");
+    assert.ok(text.includes(want), `a ${state} dimension does not say "${want}"`);
+    assert.ok(!text.includes(notWant), `a ${state} dimension also says "${notWant}", which is a different answer`);
+    // WHAT IT DID DO, when it did anything: four pages fetched and nothing
+    // verified is a different answer from four pages never fetched, and the
+    // drawer used to be silent about both.
+    assert.ok(text.includes("抓到 4 页"), `a ${state} dimension hides what it actually read`);
+    // The state belongs in the header too, or an empty drawer is a title over
+    // a sentence with nothing tying them together.
+    assert.ok(
+      text.includes(state === "pending" ? "待采集" : state === "collecting" ? "采集中" : state === "failed" ? "失败" : "已采集"),
+      `a ${state} dimension does not carry its state as a chip`,
+    );
+  }
+});
