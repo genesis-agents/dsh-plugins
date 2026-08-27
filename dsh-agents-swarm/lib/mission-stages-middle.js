@@ -636,12 +636,89 @@ export function assemble(chapterRows) {
  * read from that column by the writer prompt, the reviewer's full-marks line,
  * the send-back gate and the final accounting. A second computation in `s8` is
  * the defect that produced chapters at exactly 728 words and then exactly 612.
- * @param wordFloor - the tier's whole-report floor.
+ * @param wordFloor - the tier's whole-report SEED, not its operative floor.
  * @param chapterCount - how many chapters the report has.
+ * @param verifiedCount - verified findings the report is written from.
  * @returns the per-chapter floor, in words.
  */
-function deliveryFloor(wordFloor, chapterCount) {
-  return Math.max(MIN_CHAPTER_WORDS, Math.round(intOr0(wordFloor) / Math.max(1, chapterCount)));
+function deliveryFloor(wordFloor, chapterCount, verifiedCount) {
+  // A CHAPTER'S SHARE OF THE SHORTEST REPORT THE GUARD WILL ACCEPT, which is
+  // the only per-chapter number that cannot contradict the whole-report one.
+  //
+  // It used to be the tier seed divided by the chapter count, and that
+  // disagreed with the content guard twice over. The guard scales the floor to
+  // the evidence (`operativeWordFloor`) and then accepts half of it
+  // (`CONTENT_GUARD_WORD_FRACTION`); this divided the unscaled seed at full
+  // rate. A real run measured the gap at 4.8x: 42 verified findings, 7
+  // chapters, 5,680 words. The whole-report check wanted 5,250 and passed it —
+  // and the same guard then refused the same report because all 7 chapters were
+  // under 3,571, a target adding up to a report 4.4x longer than the one it had
+  // just accepted. Both numbers now come from one expression, so a report whose
+  // chapters all hit their target is exactly a report at the total minimum.
+  // `minimum` is character-for-character the guard's own expression, so the
+  // share below is a share of the number the report is actually held to.
+  const operative = operativeWordFloor(wordFloor, verifiedCount).floor;
+  const minimum = Math.floor(operative * CONTENT_GUARD_WORD_FRACTION);
+  // Rounded DOWN: rounding to nearest lets the targets sum past the total they
+  // are a share of — at 9,000 across 7 chapters that is 4,501 demanded against
+  // a 4,500 minimum, and the report that meets every chapter fails as a whole
+  // by one word.
+  return Math.max(MIN_CHAPTER_WORDS, Math.floor(minimum / Math.max(1, chapterCount)));
+}
+
+/**
+ * Words a chapter can honestly carry per verified finding.
+ *
+ * Measured, not chosen: a real mission wrote 1,008 words from 11 verified
+ * findings — 92 words each — and that is what the writer produces when it has
+ * something to say and nothing to pad with. The multiple below is generous
+ * against that, because analysis around a fact is legitimate length, but it is
+ * anchored to a number a run actually produced.
+ */
+const WORDS_PER_VERIFIED_FINDING = 250;
+
+/** The floor below which a report is too short whatever its evidence. */
+const ABSOLUTE_WORD_FLOOR = 400;
+
+/**
+ * The fraction of the word floor below which a report is not short, it is
+ * broken.
+ */
+export const CONTENT_GUARD_WORD_FRACTION = 0.5;
+
+/**
+ * The word floor this report is actually judged against.
+ *
+ * The tier's number is a SEED, not the operative floor. §1 of the design says
+ * so and the evidence floor already works that way — `derivedFloor` is computed
+ * from measured supply after `s3`. The word floor was left as the constant, and
+ * a real mission then failed for being "1,008 words against a standard floor of
+ * 9,000" while holding 11 verified findings. Eleven findings cannot honestly
+ * carry nine thousand words; demanding it asks the writer to pad, and a padded
+ * report that passes is worse than a short one that fails.
+ *
+ * So the operative floor is whichever is SMALLER: what the tier asked for, or
+ * what the evidence can carry. A report that is short because it found little
+ * is reported as thin evidence, which is true and actionable; a report that is
+ * short while sitting on plenty is reported as a writing failure, which is also
+ * true. Collapsing both into the tier constant said the second when it meant
+ * the first.
+ *
+ * It lives HERE, beside the per-chapter floor that divides it, because the two
+ * were computed in different files from different inputs for exactly as long as
+ * they were allowed to be. `contentGuard` imports it from here.
+ *
+ * @param tierFloor - the tier's seed value.
+ * @param verifiedCount - verified findings actually collected.
+ * @returns `{floor, source}` — `source` names which of the two bound it.
+ */
+export function operativeWordFloor(tierFloor, verifiedCount) {
+  const seed = Number(tierFloor) > 0 ? Number(tierFloor) : 0;
+  const supported = Math.max(ABSOLUTE_WORD_FLOOR, Number(verifiedCount ?? 0) * WORDS_PER_VERIFIED_FINDING);
+  if (seed <= 0) return { floor: supported, source: "evidence" };
+  return supported < seed
+    ? { floor: supported, source: "evidence" }
+    : { floor: seed, source: "tier" };
 }
 
 /**
@@ -656,7 +733,7 @@ function deliveryFloor(wordFloor, chapterCount) {
  * computed by the caller, and this planner never exceeds it. Opening more
  * chapters than the evidence can cite makes the reviewer's citation
  * requirement unsatisfiable and chapters then rewrite until wall-time.
- * @param input - `{dimensions, facts, insights, maxChapters, wordFloor, language}`.
+ * @param input - `{dimensions, facts, insights, maxChapters, wordFloor, verifiedCount, language}`.
  * @returns `[{dimensionId, chapterIndex, heading, sectionType, minDelivery, factIds, brief}]`.
  */
 export function planChapters(input) {
@@ -700,7 +777,11 @@ export function planChapters(input) {
     });
   }
 
-  const minDelivery = deliveryFloor(input?.wordFloor, chapters.length);
+  // `facts` is the supply reading for a caller that did not pass one: they are
+  // what survived verification, the same quantity the guard counts. A planner
+  // that fell back to the tier constant here would reopen the gap this
+  // parameter closes.
+  const minDelivery = deliveryFloor(input?.wordFloor, chapters.length, input?.verifiedCount ?? facts.length);
   for (const chapter of chapters) chapter.minDelivery = minDelivery;
   allocateFacts(chapters, facts);
   return chapters;
@@ -1897,7 +1978,14 @@ export function createS7Outline(deps) {
     if (planned.length === 0) {
       // The same planner `quick` uses, rather than a second fallback path: a
       // broken outline becomes a plain report, not no report.
-      chapters = planChapters({ dimensions, facts, insights: crossState?.insights, maxChapters, wordFloor: policy.wordFloor, language: mission.language });
+      chapters = planChapters({
+        dimensions, facts, insights: crossState?.insights, maxChapters,
+        wordFloor: policy.wordFloor,
+        // The same count `contentGuard` reads, from the same query, so the
+        // chapter targets and the whole-report floor cannot drift apart.
+        verifiedCount: store.countVerified(missionId, null, runCount),
+        language: mission.language,
+      });
       notes.push(zh
         ? "写作者没有产出可用的大纲，已改用确定性规划（每个维度一章）。"
         : "the Writer produced no usable outline; the deterministic planner (one chapter per dimension) was used instead.");
@@ -1978,7 +2066,7 @@ export function createS7Outline(deps) {
         : `${reassigned} facts were left unallocated by the outline and were assigned to the nearest chapter by dimension and heading.`);
     }
 
-    const minDelivery = deliveryFloor(policy.wordFloor, chapters.length);
+    const minDelivery = deliveryFloor(policy.wordFloor, chapters.length, store.countVerified(missionId, null, runCount));
     const factAllocation = {};
     const sectionTypes = {};
     const at = now();
@@ -2257,7 +2345,12 @@ export function createS8Write(deps) {
           ? "没有任何维度，无法规划章节。s2-plan 是维度的唯一写入方。"
           : "there are no dimensions, so no chapters can be planned. s2-plan is their only writer.");
       }
-      const planned = planChapters({ dimensions, facts, insights: crossState?.insights, maxChapters, wordFloor: policy.wordFloor, language: mission.language });
+      const planned = planChapters({
+        dimensions, facts, insights: crossState?.insights, maxChapters,
+        wordFloor: policy.wordFloor,
+        verifiedCount: store.countVerified(missionId, null, runCount),
+        language: mission.language,
+      });
       const at = now();
       for (const chapter of planned) {
         store.upsertChapter({

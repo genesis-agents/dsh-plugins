@@ -41,7 +41,11 @@ import { finalizeToolFor, readSettlement } from "./mission-agent.js";
 // would renumber the citations and produce two different `[7]`s, and a second
 // tier table would grade the report against a floor it was not written against.
 import { TIER_POLICY, loadRolePrompt, spanIndexOf } from "./mission-stages-front.js";
-import { assemble } from "./mission-stages-middle.js";
+// `operativeWordFloor` and its fraction come from there because the
+// per-chapter floor divides them; re-exported below so this file stays the
+// address callers already know for the content guard's constants.
+import { assemble, operativeWordFloor, CONTENT_GUARD_WORD_FRACTION } from "./mission-stages-middle.js";
+export { operativeWordFloor, CONTENT_GUARD_WORD_FRACTION };
 import { verifyQuote } from "./insights.js";
 // The ONE block builder (§3.6). `quotableSpans` strips a header only when the
 // first paragraph carries a `## ` line and skips a span only on three literal
@@ -101,12 +105,6 @@ export const VERIFIER_JUDGEMENTS = Object.freeze(["supports", "contradicts", "un
  * is matched as a standalone token below so that "TKinter" does not fire it.
  */
 export const PLACEHOLDER_MARKERS = Object.freeze(["[TODO]", "[insert citation]", "{{", "TK"]);
-
-/**
- * The fraction of the tier's word floor below which a report is not short, it
- * is broken.
- */
-export const CONTENT_GUARD_WORD_FRACTION = 0.5;
 
 /** The share of chapters that may be under-delivered before the report is a hole. */
 export const CONTENT_GUARD_UNDER_DELIVERED_SHARE = 1 / 3;
@@ -1781,51 +1779,6 @@ export function createS11Signoff(deps) {
  * @param options - `{chapters, wordFloor}`.
  * @returns `{ok, violations}` — each violation is `{code, detail}`.
  */
-/**
- * Words a chapter can honestly carry per verified finding.
- *
- * Measured, not chosen: a real mission wrote 1,008 words from 11 verified
- * findings — 92 words each — and that is what the writer produces when it has
- * something to say and nothing to pad with. The multiple below is generous
- * against that, because analysis around a fact is legitimate length, but it is
- * anchored to a number a run actually produced.
- */
-const WORDS_PER_VERIFIED_FINDING = 250;
-
-/** The floor below which a report is too short whatever its evidence. */
-const ABSOLUTE_WORD_FLOOR = 400;
-
-/**
- * The word floor this report is actually judged against.
- *
- * The tier's number is a SEED, not the operative floor. §1 of the design says
- * so and the evidence floor already works that way — `derivedFloor` is computed
- * from measured supply after `s3`. The word floor was left as the constant, and
- * a real mission then failed for being "1,008 words against a standard floor of
- * 9,000" while holding 11 verified findings. Eleven findings cannot honestly
- * carry nine thousand words; demanding it asks the writer to pad, and a padded
- * report that passes is worse than a short one that fails.
- *
- * So the operative floor is whichever is SMALLER: what the tier asked for, or
- * what the evidence can carry. A report that is short because it found little
- * is reported as thin evidence, which is true and actionable; a report that is
- * short while sitting on plenty is reported as a writing failure, which is also
- * true. Collapsing both into the tier constant said the second when it meant
- * the first.
- *
- * @param tierFloor - the tier's seed value.
- * @param verifiedCount - verified findings actually collected.
- * @returns `{floor, source}` — `source` names which of the two bound it.
- */
-export function operativeWordFloor(tierFloor, verifiedCount) {
-  const seed = Number(tierFloor) > 0 ? Number(tierFloor) : 0;
-  const supported = Math.max(ABSOLUTE_WORD_FLOOR, Number(verifiedCount ?? 0) * WORDS_PER_VERIFIED_FINDING);
-  if (seed <= 0) return { floor: supported, source: "evidence" };
-  return supported < seed
-    ? { floor: supported, source: "evidence" }
-    : { floor: seed, source: "tier" };
-}
-
 export function contentGuard(artifact, scorecard, tier, { chapters = [], wordFloor, verifiedCount = null } = {}) {
   let floor = Number(wordFloor);
   if (!Number.isFinite(floor) || floor <= 0) {
