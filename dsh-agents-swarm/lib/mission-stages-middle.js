@@ -1575,7 +1575,11 @@ function checkSynthesize({ handles, factIds, zh }) {
           ? `预测 #${index + 1} 没有写明兑现判据：什么事情发生、到什么时候，就算这条预测成立或不成立。`
           : `forecast #${index + 1} states no resolution criteria: say what observable event, and by when, settles it either way.`);
       }
-      if (!factIds.has(asText(forecast?.factId))) {
+      // RESOLVED, like the themes above it. Wiring the handles into one of this
+      // gate's two fact checks and not the other refused the model for doing
+      // exactly what it was told: run 18 lost four forecasts to
+      // `预测 #1 的 factId「T11」不在事实表里` — T11 was a correct handle.
+      if (handles.resolve(asText(forecast?.factId)) === null) {
         issues.push(zh
           ? `预测 #${index + 1} 的 factId「${asText(forecast?.factId)}」不在事实表里。预测必须挂在一条事实上。`
           : `forecast #${index + 1} names factId "${asText(forecast?.factId)}", which is not in the fact table. A forecast must extend a fact.`);
@@ -1638,7 +1642,7 @@ export function createS6Synthesize(deps) {
     let droppedForecasts = 0;
     for (const forecast of asArray(run.output?.foresight)) {
       const probability = Number(forecast?.probability);
-      const factId = asText(forecast?.factId);
+      const factId = handles.resolve(asText(forecast?.factId)) ?? "";
       const statement = asText(forecast?.statement);
       const criteria = asText(forecast?.resolutionCriteria);
       if (statement === "" || criteria === "" || !factIds.has(factId) || !Number.isFinite(probability) || probability < 0 || probability > 1) {
@@ -1721,7 +1725,7 @@ export function createS6Synthesize(deps) {
         .map((card) => ({
           title: asText(card.title),
           body: asText(card.body),
-          factIds: asArray(card.factIds).map(asText).filter((id) => factIds.has(id)),
+          factIds: [...new Set(asArray(card.factIds).map((id) => handles.resolve(asText(id))).filter((id) => id !== null))],
         }));
       if (cardRun.state === "degraded") notes.push(cardRun.diagnostic ?? "the quick-view run ended degraded.");
     }
@@ -2138,7 +2142,7 @@ export function createS7Outline(deps) {
         if (heading !== "") target.heading = heading;
         const points = asArray(refined?.keyPoints).map(asText).filter((p) => p !== "");
         if (points.length > 0) target.brief = compact(points.map((p) => `- ${p}`).join("\n"), 900);
-        const refinedFacts = asArray(refined?.factIds).map(asText).filter((id) => factIds.has(id));
+        const refinedFacts = [...new Set(asArray(refined?.factIds).map((id) => handles.resolve(asText(id))).filter((id) => id !== null))];
         if (refinedFacts.length > 0) target.factIds = refinedFacts;
       }
     }
@@ -2424,7 +2428,7 @@ export function createS8Write(deps) {
   const { store } = deps;
 
   return async function s8Write(context) {
-    const { missionId, runCount, mission, tier, stage, crossState, budget, signal, now } = context;
+    const { missionId, runCount, mission, tier, stage, crossState, budget, signal, now, emit } = context;
     const zh = isZh(mission);
     const notes = [];
     const policy = tierPolicyOf(crossState, mission);
@@ -2744,6 +2748,21 @@ export function createS8Write(deps) {
         at: now(),
       });
       written.push({ heading: row.heading, opening: (body ?? "").split("\n\n", 1)[0] ?? "" });
+      // The stall clock resets on work that LANDED, not on a call being made.
+      // A writer stuck on one chapter still trips the guard; a writer working
+      // through nine of them no longer looks identical to one that has hung.
+      emit("chapter:written", {
+        stepId: stage.id,
+        runCount,
+        chapterIndex: row.chapterIndex,
+        of: rows.length,
+        heading: row.heading,
+        wordCount,
+        minDelivery: row.minDelivery,
+        underDelivered,
+        decision,
+        attempts,
+      });
     }
 
     // Narrated whenever an incremental rerun was asked for, INCLUDING when it

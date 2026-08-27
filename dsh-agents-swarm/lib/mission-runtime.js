@@ -329,6 +329,17 @@ export const EVENT_TYPES = Object.freeze({
   // throws on an unregistered one — inside putArtifact's own transaction, so the
   // artefact row rolled back with the throw. s12 could not write an artefact at
   // all until this line existed.
+  // ONE PER CHAPTER, and business because it IS progress. `s8` used to emit
+  // `stage:started` and then nothing until `stage:done`, so the whole of the
+  // writing — every chapter, every review round — was one silent block to the
+  // watchdog. `detectNoProgress` kills a stage that spends for 322s without a
+  // business event, and s8 was only ever fast enough to beat that by accident:
+  // a run with 108 verified findings across 8 dimensions crossed the line and
+  // was killed mid-write with everything up to that point intact.
+  //
+  // Widening the window would have blinded the guard instead. A stage doing
+  // real work should say so, and now a hang inside ONE chapter still trips it.
+  "chapter:written": "business",
   "artifact:written": "business",
   "evidence:none": "business",
   "evidence:thin": "business",

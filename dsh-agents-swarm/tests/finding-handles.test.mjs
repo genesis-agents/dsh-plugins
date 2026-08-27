@@ -177,3 +177,39 @@ test("no stage shows a model an id it cannot copy", () => {
     assert.match(source, pattern, `${what} compares strings instead of resolving a handle`);
   }
 });
+
+test("no model-supplied id reaches a membership test without being resolved", () => {
+  // The rule, not another list of sites. Wiring the handles into a gate's
+  // themes check and not its FORECASTS check refused the model for doing
+  // exactly what it was told: run 18 lost four forecasts to
+  // `预测 #1 的 factId「T11」不在事实表里` — T11 was a correct handle. Two more
+  // sites, s6's quickview card and s7's refined outline, dropped every
+  // allocation silently rather than complaining, which is worse.
+  //
+  // Both shapes below take a string the MODEL wrote straight into a lookup
+  // against ids that CODE minted. There is exactly one legitimate place to
+  // compare them, and it is after `resolve`.
+  const source = readFileSync(new URL("../lib/mission-stages-middle.js", import.meta.url), "utf8");
+
+  const SHAPES = [
+    ["a lookup on model text", /(factIds|verifiedIds|verifiedById)\.(has|get)\(\s*asText\(/g],
+    ["a filter over model ids", /\.filter\(\(id\) => (factIds|verifiedIds)\.has\(id\)\)/g],
+  ];
+  for (const [what, pattern] of SHAPES) {
+    const found = [...source.matchAll(pattern)].map(([whole]) => whole);
+    assert.deepEqual(
+      found,
+      [],
+      `${what} still goes straight into a membership test: ${found.join(", ")}. `
+      + "Resolve it first, or the model is refused — or silently dropped — for citing the handle it was shown.",
+    );
+  }
+
+  // And the one comparison that is allowed, kept honest: it reads a variable
+  // that `resolve` produced, on the line above it.
+  assert.match(
+    source,
+    /const factId = handles\.resolve\(asText\(forecast\?\.factId\)\) \?\? "";[\s\S]{0,200}factIds\.has\(factId\)/,
+    "the surviving membership test no longer reads a resolved id",
+  );
+});
