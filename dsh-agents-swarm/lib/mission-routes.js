@@ -1506,6 +1506,9 @@ function pacingOf(settings) {
     missionFetchIntervalMs: settings.missionFetchIntervalMs,
     missionDocumentMaxAgeDays: settings.missionDocumentMaxAgeDays,
     missionTurnCap: settings.missionTurnCap,
+    // Frozen with the rest: a rerun that shrank harder than its predecessor
+    // because somebody cleared this number should be able to say so.
+    missionContextWindow: settings.missionContextWindow,
   };
 }
 

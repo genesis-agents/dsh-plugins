@@ -563,7 +563,7 @@ export function createS1Brief(deps) {
     // G3 — the context window is read, never defaulted. A guessed window makes
     // every shrink decision downstream wrong in the same direction, which is
     // worse than having no plan at all.
-    const plan = readContextPlan(ctx, logger);
+    const plan = readContextPlan(ctx, logger, config.missionContextWindow);
     const degraded = plan.contextWindow === null;
     const degradeNote = degraded
       ? (zh
@@ -657,8 +657,17 @@ function costHistory(store, { depth, excludeId }) {
  * @param logger - optional.
  * @returns `{contextWindow, defaultMaxTokens, source, why}`.
  */
-function readContextPlan(ctx, logger) {
-  const unknown = (why) => ({ contextWindow: null, defaultMaxTokens: null, source: null, why });
+export function readContextPlan(ctx, logger, configured = 0) {
+  const unknown = (why) => {
+    // The setting is the LAST resort, after every accessor has been tried, so a
+    // harness that grows the metadata is preferred to a number somebody typed
+    // months ago. It is still not a guess: a person supplied it.
+    const given = Number(configured);
+    if (Number.isInteger(given) && given > 0) {
+      return { contextWindow: given, defaultMaxTokens: null, source: "setting", why: null };
+    }
+    return { contextWindow: null, defaultMaxTokens: null, source: null, why };
+  };
   if (ctx === null || ctx === undefined) return unknown("no Cordis context was passed to the handler factory");
 
   let route;
@@ -682,9 +691,15 @@ function readContextPlan(ctx, logger) {
     } catch {
       continue;
     }
-    const window = Number(info?.contextWindow ?? info?.contextLength ?? info?.maxInputTokens);
+    // FLAT OR NESTED. §9 of the design names the shape as
+    // `LlmResolvedModelInfo.context.contextWindow`, and this only ever looked at
+    // the top level — so an accessor that answered correctly still read as
+    // "reported no context window", and s1 degraded on every run of every
+    // mission with every later stage then shrinking to its smallest input.
+    const held = info?.context ?? info;
+    const window = Number(held?.contextWindow ?? held?.contextLength ?? held?.maxInputTokens);
     if (Number.isInteger(window) && window > 0) {
-      const output = Number(info?.defaultMaxTokens ?? info?.maxOutputTokens);
+      const output = Number(held?.defaultMaxTokens ?? held?.maxOutputTokens ?? info?.defaultMaxTokens ?? info?.maxOutputTokens);
       return {
         contextWindow: window,
         defaultMaxTokens: Number.isInteger(output) && output > 0 ? output : null,

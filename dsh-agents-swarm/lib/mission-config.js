@@ -64,6 +64,17 @@ export const MISSION_DEFAULTS = Object.freeze({
   missionDocumentMaxAgeDays: 30,
   // The spike's measured MAX_TURNS. Overrides AGENT_TURN_CAP.
   missionTurnCap: 12,
+  // The routed model's context window, in tokens, when the harness cannot be
+  // asked for it. 0 means unset, and unset is honest: `readContextPlan` still
+  // refuses to invent a number and every stage still runs at its smallest
+  // viable input.
+  //
+  // It exists because on a real deployment none of the three accessors answers
+  // — `openai/gpt-5.6-luna` reports no window through route, `llm.modelInfo` or
+  // `llm.models` — so s1 degraded on EVERY run and every stage after it shrank
+  // harder than it needed to. A number an operator supplies is not a guess,
+  // which is the thing the resolver is right to refuse.
+  missionContextWindow: 0,
   missionTrace: false,
   // OFF, and it is the one that must default off. The sweep ALWAYS moves rows
   // out of `running` — that part is not optional and is not a setting. Whether
@@ -136,6 +147,10 @@ export function validateMissionConfig(patch) {
     ["missionMaxConcurrent", 1, 3],
     ["missionDocumentMaxAgeDays", 1, 365],
     ["missionTurnCap", 3, 40],
+    // 0 is unset. Above that, a floor low enough to be useless is more
+    // dangerous than none at all, because it silences the degrade note while
+    // still starving every stage.
+    ["missionContextWindow", 0, 10_000_000],
   ]) {
     if (patch[key] === undefined) continue;
     const value = Number(patch[key]);
