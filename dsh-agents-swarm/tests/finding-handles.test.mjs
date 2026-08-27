@@ -97,3 +97,83 @@ test("the evidence block prints the handle, not the hash", () => {
     "the fact schema still asks for `finding ids`, so the model is told to supply what the block no longer shows it",
   );
 });
+
+/* ── the same defect, in every stage that asks a model to name a row ────── */
+
+test("facts get their own handles, under a different letter", async () => {
+  const { factHandles } = await import("../lib/mission-stages-middle.js");
+  const facts = Array.from({ length: 40 }, (_, i) => ({ factId: `fact-${i.toString(16).padStart(16, "0")}` }));
+  const { labelOf, resolve } = factHandles(facts);
+
+  assert.equal(labelOf.get(facts[0].factId), "T1");
+  assert.equal(labelOf.get(facts[39].factId), "T40");
+  assert.equal(resolve("T7"), facts[6].factId);
+  assert.equal(resolve(facts[6].factId), facts[6].factId, "the real fact id stopped being accepted");
+  // `T`, not `F`. The two stages never share a prompt so `F` would not confuse
+  // the model — it would confuse anyone reading a trace of both, and they are
+  // different tables.
+  assert.equal(resolve("F7"), null, "fact handles answer to the findings' letter");
+});
+
+test("a cited handle becomes the real id in the stored artefact", async () => {
+  // The mapping back. A bug here writes handles into `mission_artifacts`
+  // permanently, where the evidence pane and the scorecard look findings up by
+  // the real id and would find nothing.
+  const { bindCitations, idHandles } = await import("../lib/mission-stages-middle.js");
+  const findings = findingsOf(3);
+  const verifiedById = new Map(findings.map((f) => [f.id, { ...f, sourceUrl: `https://example.test/${f.id}` }]));
+  const cite = idHandles(findings.map((f) => f.id), "F");
+
+  const bound = bindCitations(
+    "A claim [1] and another [2].",
+    [{ findingId: "F2", inlineQuote: "q1" }, { findingId: findings[0].id, inlineQuote: "q2" }],
+    verifiedById,
+    cite.resolve,
+  );
+
+  assert.equal(bound.dropped, 0, `a citation was dropped: ${JSON.stringify(bound)}`);
+  assert.equal(bound.citations[0].findingId, findings[1].id, "the handle was stored instead of the finding it names");
+  assert.equal(bound.citations[1].findingId, findings[0].id, "a citation that used the real id was not preserved");
+});
+
+test("no stage shows a model an id it cannot copy", () => {
+  // The defect was in FOUR stages and killed two runs before the pattern was
+  // visible: s5 lost a whole fact table to it, s7 mis-allocated a chapter, and
+  // s6 and s8 were dropping rows silently. Each render site is one interpolation
+  // and each revert is one line, so they are pinned by name.
+  const source = readFileSync(new URL("../lib/mission-stages-middle.js", import.meta.url), "utf8");
+
+  const RENDERS = [
+    ["the evidence block s5 reconciles from", /const handle = labelOf\?\.get\(finding\.id\) \?\? finding\.id;/],
+    ["the fact line s6 and s7 read", /const handle = labelOf\?\.get\(fact\.factId\) \?\? fact\.factId;/],
+    ["a fact's provenance list", /fact\.findingIds\.map\(\(id\) => findingLabelOf\?\.get\(id\) \?\? id\)/],
+    ["s7's fact table", /handles\.labelOf\.get\(f\.factId\)/],
+    ["s8's citable findings", /cite\.labelOf\.get\(f\.id\)/],
+  ];
+  for (const [what, pattern] of RENDERS) {
+    assert.match(source, pattern, `${what} prints a minted id the model has to transcribe`);
+  }
+
+  // And the negative, because several of these blocks render twice — once full
+  // and once shrunk — and a positive match on one branch stays green while the
+  // other prints hashes. That is not hypothetical: it survived the first
+  // version of this guard.
+  const RAW = [
+    ["a citable finding", /`- \$\{f\.id\} \| \$\{f\.sourceHost\}/],
+    ["a fact table row", /`- \$\{f\.factId\} \|/],
+    ["an evidence line", /`- \$\{finding\.id\} \|/],
+  ];
+  for (const [what, pattern] of RAW) {
+    assert.doesNotMatch(source, pattern, `${what} is still rendered as its raw minted id somewhere`);
+  }
+
+  const GATES = [
+    ["s5's fact provenance", /const bad = fact\.findingIds\.filter\(\(id\) => resolve\(id\) === null\);/],
+    ["s6's themes", /asArray\(theme\?\.factIds\)\.map\(\(id\) => handles\.resolve\(asText\(id\)\)\)/],
+    ["s7's chapter allocation", /const resolved = named\.map\(\(id\) => handles\.resolve\(id\)\);/],
+    ["s8's citations", /citations\.filter\(\(c\) => resolve\(asText\(c\?\.findingId\)\) === null\)/],
+  ];
+  for (const [what, pattern] of GATES) {
+    assert.match(source, pattern, `${what} compares strings instead of resolving a handle`);
+  }
+});

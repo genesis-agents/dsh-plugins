@@ -358,7 +358,19 @@ export function quoteIssue(quote, source, reason) {
  * @param options - `{logger}`; the logger may be null and is always optional-called.
  * @returns `runAgent(request)` — one agent run to completion.
  */
-export function createMissionChat(ctx, { logger = null } = {}) {
+/**
+ * @param ctx - the harness context.
+ * @param options - `{logger, turnCap}`; `turnCap` is the resolved
+ *   `missionTurnCap` setting, which until now reached nothing. It was offered
+ *   in settings, validated to 3..40, echoed back by the settings route, and
+ *   passed to no one — so the recovery hint printed on `max_iterations`, which
+ *   says to raise it, was advice to change a number with no effect.
+ */
+export function createMissionChat(ctx, { logger = null, turnCap = AGENT_TURN_CAP } = {}) {
+  // Validated here rather than trusted: the settings document bounds it to
+  // 3..40, and a caller that hands over a raw config object should not be able
+  // to set a cap of 0 and turn every agent into one that never runs.
+  const defaultTurns = Number.isInteger(turnCap) && turnCap > 0 ? turnCap : AGENT_TURN_CAP;
   /**
    * Run one agent to completion.
    *
@@ -389,7 +401,7 @@ export function createMissionChat(ctx, { logger = null } = {}) {
       // the prompt
       system = "", messages: seedMessages = [], tools: seedTools, toolContext = {}, spec = {}, facet,
       // the call
-      maxTokens, maxTurns = AGENT_TURN_CAP, signal, language = "zh",
+      maxTokens, maxTurns = defaultTurns, signal, language = "zh",
       // the seams the tool door needs
       budget, circuit, cache, spillDir, ledger,
       // the finalize gate

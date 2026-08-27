@@ -34,6 +34,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
+  AGENT_TURN_CAP,
   QUOTE_FAILURES,
   READ_NOTHING_REFUSAL,
   oneHostRefusal,
@@ -113,6 +114,23 @@ export const TIER_POLICY = Object.freeze({
   standard: Object.freeze({ dimensionTarget: 5, findingTarget: findingTargetFor(5, 9_000), wordFloor: 9_000, verifiedRatioFloor: 0.7, citationFloor: 2 }),
   deep: Object.freeze({ dimensionTarget: 8, findingTarget: findingTargetFor(8, 25_000), wordFloor: 25_000, verifiedRatioFloor: 0.7, citationFloor: 2 }),
 });
+
+/**
+ * The turn cap in force, from the setting that has never been read.
+ *
+ * `missionTurnCap` is offered in settings, validated to 3..40, echoed back by
+ * the settings route — and passed to nothing. The agent has always used the
+ * hard-coded `AGENT_TURN_CAP`. That matters beyond the dead knob: the recovery
+ * hint printed when a run dies of `max_iterations` says "raise missionTurnCap",
+ * which was advice to change a number with no effect.
+ *
+ * @param deps - the stage bag, which carries the resolved `config`.
+ * @returns the configured cap, or the constant when it is unset.
+ */
+function turnCapOf(deps) {
+  const configured = Number(deps?.config?.missionTurnCap);
+  return Number.isInteger(configured) && configured > 0 ? configured : AGENT_TURN_CAP;
+}
 
 /** The resource types the library indexes, for the census `s2` plans against. */
 const LIBRARY_TYPES = Object.freeze([
@@ -1598,6 +1616,17 @@ async function collectOneDimension({ deps, context, dimension, policy, zh, recol
       inputBudgetTokens: stage.inputBudgetTokens,
       shrinkLadder: stage.shrinkLadder,
       maxTokens: stage.maxOutputTokens,
+      // TURNS SCALE WITH THE WORK ASKED FOR. The cap is a runaway guard, not a
+      // work allowance, and it stayed at 12 while `findingTarget` went from 6
+      // to 13. Two dimensions of one run and three of the next ended
+      // `max_iterations` holding ZERO findings — a whole dimension lost, and
+      // with it a chapter, because the researcher ran out of turns partway to a
+      // quota nobody had checked it could reach.
+      //
+      // Two turns per finding, which is the ratio that WORKED: at a target of 6
+      // the cap of 12 was never hit. The configured cap stays the floor, so no
+      // agent gets fewer turns than it does today.
+      maxTurns: Math.max(turnCapOf(deps), 2 * (Number(policy?.findingTarget) || 0)),
       signal,
       budget,
       circuit,

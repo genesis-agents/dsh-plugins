@@ -157,7 +157,10 @@ export function createMissionRuntime({ store, missionStore, ctx, config = {}, sp
   const clock = () => new Date().toISOString();
   const registry = createRunRegistry();
   const circuit = createCircuit({ db: missionStore.db });
-  const chat = createMissionChat(ctx, { logger });
+  // The turn cap the settings document actually chose. A per-call `maxTurns`
+  // still wins — s3 scales its researchers with the finding target — but every
+  // other agent now honours the setting instead of a constant.
+  const chat = createMissionChat(ctx, { logger, turnCap: config?.missionTurnCap });
 
   // Bounded, and shared across missions on purpose: it is a same-arguments
   // result cache behind the tool door, and two missions on one topic should not

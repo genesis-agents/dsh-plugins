@@ -1116,15 +1116,15 @@ function checkReconcile({ resolve, dimensionIds, zh }) {
  * @param findings - the verified findings, in the order they are rendered.
  * @returns `{labelOf, resolve}` — id to label, and label-or-id back to id.
  */
-export function findingHandles(findings) {
+export function idHandles(ids, prefix) {
   const labelOf = new Map();
   const byLabel = new Map();
-  findings.forEach((finding, index) => {
-    const label = `F${index + 1}`;
-    labelOf.set(finding.id, label);
-    byLabel.set(label, finding.id);
+  ids.forEach((id, index) => {
+    const label = `${prefix}${index + 1}`;
+    labelOf.set(id, label);
+    byLabel.set(label, id);
   });
-  const real = new Set(findings.map((f) => f.id));
+  const real = new Set(ids);
   return {
     labelOf,
     /** The real id behind a cited handle, or null. Accepts the id itself too. */
@@ -1135,6 +1135,23 @@ export function findingHandles(findings) {
       return byLabel.get(text.toUpperCase()) ?? null;
     },
   };
+}
+
+/** Handles for the findings s5 may cite: `F1`..`Fn`. */
+export function findingHandles(findings) {
+  return idHandles(findings.map((finding) => finding.id), "F");
+}
+
+/**
+ * Handles for the facts s7 allocates: `T1`..`Tn`.
+ *
+ * A different letter from the findings, deliberately. The two stages never
+ * share a prompt, so `F` would not be ambiguous to the model — but it would be
+ * to anyone reading a trace of both, and the ids behind them are different
+ * tables.
+ */
+export function factHandles(facts) {
+  return idHandles(facts.map((fact) => fact.factId), "T");
 }
 
 function renderFindings(findings, rung, zh, labelOf = null) {
@@ -1432,7 +1449,11 @@ const SYNTHESIZE_SCHEMA = Object.freeze({
             properties: {
               title: { type: "string" },
               argument: { type: "string" },
-              factIds: { type: "array", items: { type: "string" }, description: "the facts this theme reasons from" },
+              factIds: {
+                type: "array",
+                items: { type: "string" },
+                description: "the fact handles (T1, T2, …) this theme reasons from, copied from the fact table",
+              },
             },
           },
         },
@@ -1503,9 +1524,14 @@ function renderConflictBlock(conflicts, { detail, zh }) {
 }
 
 /** One fact, as one line. */
-function factLine(fact, withProvenance) {
-  const head = `- ${fact.factId} | ${fact.entity} | ${fact.attribute} | ${compact(fact.value, 400)}`;
-  return withProvenance ? `${head}\n  ← ${fact.findingIds.join(", ")}` : head;
+function factLine(fact, withProvenance, labelOf = null, findingLabelOf = null) {
+  const handle = labelOf?.get(fact.factId) ?? fact.factId;
+  const head = `- ${handle} | ${fact.entity} | ${fact.attribute} | ${compact(fact.value, 400)}`;
+  // The provenance list is the other place a model can copy an id from, and in
+  // s8 it sits directly above the citable-findings block. Showing raw hashes
+  // here and handles there is an invitation to mix them.
+  const from = fact.findingIds.map((id) => findingLabelOf?.get(id) ?? id);
+  return withProvenance ? `${head}\n  ← ${from.join(", ")}` : head;
 }
 
 /**
@@ -1513,7 +1539,7 @@ function factLine(fact, withProvenance) {
  * @param options - `{factIds, zh}`.
  * @returns `(output) => string[]`.
  */
-function checkSynthesize({ factIds, zh }) {
+function checkSynthesize({ handles, factIds, zh }) {
   return function check(output) {
     const issues = [];
     if (asText(output?.insights?.position) === "") {
@@ -1524,7 +1550,7 @@ function checkSynthesize({ factIds, zh }) {
       issues.push(zh ? "你没有给出任何主题。" : "you named no themes.");
     }
     for (const [index, theme] of themes.entries()) {
-      const named = asArray(theme?.factIds).map(asText).filter((id) => factIds.has(id));
+      const named = asArray(theme?.factIds).map((id) => handles.resolve(asText(id))).filter((id) => id !== null);
       if (named.length === 0) {
         // G4: a theme with no fact behind it becomes an interpretive chapter,
         // and an interpretive chapter with nothing to cite is the most trusted
@@ -1579,11 +1605,12 @@ export function createS6Synthesize(deps) {
     }
 
     const factIds = new Set(facts.map((f) => f.factId));
+    const handles = factHandles(facts);
     const bindings = { factCount: facts.length, conflictCount: conflicts.length };
 
     const plan = fitInput(deps, stage, (rung) => [
       block(zh ? "任务" : "Mission", mission.topic),
-      block(zh ? "事实表" : "Fact table", facts.map((f) => factLine(f, rung === 0)).join("\n")),
+      block(zh ? "事实表" : "Fact table", facts.map((f) => factLine(f, rung === 0, handles.labelOf)).join("\n")),
       block(zh ? "冲突" : "Conflicts", renderConflictBlock(conflicts, { detail: rung === 0, zh })),
       block(zh ? "缺口" : "Gaps", asArray(crossState?.gaps).map((g) => `- ${g.dimensionId} [${g.severity}] ${g.aspects.join("; ")}`).join("\n") || "-"),
       block(zh ? "备择假设" : "Alternative hypotheses", asArray(crossState?.hypotheses).map((h) => `- [${h.likelihood}] ${h.statement}`).join("\n") || "-"),
@@ -1595,7 +1622,7 @@ export function createS6Synthesize(deps) {
       input: plan.text,
       bindings: { ...bindings, shrinkRung: plan.rungName },
       schema: SYNTHESIZE_SCHEMA,
-      check: checkSynthesize({ factIds, zh }),
+      check: checkSynthesize({ handles, factIds, zh }),
       description: zh ? "提交你的判断与预测。" : "Submit your position and your forecasts.",
       messageKey: "synthesize",
     });
@@ -1637,7 +1664,7 @@ export function createS6Synthesize(deps) {
     let droppedThemes = 0;
     const themes = [];
     for (const theme of asArray(run.output?.insights?.themes)) {
-      const named = asArray(theme?.factIds).map(asText).filter((id) => factIds.has(id));
+      const named = asArray(theme?.factIds).map((id) => handles.resolve(asText(id))).filter((id) => id !== null);
       if (named.length === 0 || asText(theme?.title) === "") {
         droppedThemes += 1;
         continue;
@@ -1733,7 +1760,11 @@ const MISSION_OUTLINE_SCHEMA = Object.freeze({
           dimensionId: { type: "string" },
           heading: { type: "string" },
           sectionType: { type: "string", enum: [...SECTION_TYPES] },
-          factIds: { type: "array", items: { type: "string" } },
+          factIds: {
+            type: "array",
+            items: { type: "string" },
+            description: "the fact handles (T1, T2, …) allocated to this chapter, copied from the fact table",
+          },
           brief: { type: "string", description: "what this chapter is for, in one or two sentences" },
         },
       },
@@ -1756,7 +1787,11 @@ const DIM_OUTLINE_SCHEMA = Object.freeze({
           chapterIndex: { type: "integer" },
           heading: { type: "string" },
           keyPoints: { type: "array", items: { type: "string" } },
-          factIds: { type: "array", items: { type: "string" } },
+          factIds: {
+            type: "array",
+            items: { type: "string" },
+            description: "the fact handles (T1, T2, …) allocated to this chapter, copied from the fact table",
+          },
         },
       },
     },
@@ -1862,7 +1897,7 @@ function reusableChapters(store, { missionId, rows }) {
  * @param options - `{factIds, dimensionIds, maxChapters, zh}`.
  * @returns `(output) => string[]`.
  */
-function checkMissionOutline({ factIds, dimensionIds, maxChapters, zh }) {
+function checkMissionOutline({ handles, factIds, dimensionIds, maxChapters, zh }) {
   return function check(output) {
     const issues = [];
     const chapters = asArray(output?.chapters);
@@ -1887,8 +1922,12 @@ function checkMissionOutline({ factIds, dimensionIds, maxChapters, zh }) {
           ? `第 ${index + 1} 章的 sectionType 必须是 ${SECTION_TYPES.join(" 或 ")}。`
           : `chapter ${index + 1} must declare a sectionType of ${SECTION_TYPES.join(" or ")}.`);
       }
+      // Resolved first: the model writes handles and everything below — the
+      // partition check, the interpretive check, the unallocated list — has to
+      // reason about the facts they stand for, not about the strings.
       const named = asArray(chapter?.factIds).map(asText);
-      const unknown = named.filter((id) => !factIds.has(id));
+      const resolved = named.map((id) => handles.resolve(id));
+      const unknown = named.filter((id, at) => resolved[at] === null);
       if (unknown.length > 0) {
         issues.push(zh
           ? `第 ${index + 1} 章分配了不存在的事实：${unknown.slice(0, 5).join("、")}。`
@@ -1896,21 +1935,23 @@ function checkMissionOutline({ factIds, dimensionIds, maxChapters, zh }) {
       }
       // G2: the allocation is a PARTITION. A fact in two chapters is written
       // twice; a fact in none is dropped from a report that collected it.
-      for (const id of named) {
+      for (const id of resolved.filter((value) => value !== null)) {
         if (seen.has(id)) {
           issues.push(zh
-            ? `事实 ${id} 被分配给了不止一章。每条事实只能属于一章。`
-            : `fact ${id} is allocated to more than one chapter. Each fact belongs to exactly one.`);
+            ? `事实 ${handles.labelOf.get(id) ?? id} 被分配给了不止一章。每条事实只能属于一章。`
+            : `fact ${handles.labelOf.get(id) ?? id} is allocated to more than one chapter. Each fact belongs to exactly one.`);
         }
         seen.add(id);
       }
-      if (chapter?.sectionType === "interpretive" && named.filter((id) => factIds.has(id)).length === 0) {
+      if (chapter?.sectionType === "interpretive" && resolved.filter((id) => id !== null).length === 0) {
         issues.push(zh
           ? `第 ${index + 1} 章是解读章节，必须至少指名一条它据以推理的事实。`
           : `chapter ${index + 1} is interpretive and must name at least one fact it reasons from.`);
       }
     }
-    const missing = [...factIds].filter((id) => !seen.has(id));
+    // Reported as HANDLES. Naming a fact by an id the model has never been
+    // shown is an instruction it cannot act on.
+    const missing = [...factIds].filter((id) => !seen.has(id)).map((id) => handles.labelOf.get(id) ?? id);
     if (missing.length > 0) {
       issues.push(zh
         ? `${missing.length} 条事实没有被分配到任何章节（例如 ${missing.slice(0, 5).join("、")}）。`
@@ -1969,6 +2010,7 @@ export function createS7Outline(deps) {
     }
 
     const factIds = new Set(facts.map((f) => f.factId));
+    const handles = factHandles(facts);
     const dimensionIds = new Set(dimensions.map((d) => d.dimensionId));
     const policy = tierPolicyOf(crossState, mission);
     const bindings = {
@@ -1988,9 +2030,9 @@ export function createS7Outline(deps) {
       block(zh ? "任务" : "Mission", mission.topic),
       block(zh ? "维度" : "Dimensions", dimensions.map((d) => `- ${d.dimensionId}: ${asText(d.name)} (${d.verified} ${zh ? "条事实" : "facts"})`).join("\n")),
       block(zh ? "事实表" : "Fact table", facts.map((f) => (rung === 0
-        ? factLine(f, false)
-        : `- ${f.factId} | ${compact(`${f.entity} ${f.attribute}`, 120)}`)).join("\n")),
-      block(zh ? "分析主题" : "Analysis themes", asArray(crossState?.insights?.themes).map((t) => `- ${t.title} [${t.factIds.join(", ")}]`).join("\n") || "-"),
+        ? factLine(f, false, handles.labelOf)
+        : `- ${handles.labelOf.get(f.factId)} | ${compact(`${f.entity} ${f.attribute}`, 120)}`)).join("\n")),
+      block(zh ? "分析主题" : "Analysis themes", asArray(crossState?.insights?.themes).map((t) => `- ${t.title} [${t.factIds.map((id) => handles.labelOf.get(id) ?? id).join(", ")}]`).join("\n") || "-"),
       block(zh ? "供给上限" : "Supply ceiling", zh
         ? `唯一已验证来源 ${uniqueVerifiedSources} 个，按每章至少两个来源，最多 ${maxChapters} 章。`
         : `${uniqueVerifiedSources} unique verified hosts allows at most ${maxChapters} chapters at two sources each.`),
@@ -2002,7 +2044,7 @@ export function createS7Outline(deps) {
       input: plan.text,
       bindings: { ...bindings, shrinkRung: plan.rungName },
       schema: MISSION_OUTLINE_SCHEMA,
-      check: checkMissionOutline({ factIds, dimensionIds, maxChapters, zh }),
+      check: checkMissionOutline({ handles, factIds, dimensionIds, maxChapters, zh }),
       description: zh ? "提交报告大纲与事实分配。" : "Submit the report outline and the fact allocation.",
       messageKey: "mission-outline",
     });
@@ -2016,7 +2058,8 @@ export function createS7Outline(deps) {
         chapterIndex: index,
         heading: asText(chapter.heading),
         sectionType: SECTION_TYPES.includes(chapter?.sectionType) ? chapter.sectionType : "evidenced",
-        factIds: asArray(chapter.factIds).map(asText).filter((id) => factIds.has(id)),
+        // Back to real ids, where the chapter rows are written.
+        factIds: [...new Set(asArray(chapter.factIds).map((id) => handles.resolve(asText(id))).filter((id) => id !== null))],
         brief: compact(chapter.brief, 600),
       }));
 
@@ -2070,7 +2113,7 @@ export function createS7Outline(deps) {
           block(zh ? "任务" : "Mission", mission.topic),
           block(zh ? "维度" : "Dimension", `${dimension.dimensionId}: ${asText(dimension.name)} — ${compact(dimension.rationale, 300)}`),
           block(zh ? "本维度的章节" : "Chapters of this dimension", owned.map((c) => `- #${c.chapterIndex} [${c.sectionType}] ${c.heading} — ${compact(c.brief, 200)}`).join("\n")),
-          block(zh ? "可用事实" : "Available facts", dimensionFacts.map((f) => factLine(f, false)).join("\n") || "-"),
+          block(zh ? "可用事实" : "Available facts", dimensionFacts.map((f) => factLine(f, false, handles.labelOf)).join("\n") || "-"),
         ].join("\n"),
         bindings: { ...bindings, chapterCount: owned.length },
         schema: DIM_OUTLINE_SCHEMA,
@@ -2210,7 +2253,10 @@ const CHAPTER_SCHEMA = Object.freeze({
         type: "object",
         required: ["findingId", "inlineQuote"],
         properties: {
-          findingId: { type: "string", description: "the id of the verified finding this citation rests on" },
+          findingId: {
+            type: "string",
+            description: "the handle (F1, F2, …) of the citable finding this citation rests on, copied from the list",
+          },
           inlineQuote: { type: "string", description: "the sentence from that finding you are relying on" },
         },
       },
@@ -2266,12 +2312,15 @@ function sanitizeBody(text, heading) {
  * @param verifiedById - Map of finding id → verified finding row.
  * @returns `{prose, citations, dropped, unresolvedMarkers}`.
  */
-function bindCitations(prose, candidates, verifiedById) {
+export function bindCitations(prose, candidates, verifiedById, resolve = (id) => id) {
   const citations = [];
   const oldToNew = new Map();
   let dropped = 0;
   for (const [index, candidate] of asArray(candidates).entries()) {
-    const finding = verifiedById.get(asText(candidate?.findingId));
+    // THE MAPPING BACK. The writer cites handles; the artefact stores the real
+    // id, because that is what the evidence pane, the scorecard and every later
+    // reader look findings up by.
+    const finding = verifiedById.get(resolve(asText(candidate?.findingId)) ?? "");
     if (finding === undefined) {
       dropped += 1;
       continue;
@@ -2310,7 +2359,7 @@ function clampScore(value) {
  * @param options - `{verifiedById, sectionType, zh}`.
  * @returns `(output) => string[]`.
  */
-function checkChapter({ verifiedById, sectionType, zh }) {
+function checkChapter({ resolve, sectionType, zh }) {
   return function check(output) {
     const issues = [];
     const body = asText(output?.body);
@@ -2319,7 +2368,7 @@ function checkChapter({ verifiedById, sectionType, zh }) {
       return issues;
     }
     const citations = asArray(output?.citations);
-    const unknown = citations.filter((c) => !verifiedById.has(asText(c?.findingId)));
+    const unknown = citations.filter((c) => resolve(asText(c?.findingId)) === null);
     if (unknown.length > 0) {
       // Not an accusation: the finding ids are in the input and a mistyped one
       // is bookkeeping, not invention. The wording matters — telling a model it
@@ -2329,7 +2378,7 @@ function checkChapter({ verifiedById, sectionType, zh }) {
         ? `有 ${unknown.length} 条引用指向了输入里没有的 finding id（${unknown.slice(0, 4).map((c) => asText(c?.findingId)).join("、")}）。只能引用「可引用的发现」一节里列出的 id。`
         : `${unknown.length} citations name finding ids that are not in the input (${unknown.slice(0, 4).map((c) => asText(c?.findingId)).join(", ")}). Only the ids listed under the citable findings may be cited.`);
     }
-    if (sectionType === "evidenced" && citations.filter((c) => verifiedById.has(asText(c?.findingId))).length === 0) {
+    if (sectionType === "evidenced" && citations.filter((c) => resolve(asText(c?.findingId)) !== null).length === 0) {
       issues.push(zh
         ? "这是证据章节，至少需要一条指向已核验发现的引用。"
         : "this is an evidenced chapter and needs at least one citation to a verified finding.");
@@ -2508,6 +2557,9 @@ export function createS8Write(deps) {
         })
         : facts.filter((f) => asArray(planEntry.factIds).includes(f.factId));
       const citable = findings.filter((f) => f.dimensionId === row.dimensionId || chapterFacts.some((fact) => fact.findingIds.includes(f.id)));
+      // Handles over THIS chapter's citable set. The writer only ever sees
+      // these findings, so `F1`..`Fn` is unambiguous inside one chapter call.
+      const cite = idHandles(citable.map((f) => f.id), "F");
       const citationFloor = Math.min(2, new Set(citable.map((f) => f.sourceHost)).size);
       const bindings = {
         // Read from the COLUMN, never recomputed: one number, one variable, and
@@ -2535,10 +2587,10 @@ export function createS8Write(deps) {
         const plan = fitInput(deps, stage, (rung) => [
           block(zh ? "任务" : "Mission", mission.topic),
           block(zh ? "本章" : "This chapter", `${row.heading}\n[${row.sectionType}] ${compact(planEntry?.brief, 900)}`),
-          block(zh ? "本章要用的事实" : "Facts allocated to this chapter", chapterFacts.map((f) => factLine(f, true)).join("\n") || "-"),
+          block(zh ? "本章要用的事实" : "Facts allocated to this chapter", chapterFacts.map((f) => factLine(f, true, null, cite.labelOf)).join("\n") || "-"),
           block(zh ? "可引用的发现" : "Citable findings", citable.map((f) => (rung >= 2
-            ? `- ${f.id} | ${f.sourceHost} | ${asText(f.claim)}`
-            : `- ${f.id} | ${f.sourceHost} | ${asText(f.claim)}\n  "${compact(f.evidence, rung === 1 ? 300 : QUOTE_CHARS)}"`)).join("\n") || "-"),
+            ? `- ${cite.labelOf.get(f.id)} | ${f.sourceHost} | ${asText(f.claim)}`
+            : `- ${cite.labelOf.get(f.id)} | ${f.sourceHost} | ${asText(f.claim)}\n  "${compact(f.evidence, rung === 1 ? 300 : QUOTE_CHARS)}"`)).join("\n") || "-"),
           block(zh ? "已完成的章节" : "Chapters already written", written.map((c) => (rung >= 2
             ? `- ${c.heading}`
             : `- ${c.heading}: ${compact(c.opening, rung === 1 ? 200 : 500)}`)).join("\n") || "-"),
@@ -2551,7 +2603,7 @@ export function createS8Write(deps) {
           input: plan.text,
           bindings: { ...bindings, attempt: attempts, shrinkRung: plan.rungName },
           schema: CHAPTER_SCHEMA,
-          check: checkChapter({ verifiedById, sectionType: row.sectionType, zh }),
+          check: checkChapter({ resolve: cite.resolve, sectionType: row.sectionType, zh }),
           description: zh ? "提交本章正文与引用。" : "Submit the chapter body and its citations.",
           messageKey: `chapter-${row.dimensionId}-${row.chapterIndex}-${attempts}`,
         });
@@ -2562,7 +2614,7 @@ export function createS8Write(deps) {
         tokens += tokensOf(writeRun);
 
         const sanitised = sanitizeBody(writeRun.output?.body, row.heading);
-        const bound = bindCitations(sanitised, writeRun.output?.citations, verifiedById);
+        const bound = bindCitations(sanitised, writeRun.output?.citations, verifiedById, cite.resolve);
         if (bound.dropped > 0) {
           notes.push(zh
             ? `第 ${row.chapterIndex + 1} 章有 ${bound.dropped} 条引用无法对应到已核验的发现，已删除。`
