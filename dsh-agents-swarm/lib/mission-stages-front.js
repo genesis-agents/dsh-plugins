@@ -69,10 +69,49 @@ import { verifyQuote } from "./insights.js";
  * live here because `s1` is the one stage that resolves policy, and they travel
  * by `crossState` so nothing downstream holds a second copy.
  */
+/**
+ * Words a chapter can honestly carry per verified finding.
+ *
+ * Measured, not chosen: a real mission wrote 1,008 words from 11 verified
+ * findings — 92 words each — and that is what the writer produces when it has
+ * something to say and nothing to pad with. The multiple below is generous
+ * against that, because analysis around a fact is legitimate length, but it is
+ * anchored to a number a run actually produced.
+ *
+ * It lives HERE, above the tier table, because the table has to obey it:
+ * `findingTarget` is derived from `wordFloor` through this constant rather
+ * than written by hand. `operativeWordFloor` imports it.
+ */
+export const WORDS_PER_VERIFIED_FINDING = 250;
+
+/**
+ * Verified findings per dimension a tier must ask for to reach its own promise.
+ *
+ * THE THREE NUMBERS IN A TIER ROW WERE WRITTEN BY HAND AND CONTRADICTED EACH
+ * OTHER. `quick` was exactly right — 3 dimensions x 4 findings x 250 words is
+ * 3,000, its word floor to the digit — and the other two rows drifted from the
+ * rule the first one follows. `standard` asked for 25 findings, which carry
+ * 6,250 words, against a floor of 9,000. `deep` asked for 48, which carry
+ * 12,000, against a floor of 25,000: its word floor was unreachable by a factor
+ * of two BY ITS OWN COLLECTION TARGET, and no amount of writing could close it.
+ *
+ * That is the root of a long chain. Every dimension of a deep run stopped at
+ * exactly 6 findings — the target is what the researcher prompt asks for and
+ * what `s3`'s derived floor is clamped to — so a run ended with 43 verified
+ * findings, 5,245 words, and 88% of its token budget unspent, and was then
+ * refused for missing a 25,000-word floor that its own plan had made
+ * impossible.
+ *
+ * Derived, so the row cannot drift again. `quick` comes out at 4, unchanged.
+ */
+export function findingTargetFor(dimensionTarget, wordFloor) {
+  return Math.ceil(wordFloor / WORDS_PER_VERIFIED_FINDING / Math.max(1, dimensionTarget));
+}
+
 export const TIER_POLICY = Object.freeze({
-  quick: Object.freeze({ dimensionTarget: 3, findingTarget: 4, wordFloor: 3_000, verifiedRatioFloor: 0.7, citationFloor: 2 }),
-  standard: Object.freeze({ dimensionTarget: 5, findingTarget: 5, wordFloor: 9_000, verifiedRatioFloor: 0.7, citationFloor: 2 }),
-  deep: Object.freeze({ dimensionTarget: 8, findingTarget: 6, wordFloor: 25_000, verifiedRatioFloor: 0.7, citationFloor: 2 }),
+  quick: Object.freeze({ dimensionTarget: 3, findingTarget: findingTargetFor(3, 3_000), wordFloor: 3_000, verifiedRatioFloor: 0.7, citationFloor: 2 }),
+  standard: Object.freeze({ dimensionTarget: 5, findingTarget: findingTargetFor(5, 9_000), wordFloor: 9_000, verifiedRatioFloor: 0.7, citationFloor: 2 }),
+  deep: Object.freeze({ dimensionTarget: 8, findingTarget: findingTargetFor(8, 25_000), wordFloor: 25_000, verifiedRatioFloor: 0.7, citationFloor: 2 }),
 });
 
 /** The resource types the library indexes, for the census `s2` plans against. */

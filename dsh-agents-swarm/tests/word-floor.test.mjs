@@ -22,6 +22,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { planChapters, operativeWordFloor, CONTENT_GUARD_WORD_FRACTION } from "../lib/mission-stages-middle.js";
+import { TIER_POLICY, WORDS_PER_VERIFIED_FINDING } from "../lib/mission-stages-front.js";
 import { contentGuard } from "../lib/mission-stages-back.js";
 
 /** The shortest report the whole-report check accepts. */
@@ -254,6 +255,58 @@ test("every threshold the sign-off applies comes from the operative floor", () =
       new RegExp(`(^|\\s)${field}\\s*[,:]`, "m").test(brief),
       `the sign-off brief no longer carries ${field}, so the Leader judges the length against one number `
       + "with no way to see that the evidence, not the tier, is what set it",
+    );
+  }
+});
+
+test("a tier can reach its own word floor with the evidence it plans to collect", () => {
+  // THE ROOT OF THE CHAIN. Three numbers in a tier row, written by hand, that
+  // contradicted each other. `quick` was exactly right — 3 dimensions x 4
+  // findings x 250 words is 3,000, its floor to the digit — and the other two
+  // rows drifted from the rule the first one follows.
+  //
+  // `deep` planned 8 x 6 = 48 verified findings, which carry 12,000 words, and
+  // demanded 25,000. Unreachable by a factor of two BY ITS OWN COLLECTION
+  // TARGET, and no amount of writing could close it. Every dimension of a deep
+  // run stopped at exactly 6 — the target is what the researcher prompt asks
+  // for and what s3's derived floor is clamped to — so a run ended with 43
+  // verified findings, 5,245 words and 88% of its token budget unspent, and was
+  // refused for missing a floor its own plan had made impossible.
+  for (const [tier, policy] of Object.entries(TIER_POLICY)) {
+    const planned = policy.dimensionTarget * policy.findingTarget;
+    const carries = planned * WORDS_PER_VERIFIED_FINDING;
+    assert.ok(
+      carries >= policy.wordFloor,
+      `${tier} plans ${policy.dimensionTarget} dimensions x ${policy.findingTarget} findings = ${planned} verified, `
+      + `which carry ${carries} words, against a floor of ${policy.wordFloor}. The tier cannot reach its own promise, `
+      + "so every run of it is refused for a shortfall its own plan guaranteed.",
+    );
+  }
+});
+
+test("the tier that was already right is untouched", () => {
+  // `quick` is the control. The derivation was reverse-engineered from it, so
+  // if it ever comes out at anything but 4 the rule was read out of the wrong
+  // row and the other two tiers are wrong in a new way.
+  assert.equal(
+    TIER_POLICY.quick.findingTarget,
+    4,
+    "the derivation no longer reproduces the one tier row that was internally consistent before it existed",
+  );
+  assert.equal(TIER_POLICY.quick.dimensionTarget * TIER_POLICY.quick.findingTarget * WORDS_PER_VERIFIED_FINDING, 3_000);
+});
+
+test("the collection target is not padded far past what the floor needs", () => {
+  // The other direction. Collecting is the expensive half of a mission, and a
+  // target that overshoots buys tokens nobody asked for. One dimension's worth
+  // of slack is the rounding; more than that is a second invented number.
+  for (const [tier, policy] of Object.entries(TIER_POLICY)) {
+    const carries = policy.dimensionTarget * policy.findingTarget * WORDS_PER_VERIFIED_FINDING;
+    const slack = carries - policy.wordFloor;
+    assert.ok(
+      slack < policy.dimensionTarget * WORDS_PER_VERIFIED_FINDING,
+      `${tier} plans for ${carries} words against a floor of ${policy.wordFloor} — ${slack} words of slack, `
+      + "which is more than the rounding needs and is paid for in collection",
     );
   }
 });

@@ -59,7 +59,10 @@ import { createHash } from "node:crypto";
 import { CHAPTER_DECISIONS, SECTION_TYPES } from "./mission-store.js";
 // ONE prompt loader for all twelve stages. See `systemFor` below for what the
 // second, incompatible copy of this dependency actually cost.
-import { loadRolePrompt } from "./mission-stages-front.js";
+// `WORDS_PER_VERIFIED_FINDING` lives beside the tier table because the table's
+// `findingTarget` is derived through it; the operative floor reads the same
+// constant so a tier's promise and the evidence it plans for cannot disagree.
+import { loadRolePrompt, WORDS_PER_VERIFIED_FINDING } from "./mission-stages-front.js";
 // Reached through ONE accessor, never as `ctx.tokenMeter`: a Cordis context
 // throws on an uninjected service, so the direct read here had the same
 // unreachable-fallback bug that killed the first real run at s2-plan.
@@ -665,17 +668,6 @@ function deliveryFloor(wordFloor, chapterCount, verifiedCount) {
   // by one word.
   return Math.max(MIN_CHAPTER_WORDS, Math.floor(minimum / Math.max(1, chapterCount)));
 }
-
-/**
- * Words a chapter can honestly carry per verified finding.
- *
- * Measured, not chosen: a real mission wrote 1,008 words from 11 verified
- * findings — 92 words each — and that is what the writer produces when it has
- * something to say and nothing to pad with. The multiple below is generous
- * against that, because analysis around a fact is legitimate length, but it is
- * anchored to a number a run actually produced.
- */
-const WORDS_PER_VERIFIED_FINDING = 250;
 
 /** The floor below which a report is too short whatever its evidence. */
 const ABSOLUTE_WORD_FLOOR = 400;
