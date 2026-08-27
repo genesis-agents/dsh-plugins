@@ -1405,7 +1405,22 @@ export function createS11Signoff(deps) {
     const wordCount = report.wordCount;
     const share = verifiedRatioOf(scorecard);
     const ratioFloor = numberOrNull(policy.verifiedRatioFloor);
-    const wordFloor = Number(policy.wordFloor);
+    // THE FLOOR THIS REPORT IS ACTUALLY JUDGED AGAINST, which is the one
+    // `contentGuard` uses. The tier's number is a seed; the operative floor is
+    // whichever is smaller, it or what the evidence can carry.
+    //
+    // This rung used the seed, and it was the third place in the pipeline to do
+    // so after the per-chapter target and the guard itself. A run delivered
+    // 6,697 words from 48 verified findings — a floor of 12,000 — the content
+    // guard passed it, and then this compared it to 25,000, forced the verdict
+    // down a band, and handed the Leader "25,000" as the requirement. The
+    // Leader duly wrote "delivered only 6,697 words, below the 25,000 floor"
+    // and refused to sign. Twelve stages, refused for missing a number nothing
+    // downstream required.
+    const verifiedForFloor = store.countVerified(missionId, null, runCount);
+    const operative = operativeWordFloor(policy.wordFloor, verifiedForFloor);
+    const wordFloor = operative.floor;
+    const tierWordFloor = Number(policy.wordFloor);
 
     const dimensions = store.listDimensions(missionId, { runCount });
     const degradedDimensions = dimensions.filter((d) => d.state === "degraded" || d.state === "failed");
@@ -1454,6 +1469,15 @@ export function createS11Signoff(deps) {
       verifiedShare: share,
       wordCount,
       wordFloor,
+      // Both numbers, named. A Leader told only "25,000" reads a report at a
+      // correct length for its evidence as one four times too short; a Leader
+      // told only "12,000" cannot see that the tier asked for more and the
+      // supply is what bound it. The gap between them IS the finding — thin
+      // evidence — and it belongs in the signature, not hidden behind one
+      // number.
+      tierWordFloor,
+      wordFloorSource: operative.source,
+      verifiedFindings: verifiedForFloor,
       verifiedRatioFloor: ratioFloor,
       dimensions: dimensions.map((d) => ({ dimensionId: d.dimensionId, name: d.name, state: d.state, verified: d.verified, unchecked: d.unchecked, uniqueHosts: d.uniqueHosts })),
       critique: { blindspots, biases: arrayOf(crossState?.biases), forecastVulnerabilities: arrayOf(crossState?.forecastVulnerabilities) },
@@ -1478,6 +1502,8 @@ export function createS11Signoff(deps) {
         verifiedShare: brief.verifiedShare,
         wordCount: brief.wordCount,
         wordFloor: brief.wordFloor,
+        tierWordFloor: brief.tierWordFloor,
+        wordFloorSource: brief.wordFloorSource,
         unclearRequired: brief.unclearRequired,
         ...(level >= 2 ? {} : { preconditions: brief.preconditions }),
         ...extra,
@@ -1606,8 +1632,12 @@ export function createS11Signoff(deps) {
           at: now(),
           label: `word-floor ${wordCount}<${wordFloor}`,
           detail: zh
-            ? `交付 ${wordCount} 词，低于本档下限 ${wordFloor} 词，verdict 由 ${asked.name} 强制下调为 ${forced.name}。`
-            : `${wordCount} words delivered against a floor of ${wordFloor}; verdict forced from ${asked.name} down to ${forced.name}.`,
+            ? `交付 ${wordCount} 词，低于生效下限 ${wordFloor} 词${operative.source === "evidence"
+                ? `（本档要求 ${tierWordFloor} 词，${verifiedForFloor} 条已核验发现只能支撑 ${wordFloor} 词）`
+                : ""}，verdict 由 ${asked.name} 强制下调为 ${forced.name}。`
+            : `${wordCount} words delivered against an operative floor of ${wordFloor}${operative.source === "evidence"
+                ? ` (the ${tier} tier asks for ${tierWordFloor}; ${verifiedForFloor} verified findings support ${wordFloor})`
+                : ""}; verdict forced from ${asked.name} down to ${forced.name}.`,
         });
         const reask = await runDuty(wired, context, {
           role: stage.agent,
@@ -1619,8 +1649,12 @@ export function createS11Signoff(deps) {
             decisionIds: [...decisionIds],
             forcedBand: forced.name,
             forcedReason: zh
-              ? `交付 ${wordCount} 词，低于本档下限 ${wordFloor} 词。你的判定已被下调到 ${forced.name}（${forced.min}–${forced.max} 分）。请在这个区间内重新签署，并说明这个长度差距。`
-              : `${wordCount} words were delivered against a floor of ${wordFloor}. Your verdict has been forced down to ${forced.name} (${forced.min}-${forced.max}). Re-sign inside that band and address the shortfall.`,
+              ? `交付 ${wordCount} 词，低于生效下限 ${wordFloor} 词${operative.source === "evidence"
+                  ? `（本档要求 ${tierWordFloor} 词，但 ${verifiedForFloor} 条已核验发现只能支撑 ${wordFloor} 词；请按生效下限判断，不要按 ${tierWordFloor} 判断）`
+                  : ""}。你的判定已被下调到 ${forced.name}（${forced.min}–${forced.max} 分）。请在这个区间内重新签署，并说明这个长度差距。`
+              : `${wordCount} words were delivered against an operative floor of ${wordFloor}${operative.source === "evidence"
+                  ? ` (the ${tier} tier asks for ${tierWordFloor}; ${verifiedForFloor} verified findings support ${wordFloor}. Judge against the operative floor, not the tier's)`
+                  : ""}. Your verdict has been forced down to ${forced.name} (${forced.min}-${forced.max}). Re-sign inside that band and address the shortfall.`,
           }),
           schema: SIGNOFF_SCHEMA,
           description: signDescription,

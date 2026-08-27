@@ -20,6 +20,7 @@
 // exactly a report at the whole-report minimum.
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
 import { planChapters, operativeWordFloor, CONTENT_GUARD_WORD_FRACTION } from "../lib/mission-stages-middle.js";
 import { contentGuard } from "../lib/mission-stages-back.js";
 
@@ -169,4 +170,90 @@ test("a planner given no supply reading does not fall back to the tier constant"
     withCount[0].minDelivery,
     "a caller that omitted verifiedCount got a different chapter target, so the fallback is not the fact table",
   );
+});
+
+test("the tier number is a seed, and only one function may turn it into a threshold", () => {
+  // THE THIRD PLACE. After the per-chapter target and the guard itself, the s11
+  // sign-off rung compared the delivered length to `policy.wordFloor` and forced
+  // the Leader's verdict down a band when it fell short — and handed the Leader
+  // the same raw number as "the floor". A run delivered 6,697 words from 48
+  // verified findings, an operative floor of 12,000; the content guard passed
+  // it, and the Leader then wrote "delivered only 6,697 words, below the 25,000
+  // floor" and refused to sign. Twelve stages of work, refused for missing a
+  // number nothing downstream required.
+  //
+  // Behavioural tests could not reach it: the rung lives inside a stage closure
+  // with no seam. So the rule is enforced where it can be — every use of the
+  // tier constant must be one of the four that are allowed to exist.
+  const ALLOWED = [
+    // Scaled to the evidence. This is the ONLY way to a threshold.
+    /operativeWordFloor\(\s*policy\??\.?wordFloor/,
+    // The per-chapter share, which scales it the same way internally.
+    /deliveryFloor\(\s*policy\??\.?wordFloor/,
+    // Handed to a callee that takes `verifiedCount` beside it and scales there.
+    /wordFloor:\s*policy\??\.?wordFloor\s*,/,
+    // Kept under a name that says it is the tier's ask, for a message that
+    // shows both numbers.
+    /const\s+tierWordFloor\s*=\s*Number\(policy\??\.?wordFloor\)/,
+    // A presence check, not a comparison against a delivered length.
+    /intOr0\(policy\??\.?wordFloor\)\s*<=\s*0/,
+  ];
+
+  for (const file of ["mission-stages-back.js", "mission-stages-middle.js"]) {
+    const source = readFileSync(new URL(`../lib/${file}`, import.meta.url), "utf8");
+    const lines = source.split(/\r?\n/);
+    lines.forEach((line, index) => {
+      if (!/policy\??\.?\.?wordFloor/.test(line)) return;
+      if (!/policy\??\.wordFloor/.test(line)) return;
+      assert.ok(
+        ALLOWED.some((allowed) => allowed.test(line)),
+        `${file}:${index + 1} uses the tier's word floor directly:\n  ${line.trim()}\n`
+        + "The tier number is a SEED. Pass it through operativeWordFloor so the report is judged "
+        + "against what its evidence can carry, or the pipeline gets a fourth opinion about one length.",
+      );
+    });
+  }
+});
+
+test("every threshold the sign-off applies comes from the operative floor", () => {
+  // Narrower and blunter: inside s11, the comparison that forces a verdict down
+  // must be against the scaled floor. Reverting the one assignment above it is
+  // the exact regression, and it leaves the comparison itself untouched — so
+  // the guard has to look at where `wordFloor` in that scope comes from.
+  const source = readFileSync(new URL("../lib/mission-stages-back.js", import.meta.url), "utf8");
+  const open = source.indexOf("export function createS11Signoff");
+  assert.ok(open > 0, "createS11Signoff moved; this guard is looking at nothing");
+  const body = source.slice(open, source.indexOf("export function createS12Persist"));
+
+  assert.match(
+    body,
+    /const\s+wordFloor\s*=\s*operative\.floor\s*;/,
+    "s11's `wordFloor` is no longer the operative floor, so the rung that forces a verdict down "
+    + "is comparing a delivered length against the tier constant again",
+  );
+  assert.match(
+    body,
+    /operativeWordFloor\(\s*policy\.wordFloor\s*,\s*verifiedForFloor\s*\)/,
+    "s11 stopped scaling the tier floor to the evidence it actually collected",
+  );
+  assert.ok(
+    body.includes("wordCount < wordFloor"),
+    "the word-floor rung is gone; it exists because a Leader rated a 50k-word delivery against a "
+    + "200k-word promise as excellent, and removing it is not the way to stop it misfiring",
+  );
+  // The Leader has to SEE both numbers, or a report at a correct length for its
+  // evidence reads to it as one four times too short. Scoped to the brief
+  // OBJECT: a first draft looked at the whole stage, and the bounded digest's
+  // own `tierWordFloor: brief.tierWordFloor` kept it green with the brief field
+  // deleted — a guard that passes while reading a field that is no longer set.
+  const briefOpen = body.indexOf("const brief = {");
+  assert.ok(briefOpen > 0, "the sign-off brief moved; this guard is looking at nothing");
+  const brief = body.slice(briefOpen, body.indexOf("\n    };", briefOpen));
+  for (const field of ["tierWordFloor", "wordFloorSource", "verifiedFindings"]) {
+    assert.ok(
+      new RegExp(`(^|\\s)${field}\\s*[,:]`, "m").test(brief),
+      `the sign-off brief no longer carries ${field}, so the Leader judges the length against one number `
+      + "with no way to see that the evidence, not the tier, is what set it",
+    );
+  }
 });
