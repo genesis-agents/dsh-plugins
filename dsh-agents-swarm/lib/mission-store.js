@@ -734,6 +734,28 @@ export const MISSION_MIGRATIONS = Object.freeze([
   // that exists. Without this, the first insert after an upgrade fails on a
   // column the schema says is there — on somebody else's machine, at the first
   // tool call of a mission they just started.
+  // THE CEILING WAS A LIFETIME BUDGET. `mission_spend` and `mission_tool_calls`
+  // had no generation column, and `budgetFor` seeds the pool from the whole
+  // mission — deliberately, so a RESUME does not get the ceiling again. For a
+  // FRESH RERUN that is the opposite of what is wanted: run 9 of this mission
+  // opened with nine runs of spend already against a cap chosen for one, so
+  // s3-collect failed all eight dimensions with `budget_exhausted` five
+  // milliseconds in, and reported "0 of 0 dimensions returned no verifiable
+  // evidence" — a sentence about evidence for a failure about money.
+  //
+  // One column serves both: a resume keeps its generation and keeps
+  // accumulating, a fresh rerun bumps it and starts clean. Rows written before
+  // this migration get 0, which belongs to no generation — they are history,
+  // and no run's ceiling counts them.
+  Object.freeze({
+    id: "006-spend-generation",
+    up: (db) => {
+      for (const table of ["mission_spend", "mission_tool_calls"]) {
+        const has = db.prepare(`PRAGMA table_info(${table})`).all().some((column) => column.name === "run_count");
+        if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0`);
+      }
+    },
+  }),
   Object.freeze({
     id: "005-tool-args",
     up: (db) => {
@@ -3847,14 +3869,21 @@ export class MissionStore {
     const role = assertText(record?.role, "role");
     const at = record?.at ?? new Date().toISOString();
     assertIso(at, "at");
+    // THE GENERATION THIS SPEND BELONGS TO. Without it the pool cannot tell a
+    // resume — same run, keep accumulating, which is what its comment promises
+    // — from a fresh rerun, which is a new attempt and must get the ceiling
+    // somebody chose for one attempt. Taken from the row when the caller knows
+    // it and from the mission otherwise, so no writer has to remember.
+    const runCount = Number(record?.runCount ?? this.getMission(missionId)?.runCount ?? 0) || 0;
     const info = this.db.prepare(`
       INSERT INTO mission_spend (
-        mission_id, step_id, role, agent_id,
+        mission_id, step_id, role, agent_id, run_count,
         prompt_tok, completion_tok, cache_read_tok, estimated_tok, calls, at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       missionId, stepId, role,
       typeof record?.agentId === "string" ? record.agentId : null,
+      runCount,
       assertCount(record?.promptTok ?? 0, "promptTok", 0),
       assertCount(record?.completionTok ?? 0, "completionTok", 0),
       assertCount(record?.cacheReadTok ?? 0, "cacheReadTok", 0),
@@ -3875,7 +3904,7 @@ export class MissionStore {
    * @param missionId - the mission.
    * @returns `{ tokens, promptTok, completionTok, cacheReadTok, estimatedTok, calls }`.
    */
-  spendTotals(missionId) {
+  spendTotals(missionId, runCount = null) {
     const row = this.db.prepare(`
       SELECT COALESCE(SUM(prompt_tok), 0) AS prompt_tok,
              COALESCE(SUM(completion_tok), 0) AS completion_tok,
@@ -3883,7 +3912,8 @@ export class MissionStore {
              COALESCE(SUM(estimated_tok), 0) AS estimated_tok,
              COALESCE(SUM(calls), 0) AS calls
       FROM mission_spend WHERE mission_id = ?
-    `).get(String(missionId));
+        AND (? IS NULL OR run_count = ?)
+    `).get(String(missionId), runCount === null ? null : Number(runCount), runCount === null ? null : Number(runCount));
     return {
       tokens: row.prompt_tok + row.completion_tok + row.cache_read_tok,
       promptTok: row.prompt_tok,
@@ -3996,10 +4026,15 @@ export class MissionStore {
     assertIso(at, "at");
     const info = this.db.prepare(`
       INSERT INTO mission_tool_calls (
-        mission_id, step_id, agent_id, tool, pace_key, args_hash, args_text, ok, error_code, cached, latency_ms, at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        mission_id, step_id, agent_id, run_count, tool, pace_key, args_hash, args_text, ok, error_code, cached, latency_ms, at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
-      missionId, stepId, agentId, tool,
+      missionId, stepId, agentId,
+      // The generation, for the same reason the spend row carries one: the
+      // per-tool ceilings (arXiv, web, fetch) are seeded from these counts, so
+      // without it a fresh rerun opens with every allowance already spent.
+      Number(record?.runCount ?? this.getMission(missionId)?.runCount ?? 0) || 0,
+      tool,
       typeof record?.paceKey === "string" && record.paceKey !== "" ? record.paceKey : null,
       argsHash,
       // Truncated: a fetch's arguments are a URL and a search's are a sentence,
@@ -4024,15 +4059,17 @@ export class MissionStore {
    * @param missionId - the mission.
    * @returns `{ [paceKey]: { charged, cached, failed } }`.
    */
-  toolCallTotals(missionId) {
+  toolCallTotals(missionId, runCount = null) {
     const totals = {};
     for (const row of this.db.prepare(`
       SELECT COALESCE(pace_key, tool) AS pace_key,
              SUM(CASE WHEN cached = 0 THEN 1 ELSE 0 END) AS charged,
              SUM(cached) AS cached,
              SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed
-      FROM mission_tool_calls WHERE mission_id = ? GROUP BY COALESCE(pace_key, tool)
-    `).all(String(missionId))) {
+      FROM mission_tool_calls WHERE mission_id = ?
+        AND (? IS NULL OR run_count = ?)
+      GROUP BY COALESCE(pace_key, tool)
+    `).all(String(missionId), runCount === null ? null : Number(runCount), runCount === null ? null : Number(runCount))) {
       totals[row.pace_key] = { charged: row.charged, cached: row.cached, failed: row.failed };
     }
     return totals;
