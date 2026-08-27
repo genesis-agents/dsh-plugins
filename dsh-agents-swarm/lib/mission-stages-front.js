@@ -1532,6 +1532,13 @@ async function collectOneDimension({ deps, context, dimension, policy, zh, recol
 
     const run = await chat({
       agent: stage.agent,
+      // THE ONE PLACE THIS STAGE IS FIVE AGENTS RATHER THAN ONE. s3 fans out
+      // per dimension, so the tool ledger must record WHICH researcher made a
+      // call — the loop rule counts identical calls per agent id, and without
+      // the suffix three dimensions reading the same page are one agent reading
+      // it three times. `mission-view.js` has always DISPLAYED this shape; it
+      // just was not written anywhere.
+      agentId: `${stage.agent}:${dimension.dimensionId}`,
       stepId: stage.id,
       missionId,
       runCount,

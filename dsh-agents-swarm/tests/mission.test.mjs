@@ -2198,3 +2198,55 @@ test("a fresh rerun puts the stage machine back to the start", (t) => {
     assert.equal(row.output ?? null, null, `${row.stepId} kept last generation's output`);
   }
 });
+
+test("a fan-out is many agents to the loop rule, not one", () => {
+  // THIS KILLED THREE RUNS. `detectNoProgress` counts identical calls per
+  // `agentId::tool::argsHash` and aborts at three, deliberately scoped so that
+  // a loop is counted "where a loop can happen, which is inside one agent" —
+  // its own comment says the aggregate across a fan-out cannot tell one agent
+  // repeating itself from five agents agreeing.
+  //
+  // The ledger stored the ROLE. Every one of s3's five researchers wrote
+  // `researcher`, so the aggregate is exactly what the rule got, and three
+  // dimensions fetching the same authoritative page read as one agent fetching
+  // it three times. Measured: a fresh run died forty seconds into s3-collect.
+  //
+  // Both halves asserted here, because the rule is only correct when the
+  // ledger is: five distinct instances do NOT trip, and one instance repeating
+  // itself still does.
+  const entry = { missionId: "m1", runCount: 1, stepId: "s3-collect", lastProgressAtMs: 1000 };
+  const call = (agentId) => ({ agentId, stepId: "s3-collect", tool: "fetch_page", argsHash: "same-page" });
+
+  const fanOut = detectNoProgress({
+    entry,
+    now: new Date(2000),
+    noProgressKillMs: 300_000,
+    spendRose: true,
+    toolShapes: [
+      call("researcher:ai-capabilities"),
+      call("researcher:governance-policy"),
+      call("researcher:talent-capital"),
+      call("researcher:industry-cluster"),
+    ],
+  });
+  assert.equal(
+    fanOut.tripped,
+    false,
+    "four dimensions reading the same authoritative page were killed as a loop — the aggregation this rule exists to avoid",
+  );
+
+  const looping = detectNoProgress({
+    entry,
+    now: new Date(2000),
+    noProgressKillMs: 300_000,
+    spendRose: true,
+    toolShapes: [
+      call("researcher:ai-capabilities"),
+      call("researcher:ai-capabilities"),
+      call("researcher:ai-capabilities"),
+    ],
+  });
+  assert.equal(looping.tripped, true, "one agent fetching the same page three times is no longer detected at all");
+  assert.equal(looping.detail.condition, "loop-shape", "the loop trip lost the field that selects its own sentence");
+  assert.equal(looping.detail.agentId, "researcher:ai-capabilities", "the sentence cannot name which researcher looped");
+});

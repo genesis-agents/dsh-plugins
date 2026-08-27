@@ -370,7 +370,22 @@ export function createMissionChat(ctx, { logger = null } = {}) {
   return async function runAgent(request = {}) {
     const {
       // identity — what is running, for whom, under which duty
-      agent = "", stepId = "", missionId = "", runCount = 0, duty = "",
+      // `agent` is the ROLE and stays the role: prompts are looked up by it and
+      // `mission_spend.role` is grouped by it. `agentId` is the INSTANCE — the
+      // one researcher of five that this call is — and it is what the tool
+      // ledger and the spend row record.
+      //
+      // THE LOOP RULE DEPENDS ON THIS DISTINCTION AND DID NOT HAVE IT.
+      // `detectNoProgress` keys repeats on `agentId::tool::argsHash` and kills a
+      // run at three, precisely so that a loop is counted "where a loop can
+      // happen, which is inside one agent". The ledger stored the role, so five
+      // parallel researchers were ONE agent to that rule and three dimensions
+      // fetching the same authoritative page looked like one agent fetching it
+      // three times. Measured: a fresh run died forty seconds into s3-collect
+      // with "researcher called fetch_page 3 times with identical arguments".
+      // The instance id existed only in mission-view.js, synthesised at READ
+      // time, so nothing on the write path could tell the five apart.
+      agent = "", agentId = null, stepId = "", missionId = "", runCount = 0, duty = "",
       // the prompt
       system = "", messages: seedMessages = [], tools: seedTools, toolContext = {}, spec = {}, facet,
       // the call
@@ -521,8 +536,13 @@ export function createMissionChat(ctx, { logger = null } = {}) {
           try {
             onUsage({
               missionId, stepId, runCount, duty,
+              // ROLE stays the role — `spendByAgent` groups on it and a
+              // per-dimension role would make the roster five rows of
+              // "researcher:…" where it wants one. The INSTANCE goes to
+              // `agentId`, which is the column the loop rule and the trajectory
+              // read.
               role: agent === "" ? "code" : agent,
-              agentId: agent === "" ? null : agent,
+              agentId: agentId ?? (agent === "" ? null : agent),
               promptTok: turn.usage.prompt,
               completionTok: turn.usage.completion,
               cacheReadTok: turn.usage.cacheRead,
@@ -687,7 +707,10 @@ export function createMissionChat(ctx, { logger = null } = {}) {
       if (dispatch.length > 0) {
         const observations = await invokeMany(
           dispatch.map((entry) => ({ tool: entry.call.name, args: entry.args, id: entry.call.id })),
-          { agent, spec, ctx: toolContext, signal, pool: budget, circuit, cache, ledger, spillDir, missionId, stepId },
+          // `agent` here is what lands in `mission_tool_calls.agent_id`, so it
+          // is the INSTANCE. The door's own `agent` option is a label, not a
+          // role lookup — nothing downstream of it re-reads a prompt.
+          { agent: agentId ?? agent, spec, ctx: toolContext, signal, pool: budget, circuit, cache, ledger, spillDir, missionId, stepId },
         );
         for (const [at, entry] of dispatch.entries()) {
           const observation = observations[at] ?? {
