@@ -2153,3 +2153,48 @@ test("a guard's finding survives the abort that carries it", () => {
   assert.ok(!said.includes("0s"), `a loop-shape kill still reports a stall in seconds: ${said}`);
   assert.ok(said.includes("fetch_page"), "the loop sentence does not name the tool that looped");
 });
+
+test("a fresh rerun puts the stage machine back to the start", (t) => {
+  // IT RAN NOTHING. `mission_stages` holds one row per STEP ID, not one per
+  // generation, so a finished mission's twelve rows all said `done`.
+  // `runMission` computes `settled` from those rows and starts at the first
+  // unsettled one — so a fresh rerun found every stage settled, dispatched
+  // nothing, and died in seven seconds on the s12 contract: "every stage
+  // settled but s12-persist wrote no terminal state".
+  //
+  // docs/insight-mission.md §12 predicts this row verbatim: "a rerun killed in
+  // its first second, zero output". It shipped anyway, because the two halves —
+  // the runner's skip rule and the rerun's claim — are each correct alone.
+  const { missions: store } = library(t);
+  const id = mission(store, { depth: "standard" });
+
+
+  // Walk every stage of the tier to `done`, the state a finished mission leaves.
+  const before = store.listStages(id);
+  assert.ok(before.length > 0, "the mission opened with no stage rows at all");
+  const runnable = before.filter((row) => row.status !== "skipped-by-tier");
+  for (const row of runnable) {
+    store.startStage(id, row.stepId, "2026-08-27T09:00:01.000Z");
+    store.finishStage(id, row.stepId, { status: "done", at: "2026-08-27T09:00:02.000Z", output: { ok: true }, tokens: 5 });
+  }
+  assert.equal(
+    store.listStages(id).filter((row) => row.status === "done").length,
+    runnable.length,
+    "the fixture did not actually settle the stages, so this test would pass on an empty mission",
+  );
+
+  const pending = store.resetStagesForFreshRerun(id, "2026-08-27T09:10:00.000Z");
+  assert.equal(pending, runnable.length, "a fresh rerun left stages settled, so runMission will skip them all again");
+
+  const after = store.listStages(id);
+  assert.equal(after.length, before.length, "the reset changed how many stages the mission has");
+  for (const row of after) {
+    if (row.status === "skipped-by-tier") continue;
+    assert.equal(row.status, "pending", `${row.stepId} is ${row.status} after a fresh rerun`);
+    // The recorded work of a settled stage is what made it settled. Left
+    // behind, the read model shows last generation's output under this
+    // generation's pending stage.
+    assert.equal(row.attempts, 0, `${row.stepId} kept its attempt count`);
+    assert.equal(row.output ?? null, null, `${row.stepId} kept last generation's output`);
+  }
+});

@@ -2104,6 +2104,51 @@ export class MissionStore {
   }
 
   /**
+   * Put every stage of a tier back to `pending`, for a FRESH rerun.
+   *
+   * WITHOUT THIS, A FRESH RERUN RAN NOTHING. `mission_stages` holds one row per
+   * step id — not one per generation — so after a run finished, all twelve rows
+   * said `done`. `runMission` computes `settled` from those rows and starts at
+   * the first unsettled one, so a fresh rerun found every stage settled, walked
+   * to the end without dispatching anything, and died in seven seconds as
+   * `stage_contract_violation`: "every stage settled but s12-persist wrote no
+   * terminal state". Measured, not reasoned about — and it is the row
+   * docs/insight-mission.md §12 predicts as "a rerun killed in its first
+   * second, zero output".
+   *
+   * `skipped-by-tier` rows are REWRITTEN rather than preserved, because the
+   * tier can change between generations: `#validateStageRows` asks the pipeline
+   * which stages this depth runs, so a mission reran at a deeper tier gets the
+   * four rows back as `pending` instead of keeping a skip that no longer
+   * applies.
+   *
+   * The recorded WORK is not touched. Findings, chapters and artefacts are
+   * keyed by `run_count` and survive by design (§6.1); what this clears is the
+   * stage machine's own progress, which is per-step and cannot be.
+   * @param missionId - the mission.
+   * @param at - ISO stamp for the reset.
+   * @returns the number of rows now pending.
+   */
+  resetStagesForFreshRerun(missionId, at = new Date().toISOString()) {
+    assertIso(at, "at");
+    const id = String(missionId);
+    return withTx(this.db, () => {
+      this.db.prepare(`
+        UPDATE mission_stages
+        SET status = 'pending', attempts = 0, started_at = NULL, ended_at = NULL,
+            duration_ms = NULL, tokens = 0, output = NULL, degrade_note = NULL
+        WHERE mission_id = ? AND status != 'skipped-by-tier'
+      `).run(id);
+      // The checkpoint describes a generation that is being abandoned. Left
+      // behind, a later resume would rehydrate cross-state from a run whose
+      // stage rows no longer exist in any form — the silent-skip failure the
+      // checkpoint design exists to prevent.
+      this.db.prepare("DELETE FROM mission_checkpoints WHERE mission_id = ?").run(id);
+      return this.db.prepare("SELECT COUNT(*) AS n FROM mission_stages WHERE mission_id = ? AND status = 'pending'").get(id).n;
+    });
+  }
+
+  /**
    * Mark stages this tier does not run.
    *
    * NOT the primary path any more, and it must not become a second one. The

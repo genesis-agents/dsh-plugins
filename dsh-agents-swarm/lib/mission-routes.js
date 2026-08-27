@@ -1200,6 +1200,14 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
       // A rerun DELETES NOTHING. `run_count` keys every findings, chapters and
       // artifacts row, so the previous generation stays readable beside the new
       // one and the artefact version list is the history.
+      // FRESH MEANS THE STAGE MACHINE STARTS OVER, and it did not. The rows
+      // are per step id rather than per generation, so a finished mission's
+      // twelve `done` rows made `runMission` skip every stage and die on the
+      // s12 contract in seven seconds. Reset before the claim: the claim is
+      // what makes the row dispatchable, and a run that becomes dispatchable
+      // while its stages still say `done` is exactly the race this ordering
+      // removes.
+      if (mode === "fresh") missionStore.resetStagesForFreshRerun(id, runtime.clock());
       const claimed = missionStore.claimForRun(id, { bootId: runtime.bootId, pid: process.pid, newGeneration: true, at: runtime.clock() });
       if (!claimed.claimed) {
         sendJson(res, 409, { success: false, error: claimed.reason, data: { id } });
