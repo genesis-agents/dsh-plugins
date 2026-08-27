@@ -2287,3 +2287,52 @@ test("an agent instance is granted its role's tools", () => {
   assert.equal(grantsFor("nobody").tools.length, 0, "an unknown agent was granted tools");
   assert.equal(grantsFor("nobody:with-a-suffix").tools.length, 0, "a suffix let an unknown agent through the ACL");
 });
+
+test("a stage doing paced work is not a wedge", () => {
+  // THE PER-STAGE DEADLINE THIS MODULE SAYS IT CANNOT BE. Its header records
+  // playground shipping and deleting one:
+  //
+  //     a per-stage deadline that repeatedly killed fan-outs which were
+  //     demonstrably alive ... because the deadline could not see sub-events
+  //
+  // It could not see them either. EVERY `business` event is stage-level —
+  // stage:started, stage:done, gate:*, artifact:written — and none fires while
+  // a stage runs, so `lastProgressAtMs` cannot move between stage boundaries.
+  // s3-collect over eight dimensions of paced fetches exceeds five minutes by
+  // construction, and run 7 was killed at 311s with its researchers fetching
+  // pages successfully the whole time.
+  //
+  // `toolShapes` is already scoped to this stage and to calls newer than the
+  // last progress mark, so a non-empty list IS the sub-event the header says
+  // the guard must be able to see.
+  const entry = { missionId: "m1", runCount: 1, stepId: "s3-collect", lastProgressAtMs: 0 };
+  const working = (n) => Array.from({ length: n }, (_, at) => ({
+    agentId: `researcher:d${at}`, stepId: "s3-collect", tool: "fetch_page", argsHash: `page-${at}`,
+  }));
+
+  const alive = detectNoProgress({
+    entry,
+    now: new Date(311_000),
+    noProgressKillMs: 300_000,
+    spendRose: true,
+    toolShapes: working(6),
+  });
+  assert.equal(alive.tripped, false, "a stage fetching six different pages was killed for making no progress");
+  assert.equal(alive.detail.landed, 6, "the verdict does not record what it saw land");
+
+  // Silence WITH spend is still a wedge: the model is being called and nothing
+  // it returns is landing. That is what the branch is for and it must survive.
+  const wedged = detectNoProgress({
+    entry,
+    now: new Date(311_000),
+    noProgressKillMs: 300_000,
+    spendRose: true,
+    toolShapes: [],
+  });
+  assert.equal(wedged.tripped, true, "a genuinely silent stage burning tokens is no longer caught at all");
+  assert.equal(wedged.detail.condition, "silent-but-spending", "the wedge lost the field that selects its sentence");
+  assert.ok(
+    describeFailure("no_progress", wedged.detail).includes("311"),
+    "the sentence no longer reports the stall it measured",
+  );
+});

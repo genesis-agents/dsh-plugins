@@ -1123,11 +1123,32 @@ export function detectNoProgress({ entry, now, noProgressKillMs, spendRose = fal
 
   const stalledMs = msOf(now, "now") - entry.lastProgressAtMs;
 
-  if (stalledMs >= noProgressKillMs && spendRose) {
+  // A TOOL CALL LANDING IS PROGRESS, and without this clause the branch below
+  // is a five-minute PER-STAGE DEADLINE wearing another name — the exact
+  // failure this module's own header says it is structurally immune to:
+  //
+  //     a per-stage deadline that repeatedly killed fan-outs which were
+  //     demonstrably alive ... because the deadline could not see sub-events
+  //
+  // It could not see them either. Every `business` event is stage-level —
+  // stage:started, stage:done, gate:*, artifact:written — and NONE fires while
+  // a stage runs, so `lastProgressAtMs` cannot move between stage boundaries.
+  // s3-collect over eight dimensions of paced fetches takes longer than five
+  // minutes by construction, and it was killed at 311s while its researchers
+  // were fetching pages successfully.
+  //
+  // `toolShapes` is already filtered to calls newer than the last progress mark
+  // AND to this stage, so a non-empty list is work that landed since the clock
+  // started. That is the branch's own stated meaning — "the model is being
+  // called and nothing it returns is landing" — read literally rather than
+  // approximated by the wall clock.
+  const landed = toolShapes.length > 0;
+
+  if (stalledMs >= noProgressKillMs && spendRose && !landed) {
     return {
       tripped: true,
       reason: "no_progress",
-      detail: { stalledMs, noProgressKillMs, stepId: entry.stepId, condition: "silent-but-spending" },
+      detail: { stalledMs, noProgressKillMs, stepId: entry.stepId, condition: "silent-but-spending", landed: 0 },
       why: `no business event for ${stalledMs}ms while spend kept rising — the model is being called and nothing it returns counts as progress`,
     };
   }
@@ -1169,10 +1190,12 @@ export function detectNoProgress({ entry, now, noProgressKillMs, spendRose = fal
   return {
     tripped: false,
     reason: null,
-    detail: { stalledMs, noProgressKillMs, spendRose },
+    detail: { stalledMs, noProgressKillMs, spendRose, landed: toolShapes.length },
     why: stalledMs < noProgressKillMs
       ? `last business event ${stalledMs}ms ago, under the ${noProgressKillMs}ms threshold`
-      : "stage is quiet but spend is flat, which is a paced fetch or a serialised parse, not a wedge",
+      : landed
+        ? `no business event for ${stalledMs}ms, but ${toolShapes.length} tool call(s) landed in this stage since — the stage is working, it just has no stage-level event to emit until it finishes`
+        : "stage is quiet but spend is flat, which is a paced fetch or a serialised parse, not a wedge",
   };
 }
 
