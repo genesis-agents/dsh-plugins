@@ -10272,6 +10272,180 @@ window.__ModuleLoader__.load({
 		];
 
 		/**
+		* One dimension, opened.
+		*
+		* THE CARD THAT WAS DELETED, PUT WHERE IT BELONGS. The 证据 pane drew a
+		* dimension card per dimension and expanded it in place — two presses to
+		* reach a quote, on a pane whose other two layers restated the task board
+		* and the report. The pane went; this is the half of it that had no
+		* second home: a dimension's rationale, how it stands against its floor,
+		* and the findings it actually produced.
+		*
+		* A DRAWER, NOT AN EXPANSION. The references pane is a list whose rows are
+		* already wide; opening one inline pushes every row below it down the
+		* page, so the thing you were comparing against moves while you read.
+		* `MissionDrawer` is the pattern the task board already uses for exactly
+		* this, and reusing it is why the two read the same.
+		* @param props - `{missionId, dimension, runCount, zh, onClose, onOpenSource}`.
+		*/
+		function MissionDimensionDrawer({ missionId, dimension, runCount, zh, onClose, onOpenSource }) {
+			const [held, setHeld] = useState(null);
+			const [error, setError] = useState("");
+			const dimensionId = dimension === null || dimension === undefined ? null : dimension.id;
+
+			useEffect(() => {
+				if (dimensionId === null) return undefined;
+				let alive = true;
+				setHeld(null);
+				setError("");
+				const query = `?dimensionId=${encodeURIComponent(dimensionId)}`
+					+ (runCount === null || runCount === undefined ? "" : `&runCount=${runCount}`);
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/findings${query}`)
+					.then(missionData)
+					.then((data) => { if (alive) setHeld(data); })
+					.catch((cause) => { if (alive) setError(String(cause?.message ?? cause)); });
+				return () => { alive = false; };
+			}, [missionId, dimensionId, runCount]);
+
+			const detail = held?.dimension ?? null;
+			const counts = held?.counts ?? null;
+			const findings = Array.isArray(held?.findings) ? held.findings : [];
+			// A null floor is NEUTRAL and prints no denominator. `?? 0` here would
+			// be `/0` in another spelling: a dimension whose bar s3 has not derived
+			// yet, drawn as having beaten it. The task board's chip makes the same
+			// refusal — this is a second READER of that decision, not a second copy.
+			const floor = detail?.gradeAxes?.floor ?? null;
+			const verified = counts?.verified ?? null;
+			const hasFloor = Number.isFinite(floor) && floor > 0;
+
+			const finding = (row) => jsxs("div", {
+				style: {
+					display: "flex", flexDirection: "column", gap: SPACE.xs,
+					paddingBottom: SPACE.md, borderBottom: `1px solid ${LINE.hair}`
+				},
+				children: [
+					jsxs("div", {
+						style: { display: "flex", alignItems: "flex-start", gap: SPACE.sm },
+						children: [
+							jsx("div", {
+								style: { font: FONT.small, color: INK.primary, flex: 1, minWidth: 0 },
+								children: jsx(MissionClamp, { text: row.claim ?? "", lines: 3, zh })
+							}, "claim"),
+							Chip({
+								tone: missionHue(MISSION_VERIFY_FACES, row.verifyState),
+								icon: missionIcon(MISSION_VERIFY_FACES, row.verifyState),
+								label: missionFace(MISSION_VERIFY_FACES, row.verifyState, zh)
+							}, "state")
+						]
+					}, "top"),
+					(row.quote ?? "") === "" ? null : jsx("div", {
+						// The quote is what a person checks the claim against, so it is
+						// drawn as a quotation rather than as a second grey sentence
+						// under it. The rule takes the verify state's own hue: a quote
+						// that did not verify must not look like one that did.
+						style: {
+							font: FONT.small, color: INK.secondary,
+							padding: `${SPACE.xs} ${SPACE.sm}`,
+							borderLeft: `2px solid rgba(${missionHue(MISSION_VERIFY_FACES, row.verifyState)},${TINT.ring})`,
+							background: SURFACE.subtle
+						},
+						children: jsx(MissionClamp, { text: row.quote, lines: 3, zh })
+					}, "quote"),
+					SourceLink({
+						zh,
+						title: sourceTitleOf(row.sourceTitle, "", row.sourceUrl),
+						url: row.sourceUrl,
+						host: row.sourceHost,
+						verifyState: row.verifyState,
+						meta: typeof onOpenSource !== "function" || (row.documentId ?? null) === null ? [] : [
+							jsx("button", {
+								type: "button",
+								className: "swm-ctl swm-focus",
+								style: { ...controlStyle(), height: CONTROL.xs, padding: `0 ${SPACE.sm}`, font: FONT.micro },
+								onClick: () => { onOpenSource({ documentId: row.documentId, url: row.sourceUrl, title: row.sourceTitle }); },
+								children: zh ? "读这一页" : "Read the page"
+							}, "read")
+						]
+					}, "source")
+				]
+			}, row.id);
+
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column", minHeight: 0, height: "100%" },
+				children: [
+					jsxs("div", {
+						style: {
+							flex: "none", display: "flex", alignItems: "center", gap: SPACE.sm,
+							padding: `${SPACE.sm} ${SPACE.md}`, borderBottom: `1px solid ${LINE.rule}`
+						},
+						children: [
+							jsx("div", {
+								style: {
+									font: FONT.smallStrong, color: INK.primary, flex: 1, minWidth: 0,
+									overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+								},
+								title: dimension?.name ?? "",
+								children: dimension?.name ?? ""
+							}, "name"),
+							verified === null ? null : Chip({
+								tone: !hasFloor ? TONE.neutral : verified >= floor ? TONE.success : TONE.warn,
+								icon: !hasFloor ? undefined : verified >= floor ? "check" : "alert",
+								label: hasFloor
+									? (zh ? `已核验 ${verified}/${floor}` : `${verified}/${floor} verified`)
+									: (zh ? `已核验 ${verified}` : `${verified} verified`)
+							}, "verified"),
+							jsx(IconButton, {
+								label: zh ? "关闭" : "Close",
+								size: CONTROL.xs,
+								onClick: onClose,
+								children: jsx(Icon, { name: "close", size: ICON.sm })
+							}, "close")
+						]
+					}, "head"),
+					jsx("div", {
+						style: { flex: 1, minHeight: 0, overflowY: "auto", padding: SPACE.md },
+						children: error !== ""
+							? jsx("div", {
+								style: { font: FONT.small, color: `rgb(${TONE.warn})` },
+								children: (zh ? "读不到这个维度的发现：" : "Could not read this dimension's findings: ") + error
+							})
+							: held === null
+								? jsx("div", { style: { font: FONT.small, color: INK.secondary }, children: zh ? "读取中…" : "Reading…" })
+								: jsxs("div", {
+									style: { display: "flex", flexDirection: "column", gap: SPACE.md },
+									children: [
+										// WHY THIS DIMENSION EXISTS, which is the one thing about it
+										// that no count can say and that no other screen carries.
+										(detail?.rationale ?? "") === "" ? null : jsx("div", {
+											style: { font: FONT.small, color: INK.secondary },
+											children: jsx(MissionClamp, { text: detail.rationale, lines: 3, zh })
+										}, "why"),
+										(detail?.summary ?? "") === "" ? null : jsx("div", {
+											style: { font: FONT.small, color: INK.primary },
+											children: detail.summary
+										}, "account"),
+										findings.length === 0
+											? jsx("div", {
+												style: { font: FONT.small, color: INK.secondary },
+												// An absence WITH A REASON, never an empty box: "we
+												// verified nothing" and "we have not looked yet" render
+												// as the same blank rectangle and want opposite reactions.
+												children: detail?.state === "pending"
+													? (zh ? "还没有采集这个维度。" : "This dimension has not been collected yet.")
+													: (zh ? "这个维度没有留下任何发现。" : "This dimension recorded no findings.")
+											}, "none")
+											: jsx("div", {
+												style: { display: "flex", flexDirection: "column", gap: SPACE.md },
+												children: findings.map(finding)
+											}, "findings")
+									]
+								}, "body")
+					}, "scroller")
+				]
+			});
+		}
+
+		/**
 		* Everything this mission read, once each.
 		*
 		* The evidence pane answers "what did we learn" and answers it per finding;
@@ -10287,8 +10461,13 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @param mission - `view.mission`, for the empty state's sentence.
 		*/
-		function MissionSources({ missionId, zh, mission }) {
+		function MissionSources({ missionId, zh, mission, onOpenSource }) {
 			const [held, setHeld] = useState(null);
+			// Which dimension the drawer is showing. ABOVE the early return, with
+			// the other hooks: this component returns before the list when nothing
+			// has been read, and a hook below that point runs on some renders and
+			// not others.
+			const [openDim, setOpenDim] = useState(null);
 			const [error, setError] = useState("");
 			const [run, setRun] = useState(null);
 			const [order, setOrder] = useState("cites");
@@ -10394,9 +10573,20 @@ window.__ModuleLoader__.load({
 					jsxs("div", {
 						style: { display: "flex", alignItems: "center", gap: SPACE.sm, margin: `0 0 ${SPACE.xs}` },
 						children: [
-							jsx("span", {
+							// A BUTTON, because it opens something. It reads as the heading
+							// it replaced — no border, no fill — but it takes the focus ring
+							// and the pointer, so the one pressable thing in this row says
+							// so before it is pressed. Only the NAME: a whole-row control
+							// would swallow the source links underneath it.
+							jsx("button", {
+								type: "button",
+								className: "swm-back swm-focus",
+								"aria-label": zh ? `打开维度：${entry.name}` : `Open dimension: ${entry.name}`,
+								onClick: () => { setOpenDim(entry); },
 								style: {
+									...backStyle(),
 									font: FONT.smallStrong, color: INK.primary,
+									height: "auto", padding: 0,
 									minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
 								},
 								title: entry.name,
@@ -10539,8 +10729,22 @@ window.__ModuleLoader__.load({
 				}, source.url);
 			};
 
+			// THE DRAWER IS A SIBLING OF THE LIST, not a child of a group. Two
+			// groups each owning their own open state is two drawers, and the
+			// second renders behind the first.
+			const drawer = jsx(MissionDrawer, {
+				open: openDim !== null,
+				onClose: () => { setOpenDim(null); },
+				children: openDim === null ? null : jsx(MissionDimensionDrawer, {
+					missionId, dimension: openDim, runCount: run, zh,
+					onClose: () => { setOpenDim(null); },
+					onOpenSource
+				})
+			}, "dimDrawer");
+
 			return jsxs("div", {
 				children: [
+					drawer,
 					picker,
 					// THE FOURTH DOT-JOINED SENTENCE, and the last one this batch
 					// reaches. Four figures — findings, sources, hosts, verified —
@@ -11445,7 +11649,13 @@ window.__ModuleLoader__.load({
 											bare: true,
 											title: zh ? "参考文献" : "References",
 											note: "",
-											children: jsx(MissionSources, { missionId, zh, mission })
+											// The same reader every other pane opens a page in. A
+											// finding in the dimension drawer reaches the page it
+											// was verified against without leaving the mission.
+											children: jsx(MissionSources, {
+												missionId, zh, mission,
+												onOpenSource: (entry) => { setSource(entry); }
+											})
 										}, "sources")
 										]),
 

@@ -3081,3 +3081,41 @@ test("the stage drawer says what the step did, and how far into the run it did i
     "the drawer's timings are absolute wall-clock only, so \"how far into the run did this step start\" is subtraction done by hand",
   );
 });
+
+test("a dimension opens into a drawer, and the drawer carries what the pane cannot", async () => {
+  // THE HALF OF THE 证据 PANE THAT HAD NO SECOND HOME. Its counts were the
+  // task board's columns and its quotes were the trajectory's and the
+  // report's, so the pane went — but a dimension's RATIONALE, and the findings
+  // read for it, were nowhere else. They are a press away now instead of a
+  // pane away, and the list they open over does not move while you read.
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, SIGNED.topic);
+  await pane(view, "参考文献");
+  await view.act(() => { button(view.tree, "按维度").props.onClick(); });
+
+  const heads = findAll(view.tree, (node) => node.type === "button"
+    && typeof node.props?.["aria-label"] === "string"
+    && node.props["aria-label"].startsWith("打开维度："));
+  assert.ok(heads.length > 0, "a dimension heading is not a control, so there is no way into its findings");
+
+  const before = textOf(view.tree).join(" ");
+  await view.act(() => { heads[0].props.onClick(); });
+  const opened = textOf(view.tree).join(" ");
+  assert.ok(opened.length > before.length, "pressing a dimension opened nothing");
+  assert.ok(opened.includes("三家实验室同期收敛"), "the drawer does not carry the dimension's findings");
+  assert.ok(opened.includes("we observe the same scaling behaviour"), "the drawer drops the quote, which is what a claim is checked against");
+
+  // A DRAWER, NOT AN EXPANSION: the rows it opened over are still there, in
+  // place. An inline expansion pushes every row below it down the page, so the
+  // thing being compared against moves while it is read.
+  assert.ok(opened.includes("参考文献"), "the pane under the drawer went away, so this is a screen change rather than a drawer");
+
+  const close = findAll(view.tree, (node) => node.props?.["aria-label"] === "关闭");
+  assert.ok(close.length > 0, "the drawer has no way out of itself");
+  await view.act(() => { close[close.length - 1].props.onClick(); });
+  assert.ok(
+    !textOf(view.tree).join(" ").includes("we observe the same scaling behaviour"),
+    "the drawer will not close",
+  );
+});
