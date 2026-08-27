@@ -1574,7 +1574,14 @@ export function readMissionViewInput(db, missionId, opts = {}) {
   const runCount = numberOr(row.run_count, 1);
 
   const stages = query(db, "SELECT * FROM mission_stages WHERE mission_id = ? ORDER BY ordinal", [missionId]);
-  const dimensionRows = query(db, "SELECT * FROM mission_dimensions WHERE mission_id = ?", [missionId]);
+  // THIS RUN'S PLAN. The counts below are already scoped to `runCount` and the
+  // rows they attach to were not, so the pane listed every plan the mission had
+  // ever had with this run's evidence hung off whichever ids happened to match:
+  // 63 dimensions for a plan of 8, four of them the same id twice, because
+  // thirteen leaders had each named the same eight concepts differently.
+  const dimensionRows = query(
+    db, "SELECT * FROM mission_dimensions WHERE mission_id = ? AND run_count = ?", [missionId, runCount],
+  );
 
   // One GROUP BY answers every dimension card and the mission-wide roll-up.
   // §4.4 deleted the stored `verified_count` column precisely because four
@@ -1636,7 +1643,7 @@ export function readMissionViewInput(db, missionId, opts = {}) {
            COALESCE(SUM(cache_read_tok),0) AS cache_read_tok,
            COALESCE(SUM(estimated_tok),0)  AS estimated_tok,
            COALESCE(SUM(calls),0)          AS calls
-      FROM mission_spend WHERE mission_id = ?`, [missionId])[0] ?? {};
+      FROM mission_spend WHERE mission_id = ? AND run_count = ?`, [missionId, runCount])[0] ?? {};
 
   const byStage = query(db, `
     SELECT step_id, role,
@@ -1644,7 +1651,7 @@ export function readMissionViewInput(db, missionId, opts = {}) {
            COALESCE(SUM(completion_tok),0) AS completion_tok,
            COALESCE(SUM(cache_read_tok),0) AS cache_read_tok,
            COALESCE(SUM(calls),0)          AS calls
-      FROM mission_spend WHERE mission_id = ? GROUP BY step_id, role`, [missionId]);
+      FROM mission_spend WHERE mission_id = ? AND run_count = ? GROUP BY step_id, role`, [missionId, runCount]);
 
   const byAgent = query(db, `
     SELECT agent_id, role, MAX(step_id) AS step_id,
@@ -1652,7 +1659,7 @@ export function readMissionViewInput(db, missionId, opts = {}) {
            COALESCE(SUM(completion_tok),0) AS completion_tok,
            COALESCE(SUM(cache_read_tok),0) AS cache_read_tok,
            COALESCE(SUM(calls),0)          AS calls
-      FROM mission_spend WHERE mission_id = ? GROUP BY agent_id, role`, [missionId]);
+      FROM mission_spend WHERE mission_id = ? AND run_count = ? GROUP BY agent_id, role`, [missionId, runCount]);
 
   // `pace_key` is which ceiling a call consumed, so this is the meter for
   // arXiv, web and fetch. Calls with no pace key consume no ceiling and are
@@ -1660,8 +1667,8 @@ export function readMissionViewInput(db, missionId, opts = {}) {
   const paceRows = query(db, `
     SELECT pace_key, COUNT(*) AS n
       FROM mission_tool_calls
-     WHERE mission_id = ? AND pace_key IS NOT NULL
-     GROUP BY pace_key`, [missionId]);
+     WHERE mission_id = ? AND run_count = ? AND pace_key IS NOT NULL
+     GROUP BY pace_key`, [missionId, runCount]);
   const toolsByPaceKey = Object.create(null);
   for (const p of paceRows) toolsByPaceKey[String(p.pace_key)] = numberOr(p.n, 0);
 
@@ -1670,12 +1677,12 @@ export function readMissionViewInput(db, missionId, opts = {}) {
            COUNT(*)                                AS calls,
            SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failures,
            SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END) AS cached
-      FROM mission_tool_calls WHERE mission_id = ? GROUP BY agent_id`, [missionId]);
+      FROM mission_tool_calls WHERE mission_id = ? AND run_count = ? GROUP BY agent_id`, [missionId, runCount]);
 
   const toolTotals = query(db, `
     SELECT SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END)     AS failures,
            SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END) AS cached
-      FROM mission_tool_calls WHERE mission_id = ?`, [missionId])[0] ?? {};
+      FROM mission_tool_calls WHERE mission_id = ? AND run_count = ?`, [missionId, runCount])[0] ?? {};
 
   // Per TOOL, not per pace key. `toolsByPaceKey` above says which CEILING was
   // consumed — three buckets for the whole product — and cannot answer "which
@@ -1694,8 +1701,8 @@ export function readMissionViewInput(db, missionId, opts = {}) {
            SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END)     AS cached,
            SUM(latency_ms)                                 AS latency_ms,
            SUM(CASE WHEN latency_ms > 0 THEN 1 ELSE 0 END) AS latency_measured
-      FROM mission_tool_calls WHERE mission_id = ? GROUP BY tool
-     ORDER BY calls DESC, tool`, [missionId]);
+      FROM mission_tool_calls WHERE mission_id = ? AND run_count = ? GROUP BY tool
+     ORDER BY calls DESC, tool`, [missionId, runCount]);
 
   // DESC + LIMIT is how the tail is taken; the projector sorts it back to
   // reading order. The write side stays unbounded (§4.7).
