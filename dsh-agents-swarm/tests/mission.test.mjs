@@ -81,7 +81,7 @@ import {
   sweepOrphans,
   validateStageDag,
 } from "../lib/mission-runtime.js";
-import { TOOL_CODES, createCircuit } from "../lib/mission-tools.js";
+import { TOOL_CODES, createCircuit, grantsFor } from "../lib/mission-tools.js";
 import { projectMissionView, readMissionViewInput, splitGuardViolations } from "../lib/mission-view.js";
 import { createMissionRoutes } from "../lib/mission-routes.js";
 
@@ -2249,4 +2249,41 @@ test("a fan-out is many agents to the loop rule, not one", () => {
   assert.equal(looping.tripped, true, "one agent fetching the same page three times is no longer detected at all");
   assert.equal(looping.detail.condition, "loop-shape", "the loop trip lost the field that selects its own sentence");
   assert.equal(looping.detail.agentId, "researcher:ai-capabilities", "the sentence cannot name which researcher looped");
+});
+
+test("an agent instance is granted its role's tools", () => {
+  // THE REGRESSION THIS EXISTS FOR. Agent ids became per-dimension —
+  // `researcher:ai-capabilities` — so the loop rule could tell one researcher
+  // of five apart. That same id was then handed to the tool door, and
+  // `grantsFor` keys on the bare role: it missed, fell through to an EMPTY
+  // grant, and every web_search, arxiv_search and library_search in the run
+  // came back `forbidden`. The agents retried the calls they were refused and
+  // the loop rule killed the mission for looping.
+  //
+  // The whole suite was green while that shipped, because nothing asserted
+  // that an instance still gets its role's tools. The failure is silent by
+  // construction: an unknown agent is not an error here, it is an agent with
+  // no tools, which is indistinguishable from one that was never meant to have
+  // any.
+  const role = grantsFor("researcher");
+  assert.ok(role.tools.length > 0, "the researcher grant is empty, so this test cannot detect the thing it is for");
+
+  for (const instance of ["researcher:ai-capabilities", "RESEARCHER:Governance-Policy", "researcher:d3"]) {
+    const granted = grantsFor(instance);
+    assert.deepEqual(
+      [...granted.tools].sort(),
+      [...role.tools].sort(),
+      `${instance} was granted a different tool set from its own role — an instance is its role for the ACL`,
+    );
+    assert.deepEqual(
+      [...granted.capabilities].sort(),
+      [...role.capabilities].sort(),
+      `${instance} lost its role's capabilities`,
+    );
+  }
+
+  // And an agent nobody has heard of still gets nothing, which is the branch
+  // the suffix split must not have widened.
+  assert.equal(grantsFor("nobody").tools.length, 0, "an unknown agent was granted tools");
+  assert.equal(grantsFor("nobody:with-a-suffix").tools.length, 0, "a suffix let an unknown agent through the ACL");
 });

@@ -707,10 +707,12 @@ export function createMissionChat(ctx, { logger = null } = {}) {
       if (dispatch.length > 0) {
         const observations = await invokeMany(
           dispatch.map((entry) => ({ tool: entry.call.name, args: entry.args, id: entry.call.id })),
-          // `agent` here is what lands in `mission_tool_calls.agent_id`, so it
-          // is the INSTANCE. The door's own `agent` option is a label, not a
-          // role lookup — nothing downstream of it re-reads a prompt.
-          { agent: agentId ?? agent, spec, ctx: toolContext, signal, pool: budget, circuit, cache, ledger, spillDir, missionId, stepId },
+          // BOTH, and the distinction is load-bearing: `agent` is the role the
+          // tool ACL grants against, `agentId` is the instance the ledger
+          // records. An earlier version passed the instance as `agent` and the
+          // ACL — which falls back to an EMPTY grant on a miss — forbade every
+          // tool in the run.
+          { agent, agentId, spec, ctx: toolContext, signal, pool: budget, circuit, cache, ledger, spillDir, missionId, stepId },
         );
         for (const [at, entry] of dispatch.entries()) {
           const observation = observations[at] ?? {

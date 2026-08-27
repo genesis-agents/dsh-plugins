@@ -449,7 +449,14 @@ export const AGENT_GRANTS = Object.freeze({
  *   everything.
  */
 export function grantsFor(agent) {
-  return AGENT_GRANTS[String(agent ?? "").toLowerCase()]
+  // AN INSTANCE IS ITS ROLE FOR THIS PURPOSE. Agent ids are minted per
+  // dimension — `researcher:ai-capabilities` — and a grant table keyed on the
+  // bare role misses every one of them. The miss is SILENT: the fallback below
+  // is an empty grant, so a fan-out whose ids carry a suffix loses every tool
+  // and reads as an agent that was never allowed any, rather than as a lookup
+  // that failed. That is what happened; this split is why it cannot again.
+  const key = String(agent ?? "").toLowerCase().split(":")[0];
+  return AGENT_GRANTS[key]
     ?? Object.freeze({ tools: Object.freeze([]), capabilities: Object.freeze([]) });
 }
 
@@ -1526,13 +1533,23 @@ export async function invokeTool(action, options = {}) {
   const startedAt = Date.now();
   const name = String(action?.tool ?? action?.name ?? "");
   const {
-    agent = "", spec = {}, ctx = {}, signal, pool, circuit, cache,
+    // TWO NAMES FOR ONE CALLER, AND THEY ARE NOT INTERCHANGEABLE. `agent` is
+    // the ROLE and is what `grantsFor` looks up; `agentId` is the INSTANCE —
+    // `researcher:ai-capabilities` — and is what the ledger records so the loop
+    // rule can tell one researcher of five from the fan-out as a whole.
+    //
+    // Passing the instance as `agent` was tried and it took the tools away:
+    // `grantsFor` misses and returns an EMPTY grant, so every call came back
+    // `forbidden` and the agents retried into a loop kill. Measured — a whole
+    // run of s3-collect where every web_search, arxiv_search and library_search
+    // was refused.
+    agent = "", agentId = null, spec = {}, ctx = {}, signal, pool, circuit, cache,
     ledger, spillDir, missionId = "", stepId = "", unmetered = false,
   } = options;
 
   const record = (result, extra = {}) => {
     const row = {
-      missionId, stepId, agent, tool: name,
+      missionId, stepId, agent: agentId ?? agent, tool: name,
       paceKey: getTool(name)?.paceKey ?? null,
       argsHash: extra.argsHash ?? "",
       argsText: argsTextOf(action?.args ?? action?.arguments),
