@@ -519,9 +519,10 @@ export function createMissionChat(ctx, { logger = null } = {}) {
       //    exposes a method, not fields, because the settings document can
       //    replace the selection between two calls of one mission.
       const route = ctx.agentDefaultModel.currentSelection();
-      const turn = await streamTurn({
-        ctx, route, system: fitted.system, messages, tools: wire, maxTokens, signal, budget, note,
-      });
+      const turn = await streamTurnResiliently(
+        { ctx, route, system: fitted.system, messages, tools: wire, maxTokens, signal, budget, note },
+        { note, signal },
+      );
 
       // 6. usage. ONE chunk, at the end. The live pool is an ESTIMATE and
       //    SUM(mission_spend) is exact; both are recorded, because they are two
@@ -868,6 +869,103 @@ export async function runAgentTurn(options = {}) {
 }
 
 /* ── internals ──────────────────────────────────────────────────────────── */
+
+/** How many times a turn is re-issued after a TRANSPORT failure. */
+const TRANSPORT_RETRIES = 3;
+
+/**
+ * Waits before each re-issue, in ms, when the provider names no interval.
+ *
+ * `ctx.transportBackoffMs` overrides it. That is the seam the tests drive the
+ * loop through — a test that had to sit out five real seconds to prove one
+ * retry would be deleted by the third person who ran the suite — and it is
+ * equally the knob for a deployment whose link to the provider is worse than
+ * this default assumes.
+ */
+const TRANSPORT_BACKOFF_MS = Object.freeze([1_000, 4_000, 10_000]);
+
+/** The wait ladder in force, which `ctx` may replace. */
+function backoffLadder(ctx) {
+  const given = ctx?.transportBackoffMs;
+  return Array.isArray(given) && given.length > 0 && given.every((ms) => Number.isFinite(Number(ms)))
+    ? given.map(Number)
+    : TRANSPORT_BACKOFF_MS;
+}
+
+/** HTTP statuses that mean "the request never landed"; anything else is an answer. */
+const TRANSPORT_STATUSES = Object.freeze([408, 429, 500, 502, 503, 504]);
+
+/**
+ * Whether this failure is the provider being unreachable rather than refusing.
+ *
+ * `status === null` is the important case and the one that cost a mission: a
+ * connection error never reached the provider, so there is no status to read
+ * and nothing about the request was rejected. A 400 or a content filter is an
+ * ANSWER and re-issuing it just spends the same money for the same reply.
+ */
+function isTransportFailure(failure) {
+  if (failure === null || failure === undefined) return false;
+  if (failure.kind !== "error") return false;
+  if (failure.status === null || failure.status === undefined) return true;
+  return TRANSPORT_STATUSES.includes(Number(failure.status));
+}
+
+/** A sleep that gives up the moment the mission is cancelled. */
+function pause(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted === true) { resolve(); return; }
+    const timer = setTimeout(() => { signal?.removeEventListener?.("abort", onAbort); resolve(); }, ms);
+    function onAbort() { clearTimeout(timer); resolve(); }
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * One turn, re-issued while the provider is merely unreachable.
+ *
+ * A twelve-stage mission runs for hours across hundreds of model calls, and a
+ * single "Connection error." on one of them used to end the whole thing:
+ * `failed_model` propagated straight out of the loop, the run was marked
+ * `model_error`, and three hours of collected evidence waited for somebody to
+ * press rerun. That is the provider having a bad second, not the mission being
+ * wrong, and the diagnostic even said so — "re-run when the provider recovers".
+ *
+ * Only TRANSPORT failures are re-issued, and only a bounded number of times.
+ * The estimate from each abandoned attempt is carried into the result rather
+ * than dropped: those characters were streamed and the pool paid for them.
+ *
+ * @param args - what `streamTurn` takes.
+ * @param options - `{note, signal}`; `note` puts each re-issue in the trace.
+ * @returns the last turn, with `estimated` summed over every attempt.
+ */
+async function streamTurnResiliently(args, { note, signal }) {
+  let spentOnAbandoned = 0;
+  for (let attempt = 0; ; attempt += 1) {
+    const turn = await streamTurn(args);
+    turn.estimated += spentOnAbandoned;
+    const retryable = isTransportFailure(turn.failure)
+      && attempt < TRANSPORT_RETRIES
+      && signal?.aborted !== true;
+    if (!retryable) return turn;
+
+    spentOnAbandoned = turn.estimated;
+    const ladder = backoffLadder(args?.ctx);
+    const waitMs = Number(turn.failure.retryAfterMs) > 0
+      ? Number(turn.failure.retryAfterMs)
+      : ladder[Math.min(attempt, ladder.length - 1)];
+    // In the trace, because a mission that quietly took four times as long as
+    // its neighbour should say why.
+    note("model:transport-retry", {
+      attempt: attempt + 1,
+      of: TRANSPORT_RETRIES,
+      waitMs,
+      status: turn.failure.status ?? null,
+      message: turn.failure.message,
+    });
+    await pause(waitMs, signal);
+    if (signal?.aborted === true) return turn;
+  }
+}
 
 /**
  * Consume one model turn, accumulating deltas by `chunk.id`.
