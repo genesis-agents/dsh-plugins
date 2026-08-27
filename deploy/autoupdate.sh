@@ -47,6 +47,51 @@ REMOTE="$(git rev-parse origin/main)"
 
 [ "$BEFORE" = "$REMOTE" ] && exit 0
 
+# ── in-flight work ──────────────────────────────────────────────────────────
+#
+# A RESTART KILLS A RUNNING MISSION, and this script had no idea missions
+# existed. Measured: a push landed while s3-collect was fetching, the box
+# kickstarted three minutes later, and the mission died `runtime_crashed` —
+# "the process died during s3-collect" — an hour of paced fetching thrown away
+# by a deployment nobody had asked to happen now.
+#
+# The check goes HERE, before the fast-forward, so a deferred tick leaves the
+# checkout exactly as it was. Deferring after the pull would leave the tree on
+# new code while the old process is still serving from memory, and the profile
+# symlinks point at that tree — so the next lazy import would get half of an
+# update nobody restarted into.
+#
+# BOUNDED, because a mission that hangs must not freeze deployment for ever.
+# Past the bound it restarts anyway and says so: every mission arms resume on
+# a crash, so the cost of proceeding is a resume, and the cost of never
+# updating is a box that drifts until somebody notices.
+DEFER_MARK="${DEFER_MARK:-$HOME/.dsh-autoupdate-deferred-since}"
+DEFER_MAX="${DEFER_MAX:-7200}"
+
+running_missions() {
+  curl -fsS -m 5 "http://127.0.0.1:${DSH_PORT:-3080}/swarm-api/missions/list?status=running" 2>/dev/null \
+    | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);process.stdout.write(String((j.data&&j.data.missions||[]).length))}catch(e){process.stdout.write("")}})' 2>/dev/null
+}
+
+LIVE="$(running_missions)"
+# An EMPTY answer is not zero. A box that is down, or a plugin that did not
+# mount, cannot be asked what it is running — and treating "cannot ask" as
+# "nothing is running" is how this check would pass at exactly the moment it
+# is least able to. No answer means proceed, because a box that is not
+# answering has no mission to protect and probably needs the update.
+if [ -n "$LIVE" ] && [ "$LIVE" -gt 0 ] 2>/dev/null; then
+  SINCE="$(cat "$DEFER_MARK" 2>/dev/null || true)"
+  NOW="$(date +%s)"
+  case "$SINCE" in ''|*[!0-9]*) SINCE="$NOW"; printf '%s' "$NOW" > "$DEFER_MARK" ;; esac
+  WAITED=$(( NOW - SINCE ))
+  if [ "$WAITED" -lt "$DEFER_MAX" ]; then
+    say "deferring $(git rev-parse --short "$REMOTE"): $LIVE mission(s) running (${WAITED}s so far, giving up at ${DEFER_MAX}s)"
+    exit 0
+  fi
+  say "WARNING proceeding over $LIVE running mission(s) after ${WAITED}s; resume is armed for each"
+fi
+rm -f "$DEFER_MARK"
+
 # Local edits mean somebody is working here, and pulling over that would
 # discard their work or stop on a conflict. Neither is this script's decision.
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
