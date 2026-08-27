@@ -401,7 +401,7 @@ export function createMissionChat(ctx, { logger = null, turnCap = AGENT_TURN_CAP
       // the prompt
       system = "", messages: seedMessages = [], tools: seedTools, toolContext = {}, spec = {}, facet,
       // the call
-      maxTokens, maxTurns = defaultTurns, signal, language = "zh",
+      maxTokens, maxTurns = defaultTurns, transportBackoffMs, signal, language = "zh",
       // the seams the tool door needs
       budget, circuit, cache, spillDir, ledger,
       // the finalize gate
@@ -533,7 +533,7 @@ export function createMissionChat(ctx, { logger = null, turnCap = AGENT_TURN_CAP
       const route = ctx.agentDefaultModel.currentSelection();
       const turn = await streamTurnResiliently(
         { ctx, route, system: fitted.system, messages, tools: wire, maxTokens, signal, budget, note },
-        { note, signal },
+        { note, signal, backoff: transportBackoffMs },
       );
 
       // 6. usage. ONE chunk, at the end. The live pool is an ESTIMATE and
@@ -888,17 +888,24 @@ const TRANSPORT_RETRIES = 3;
 /**
  * Waits before each re-issue, in ms, when the provider names no interval.
  *
- * `ctx.transportBackoffMs` overrides it. That is the seam the tests drive the
- * loop through — a test that had to sit out five real seconds to prove one
- * retry would be deleted by the third person who ran the suite — and it is
- * equally the knob for a deployment whose link to the provider is worse than
- * this default assumes.
+ * A request may override it with `transportBackoffMs`, the way it may override
+ * `maxTurns`. That is the seam the tests drive the loop through — a test that
+ * had to sit out five real seconds to prove one retry would be deleted by the
+ * third person who ran the suite — and it is equally the knob for a deployment
+ * whose link to the provider is worse than this default assumes.
+ *
+ * IT IS NOT READ OFF `ctx`. The harness context is a dependency container that
+ * THROWS on an undeclared property, so `ctx?.transportBackoffMs` is not a
+ * missing-value read returning undefined — it is an exception. That shipped,
+ * and it could only fire on the retry path, so two runs passed and the third
+ * turned a transient connection error into `model_error: cannot get property
+ * "transportBackoffMs" without inject`. The retry meant to save a run from a
+ * blip is what ended it.
  */
 const TRANSPORT_BACKOFF_MS = Object.freeze([1_000, 4_000, 10_000]);
 
-/** The wait ladder in force, which `ctx` may replace. */
-function backoffLadder(ctx) {
-  const given = ctx?.transportBackoffMs;
+/** The wait ladder in force, which the request may replace. */
+function backoffLadder(given) {
   return Array.isArray(given) && given.length > 0 && given.every((ms) => Number.isFinite(Number(ms)))
     ? given.map(Number)
     : TRANSPORT_BACKOFF_MS;
@@ -950,7 +957,7 @@ function pause(ms, signal) {
  * @param options - `{note, signal}`; `note` puts each re-issue in the trace.
  * @returns the last turn, with `estimated` summed over every attempt.
  */
-async function streamTurnResiliently(args, { note, signal }) {
+async function streamTurnResiliently(args, { note, signal, backoff }) {
   let spentOnAbandoned = 0;
   for (let attempt = 0; ; attempt += 1) {
     const turn = await streamTurn(args);
@@ -961,7 +968,7 @@ async function streamTurnResiliently(args, { note, signal }) {
     if (!retryable) return turn;
 
     spentOnAbandoned = turn.estimated;
-    const ladder = backoffLadder(args?.ctx);
+    const ladder = backoffLadder(backoff);
     const waitMs = Number(turn.failure.retryAfterMs) > 0
       ? Number(turn.failure.retryAfterMs)
       : ladder[Math.min(attempt, ladder.length - 1)];

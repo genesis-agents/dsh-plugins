@@ -28,7 +28,6 @@ const MESSAGES = [{ id: "u1", role: "user", content: [{ type: "text", text: "hi"
 function stub(failures, { failure = CONNECTION_ERROR, text = "the answer", onAttempt = null, backoff = [1, 1, 1] } = {}) {
   const state = { attempts: 0 };
   const ctx = {
-    transportBackoffMs: backoff,
     agentDefaultModel: { currentSelection: () => ({ provider: "stub", model: "stub-1" }) },
     llm: {
       async *stream() {
@@ -43,17 +42,26 @@ function stub(failures, { failure = CONNECTION_ERROR, text = "the answer", onAtt
       },
     },
   };
-  return { state, ctx };
+  return { state, ctx, backoff };
 }
 
-/** Run one agent over the stub, the way a stage does. */
+/**
+ * Run one agent over the stub, the way a stage does.
+ *
+ * The backoff rides on the REQUEST, not on `ctx`. The harness context is a
+ * dependency container that throws on an undeclared property, so reading a test
+ * knob off it is an exception rather than a default — which is exactly how a
+ * transient connection error became `model_error: cannot get property
+ * "transportBackoffMs" without inject` and ended a run the retry existed to
+ * save.
+ */
 const run = (ctx, extra = {}) => createMissionChat(ctx)({
   agent: "researcher", stepId: "s3-collect", system: "sys", messages: MESSAGES, tools: [], ...extra,
 });
 
 test("a connection error is re-issued, not turned into a failed mission", async () => {
-  const { state, ctx } = stub(2);
-  const result = await run(ctx);
+  const { state, ctx, backoff } = stub(2);
+  const result = await run(ctx, { transportBackoffMs: backoff });
 
   assert.equal(state.attempts, 3, "the turn was not re-issued after a failure that never reached the provider");
   assert.equal(
@@ -67,8 +75,8 @@ test("a connection error is re-issued, not turned into a failed mission", async 
 test("re-issuing is bounded, so an outage is still reported", async () => {
   // The provider being down for a minute must not become an agent that spins
   // against it until the mission's wall clock runs out.
-  const { state, ctx } = stub(99);
-  const result = await run(ctx);
+  const { state, ctx, backoff } = stub(99);
+  const result = await run(ctx, { transportBackoffMs: backoff });
 
   assert.equal(state.attempts, 4, `the loop made ${state.attempts} attempts; the bound is one call and three re-issues`);
   assert.equal(result.state, "failed", "an outage that outlasts the retries has to surface as a failure");
@@ -79,8 +87,8 @@ test("a refusal is an answer, and answers are not re-issued", async () => {
   // 400 means the request landed and was rejected. Sending it again buys the
   // same rejection at the same price.
   for (const status of [400, 401, 403, 404, 422]) {
-    const { state, ctx } = stub(99, { failure: { message: "bad request", code: null, status } });
-    const result = await run(ctx);
+    const { state, ctx, backoff } = stub(99, { failure: { message: "bad request", code: null, status } });
+    const result = await run(ctx, { transportBackoffMs: backoff });
     assert.equal(state.attempts, 1, `HTTP ${status} was re-issued; it is an answer, not an outage`);
     assert.equal(result.state, "failed", `HTTP ${status} must still be reported`);
   }
@@ -88,8 +96,8 @@ test("a refusal is an answer, and answers are not re-issued", async () => {
 
 test("the statuses that mean the request never landed are re-issued", async () => {
   for (const status of [408, 429, 500, 502, 503, 504]) {
-    const { state, ctx } = stub(1, { failure: { message: "upstream", code: null, status } });
-    const result = await run(ctx);
+    const { state, ctx, backoff } = stub(1, { failure: { message: "upstream", code: null, status } });
+    const result = await run(ctx, { transportBackoffMs: backoff });
     assert.equal(state.attempts, 2, `HTTP ${status} was not re-issued, so a routine upstream blip ends the mission`);
     assert.equal(result.state, "completed", `HTTP ${status} recovered but the run still failed`);
   }
@@ -100,12 +108,12 @@ test("the provider's own interval is honoured over the default ladder", async ()
   // than reading, and honouring it is also what keeps the next attempt from
   // being rejected the same way. The ladder here is long enough that ignoring
   // the interval would take a full second.
-  const { state, ctx } = stub(1, {
+  const { state, ctx, backoff } = stub(1, {
     failure: { message: "slow down", code: null, status: 429, providerRetryAfterMs: 5 },
     backoff: [1_000],
   });
   const started = process.hrtime.bigint();
-  await run(ctx);
+  await run(ctx, { transportBackoffMs: backoff });
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
 
   assert.equal(state.attempts, 2);
@@ -120,10 +128,10 @@ test("an abort during the wait stops the loop instead of sleeping through it", a
   // only while it is streaming. The ladder here is long enough that a sleep
   // ignoring the signal would hang this test rather than fail it.
   const controller = new AbortController();
-  const { state, ctx } = stub(99, { backoff: [30_000], onAttempt: () => controller.abort() });
+  const { state, ctx, backoff } = stub(99, { backoff: [30_000], onAttempt: () => controller.abort() });
 
   const started = process.hrtime.bigint();
-  const result = await run(ctx, { signal: controller.signal });
+  const result = await run(ctx, { signal: controller.signal, transportBackoffMs: backoff });
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
 
   assert.ok(elapsedMs < 5_000, `the loop slept ${Math.round(elapsedMs)}ms through a cancelled mission`);
@@ -146,7 +154,6 @@ test("the characters an abandoned attempt streamed are still counted", async () 
   // hiccuped, and the estimator is tuned against that number.
   const state = { attempts: 0 };
   const ctx = {
-    transportBackoffMs: [1],
     agentDefaultModel: { currentSelection: () => ({ provider: "stub", model: "stub-1" }) },
     llm: {
       async *stream() {
@@ -164,7 +171,7 @@ test("the characters an abandoned attempt streamed are still counted", async () 
     yield { type: "text-delta", id: "t", text: "x".repeat(400) };
     yield { type: "finish", reason: { kind: "stop" } };
   } } });
-  const retried = await run(ctx);
+  const retried = await run(ctx, { transportBackoffMs: [1] });
 
   assert.equal(state.attempts, 2);
   assert.ok(
@@ -172,4 +179,48 @@ test("the characters an abandoned attempt streamed are still counted", async () 
     `the retried run estimated ${retried.tokens.estimated} against ${oneAttempt.tokens.estimated} for a single attempt, `
     + "so the abandoned attempt's streamed characters were dropped from the meter",
   );
+});
+
+test("the retry path never probes the harness context for a property it did not declare", async () => {
+  // THE TEST THAT WOULD HAVE CAUGHT IT. `ctx` is a dependency container: reading
+  // a property nobody injected THROWS, so `ctx?.transportBackoffMs` is not a
+  // missing-value read that returns undefined — it is an exception, on a path
+  // that only executes when the provider has already failed. Two runs passed
+  // and the third turned a transient connection error into
+  // `model_error: cannot get property "transportBackoffMs" without inject`.
+  // The retry written to save a run from a blip is what ended it.
+  //
+  // The stub below behaves the way the real container does. Any new read off
+  // `ctx` from anywhere in the loop fails here rather than in production, on a
+  // path production only reaches when something else has already gone wrong.
+  const declared = {
+    agentDefaultModel: { currentSelection: () => ({ provider: "stub", model: "stub-1" }) },
+    llm: {
+      async *stream() {
+        state.attempts += 1;
+        if (state.attempts <= 2) {
+          yield { type: "finish", reason: { kind: "error", failure: CONNECTION_ERROR } };
+          return;
+        }
+        yield { type: "text-delta", id: "t", text: "the answer" };
+        yield { type: "finish", reason: { kind: "stop" } };
+      },
+    },
+  };
+  const state = { attempts: 0 };
+  const probed = [];
+  const ctx = new Proxy(declared, {
+    get(target, property) {
+      if (property in target) return target[property];
+      if (typeof property === "symbol" || property === "then") return undefined;
+      probed.push(String(property));
+      throw new Error(`cannot get property "${String(property)}" without inject`);
+    },
+  });
+
+  const result = await run(ctx, { transportBackoffMs: [1, 1, 1] });
+
+  assert.deepEqual(probed, [], `the loop read ${probed.join(", ")} off the harness context, which throws there`);
+  assert.equal(state.attempts, 3);
+  assert.equal(result.state, "completed", `the retry path failed against a real-shaped context: ${result.diagnostic}`);
 });
