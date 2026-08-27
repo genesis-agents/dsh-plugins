@@ -2486,7 +2486,7 @@ export async function runMission({
       if (deadlines.expired) {
         registry.abort(missionId, deadlines.reason, { runCount: current.runCount, detail: deadlines.detail });
         stopped = { kind: "deadline", reason: deadlines.reason };
-        terminal = endMission({ fromSignal: true, detail: { stepId: stage.id, ...deadlines.detail, resumable: true } });
+        terminal = endMission({ fromSignal: true, detail: { stepId: stage.id, ...deadlines.detail, ...(registry.detailOf?.(missionId) ?? {}), resumable: true } });
         break;
       }
 
@@ -2569,7 +2569,14 @@ export async function runMission({
           });
         });
         stopped = { kind: "throw", reason: `${stage.id} threw: ${error.message}` };
-        terminal = endMission({ fromSignal: signal.aborted, error, detail: { stepId: stage.id } });
+        // THE SAME MERGE AS THE OTHER SIGNAL PATH. A guard's abort makes the
+        // running stage throw, and it lands HERE rather than at the top-of-loop
+        // check — so a mission killed by the loop rule mid-stage reported the
+        // timeout branch's sentence with `stalledMs ?? 0`, "No progress for
+        // 0s", after the carrying seam had already been fixed at the other
+        // door. Three doors, and an audit that checked the aborts and the
+        // fields but not the collectors.
+        terminal = endMission({ fromSignal: signal.aborted, error, detail: { stepId: stage.id, ...(registry.detailOf?.(missionId) ?? {}) } });
         break;
       }
 

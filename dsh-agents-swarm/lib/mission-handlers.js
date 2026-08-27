@@ -396,7 +396,14 @@ export function createMissionRuntime({ store, missionStore, ctx, config = {}, sp
       const shapes = missionStore
         .recentToolCalls(entry.missionId, 50)
         .filter((call) => String(call.at) >= since)
-        .filter((call) => String(call.stepId ?? "") === String(entry.stepId ?? ""));
+        .filter((call) => String(call.stepId ?? "") === String(entry.stepId ?? ""))
+        // A CACHE HIT IS THE OPPOSITE OF A LOOP. The ledger records every call,
+        // served or not, and `cached: true` means the door recognised the
+        // request and did NOT do the work again — which is the system behaving,
+        // not an agent spinning. s9-verify checks many quotes against the same
+        // few pages, so its fetches are cached by design and three of them in a
+        // row read as a loop to a rule that cannot see the flag.
+        .filter((call) => call.cached !== true);
 
       const wedged = detectNoProgress({
         entry,
