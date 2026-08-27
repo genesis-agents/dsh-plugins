@@ -984,7 +984,19 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
           // is re-run. Measured on a real mission: five runs, all fourteen
           // findings in run 1, and a references screen that would show none.
           runs: missionStore.findingRuns(id),
-          dimensions: dimensions.map((row) => ({ dimensionId: row.dimensionId, name: row.name })),
+          // NAME, STATE AND SUMMARY — not the name alone. The references pane
+          // can now arrange by dimension, and a dimension that read pages and
+          // verified nothing has NO ROWS to group under: with only a name it
+          // would be indistinguishable from a dimension that was never planned,
+          // which is the difference between "we tried and it did not land" and
+          // "we did not look". The state says which, and the summary is the
+          // dimension's own account of it.
+          dimensions: dimensions.map((row) => ({
+            dimensionId: row.dimensionId,
+            name: row.name,
+            state: row.state ?? null,
+            summary: row.summary ?? "",
+          })),
         },
       });
       return true;
