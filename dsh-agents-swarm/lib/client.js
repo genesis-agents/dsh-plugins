@@ -80,6 +80,1674 @@ window.__ModuleLoader__.load({
 		*/
 		const CLIENT_VERSION = "0.6.3";
 
+		//#region design tokens
+		/**
+		* The one place a colour is decided, and the only place a literal one
+		* may be written.
+		*
+		* WHAT THIS REPLACES. Every vocabulary table in this file used to carry
+		* its own `hue: TONE.success` — eight literals across sixty-two
+		* occurrences, all of them Tailwind's palette transcribed from the
+		* reference rather than taken from the host. Three consequences, and not
+		* one of them throws:
+		*
+		*   1. NO DARK MODE. The harness flips its entire alias layer on
+		*      `body[data-ds-dark-theme]`. A literal triple does not flip. The
+		*      chip tint this file draws everywhere — `rgba(hue,0.08)` — is 8%
+		*      of a mid-tone over `rgb(35,35,36)` in the dark theme, which is
+		*      invisible, while the same rule carries the whole stage strip in
+		*      the light one. A strip that silently loses its colour is the
+		*      class of failure docs/architecture.md §9 names: the check that
+		*      passes is not the check that matters.
+		*   2. NOT THE HOST'S GREEN. The harness has a success colour and this
+		*      was not it, so a verified chip here and a success dot elsewhere
+		*      in the same window were two different greens — close enough to
+		*      read as a rendering fault rather than as a choice.
+		*   3. ONE DECISION, SIX COPIES. `running` was declared in five tables
+		*      and once inline. Changing it is five edits and a miss.
+		*
+		* THREE LAYERS, AND THE MIDDLE ONE IS THE POINT. `PALETTE` is the ramp
+		* and carries no meaning; `TONE` says what a STATE looks like; `KIND`
+		* and `ROLE_TONE` say what a CATEGORY looks like. Collapsing the last
+		* two into the first is the mistake this file already made once: source
+		* kinds were drawn in the same red as a failed stage, so the eye learned
+		* that red means "bad" on one tab and "YouTube" on the next. A category
+		* ramp and a state ramp must be separable even when they share a hue.
+		*
+		* WHY THE VARS HOLD TRIPLES AND NOT COLOURS. `--swm-h-green` is
+		* `34,197,94`, not `rgb(34,197,94)`, because every consumer builds a tint
+		* from it: `rgb(var(--swm-h-green))` is a chip's text and
+		* `rgba(var(--swm-h-green),0.12)` its background. A var holding a
+		* finished colour cannot do the second, and a second var holding the
+		* tint would put the alpha decision back in sixty-two places. The triple
+		* substitutes into legacy `rgb()`/`rgba()` syntax, which is why every
+		* `rgb(${hue})` template already in this file kept working unchanged
+		* when the literals were swapped for these names.
+		*
+		* WHERE THE VALUES COME FROM. The five the harness itself defines are
+		* the harness's, read from its `design-platform.css` and named beside
+		* each, so this tab's success is the shell's success. The four it has no
+		* equivalent for exist only to keep seven agent roles and six source
+		* kinds apart, and follow the harness's own convention for a hue: a
+		* 600-weight in light, a 400-weight in dark.
+		*/
+		const SWM_STYLE_ID = "dsw-swarm-tokens";
+		const SWM_CSS = [
+			"body{",
+			"--swm-h-green:34,197,94;",       // = --dsw-static-green-500
+			"--swm-h-amber:221,134,41;",      // = --dsw-static-amber-600
+			"--swm-h-red:236,19,19;",         // = --dsw-static-red-600
+			"--swm-h-blue:65,118,230;",       // = --dsw-static-deepseek-500
+			"--swm-h-slate:97,102,107;",      // = --dsw-static-neutral-bluish-700
+			"--swm-h-slate-dim:129,133,140;", // = --dsw-static-neutral-bluish-600
+			"--swm-h-violet:124,58,237;",
+			"--swm-h-indigo:79,70,229;",
+			"--swm-h-cyan:8,145,178;",
+			"--swm-h-rose:225,29,72;",
+			"--swm-a-soft:0.10;",
+			"--swm-a-ring:0.28;",
+			"--swm-a-fill:0.90;",
+			"}",
+			"body[data-ds-dark-theme]{",
+			"--swm-h-green:78,209,126;",      // = --dsw-static-green-400
+			"--swm-h-amber:247,173,49;",      // = --dsw-static-amber-400
+			"--swm-h-red:242,90,90;",         // = --dsw-static-red-400
+			"--swm-h-blue:103,158,254;",      // = --dsw-static-deepseek-400
+			"--swm-h-slate:207,211,214;",     // = --dsw-static-neutral-bluish-300
+			"--swm-h-slate-dim:173,178,184;", // = --dsw-static-neutral-bluish-400
+			"--swm-h-violet:167,139,250;",
+			"--swm-h-indigo:129,140,248;",
+			"--swm-h-cyan:34,211,238;",
+			"--swm-h-rose:251,113,133;",
+			// THE ALPHAS ARE THEME-AWARE TOO, and this is the half that is easy
+			// to miss: a tint is a hue AND an alpha, so making only the hue flip
+			// leaves the tint half-corrected. 8% of a mid-tone over white is a
+			// visible wash; 8% of the same tone over rgb(35,35,36) is nothing.
+			// The dark values are raised, not the hues.
+			"--swm-a-soft:0.16;",
+			"--swm-a-ring:0.36;",
+			"--swm-a-fill:0.92;",
+			"}"
+		].join("");
+
+		/**
+		* Put a stylesheet in the document, at most once, and never throw.
+		*
+		* Guarded rather than assumed: this module is executed in Node by
+		* tests/settings.test.mjs against a hand-written `document` stub, and a
+		* bundle that throws at load time there is a bundle nobody can test. The
+		* trajectory sheet and the token sheet are two callers of ONE injector,
+		* because a second copy of this function is where the two would drift on
+		* which host to append to.
+		* @param id - the element id, so a second call is a no-op.
+		* @param css - the sheet's text.
+		*/
+		function ensureStyle(id, css) {
+			try {
+				if (typeof document?.getElementById !== "function") return;
+				if (document.getElementById(id) !== null) return;
+				const node = document.createElement("style");
+				node.id = id;
+				node.textContent = css;
+				const host = document.head ?? document.documentElement;
+				if (typeof host?.appendChild === "function") host.appendChild(node);
+			} catch {
+				// A host that will not take a stylesheet still gets a working
+				// page: every name below carries the light-theme triple as its
+				// var fallback, so the chips keep their colours and only the
+				// dark-theme correction is lost.
+			}
+		}
+
+		/**
+		* The ramp. Ten hues, no meanings.
+		*
+		* THE FALLBACKS ARE NOT DECORATION. Each name is `var(--x, <triple>)`
+		* with the light-theme value inline, so a page whose style injection was
+		* refused still renders coloured chips rather than `rgb()` with an empty
+		* argument — which is a chip with no text on a background of nothing.
+		*/
+		const PALETTE = {
+			green: "var(--swm-h-green,34,197,94)",
+			amber: "var(--swm-h-amber,221,134,41)",
+			red: "var(--swm-h-red,236,19,19)",
+			blue: "var(--swm-h-blue,65,118,230)",
+			slate: "var(--swm-h-slate,97,102,107)",
+			slateDim: "var(--swm-h-slate-dim,129,133,140)",
+			violet: "var(--swm-h-violet,124,58,237)",
+			indigo: "var(--swm-h-indigo,79,70,229)",
+			cyan: "var(--swm-h-cyan,8,145,178)",
+			rose: "var(--swm-h-rose,225,29,72)"
+		};
+
+		/**
+		* What a STATE looks like. Six, and every status vocabulary in this file
+		* resolves into these rather than choosing a hue of its own.
+		*
+		* `muted` is separate from `neutral` because "not started" and "we do not
+		* know" are drawn at different weights: a pending stage should recede,
+		* an unknown status should not.
+		*/
+		const TONE = {
+			success: PALETTE.green,
+			warn: PALETTE.amber,
+			danger: PALETTE.red,
+			info: PALETTE.blue,
+			neutral: PALETTE.slate,
+			muted: PALETTE.slateDim,
+			accent: PALETTE.violet
+		};
+
+		/**
+		* The seven agents, each with a colour that is only ever theirs.
+		*
+		* The reference gives every role a hue and prints it on the roster, on
+		* the task board and on every trajectory row, which is what makes "who
+		* is working" answerable at a glance. This tab printed role names in
+		* body text and nothing else, so the same answer cost a read of every
+		* row.
+		*
+		* Assignments follow the reference where the roles coincide — Leader
+		* violet, Researcher blue, Analyst amber, Writer rose — and the two it
+		* does not have are placed by meaning: the Verifier is the agent that
+		* checks evidence, so it takes green, and the Reviewer is the critic, so
+		* it takes red. `mission` is the fallback for a row belonging to no
+		* agent, and is the only neutral one.
+		*/
+		const ROLE_TONE = {
+			leader: PALETTE.violet,
+			researcher: PALETTE.blue,
+			analyst: PALETTE.amber,
+			reconciler: PALETTE.cyan,
+			writer: PALETTE.rose,
+			reviewer: PALETTE.red,
+			verifier: PALETTE.green,
+			mission: PALETTE.slate
+		};
+
+		/**
+		* The colour of an agent id, which is not always a bare role.
+		*
+		* Researchers are minted per dimension — `researcher:d3` — so an exact
+		* lookup answers `mission` for the one role that appears most often on
+		* screen. The prefix before the colon is the role.
+		* @param agentId - a role, an instance id, or null.
+		* @returns a colour triple, never undefined.
+		*/
+		function roleTone(agentId) {
+			const key = String(agentId ?? "").split(":")[0].trim().toLowerCase();
+			return Object.hasOwn(ROLE_TONE, key) ? ROLE_TONE[key] : ROLE_TONE.mission;
+		}
+
+		/**
+		* What a PUBLISHED FORMAT looks like, and why it is a table rather than
+		* an index.
+		*
+		* The publish switcher took each format's colour from the SOURCE-KIND
+		* ramp by rotating through it — `KINDS[(at + 1) % KINDS.length]` — so a
+		* format's identity was decided by the order the Host happened to return
+		* it in, and adding one format shifted the colour of every format after
+		* it. A colour that moves when its neighbour changes is not an identity;
+		* it is a position. Worse, it was the SOURCE ramp: a written digest was
+		* drawn in the hue that means "YouTube" two tabs away, which is the
+		* category-against-category mixing the docblock above forbids one layer
+		* along.
+		*
+		* Keyed by format id, which is the Host's own stable name for the thing.
+		* A format this table has never heard of falls back to TONE.accent — the
+		* product's own colour — rather than to a rotation, so an unlisted
+		* format looks unlisted instead of looking like one of the four.
+		*/
+		const FORMAT_TONE = {
+			podcast: PALETTE.rose,
+			digest: PALETTE.blue,
+			report: PALETTE.indigo,
+			brief: PALETTE.cyan
+		};
+
+		/**
+		* The colour of a publish format.
+		* @param id - a format id, or null.
+		* @returns a colour triple, never undefined.
+		*/
+		function formatTone(id) {
+			const key = String(id ?? "").trim().toLowerCase();
+			return Object.hasOwn(FORMAT_TONE, key) ? FORMAT_TONE[key] : TONE.accent;
+		}
+
+		/**
+		* The type scale, which is the harness's and not ours.
+		*
+		* MEASURED BEFORE IT WAS WRITTEN. This file declared ten distinct font
+		* sizes as raw pixels — 10, 11, 12, 13, 14, 15, 16, 18, 20 and 30 — and
+		* reached the harness's own scale exactly seven times out of roughly
+		* three hundred declarations. Ten sizes is not a scale; it is the
+		* residue of each region deciding locally, and the visible result is
+		* that two panels side by side set their labels one pixel apart, which
+		* reads as a rendering fault rather than as a hierarchy.
+		*
+		* Each name below is a `font` SHORTHAND, so it carries family, size,
+		* weight and line height together. That is the point: a size chosen here
+		* and a line height chosen at the call site is how this file ended up
+		* with 11px text on a 19px line in one panel and a 17px line in the next.
+		*
+		* THE STRONG VARIANTS ARE 500, NOT 600. The harness's emphasis weight is
+		* 500 at every step below 24px, and this file used 600 forty-eight times,
+		* 650 twice and 700 twice. Those are heavier than anything the shell
+		* draws, which is why the tab reads as slightly shouty next to the rest
+		* of the app. Use `*Strong` for emphasis and let the shell decide what
+		* emphasis weighs.
+		*
+		* `display` is the only 600 in the set because the harness's own 24px
+		* step is 600 — the exception is the shell's, not ours.
+		*/
+		const FONT = {
+			micro: "var(--dsw-font-xxxs-11)",
+			microStrong: "var(--dsw-font-xxxs-strong-11)",
+			small: "var(--dsw-font-xxs-12)",
+			smallStrong: "var(--dsw-font-xxs-strong-12)",
+			body: "var(--dsw-font-xs-13)",
+			bodyStrong: "var(--dsw-font-xs-strong-13)",
+			base: "var(--dsw-font-s-14)",
+			baseStrong: "var(--dsw-font-s-strong-14)",
+			large: "var(--dsw-font-base-16)",
+			largeStrong: "var(--dsw-font-base-strong-16)",
+			title: "var(--dsw-font-l-20)",
+			display: "var(--dsw-font-xl-24)"
+		};
+
+		/**
+		* Mono where the text is DATA rather than prose, HOISTED OUT OF THE
+		* MISSIONS REGION.
+		*
+		* A tool name, a JSON argument and a source host are things a person
+		* compares character by character across rows, and a proportional face
+		* makes two nearly-identical queries look identical.
+		*
+		* It was declared beside the trajectory table, four thousand lines below
+		* this one, which is harmless for a function body — a body is only
+		* evaluated when it is called — and fatal for a top-level `const`.
+		* `COUNT_CHIP` below reads it at module evaluation, so leaving the
+		* declaration down there is not a style bug: it is a TDZ
+		* `ReferenceError` at load and a blank tab.
+		*
+		* A stack that thirteen places in this file already reach for belongs
+		* beside the type scale anyway. `var(--ds-font-family-code)` is the
+		* harness's own name for the same thing and is used by the trajectory
+		* sheet; this is the JavaScript-side spelling, with the fallbacks
+		* written out because a `font-family` cannot carry a var fallback list
+		* through a `font` shorthand.
+		*/
+		const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+
+		/**
+		* The spacing rhythm: five steps, all multiples of four.
+		*
+		* This file used sixteen distinct gap values — including 1, 3, 7, 9, 11
+		* and 18 — and roughly thirty distinct padding strings. A 9px gap beside
+		* a 10px gap is not a decision anybody made; it is two people typing.
+		* Five steps is enough for every layout in this tab and few enough that
+		* choosing between them is a real choice.
+		*/
+		const SPACE = { xs: "4px", sm: "8px", md: "12px", lg: "16px", xl: "24px" };
+
+		/**
+		* Corner radii: four, plus the two shapes that are not radii at all.
+		*
+		* Thirteen values were in use, nine of them within six pixels of each
+		* other. `pill` and `circle` are separate names because they are shapes
+		* — a 999px radius on a rectangle and a 50% radius on a square are
+		* different intentions, and spelling both as numbers is how a chip ends
+		* up almost round.
+		*/
+		const RADIUS = { sm: "6px", md: "8px", lg: "12px", pill: "999px", circle: "50%" };
+
+		/**
+		* A STATE's shape, which is not a CATEGORY's shape.
+		*
+		* Six literals drew one status pill: `1px 7px` on a 5px radius in the
+		* list, `1px 8px` on a 6px radius in the header, and four more between
+		* them. None of the six was round, so the shape that was meant to
+		* separate "what this is" from "how it is going" said nothing at all,
+		* and the 5px/6px difference is a pixel nobody chose — visible only when
+		* the list and the header are on screen together, which is always.
+		*
+		* THE RING IS AN INSET SHADOW, not a border, for the reason
+		* `pressedStyle` gives one paragraph over: a border grows the box, so a
+		* pill that gains or loses one as its state changes nudges everything
+		* beside it along the row.
+		*
+		* CATEGORIES STAY ON `RADIUS.sm` — the stage strip, the task board's
+		* origin, every tally. A category is not a state, and collapsing the two
+		* ramps into one shape is the mistake the tokens docblock above names:
+		* the eye learns a shape faster than it reads a word.
+		*
+		* Reads TINT and TONE, which are declared below it. That is safe because
+		* a function body is evaluated when it is called and this is only ever
+		* called from a render — the same reason `COUNT_CHIP`, which is an
+		* object literal, could NOT be written here.
+		* @param tone - the colour triple.
+		* @param size - "md" beside a title, otherwise the 11px default.
+		* @returns a style object to spread.
+		*/
+		function pillStyle(tone, size) {
+			const step = size === "md"
+				? { font: FONT.smallStrong, padding: `1px ${SPACE.sm}`, gap: SPACE.xs }
+				: { font: FONT.microStrong, padding: "1px 6px", gap: SPACE.xs };
+			return {
+				...step,
+				display: "inline-flex", alignItems: "center", boxSizing: "border-box",
+				borderRadius: RADIUS.pill,
+				background: `rgba(${tone ?? TONE.neutral},${TINT.soft})`,
+				color: `rgb(${tone ?? TONE.neutral})`,
+				boxShadow: `inset 0 0 0 1px rgba(${tone ?? TONE.neutral},${TINT.ring})`,
+				whiteSpace: "nowrap"
+			};
+		}
+
+		/** Icon box sizes: inline, default, and section-header. Three, as the reference has three. */
+		const ICON = { xs: "12px", sm: "14px", md: "16px" };
+
+		/**
+		* The three strengths a tinted surface may have.
+		*
+		* Twelve distinct alphas were in use — 0.035, 0.05, 0.06, 0.08, 0.09,
+		* 0.10, 0.12, 0.13, 0.25, 0.35, 0.45, 0.9 — and the eight at the bottom
+		* were all trying to be the same thing: a chip's background. Three steps
+		* with names is enough, and naming them is what lets the dark theme raise
+		* all of them at once.
+		*
+		* `soft` is a fill you read text on top of, `ring` is a border you read
+		* the fill through, `fill` is the tone itself standing in for a surface.
+		*/
+		const TINT = {
+			soft: "var(--swm-a-soft,0.10)",
+			ring: "var(--swm-a-ring,0.28)",
+			fill: "var(--swm-a-fill,0.90)"
+		};
+
+		/**
+		* Five surface roles over the harness's ten background variables.
+		*
+		* The count is the finding: ten names were in use for what is really
+		* base / card / subtle / hover / code, so two panels meant to sit at the
+		* same depth were drawn a layer apart.
+		*/
+		const SURFACE = {
+			base: "var(--dsw-alias-bg-base)",
+			card: "var(--dsw-specific-menu)",
+			subtle: "var(--dsw-alias-bg-layer-2)",
+			hover: "var(--dsw-alias-interactive-bg-hover)",
+			code: "var(--dsw-alias-markdown-code-block)"
+		};
+
+		/** Three depths. `raised` is a card, `floating` is something over a card. */
+		const ELEVATION = {
+			flat: "none",
+			raised: "var(--dsw-shadow-lv1)",
+			floating: "var(--dsw-shadow-lv3)"
+		};
+
+		/**
+		* Two line weights, and WHICH ONE TO USE IS A RULE, not a preference.
+		*
+		* `hair` is a container's OUTER edge. It sits under a shadow, so it only
+		* has to define the top edge the shadow cannot reach, and it may be
+		* nearly invisible.
+		*
+		* `rule` is an INNER divider between siblings. Nothing helps it — there
+		* is no shadow on a table row — so it has to read on its own.
+		*
+		* This file alternated between the two with no rule at all, which is why
+		* two adjacent panels drew the same separator at two different weights.
+		* A test cannot check this one: both are legal references and the choice
+		* is semantic. The docblock is the guard.
+		*/
+		const LINE = {
+			hair: "var(--dsw-alias-border-l1)",
+			rule: "var(--dsw-alias-border-l2)"
+		};
+
+		/**
+		* Three text weights, and `quiet` HAS A CONTRAST BUDGET.
+		*
+		* `--dsw-alias-label-tertiary` resolves to rgb(129,133,140): 3.71:1 on
+		* white, under the 4.5:1 that normal-size text needs. So `quiet` is for
+		* text that is decoration — a row ordinal, a unit suffix, a timestamp
+		* beside the thing it stamps — and never for a value the reader has to
+		* read. Thirteen meta lines in this file were on `quiet` at 11px, which
+		* is the combination that fails hardest.
+		*/
+		const INK = {
+			primary: "var(--dsw-alias-label-primary)",
+			secondary: "var(--dsw-alias-label-secondary)",
+			quiet: "var(--dsw-alias-label-tertiary)"
+		};
+
+		/**
+		* A bare quantity, drawn as a badge instead of as grey text.
+		*
+		* Counts in this file were printed as 10px monospace in `INK.quiet` —
+		* the decoration weight, at the size that fails contrast hardest — with
+		* no background and no padding, so "6" beside a pane name read as a
+		* rendering artefact rather than as the answer to "how many". It is a
+		* neutral fill because a count is not a state: it must not compete with
+		* the tinted chips beside it.
+		*
+		* `--dsw-alias-fill-tertiary` is the harness's own neutral fill and had
+		* exactly one consumer in this file. It follows the theme; a hand-mixed
+		* grey does not.
+		*
+		* `font` FIRST, then the family and the figures. The shorthand resets
+		* both, so a `fontVariantNumeric` written above it is discarded and the
+		* digits stop aligning in the one place alignment is the point.
+		*/
+		const COUNT_CHIP = {
+			font: FONT.micro,
+			fontFamily: MONO,
+			fontVariantNumeric: "tabular-nums",
+			display: "inline-flex", alignItems: "center",
+			height: "16px", padding: "0 5px", borderRadius: RADIUS.sm,
+			background: "var(--dsw-alias-fill-tertiary)",
+			color: INK.secondary
+		};
+
+		/**
+		* ONE table cell, and ONE table header cell, for all three tables.
+		*
+		* THE MEASUREMENT. Three tables on three panes of the same tab drew the
+		* same object three ways. Headers: `6px 9px` at 500 in `INK.secondary`,
+		* `7px 10px` at 500 in `INK.secondary`, and — in the roster — no padding
+		* at all, at the plain weight, right-aligned. Cells: an 18px line here,
+		* an 18px line and `verticalAlign:"top"` there, a 26px line and NO
+		* padding whatsoever in the third. Three heights, three paddings, two
+		* header weights. None of the differences was decided; each is what one
+		* person typed on one afternoon, and they are only visible when a reader
+		* moves between the cost pane's three tables in the space of a minute,
+		* which is the whole reason those tables are on one pane.
+		*
+		* `fontVariantNumeric` IS UNCONDITIONAL, and that is the point of
+		* putting it here. Every one of these tables is mostly figures, and the
+		* three that carried tabular-nums carried it per cell — so a column added
+		* later got proportional digits and the ones above it did not, which is
+		* how a total stops lining up under the column it totals. A cell with no
+		* digits in it is unaffected by the property, so the blanket setting
+		* costs nothing and closes the hole for good.
+		*
+		* `font` FIRST in both, for the reason FONT's docblock gives: the
+		* shorthand resets weight, leading AND font-variant, so a
+		* `fontVariantNumeric` written above it is silently discarded. Anything
+		* that spreads `TD` and then overrides `font` must write the variant
+		* again after it — the spread carries the old order, not the new one.
+		*
+		* WHY THEY ARE HERE AND NOT BESIDE `RADIUS`, where the batch spec put
+		* them: they read `INK`, `LINE` and `SURFACE`, all of which are declared
+		* below `RADIUS`. An object literal is evaluated where it is written, so
+		* up there this is not a style bug — it is the same TDZ `ReferenceError`
+		* at load, and the same blank tab, that moved `MONO` up here in the
+		* first place.
+		*
+		* `LINE.rule` and not `LINE.hair` for the divider, against the spec's
+		* `border-l1`: LINE's own docblock names a table row as the example of
+		* an inner divider with no shadow helping it, and two of the three
+		* tables had already reached for `rule`.
+		*/
+		const TH = {
+			font: FONT.smallStrong,
+			boxSizing: "border-box",
+			height: "30px", padding: `0 ${SPACE.sm}`,
+			// INK.secondary, not the spec's `label-tertiary`. A column header is
+			// a word the reader has to read to know what the column is, and
+			// INK's docblock puts tertiary at 3.71:1 — the decoration budget.
+			// All three tables already used secondary; the spec was reading the
+			// roster's `INK.secondary` as tertiary.
+			color: INK.secondary,
+			background: SURFACE.subtle,
+			textAlign: "left", whiteSpace: "nowrap",
+			overflow: "hidden", textOverflow: "ellipsis",
+			userSelect: "none"
+		};
+
+		const TD = {
+			font: FONT.small,
+			fontVariantNumeric: "tabular-nums",
+			boxSizing: "border-box",
+			height: "30px", padding: `0 ${SPACE.sm}`,
+			color: INK.primary,
+			overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+			borderBottom: `1px solid ${LINE.rule}`
+		};
+
+		/**
+		* THE GROUND A BAR IS MEASURED AGAINST.
+		*
+		* All four progress tracks in this file painted themselves with a LINE
+		* token. Those resolve to `--dsw-alias-border-l1` and `-l2`, which are
+		* black overlays at 4% and 10%: a sensible hairline on a white page, and
+		* literally nothing on the dark theme's own dark ground. Three of the
+		* four bars therefore had no track at all on dark — a coloured sliver
+		* floating in the page with nothing behind it to say how much of the run
+		* it stood for, which is the entire information a bar carries.
+		*
+		* A LINE TOKEN IS AN EDGE, NOT A FILL, and that is the rule the four
+		* sites broke. `SURFACE.hover` is the harness's own neutral interactive
+		* fill, declared in both themes, so it lifts on dark instead of
+		* disappearing.
+		*
+		* `pill`, because a 6px bar with a 3px radius IS a pill spelled as a
+		* number — and the three radii in use (2px, 3px, none) were three
+		* spellings of that one intention.
+		*/
+		const TRACK = {
+			background: SURFACE.hover,
+			borderRadius: RADIUS.pill,
+			overflow: "hidden"
+		};
+
+		/**
+		* Two recedes. `disabled` is a control that cannot be used; `quiet` is
+		* content that is present and secondary.
+		*
+		* Twenty-five controls in this file set `disabled` and seven showed it,
+		* in five different opacities. A button that is refused and looks
+		* pressable is a click the user makes twice.
+		*/
+		const OPACITY = { disabled: 0.45, quiet: 0.65 };
+
+		/**
+		* Three durations on one curve.
+		*
+		* Nine hand-typed durations across three values, all of them on the
+		* browser's default `ease`, which is the one curve no design system
+		* chooses: it accelerates out of rest too slowly and arrives too fast.
+		*/
+		const MOTION = {
+			fast: "150ms cubic-bezier(.4,0,.2,1)",
+			base: "200ms cubic-bezier(.4,0,.2,1)",
+			slow: "300ms cubic-bezier(.4,0,.2,1)"
+		};
+
+		/**
+		* The interaction sheet, and why it is a SECOND string.
+		*
+		* It has to be declared here rather than beside the variables, because
+		* every rule below interpolates a token — MOTION, SURFACE, INK, RADIUS,
+		* TINT — and `SWM_CSS` is initialised at the top of this module, before
+		* any of them exist. Written up there it is not a style bug, it is a
+		* `ReferenceError` at load and a blank tab.
+		*/
+		const SWM_RULES = [
+
+			// ── interaction ──────────────────────────────────────────────
+			// AN INLINE STYLE OBJECT CANNOT EXPRESS A STATE. `:hover`,
+			// `:focus-visible`, `:disabled`, `::after` and `@media` are all
+			// unreachable from a `style: {}`, which is why this file — 590
+			// style objects deep — had a focus ring on exactly the 44 elements
+			// that happened to carry a `.swt-*` class, and none anywhere else.
+			// Keyboard users could not see where they were on sixty buttons.
+			//
+			// These ship on THIS sheet rather than the trajectory's, because
+			// TRACE_CSS mounts only when the trace pane opens while SWM_CSS is
+			// injected by the page itself, before first paint.
+			`.swm-focus:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px;border-radius:inherit}`,
+			// A mouse click focuses too. Without this the ring fires on every
+			// press and reads as a stuck selection rather than as a keyboard
+			// position.
+			`.swm-focus:focus:not(:focus-visible){outline:none}`,
+			// THE RESTING BACKGROUND AND THE RESTING INK LIVE HERE, NOT IN THE
+			// BUILDER, and that is the whole reason the two hover rules under
+			// them do anything. `controlStyle()` used to return
+			// `background: "transparent", color: INK.secondary` as inline keys,
+			// and an inline declaration beats a stylesheet whatever the
+			// selector — so both halves of `.swm-ctl:hover` were overridden on
+			// every one of the fifty-odd controls that wear the class, and the
+			// failure had no symptom to search for. Same defect, same fix as
+			// `.swm-tr` and `.swm-tab` before it: the reset moves to the rule.
+			`.swm-ctl{background:transparent;color:${INK.secondary};transition:background ${MOTION.fast},border-color ${MOTION.fast},color ${MOTION.fast}}`,
+			`.swm-ctl:hover:not(:disabled){background:${SURFACE.hover};color:${INK.primary}}`,
+			// The chip carries its own hue as a custom property so one rule can
+			// serve six categories. React passes `--`-prefixed style keys
+			// through unchanged, which is the whole mechanism.
+			//
+			// The INACTIVE chip is painted here for the same reason: `chipStyle`
+			// wrote `background: "transparent"` inline and its own comment said
+			// that was what kept the hover reachable. It was the opposite.
+			`.swm-chip{background:transparent;color:${INK.secondary}}`,
+			`.swm-chip:hover{background:rgba(var(--swm-chip-h,var(--swm-h-slate)),${TINT.soft})}`,
+			`.swm-iconbtn{display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;color:${INK.quiet};cursor:pointer;border-radius:${RADIUS.sm};transition:background ${MOTION.fast},color ${MOTION.fast}}`,
+			`.swm-iconbtn:hover{color:${INK.primary};background:${SURFACE.hover}}`,
+			`.swm-iconbtn:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}`,
+			// Leaving a screen is not aborting one. The back control used to
+			// take the same hover as a destructive button. The resting pair is
+			// on the class rather than in `backStyle()` for the reason above:
+			// inline beats the sheet, so a builder that writes them is a
+			// builder that switches its own hover off.
+			`.swm-back{background:transparent;color:${INK.secondary}}`,
+			`.swm-back:hover{background:${SURFACE.hover};color:${INK.primary}}`,
+
+			// ── motion ───────────────────────────────────────────────────
+			// The first animation in 11,248 lines, and it arrives WITH its
+			// opt-out rather than after a complaint. A spinner that cannot be
+			// stopped is a vestibular trigger, and `prefers-reduced-motion` is
+			// the setting that says so.
+			`@keyframes swm-spin{to{transform:rotate(360deg)}}`,
+			`.swm-spin{animation:swm-spin 900ms linear infinite;transform-origin:50% 50%}`,
+			`@keyframes swm-pulse{0%,100%{opacity:1}50%{opacity:.45}}`,
+			`.swm-live{animation:swm-pulse 1600ms ease-in-out infinite}`,
+			// THE SHAPE OF AN ANSWER THAT HAS NOT ARRIVED YET. Every screen-level
+			// wait in this file drew the SAME dashed box as "there is nothing here"
+			// and as "the read failed", so the three states a person most needs to
+			// tell apart at a glance were one picture — and the worst of the three
+			// confusions is between an emptiness and a failure, because they call
+			// for opposite reactions.
+			//
+			// It REUSES `swm-pulse` rather than declaring a second set of keyframes
+			// at a second rate. A live dot and a skeleton make the same statement —
+			// this is not finished — and two curves for one statement is how a page
+			// ends up breathing at two speeds.
+			//
+			// The fill is the meter's own track colour, because a skeleton block and
+			// an empty track are the same drawing: a box with nothing in it yet.
+			`.swm-skel{background:${SURFACE.hover};border-radius:${RADIUS.sm};animation:swm-pulse 1600ms ease-in-out infinite}`,
+			`@media (prefers-reduced-motion:reduce){.swm-spin,.swm-live,.swm-skel{animation:none}.swm-ctl,.swm-iconbtn{transition:none}}`,
+
+			// ── layout a style object cannot express ─────────────────────
+			// The twelve-stage ruler is a GRID at three widths, and a width is a
+			// media query. The strip carries the twelve-column base inline too,
+			// so the ruler is a ruler even in the frame that renders before a
+			// sheet lands; these three only ever narrow it.
+			//
+			// TWELVE, SIX, FOUR — factors of twelve, on purpose. A ruler that
+			// reflowed to five columns would put s6 under s1 on one screen and
+			// under s2 on the next, and the whole value of a fixed strip is that
+			// the shape is the same every time you look at it.
+			// The event stream's spine, as a pseudo-element because a wrapper
+			// div with a left border would draw the line past the first and last
+			// dot instead of between them.
+			`.swm-rail{position:relative;padding-left:16px}`,
+			`.swm-rail:before{content:"";position:absolute;left:3px;top:8px;bottom:8px;width:1px;background:${LINE.rule}}`,
+			// One event row. The hover is the reason it is a rule at all: the
+			// border is transparent at rest so the row does not move by a pixel
+			// when it lights up, which is what a hover drawn by adding a border
+			// does.
+			`.swm-ev{position:relative;display:flex;align-items:flex-start;gap:${SPACE.sm};padding:3px ${SPACE.sm};border-radius:${RADIUS.sm};border:1px solid transparent}`,
+			`.swm-ev:hover{border-color:${LINE.rule}}`,
+			// A TABLE ROW LIGHTING UP UNDER THE POINTER, which none of the three
+			// tables had, because a `<tr>` styled from a `style: {}` cannot
+			// express `:hover` at all. Two of these tables are clickable — the
+			// task board opens a drawer, the tool table is read across — and a
+			// row you can click that does not answer the pointer reads as text.
+			//
+			// AN INLINE `background` BEATS THIS RULE. The task board used to
+			// write `background: "transparent"` on every unselected row, which
+			// is an inline declaration and therefore wins over a stylesheet: the
+			// hover would have been dead on arrival and nothing would have said
+			// so. The unselected row now leaves `background` undefined.
+			`.swm-tr{transition:background ${MOTION.fast}}`,
+			`.swm-tr:hover{background:${SURFACE.hover}}`,
+			// A SOURCE IS A CARD, and a card that does not answer the pointer is a
+			// paragraph with a border round it. Both steps are colour — the edge and
+			// the surface — rather than a shadow, because twenty of these stack down
+			// one column and a card that LIFTS under the cursor makes the whole
+			// column ripple as the pointer crosses it.
+			//
+			// THE TITLE UNDERLINES, NOT THE BOX. The card itself is the anchor, so
+			// painting every word inside it in the link colour would make the host,
+			// the tally chips and the verdict each look separately pressable when
+			// only the box is.
+			// THE EDGE AND THE GROUND ARE HERE, NOT IN THE STYLE OBJECT. They
+			// were written inline on the card — `border: 1px solid ${LINE.hair}`
+			// and `background: SURFACE.card` — and an inline declaration beats a
+			// stylesheet whatever the selector, so BOTH halves of the hover below
+			// were overridden and the card sat inert under the pointer. The guard
+			// that checks this rule's declaration could not see it: the rule was
+			// there, on the right sheet, on the right element, and dead.
+			`.swm-source{border:1px solid ${LINE.hair};background:${SURFACE.card};transition:border-color ${MOTION.fast},background ${MOTION.fast}}`,
+			`.swm-source:hover{border-color:${LINE.rule};background:${SURFACE.hover}}`,
+			`.swm-source:hover .swm-source-title{text-decoration:underline}`,
+
+			// ── the ONE tab vocabulary ───────────────────────────────────
+			// THREE STRIPS DID THIS JOB THREE WAYS: the page strip underlined
+			// in `label-primary` with no hover at all, the mission detail strip
+			// was a segmented pill track with `aria-pressed` on it, and the
+			// trajectory drawer had the complete underline treatment — colour,
+			// a 2px `::after`, a hover, a focus ring — sitting on TRACE_CSS
+			// where only the drawer could reach it.
+			//
+			// THE RULES MOVED SHEETS, and that is what makes the reconciliation
+			// possible rather than cosmetic: TRACE_CSS mounts when the trace
+			// pane opens, so a detail strip wearing `.swt-tab` would have been
+			// an unstyled row of buttons until somebody clicked 轨迹, and then
+			// styled for the rest of the session. This sheet is injected by the
+			// page before first paint AND by `ensureTraceStyle`, so all three
+			// strips are painted wherever they render.
+			//
+			// GEOMETRY STAYS INLINE, state lives here: the three strips sit in
+			// three boxes and want three paddings, but they must agree about
+			// what "selected" and "hovered" look like. `--swm-tab-inset` is how
+			// the underline learns each strip's padding — the same custom
+			// property trick `.swm-chip` uses to serve six hues from one rule.
+			`.swm-tab{position:relative;flex:none;appearance:none;border:0;background:transparent;cursor:pointer;white-space:nowrap;border-radius:${RADIUS.sm} ${RADIUS.sm} 0 0;transition:background ${MOTION.fast},color ${MOTION.fast}}`,
+			// THE HOVER IS A BACKGROUND, NOT A COLOUR, and that is forced: every
+			// strip sets its label colour inline (resting, selected) and an
+			// inline declaration beats a stylesheet, so a `:hover{color}` rule
+			// would be dead on arrival with nothing to say so. `background` is
+			// deliberately NOT set inline anywhere, which is what leaves this
+			// rule somewhere to land.
+			`.swm-tab:hover{background:${SURFACE.hover}}`,
+			`.swm-tab:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}`,
+			// The underline as a pseudo-element rather than a border, because a
+			// border changes the box: a 2px line switching on under the active
+			// tab would push the whole strip up two pixels as the reader moves
+			// along it, which is the same defect `pressedStyle` exists to avoid
+			// one widget along.
+			`.swm-tab[aria-selected="true"]::after{position:absolute;right:var(--swm-tab-inset,0);bottom:0;left:var(--swm-tab-inset,0);height:2px;border-radius:1px 1px 0 0;background:var(--dsw-alias-state-business-primary);content:""}`,
+			// A TAB BAR THAT CANNOT SCROLL CLIPS ITS LAST TAB, and the scrollbar
+			// that lets it scroll is itself chrome nobody asked for. Hidden the
+			// way `.swt-tabs` already hides its own, which is where this pattern
+			// was taken from rather than invented beside it.
+			`.swm-tabbar::-webkit-scrollbar{display:none}`,
+
+			// ── the centred overlay ──────────────────────────────
+			// ONE OVERLAY DEPTH, TWO SHAPES. The product had a right slide-over
+			// and nothing else, so the only place to put a form that is not a
+			// page was the page — which is how the create form came to sit
+			// permanently expanded above every mission in the list. The scrim's
+			// colour and blur are COPIED from `.swt-drawer`'s rather than chosen
+			// again: two overlays a shade apart read as two products, and a
+			// source test now holds the two alphas equal so they cannot drift.
+			//
+			// `swm-`, NOT `swt-`, AND THAT IS WHY IT IS ON THIS SHEET. TRACE_CSS
+			// is injected by `ensureTraceStyle`, which runs only when the
+			// trajectory pane or the stage drawer opens — a modal wearing
+			// `.swt-modal` would have been an unstyled div in the page flow until
+			// somebody clicked 轨迹, and correctly positioned for the rest of the
+			// session. That is the defect B14 found in the tab strip one widget
+			// along, and the missions list never calls `ensureTraceStyle` at all.
+			`.swm-modal-scrim{position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;padding:${SPACE.lg};background:rgba(0,0,0,0.30);backdrop-filter:blur(2px)}`,
+			// `--dsw-shadow-lv3` is what the drawer already wears. A hand-mixed
+			// `0 10px 34px rgba(0,0,0,0.20)` would be a second elevation for the
+			// same altitude, and it is the exact literal the segmented control's
+			// guard was written to keep out of this file.
+			`.swm-modal{display:flex;flex-direction:column;width:100%;max-width:640px;max-height:90vh;overflow:hidden;border-radius:${RADIUS.lg};border:1px solid ${LINE.rule};background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-shadow-lv3)}`,
+			`.swm-modalhead{display:flex;flex:none;align-items:flex-start;gap:${SPACE.md};padding:14px ${SPACE.lg};border-bottom:1px solid ${LINE.rule}}`,
+			// THE BODY IS THE ONLY THING THAT SCROLLS. `max-height:90vh` on the
+			// box with the scroll on the body is what keeps the title and the way
+			// out reachable on a short window — a dialog that scrolls as a whole
+			// puts its close control off the bottom of a laptop screen.
+			`.swm-modalbody{min-height:0;overflow-y:auto;padding:${SPACE.lg}}`
+				].join("");
+
+		/**
+		* Control heights: three, over the TWELVE this file had in it.
+		*
+		* 18, 19, 20, 22, 24, 26, 27, 28, 30, 32, 34, 36, 38 and 42 pixels were
+		* all in use, most of them within two pixels of a neighbour. Two buttons
+		* a pixel apart in a row do not read as two sizes; they read as one size
+		* rendered badly.
+		*
+		* The steps are the file's own centre of mass rather than a fresh
+		* invention: 28 was already the most common by three to one, 24 is the
+		* dense in-row control, and 34 is what `controlStyle` has always been.
+		* Anything under 24 in this file is a badge or a dot, not a control, and
+		* is left alone.
+		*/
+		const CONTROL = { xs: "24px", sm: "28px", md: "34px" };
+
+		/** Variables and rules, in the order the cascade needs them. */
+		const SWM_SHEET = SWM_CSS + SWM_RULES;
+		//#endregion
+
+		//#region ui primitives
+		/**
+		* The glyphs, as path data on a 24x24 box.
+		*
+		* HAND-WRITTEN, AND THAT IS NOT A COMPROMISE. This plugin has no build
+		* step — `lib/client.js` is what the harness loads — so an icon library
+		* is not a dependency this file can take. What it CAN take is a table of
+		* strings, which is what a library ships anyway.
+		*
+		* Every glyph is stroked rather than filled, at the same width, on the
+		* same box, so they sit on a line of text at one weight instead of five.
+		* The two paths already in this file — a trash can and a close cross —
+		* were drawn at different weights on different boxes, which is what a
+		* set of glyphs looks like when each one arrives on its own.
+		*/
+		const ICON_PATHS = {
+			chevronDown: "M6 9l6 6 6-6",
+			chevronRight: "M9 6l6 6-6 6",
+			arrowRight: "M5 12h14M13 6l6 6-6 6",
+			arrowLeft: "M19 12H5M11 18l-6-6 6-6",
+			check: "M20 6L9 17l-5-5",
+			close: "M18 6L6 18M6 6l12 12",
+			plus: "M12 5v14M5 12h14",
+			alert: "M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01",
+			external: "M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3",
+			trash: "M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6",
+			refresh: "M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0114.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0020.5 15",
+			search: "M11 19a8 8 0 100-16 8 8 0 000 16zM21 21l-4.4-4.4",
+			clock: "M12 22a10 10 0 100-20 10 10 0 000 20zM12 6v6l4 2",
+			spinner: "M21 12a9 9 0 11-6.2-8.6",
+			pause: "M10 4H6v16h4zM18 4h-4v16h4z",
+			play: "M5 3l14 9-14 9z",
+			// THE TWO MARKS A STATE TABLE NEEDS, and the reason they are worth two
+			// more lines of path data. MISSION_STAGE_STATUS_FACES gives `pending`
+			// and `skipped-by-tier` the SAME TONE.muted on adjacent lines, and that
+			// is deliberate — a skip is not a failure and must not be drawn as one —
+			// so once the tint is shared the glyph is the ONLY thing left that can
+			// separate "not run yet" from "this tier never runs it".
+			circle: "M12 22a10 10 0 100-20 10 10 0 000 20z",
+			minus: "M5 12h14",
+			// THE ROLE GLYPHS, and the reason there are eight of them. A role is
+			// a CATEGORY, and a category chip that carries only a word is read at
+			// the speed of reading; the mark is what makes a roster scannable at
+			// 11px. They are drawn to the same box and the same stroke as the
+			// fifteen above so a role mark and a status tick sit on one line at
+			// one weight — which is the whole reason this table exists rather
+			// than each site pasting its own <svg>.
+			brain: "M12 5a3 3 0 10-5.9.8A2.5 2.5 0 004 9.5 2.5 2.5 0 005.5 12 2.5 2.5 0 004 14.5c0 1.6 1.4 2.5 3 2.5v2M12 5a3 3 0 115.9.8A2.5 2.5 0 0120 9.5a2.5 2.5 0 01-1.5 2.5 2.5 2.5 0 011.5 2.5c0 1.6-1.4 2.5-3 2.5v2M12 5v14",
+			gitBranch: "M6 3v12M18 6a3 3 0 100-6 3 3 0 000 6zM6 21a3 3 0 100-6 3 3 0 000 6zM15 6a9 9 0 01-9 9",
+			scanSearch: "M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2M13.5 12.5a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0zM16 16l-1.9-1.9",
+			penLine: "M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z",
+			gavel: "M14.5 12.5l-8 8a2.1 2.1 0 11-3-3l8-8M16 16l6-6M8 8l6-6M9 7l8 8M21 11l-8-8",
+			shieldAlert: "M20 13c0 5-3.5 7.5-7.7 9a1 1 0 01-.6 0C7.5 20.5 4 18 4 13V6a1 1 0 011-1c2 0 4.5-1.2 6.2-2.7a1 1 0 011.5 0C14.5 3.8 17 5 19 5a1 1 0 011 1z",
+			sparkles: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z",
+			// The tool glyphs. `wrench` is the fallback the tool table leans on:
+			// the Host half registers its own ids and an unlisted one has to draw
+			// as SOMETHING, or a row loses its mark and reads as a different kind
+			// of row.
+			globe: "M12 22a10 10 0 100-20 10 10 0 000 20zM2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z",
+			book: "M4 19.5A2.5 2.5 0 016.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z",
+			wrench: "M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.8-3.8a6 6 0 01-8 8l-6.9 6.9a2.1 2.1 0 01-3-3l6.9-6.9a6 6 0 018-8l-3.8 3.8z"
+		};
+
+		/**
+		* A mark per role, keyed EXACTLY as ROLE_TONE is keyed.
+		*
+		* Two tables that have to agree and are four hundred lines apart is what
+		* a source test is for, and there is one: a role that gains a colour here
+		* and no glyph there draws a chip with a hole in it, which is the one
+		* failure a reader reports as "the icon is broken" rather than as a
+		* missing role.
+		*
+		* `mission` is the fallback and takes the sparkle, because a row that
+		* belongs to no agent belongs to the run itself.
+		*/
+		const ROLE_ICON = {
+			leader: "brain",
+			researcher: "search",
+			analyst: "gitBranch",
+			reconciler: "scanSearch",
+			writer: "penLine",
+			reviewer: "gavel",
+			verifier: "shieldAlert",
+			mission: "sparkles"
+		};
+
+		/**
+		* One glyph, sized from ICON.
+		*
+		* An unknown name renders NOTHING rather than throwing, matching
+		* `missionFace`'s fallthrough: a glyph nobody has drawn yet is a gap in
+		* a row, and a thrown render is a blank tab.
+		* @param props - `{name, size, spin, title}`.
+		*/
+		function Icon({ name, size, spin, title }) {
+			const d = ICON_PATHS[name];
+			if (d === undefined) return null;
+			const box = size ?? ICON.sm;
+			return jsx("svg", {
+				className: spin === true ? "swm-spin" : undefined,
+				width: box, height: box, viewBox: "0 0 24 24",
+				fill: "none", stroke: "currentColor",
+				strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round",
+				// Decorative by default. A glyph that repeats the word beside it
+				// is read twice by a screen reader, which is worse than silence.
+				"aria-hidden": title === undefined ? "true" : undefined,
+				role: title === undefined ? undefined : "img",
+				"aria-label": title,
+				style: { flex: "none", display: "block" },
+				children: jsx("path", { d })
+			});
+		}
+
+		/**
+		* One small tinted surface: the chip, at two sizes and in two shapes.
+		*
+		* WHAT THIS REPLACES. Ten sites drew this box by hand — seven radii,
+		* five paddings and three font sizes for one thing — and none of the
+		* differences was a decision. A 5px corner in the list beside a 6px
+		* corner in the header is not a hierarchy; it is two people typing, and
+		* it is visible precisely when both are on screen.
+		*
+		* THE SHAPE CARRIES THE MEANING. A CATEGORY takes the default
+		* rounded-rect: the stage strip, the task board's origin, every tally.
+		* A STATE takes `pill`, which routes the geometry through `pillStyle`.
+		* The eye learns a shape faster than it reads a word, so two kinds of
+		* thing drawn in one shape is a hierarchy that has to be re-read every
+		* time.
+		*
+		* THE COUNT RIDES INSIDE. What the task board had was three sibling
+		* spans in three colours in one cell, with the figure the row exists to
+		* report drawn in `INK.quiet` — decoration weight for the load-bearing
+		* number. A count belongs in the chip whose subject it counts.
+		* IT CAN BE PRESSED, AND THAT IS STILL ONE CHIP. `onClick` swaps the
+		* `span` for a `button` and nothing else: same tint, same corner, same
+		* mark. The alternative was a second component for the one place a chip
+		* is a control — the stage ruler, where every cell opens that step in the
+		* trajectory — and a second component is a second geometry the moment
+		* either one is touched. What the button DOES need is the three
+		* resets no chip ever wanted (`appearance`, `border`, `textAlign`) and
+		* the focus ring, which arrives as `.swm-focus` rather than as a style
+		* object because `:focus-visible` is not reachable from one.
+		*
+		* Only a chip in a grid cell wants that — a chip in a row is `flex:none`
+		* precisely so a long label cannot squash its neighbours — and in a cell
+		* the opposite is true: twelve chips that each sized to their own word
+		* would not be a ruler.
+		* @param props - `{tone, label, icon, count, size, title, solid, pill, onClick, className}`.
+		* @param key - React's key, so a chip can be called straight into a list.
+		*/
+		function Chip({ tone, label, icon, count, size, title, solid, pill, onClick, className }, key) {
+			const hue = tone ?? TONE.neutral;
+			const wide = size === "sm";
+			const pressable = typeof onClick === "function";
+			const shape = pill === true ? pillStyle(hue, wide ? "md" : "sm") : {
+				font: wide ? FONT.smallStrong : FONT.microStrong,
+				display: "inline-flex", alignItems: "center", boxSizing: "border-box",
+				gap: SPACE.xs, padding: wide ? "2px 8px" : "1px 6px",
+				borderRadius: RADIUS.sm,
+				background: `rgba(${hue},${TINT.soft})`,
+				color: `rgb(${hue})`,
+				boxShadow: `inset 0 0 0 1px rgba(${hue},${TINT.ring})`,
+				whiteSpace: "nowrap"
+			};
+			return jsxs(pressable ? "button" : "span", {
+				type: pressable ? "button" : undefined,
+				onClick,
+				// The ring rides on the class, never on the style object: a chip
+				// that drew its own focus outline inline would draw it always.
+				className: pressable
+					? (className === undefined ? "swm-focus" : `swm-focus ${className}`)
+					: className,
+				title,
+				style: {
+					...shape,
+					// A chip sizes to its text unless it is filling a cell it was
+					// given. `minWidth: 0` is the half that is easy to miss: a flex
+					// or grid item refuses to shrink below its content by default,
+					// so without it the label below ellipsises never.
+					flex: "none",
+					...(pressable
+						? { appearance: "none", border: "none", cursor: "pointer", textAlign: "left" }
+						: {}),
+					// A chip on a surface of its own tone — the header row of a
+					// Callout — is 10% over 10% and disappears. `solid` is the
+					// same chip with the tone standing in for the surface, which
+					// is the one case where a tint cannot separate the two.
+					...(solid === true
+						? { background: `rgba(${hue},${TINT.fill})`, color: SURFACE.base, boxShadow: "none" }
+						: {}),
+					// AFTER the shorthand, never before it. `font` resets
+					// font-variant, so a chip that declared this first lost it
+					// silently — and half the chips in this file are a version, a
+					// fraction or a tally, which is exactly where a figure that
+					// changes width is read as the box twitching.
+					fontVariantNumeric: "tabular-nums"
+				},
+				children: [
+					icon === undefined ? null : jsx(Icon, { name: icon, size: ICON.xs, spin: icon === "spinner" }, "glyph"),
+					// THE LABEL IS THE PART THAT GIVES. A chip is `nowrap` by
+					// definition, so in a box narrower than its text something has
+					// to lose: the mark is the fastest thing to read and the count
+					// is the figure the chip exists to report, which leaves the
+					// word. With room this is invisible — an unconstrained span
+					// sizes to its content either way.
+					label === undefined || label === null || label === "" ? null : jsx("span", {
+						style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" },
+						children: label
+					}, "label"),
+					count === undefined || count === null || count === "" ? null : jsx("span", {
+						style: {
+							font: FONT.micro,
+							fontVariantNumeric: "tabular-nums",
+							flex: "none",
+							marginLeft: "2px", padding: "0 4px", borderRadius: RADIUS.pill,
+							// A stronger step of the SAME hue, not white: white is
+							// a colour in one theme and a hole in the other.
+							background: `rgba(${hue},${TINT.ring})`
+						},
+						children: count
+					}, "count")
+				]
+			}, key);
+		}
+
+		/**
+		* WHO DID IT, drawn instead of spelled.
+		*
+		* ROLE_TONE and `roleTone()` shipped with the tokens region and had ONE
+		* caller — `roleTone`'s own body. Every agent identity on screen was bare
+		* text: the roster, the task board's owner column, the stage detail's
+		* 负责人 row and every one of the hundred rows on the trajectory. The ramp
+		* existed and had no pixels. This is the component that spends it.
+		*
+		* THE ID IS NOT ALWAYS A ROLE. Researchers are minted per dimension —
+		* `researcher:${dimensionId}`, where the id is a slug the planner chose,
+		* so a real one reads `researcher:regulatory-landscape` — and the whole
+		* string is what the store holds. `roleTone` already cuts at the colon;
+		* this does the same cut once more for the glyph rather than
+		* re-implementing the normalisation a third time.
+		*
+		* THE SUFFIX IS A SEPARATE SPAN, and it is the reason this is not just a
+		* `Chip`. A chip is `whiteSpace: nowrap` by definition — that is what
+		* keeps a row of them from breaking mid-word — so a dimension slug inside
+		* one makes the chip as wide as the slug, in a 96px column. The role
+		* stays fixed-width and coloured; the instance ellipsises beside it in the
+		* decoration weight, which is what it is.
+		*
+		* Reads MISSION_AGENT_FACES and `missionFace`, declared three thousand
+		* lines below. Safe for the same reason `pillStyle` may read TINT: a
+		* function body is evaluated when it is CALLED, and this is only ever
+		* called from a render. The vocabulary stays with the other vocabularies
+		* rather than being copied up here, because a second table of role words
+		* is a second table to keep in step.
+		* @param props - `{agentId, role, label, zh, size, iconOnly, title}`.
+		* @param key - React's key, so a chip can be called straight into a list.
+		*/
+		function RoleChip({ agentId, role, label, zh, size, iconOnly, title }, key) {
+			const raw = String(agentId ?? role ?? "").trim();
+			// An absence renders as null, not as an empty chip: a tinted box with
+			// no text in it looks like a role whose word failed to load, which is
+			// a bug report about a row that simply has no agent yet.
+			if (raw === "") return null;
+			const base = raw.split(":")[0].trim().toLowerCase();
+			const hue = roleTone(raw);
+			const glyph = Object.hasOwn(ROLE_ICON, base) ? ROLE_ICON[base] : ROLE_ICON.mission;
+			const at = raw.indexOf(":");
+			// NO `suffix` OVERRIDE. It shipped as a prop with no caller — "pass a
+			// resolved dimension name instead of the raw slug" — and a prop nobody
+			// passes is the next geometry, added by whoever first needs something
+			// near it. Same rule that kept `dot` off Chip, `accent` off
+			// MissionPanel, `mono` off MetricStat and `hits` off SourceLink.
+			const instance = at === -1 ? "" : raw.slice(at + 1);
+			const word = label ?? missionFace(MISSION_AGENT_FACES, base, zh);
+			// The chip carries the caller's key when it IS the whole component, and
+			// a local one when it is a child of the wrapper below. A React key is a
+			// position among siblings, so the same key on both would be a warning in
+			// one shape and a wrong reconciliation in the other.
+			const chip = Chip({
+				tone: hue,
+				icon: glyph,
+				label: iconOnly === true ? undefined : word,
+				size,
+				// The raw id, always, even when the chip is showing the word: it is
+				// the string a log grep uses and the string the trajectory's search
+				// box matches, and it must stay reachable from the pixels.
+				title: title ?? (word === raw ? raw : `${word} · ${raw}`)
+			}, instance === "" ? key : "role");
+			if (instance === "") return chip;
+			return jsxs("span", {
+				style: { display: "inline-flex", alignItems: "center", gap: SPACE.xs, minWidth: 0, maxWidth: "100%" },
+				children: [
+					chip,
+					jsx("span", {
+						// DECORATION WEIGHT, deliberately. The dimension a researcher was
+						// minted for is context for the role beside it, not a value the
+						// reader has to read — the dimension's own card says it in full.
+						style: { font: FONT.micro, color: INK.quiet, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+						title: instance,
+						children: instance
+					}, "instance")
+				]
+			}, key);
+		}
+
+		/**
+		* A tinted box with something to say, and optionally a name for it.
+		*
+		* Three of these were hand-built — the run-elsewhere note, the failure
+		* banner, the degraded-archive note — in three alphas, three paddings
+		* and three type sizes, and only one of the three tinted its lead line.
+		* Three more sat one region away as bare coloured text with no box at
+		* all, which is how a 409's response body came to reflow the entire
+		* mission header.
+		*
+		* THE RING IS INSET rather than a border, so the three stop differing in
+		* OUTER box size: a `1px solid` box is two pixels wider than its
+		* content, and the untinted blocks above and below it are not.
+		*
+		* THE LEAD IS A LINE, NOT A CHIP. Every lead this file has is a
+		* SENTENCE — "这次运行失败了。", "This version was stored degraded." —
+		* and a sentence inside a badge is a badge the width of the box. The
+		* glyph is the chip: one solid mark that says which of the three tones
+		* this is without the reader having to name the colour.
+		* @param props - `{tone, label, meta, icon, children}`.
+		* @param key - React's key.
+		*/
+		function Callout({ tone, label, meta, icon, children }, key) {
+			const hue = tone ?? TONE.neutral;
+			const named = (label ?? "") !== "" || (meta ?? null) !== null;
+			return jsxs("div", {
+				style: {
+					font: FONT.small,
+					display: "flex", alignItems: "flex-start", gap: SPACE.sm,
+					margin: `0 0 ${SPACE.md}`, padding: `${SPACE.sm} ${SPACE.md}`,
+					borderRadius: RADIUS.md,
+					background: `rgba(${hue},${TINT.soft})`,
+					boxShadow: `inset 0 0 0 1px rgba(${hue},${TINT.ring})`,
+					color: INK.primary
+				},
+				children: [
+					// SOLID, because a 10% tint on a 10% tint is nothing. This is
+					// the one place a chip sits on a surface of its own tone, and
+					// it is why `Chip` has a `solid` at all.
+					icon === undefined ? null : Chip({ tone: hue, icon, solid: true }, "glyph"),
+					jsxs("div", {
+						style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: SPACE.xs },
+						children: [
+							!named ? null : jsxs("div", {
+								style: { display: "flex", alignItems: "baseline", gap: SPACE.sm },
+								children: [
+									// TINTED, which only one of the three hand-built
+									// copies did. A lead drawn in body colour is a
+									// first line, not a lead.
+									(label ?? "") === "" ? null : jsx("span", {
+										style: { font: FONT.smallStrong, color: `rgb(${hue})` },
+										children: label
+									}, "lead"),
+									(meta ?? null) === null ? null : jsx("span", { style: { marginLeft: "auto" }, children: meta }, "meta")
+								]
+							}, "head"),
+							jsx("div", {
+								// THE CAP IS THE LOAD-BEARING PART. A runtime error
+								// is one sentence and a 409 body is a page of them,
+								// and the second used to push every control under it
+								// off the screen. Capped and scrolled, the banner
+								// keeps its size and the text stays reachable.
+								style: {
+									minWidth: 0, maxHeight: "128px", overflowY: "auto",
+									whiteSpace: "pre-wrap", wordBreak: "break-word"
+								},
+								children
+							}, "body")
+						]
+					}, "col")
+				]
+			}, key);
+		}
+
+		/**
+		* ONE BAR, for every proportion this tab draws.
+		*
+		* Four of them existed and no two were the same object: 3px with no
+		* radius at all, 4px and 5px and 6px on a 6px radius. Nobody chose the
+		* differences; they are what four people typed on four afternoons, and
+		* they are only visible when two of the bars are on screen together —
+		* which, since the stage-spend rows and the ceiling meters share a pane,
+		* is most of the time.
+		*
+		* `max` DEFAULTS TO 100 so a percentage goes straight in, and the fill is
+		* clamped at BOTH ends. Over-100 is a real state here — a mission can
+		* spend past a soft ceiling — and an unclamped bar renders 140% wide,
+		* pushing its own row out of the panel it is measuring.
+		*
+		* THE REST SPREADS ONTO THE TRACK. The audio seek is a `role="slider"`
+		* carrying an `onClick`, an `aria-valuenow` and a `tabIndex`, and it is
+		* the same bar; without a way to pass those through, giving it a copy of
+		* its own is exactly how the fifth geometry would have arrived.
+		* @param props - `{value, max, tone, style}` plus anything the track itself should carry.
+		* @param key - React's key, so a bar can be called straight into a list.
+		*/
+		function Meter({ value, max, tone, style, ...rest }, key) {
+			// A zero or absent ceiling is a percentage, not a divide by zero. The
+			// `/0` this file refuses everywhere else renders here as either NaN —
+			// which CSS drops, leaving the fill at its full width — or as a
+			// confident 100% about a door nobody has opened.
+			const ceiling = Number(max) > 0 ? Number(max) : 100;
+			const share = Math.max(0, Math.min(100, ((Number(value) || 0) / ceiling) * 100));
+			return jsx("div", {
+				...rest,
+				style: { ...TRACK, height: "6px", ...style },
+				children: jsx("div", {
+					style: {
+						width: `${share}%`, height: "100%",
+						borderRadius: RADIUS.pill,
+						background: `rgb(${tone ?? TONE.info})`,
+						transition: `width ${MOTION.base}`
+					}
+				})
+			}, key);
+		}
+
+		/**
+		* ONE FIGURE, given the room a figure needs.
+		*
+		* Every number on this tab was either a table cell or a clause. The
+		* mission header stated seven of them as one dot-joined string —
+		* 标准 · 第 1 次运行 · 阶段 7/12 · 维度 3/4 · 章节 2/6 · 已用 12 分 · … —
+		* and a dimension card stated three more the same way, in the same weight
+		* as the sentence two elements below it. A reader looking for one of
+		* those figures has to read the whole clause to find out it is not the
+		* one they wanted.
+		*
+		* FONT.title AND NO LARGER. 20px is the biggest step this file declares
+		* anywhere; the batch spec asked for 24px, and a 24px numeral here would
+		* be the one thing in the tab that outweighs the mission's own title.
+		*
+		* `mono` IS NOT A PROP, against the spec's signature. Every value that
+		* reaches this component is a figure or a fraction, which is precisely
+		* what MONO exists for, and a prop with no caller is the next geometry
+		* waiting for whoever first needs something near it — the same reason
+		* `Chip` has no `dot` and `MissionPanel` has no `accent`.
+		*
+		* THE HINT IS `INK.secondary`, not the spec's tertiary. A hint here is
+		* 412,000 / 1,500,000 · 27% — the ceiling the figure above it is being
+		* measured against — and INK's own docblock puts tertiary at 3.71:1, the
+		* decoration budget. The label and the hint separate by SHAPE instead:
+		* one is an uppercase tracked eyebrow, the other is a sentence.
+		* @param props - `{label, value, hint, tone, meter}`; `meter` is a ratio, or null for no bar.
+		* @param key - React's key.
+		*/
+		function MetricStat({ label, value, hint, tone, meter }, key) {
+			const hue = tone ?? null;
+			// The file's own empty convention. `0` is a value and must survive:
+			// `value || "—"` would print an em dash over a real zero, which is
+			// the difference between "none verified" and "not measured".
+			const shown = value === null || value === undefined || value === "" ? "—" : value;
+			const clipped = { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+			return jsxs("div", {
+				style: {
+					display: "flex", flexDirection: "column", gap: SPACE.xs,
+					minWidth: 0,
+					padding: `${SPACE.sm} ${SPACE.md}`,
+					borderRadius: RADIUS.lg,
+					border: `1px solid ${LINE.hair}`,
+					background: hue === null ? SURFACE.subtle : `rgba(${hue},${TINT.soft})`
+				},
+				children: [
+					jsx("div", {
+						style: { font: FONT.micro, letterSpacing: "0.04em", textTransform: "uppercase", color: INK.secondary, ...clipped },
+						children: label
+					}, "label"),
+					jsx("div", {
+						style: {
+							// `font` FIRST. It is a shorthand and it resets the family,
+							// the leading AND font-variant-numeric, so a tabular-nums
+							// written above it is discarded — in the one component whose
+							// whole subject is a column of figures.
+							font: FONT.title,
+							fontFamily: MONO,
+							fontVariantNumeric: "tabular-nums",
+							color: hue === null ? INK.primary : `rgb(${hue})`,
+							...clipped
+						},
+						children: shown
+					}, "value"),
+					// A ratio the figure above is a fraction OF. Absent unless the
+					// caller has one: a tile whose value is a bare count has nothing
+					// to be a proportion of, and a bar at 0% under it would say it
+					// had failed to reach a bar nobody set.
+					meter === null || meter === undefined ? null : Meter({ value: meter * 100, tone: hue ?? TONE.info }, "meter"),
+					hint === null || hint === undefined || hint === "" ? null : jsx("div", {
+						style: { font: FONT.micro, color: INK.secondary, ...clipped },
+						children: hint
+					}, "hint")
+				]
+			}, key);
+		}
+
+		/**
+		* A row of them, on the grid that fixes itself.
+		*
+		* `auto-fit` with a `minmax` floor rather than a fixed column count, for
+		* the reason MissionCostMeters already reached for the same shape: the
+		* detail header is inset inside an overlay whose width is the window's,
+		* and four fixed columns are four 90px tiles on a narrow screen with the
+		* label ellipsised down to nothing. Four, three, two and one all work;
+		* nobody has to pick.
+		*
+		* A NULL TILE IS DROPPED, not rendered empty. Two of the call sites have
+		* a tile that only exists on some runs — a dimension with no chapters has
+		* no chapter fraction — and `null` in the array is how a caller says so
+		* without building the array twice.
+		* @param props - `{tiles}`, an array of MetricStat props; nulls are dropped.
+		* @param key - React's key.
+		*/
+		function MissionStatTiles({ tiles }, key) {
+			const shown = (Array.isArray(tiles) ? tiles : []).filter((tile) => tile !== null && tile !== undefined);
+			// An absence renders as nothing, with the reason: a grid with no
+			// children still spends its bottom margin, which on the dimension card
+			// is a gap under a header that nothing follows.
+			if (shown.length === 0) return null;
+			return jsx("div", {
+				style: {
+					display: "grid",
+					gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+					gap: SPACE.sm, margin: `0 0 ${SPACE.md}`
+				},
+				children: shown.map((tile, at) => MetricStat(tile, tile.label ?? `tile-${at}`))
+			}, key);
+		}
+
+		/**
+		* A bare URL, in a sentence nobody wrote as markdown.
+		*
+		* It travels with `linkify` rather than staying with the description
+		* parser it was first written for: a pattern and its only reader are one
+		* thing, and leaving it behind would have left the reader a ReferenceError
+		* away from a blank tab.
+		*/
+		const BARE_URL = /https?:\/\/[^\s<>()[\]]+[^\s<>()[\].,;:!?'"]/g;
+
+		/**
+		* Render one line, turning bare URLs into links.
+		*
+		* MOVED OUT OF THE VIDEO-DESCRIPTION REGION, where it sat with exactly two
+		* call sites in the one component that happened to need it first. Nothing
+		* in it knows about a video: it takes a string and returns children, which
+		* is what a primitive is. Everything an agent writes on the mission screens
+		* — a degrade note, a refusal, a researcher's closing sentence — can carry
+		* a URL, and every one of them was printing it as dead text because the
+		* function that fixes it was quarantined in another feature's region.
+		* @param text - the line.
+		* @param key - a key prefix.
+		* @returns React children.
+		*/
+		function linkify(text, key) {
+			const source = String(text ?? "");
+			const nodes = [];
+			let at = 0;
+			let index = 0;
+			BARE_URL.lastIndex = 0;
+			for (;;) {
+				const match = BARE_URL.exec(source);
+				if (match === null) break;
+				if (match.index > at) nodes.push(source.slice(at, match.index));
+				nodes.push(jsx("a", {
+					href: match[0], target: "_blank", rel: "noreferrer noopener",
+					style: { color: "var(--dsw-alias-label-link)", wordBreak: "break-all" },
+					children: match[0].replace(/^https?:\/\/(?:www\.)?/, "")
+				}, `${key}u${index++}`));
+				at = match.index + match[0].length;
+			}
+			if (at < source.length) nodes.push(source.slice(at));
+			return nodes.length === 0 ? source : nodes;
+		}
+
+		/**
+		* Cap a block of text at N lines.
+		*
+		* The three properties are useless apart and meaningless in any other
+		* combination — `-webkit-line-clamp` does nothing without the box display
+		* and the vertical orientation, and the whole thing does nothing without
+		* the overflow — so they are one call rather than four keys that a fifth
+		* site gets three-quarters right.
+		* @param lines - how many lines survive.
+		* @returns a style fragment to spread.
+		*/
+		function clampBox(lines) {
+			return { display: "-webkit-box", WebkitLineClamp: lines, WebkitBoxOrient: "vertical", overflow: "hidden" };
+		}
+
+		/**
+		* A paragraph an agent wrote, capped at a few lines with a way to read the rest.
+		*
+		* THE TWO TREATMENTS THIS REPLACES WERE BOTH WRONG. Half the mission prose
+		* was `whiteSpace:"nowrap"` with an ellipsis — one line, with the sentence
+		* that says what went wrong hidden behind a native tooltip — and the other
+		* half was printed uncapped, so one long refusal pushed the rest of the
+		* pane off the screen. A clamp with a control is the only arrangement
+		* where a long sentence costs a fixed amount of room AND stays readable.
+		*
+		* IT IS A COMPONENT, NOT A DIRECT CALL, unlike Chip / Callout / Meter
+		* beside it: it holds state and measures itself in a layout effect, so it
+		* must go through `jsx(MissionClamp, …)` and get its own hook slots. A
+		* direct call would run its hooks inside whichever component called it,
+		* which is the rule-of-hooks break that surfaces as somebody else's state.
+		* @param text - the sentence, verbatim.
+		* @param lines - how many lines to show collapsed; 2 by default.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionClamp({ text, lines, zh }) {
+			const body = String(text ?? "");
+			const want = Number(lines);
+			const cap = Number.isFinite(want) && want > 0 ? want : 2;
+			const box = useRef(null);
+			const [open, setOpen] = useState(false);
+			// THREE VALUES, and `null` is the one that earns the comment: it means
+			// the box has not been measured — nothing has laid out yet, an ancestor
+			// is hidden, or this is running in a renderer with no DOM at all — and
+			// it must never be read as "it fits". An unmeasured box still clamps,
+			// because a clamped box is the only one whose `scrollHeight` can answer
+			// the question, but it KEEPS ITS TOGGLE. The cost of that is an
+			// expander on a sentence that did not need one; the cost of the
+			// opposite default is text hidden behind a control that is not there.
+			const [overflows, setOverflows] = useState(null);
+			useLayoutEffect(() => {
+				// Only while collapsed. An expanded box has `scrollHeight ===
+				// clientHeight` by construction, so measuring it would answer "it
+				// fits", drop the toggle, and strand the reader with no way back.
+				if (open) return;
+				const node = box.current;
+				if (node === null || node === undefined) return;
+				const full = Number(node.scrollHeight);
+				const shown = Number(node.clientHeight);
+				// A zero-height box has not been laid out. Leave the state at
+				// whatever it was rather than writing `false` into it.
+				if (!Number.isFinite(full) || !Number.isFinite(shown) || shown === 0) return;
+				setOverflows(full > shown + 1);
+			}, [body, cap, open]);
+			// An absence renders as nothing, not as an empty two-line box with a
+			// control under it. Every call site guards its own field for "" as
+			// well; this is the floor under all of them.
+			if (body === "") return null;
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: SPACE.xs, minWidth: 0 },
+				children: [
+					jsx("div", {
+						ref: box,
+						style: open
+							? { minWidth: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }
+							: { ...clampBox(cap), minWidth: 0, wordBreak: "break-word" },
+						// LINKS, because these sentences are written by agents that
+						// quote addresses inside them. This is the reason linkify moved.
+						children: linkify(body, `${cap}c`)
+					}, "text"),
+					overflows === false ? null : jsx("button", {
+						type: "button",
+						className: "swm-focus",
+						style: { font: FONT.micro,
+							appearance: "none", border: "none", background: "transparent", padding: 0,
+							color: "var(--dsw-alias-state-business-primary)", cursor: "pointer"
+						},
+						// STOPPED, and it is not defensive noise: several of these sit
+						// inside a row that is itself a control, and without this the
+						// press that expands a sentence also opens the drawer over it.
+						onClick: (event) => { event.stopPropagation?.(); setOpen((value) => !value); },
+						// THE FILE'S OWN WORDS, taken from the description expander
+						// that was the precedent for this one. A third phrasing for
+						// "there is more of this" is a third thing to learn for no gain.
+						children: open ? (zh ? "收起" : "Show less") : (zh ? "展开全部" : "Show more")
+					}, "toggle")
+				]
+			});
+		}
+
+		/**
+		* What to call a page when the page did not say.
+		*
+		* FOUR STEPS, in the order of how much a human actually chose the name.
+		* A stored `<title>` is the publisher's own words; the first sentence of
+		* a snippet is the extractor's; a decoded path segment is at least the
+		* URL author's filing decision — `/scaling-test-time-compute` is a worse
+		* name than the title and a far better one than
+		* `https://deepmind.google/discover/scaling-test-time-compute` — and the
+		* hostname is the last thing that is still a NAME rather than an address.
+		*
+		* WHAT THIS REPLACES: `(source.title ?? "") === "" ? source.url : source.title`,
+		* written out three times in three components. On any run where the
+		* fetcher could not read a title that renders a column of raw addresses,
+		* which is unreadable in the specific way that is easy to miss in review:
+		* every row starts with the same eight characters and the part that
+		* differs is off the right edge behind the ellipsis.
+		*
+		* THE LAST RESORT IS THE ADDRESS ITSELF, below the hostname, and it is
+		* deliberately not `""`. A card with no name at all is a card the reader
+		* cannot tell from a rendering fault; a bare URL is a bad name and no
+		* name is worse.
+		* @param title - the stored title, where the fetch kept one.
+		* @param snippet - any prose that travelled with the row; "" is fine.
+		* @param url - the address.
+		* @returns a name.
+		*/
+		function sourceTitleOf(title, snippet, url) {
+			const stored = String(title ?? "").trim();
+			if (stored !== "") return stored;
+			// THE FIRST SENTENCE, not the whole snippet. A snippet is a paragraph,
+			// and a paragraph in a title slot is a two-line clamp with no title
+			// visible in it — the clamp would be doing the naming.
+			const prose = String(snippet ?? "").trim();
+			if (prose !== "") {
+				const stop = prose.search(/[。！？]|[.!?]\s/u);
+				const first = (stop === -1 ? prose : prose.slice(0, stop + 1)).trim();
+				if (first !== "") return first.length > 120 ? `${first.slice(0, 119)}…` : first;
+			}
+			const address = String(url ?? "").trim();
+			try {
+				const path = new URL(address).pathname.split("/").filter((piece) => piece !== "");
+				const last = path[path.length - 1];
+				if (last !== undefined) {
+					// Decoded and de-slugged, because `%E5%9C%B0%E5%9D%80` is not a
+					// name in any language and `scaling-test-time.html` is one once
+					// the extension and the hyphens come off.
+					const word = decodeURIComponent(last).replace(/\.[a-z0-9]{1,5}$/i, "").replace(/[-_]+/g, " ").trim();
+					if (word !== "") return word;
+				}
+			} catch {
+				// An unparseable address has no path to read, and a malformed URI
+				// escape makes decodeURIComponent throw. Either way the host is the
+				// next step down, not a crash on a list of a hundred rows.
+			}
+			const host = hostOf(address);
+			return host !== "" ? host : address;
+		}
+
+		/**
+		* ONE SOURCE, as a card rather than as a line.
+		*
+		* WHAT WAS HERE. Three components drew a page the reader had read, and
+		* not one of them drew it as a thing you could point at: a bare `<a>`
+		* over a single 11px mono line that `.join(" · ")`-ed the host, the
+		* finding count, the verified count, the dimension names and a
+		* timestamp. Five differing signals at one weight in one grey — this
+		* file's signature for "nobody decided which of these matters" — and the
+		* one a reader is actually on this pane for, whether what the page
+		* carried held up, was the third clause of five.
+		*
+		* THE HOVER IS A CLASS. `:hover` is unreachable from an inline
+		* `style: {}`, so the card's whole affordance — edge and surface stepping
+		* up under the pointer, title underlining — ships as `.swm-source` in
+		* SWM_RULES and the element carries the class.
+		*
+		* A ROW WITH NO ADDRESS IS A `div`, NOT A DEAD ANCHOR. An `<a>` without
+		* an `href` is not focusable and announces as plain text, so it would
+		* look pressable and answer nothing. The card still renders, because the
+		* finding it carried is real even on the runs where the address did not
+		* survive.
+		*
+		* NO TYPE ICON AND NO CREDIBILITY GRADE, against the reference this was
+		* drawn from. There is no `kind` field and no score on a source row
+		* anywhere in this projection, and a grade with no data behind it is a
+		* number the screen would be inventing.
+		*
+		* THERE IS NO `hits` PROP, also against the reference. The two callers'
+		* counts are different facts — findings taken OFF a page, versus markers
+		* in the prose that lean ON it — so a shared count chip would have to
+		* invent a third phrasing that is wrong in both places. Each caller says
+		* its own words through `meta`, the same reason `Chip` has no `dot` and
+		* `MetricStat` no `mono`.
+		* @param props - `{title, url, host, verifyState, meta, zh}`; `meta` is extra children for the bottom row.
+		* @param key - React's key, so a card can be called straight into a list.
+		*/
+		function SourceLink({ title, url, host, verifyState, meta, zh }, key) {
+			const address = String(url ?? "").trim();
+			const openable = address !== "";
+			return jsxs(openable ? "a" : "div", {
+				href: openable ? address : undefined,
+				target: openable ? "_blank" : undefined,
+				rel: openable ? "noreferrer noopener" : undefined,
+				className: openable ? "swm-source swm-focus" : "swm-source",
+				// NO `title` WITH THE ADDRESS IN IT. The browser already shows an
+				// anchor's href in the status bar on hover, so a tooltip repeating
+				// it buys nothing — and it costs something real: `textOf` walks
+				// every prop value, so the address would be in this card's text
+				// twice, and the guard that proves a six-times-cited page is listed
+				// ONCE counts occurrences of that address.
+				style: {
+					font: FONT.body,
+					display: "block", minWidth: 0,
+					padding: `${SPACE.sm} ${SPACE.md}`,
+					// NO `border` AND NO `background` HERE: `.swm-source` carries both, so
+					// that `.swm-source:hover` has something it can outrank. Written here
+					// they are inline declarations, which beat every rule on the sheet.
+					borderRadius: RADIUS.md,
+					color: INK.primary,
+					textDecoration: "none"
+				},
+				children: [
+					jsxs("div", {
+						style: { display: "flex", alignItems: "flex-start", gap: SPACE.sm },
+						children: [
+							jsx("span", {
+								className: "swm-source-title",
+								style: { flex: 1, minWidth: 0, color: INK.primary, wordBreak: "break-word", ...clampBox(2) },
+								children: title
+							}, "title"),
+							// THE ONE MARK THAT SAYS "this opens somewhere else". The
+							// card carries no link colour — see the rule — so without
+							// this glyph a card with an address and a card whose address
+							// did not survive are the same card.
+							!openable ? null : jsx("span", {
+								style: { flex: "none", color: "var(--dsw-alias-state-business-primary)" },
+								children: jsx(Icon, {
+									name: "external", size: ICON.xs,
+									title: zh ? "在新标签页打开" : "Opens in a new tab"
+								})
+							}, "out")
+						]
+					}, "head"),
+					jsxs("div", {
+						style: {
+							font: FONT.micro,
+							display: "flex", alignItems: "center", flexWrap: "wrap",
+							gap: SPACE.xs, margin: `${SPACE.xs} 0 0`, color: INK.quiet
+						},
+						children: [
+							(host ?? "") === "" ? null : jsx("span", {
+								style: {
+									fontFamily: MONO, flex: "none", maxWidth: "100%",
+									overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+								},
+								children: host
+							}, "host"),
+							// THE VERDICT, IN ITS OWN COLOUR. MISSION_VERIFY_FACES gained
+							// its hues one batch ago and this row was still spelling the
+							// state as the third clause of a grey sentence — 已核验 and
+							// 查无此文 in the same ink, on the one screen where the
+							// difference between them is the whole point.
+							verifyState === null || verifyState === undefined || verifyState === "" ? null : Chip({
+								tone: missionHue(MISSION_VERIFY_FACES, verifyState),
+								label: missionFace(MISSION_VERIFY_FACES, verifyState, zh)
+							}, "state"),
+							meta
+						]
+					}, "meta")
+				]
+			}, key);
+		}
+		//#endregion
+
 		//#region locale + mark
 		/**
 		* Whether the document is presenting Chinese. The slot's `label` is
@@ -122,8 +1790,8 @@ window.__ModuleLoader__.load({
 				children: [
 					jsx("path", { d: "M16 7.5 L7.5 22 L24.5 22 Z", opacity: 0.42 }),
 					jsx("circle", { cx: 16, cy: 7.5, r: 3.4, fill: "currentColor", stroke: "none" }),
-					jsx("circle", { cx: 7.5, cy: 22, r: 3.4, fill: "var(--dsw-specific-menu)" }),
-					jsx("circle", { cx: 24.5, cy: 22, r: 3.4, fill: "var(--dsw-specific-menu)" })
+					jsx("circle", { cx: 7.5, cy: 22, r: 3.4, fill: SURFACE.card }),
+					jsx("circle", { cx: 24.5, cy: 22, r: 3.4, fill: SURFACE.card })
 				]
 			});
 		}
@@ -269,12 +1937,15 @@ window.__ModuleLoader__.load({
 
 		/** Kinds the feed narrows to, each with the palette the reference nav gives it. */
 		const KINDS = [
-			{ id: "youtube", type: "YOUTUBE_VIDEO", en: "YouTube", zh: "YouTube", hue: "220,38,38" },
-			{ id: "papers", type: "PAPER", en: "Papers", zh: "论文", hue: "2,132,199" },
-			{ id: "blogs", type: "BLOG", en: "Blogs", zh: "博客", hue: "124,58,237" },
-			{ id: "reports", type: "REPORT", en: "Reports", zh: "报告", hue: "217,119,6" },
-			{ id: "policy", type: "POLICY", en: "Policy", zh: "政策", hue: "79,70,229" },
-			{ id: "news", type: "NEWS", en: "News", zh: "新闻", hue: "5,150,105" }
+			// PALETTE, not TONE: these are six categories, not six states. A
+			// source kind drawn in `TONE.danger` teaches the eye that red means
+			// "bad" on this tab and "YouTube" on the next.
+			{ id: "youtube", type: "YOUTUBE_VIDEO", en: "YouTube", zh: "YouTube", hue: PALETTE.red },
+			{ id: "papers", type: "PAPER", en: "Papers", zh: "论文", hue: PALETTE.blue },
+			{ id: "blogs", type: "BLOG", en: "Blogs", zh: "博客", hue: PALETTE.violet },
+			{ id: "reports", type: "REPORT", en: "Reports", zh: "报告", hue: PALETTE.amber },
+			{ id: "policy", type: "POLICY", en: "Policy", zh: "政策", hue: PALETTE.indigo },
+			{ id: "news", type: "NEWS", en: "News", zh: "新闻", hue: PALETTE.green }
 		];
 
 		/** Sort orders the resources endpoint accepts. */
@@ -559,21 +2230,66 @@ window.__ModuleLoader__.load({
 		* (`state-error-*`, `state-warn-*`) carry meaning in this product and
 		* must not stand in for an accent — per-kind colour comes from KINDS.
 		*/
+		/**
+		* The header carries NO type of its own, and that is the change.
+		*
+		* It used to set `font: FONT.largeStrong` on the container, which was
+		* fine while the header was one word — and it was one word: a mark, the
+		* product name, a version badge and a close button, with nothing saying
+		* what the tab under it is for. Two text lines cannot inherit one font,
+		* so the size lives on each line and the row only does layout.
+		*
+		* NO BOTTOM HAIRLINE HERE. The tab bar below already draws one, and it
+		* has to: it is the rail the active tab's underline sits on. Two rules
+		* fourteen pixels apart read as a double border round an empty strip.
+		*/
 		const HEADER_STYLE = {
-			flex: "none", display: "flex", alignItems: "center", gap: "10px",
-			padding: "20px 32px 0", fontSize: "16px", fontWeight: 600,
-			color: "var(--dsw-alias-label-primary)"
+			flex: "none", display: "flex", alignItems: "center", gap: SPACE.md,
+			padding: "10px 24px",
+			color: INK.primary
 		};
+		/**
+		* The subtitle, which every tab has always had and only two could show.
+		*
+		* All five TABS entries carry a written `lede`, and the `<p>` that
+		* rendered one lived inside the PLACEHOLDER branch — the path only 研究
+		* and 推演 ever take. So the three tabs that are built, which are the
+		* three a reader actually spends time on, said nothing about themselves.
+		*
+		* ONE LINE, ellipsised, because it sits on the header row beside the
+		* product name: a lede that wraps pushes the tab bar down by a line when
+		* the window narrows, and a chrome that changes height as you resize
+		* reads as the page reloading.
+		*/
+		const HERO_LEDE_STYLE = {
+			font: FONT.body,
+			margin: 0, maxWidth: "62ch",
+			overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+			color: INK.secondary
+		};
+		/**
+		* THE TAB BAR SCROLLS RATHER THAN CLIPPING. It could do neither: five
+		* icon-bearing tabs, two of them carrying a 待建 chip, in a row with no
+		* `flexWrap` and no `overflow` — so inset beside a wide sidebar the last
+		* tab was simply not there, and nothing on the page said a tab was
+		* missing. The scrollbar itself is hidden by `.swm-tabbar`, the way
+		* `.swt-tabs` has always hidden its own.
+		*
+		* The gap fell from 24px to 8px in the same change that gave each tab
+		* 8px of side padding, so the rhythm between two labels is the 24px it
+		* has always been and the hit target grew by sixteen pixels.
+		*/
 		const TABBAR_STYLE = {
-			flex: "none", display: "flex", alignItems: "center", gap: "20px",
-			padding: "0 32px", borderBottom: "1px solid var(--dsw-alias-border-l2)"
+			flex: "none", display: "flex", alignItems: "center", gap: SPACE.sm,
+			padding: "0 24px", borderBottom: `1px solid ${LINE.rule}`,
+			minWidth: 0, overflowX: "auto", overflowY: "hidden", scrollbarWidth: "none"
 		};
-		const BODY_STYLE = { flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 32px 32px" };
+		const BODY_STYLE = { flex: 1, minHeight: 0, overflowY: "auto", padding: "14px 24px 20px" };
 		/** The detail view scrolls inside its own panes, so the body must not. */
 		// No horizontal padding: the sources tab scrolls inside this box, and any
 		// padding here insets the scrollbar from the window edge. The two views
 		// underneath carry their own side padding instead.
-		const READER_BODY_STYLE = { flex: 1, minHeight: 0, overflow: "hidden", padding: "12px 0 16px" };
+		const READER_BODY_STYLE = { flex: 1, minHeight: 0, overflow: "hidden", padding: "6px 0 10px" };
 		/**
 		* The feed reads as a column, so it is capped. The detail view is a
 		* two-pane reader and must use the whole frame — capping it left a band
@@ -582,8 +2298,9 @@ window.__ModuleLoader__.load({
 		const CONTENT_STYLE = { maxWidth: "1080px" };
 		const WIDE_STYLE = { maxWidth: "none" };
 		const LEDE_STYLE = {
-			margin: "0 0 16px", maxWidth: "62ch", fontSize: "14px", lineHeight: "22px",
-			color: "var(--dsw-alias-label-secondary)"
+			font: FONT.base,
+			margin: `0 0 ${SPACE.lg}`, maxWidth: "62ch",
+			color: INK.secondary
 		};
 		/**
 		* The marker on a stage that is designed but not built.
@@ -596,28 +2313,206 @@ window.__ModuleLoader__.load({
 		* click.
 		*/
 		const SOON_STYLE = {
-			marginLeft: "6px", padding: "0 5px", borderRadius: "4px",
-			border: "1px solid var(--dsw-alias-border-l2)",
+			font: FONT.microStrong,
+			marginLeft: SPACE.xs, padding: "0 5px", borderRadius: RADIUS.sm,
+			border: `1px solid ${LINE.rule}`,
 			color: "var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary))",
-			fontSize: "10px", lineHeight: "15px", fontWeight: 500,
-			letterSpacing: "0.02em", whiteSpace: "nowrap"
+			whiteSpace: "nowrap"
 		};
 		const NOTE_STYLE = {
+			font: FONT.body,
 			display: "flex", alignItems: "center", justifyContent: "center",
-			minHeight: "140px", padding: "24px",
-			border: "1px dashed var(--dsw-alias-border-l2)", borderRadius: "10px",
-			color: "var(--dsw-alias-label-secondary)", fontSize: "13px", textAlign: "center"
+			minHeight: "140px", padding: SPACE.xl,
+			border: `1px dashed ${LINE.rule}`, borderRadius: RADIUS.md,
+			color: INK.secondary, textAlign: "center"
 		};
 
-		/** Tab styling; the active tab carries the underline, matching the session view ring. */
+		/**
+		* A SCREEN with nothing on it, saying WHICH nothing — and it is not the
+		* dashed box above.
+		*
+		* NOTE_STYLE was one vocabulary doing three jobs. "加载中…", "读不到这个
+		* 任务" and "还没有跑过任何任务" were the same 140px dashed rectangle
+		* with one centred sentence in it, so the three answers a person most
+		* needs to tell apart were drawn identically — and the two that matter
+		* most are the emptiness and the failure, because they call for opposite
+		* reactions: wait, versus go and look at the server.
+		*
+		* A MARK, A HEADING, A SENTENCE, AN ACTION, in that order, because the
+		* mark is read before the words are, the heading answers the question
+		* and the sentence explains it. `action` is what to do about it: an
+		* empty screen that names no next step is a dead end with a border round
+		* it, and this tab had three of them while the control that fixes two of
+		* them sat on the same page.
+		*
+		* NOTE_STYLE STAYS, for genuinely inline notes. A one-line status inside
+		* a panel that is already built is not a screen state and must not grow
+		* a 260px box under it.
+		* @param props - `{mark, title, note, action, tone}`; `mark` is an ICON_PATHS name.
+		* @param key - the React key, as the second argument, mirroring jsx(type, props, key).
+		* @returns the element, or null when there is nothing at all to say.
+		*/
+		function EmptyBox({ mark, title, note, action, tone }, key) {
+			// An absence with no words is not an empty state, it is a blank
+			// rectangle — which is also what a crashed component draws. Same
+			// rule MissionEmptyPane is built on one region over.
+			if ((title ?? "") === "" && (note ?? "") === "" && (action ?? null) === null) return null;
+			const hue = tone ?? TONE.muted;
+			return jsxs("div", {
+				style: {
+					display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+					gap: SPACE.md, minHeight: "260px", padding: SPACE.xl, textAlign: "center"
+				},
+				children: [
+					mark === undefined ? null : jsx("div", {
+						style: {
+							flex: "none", width: "40px", height: "40px", borderRadius: RADIUS.lg,
+							display: "flex", alignItems: "center", justifyContent: "center",
+							background: `rgba(${hue},${TINT.soft})`, color: `rgb(${hue})`
+						},
+						children: jsx(Icon, { name: mark, size: ICON.md }, "glyph")
+					}, "mark"),
+					(title ?? "") === "" ? null : jsx("div", {
+						style: { font: FONT.baseStrong, color: INK.primary },
+						children: title
+					}, "title"),
+					(note ?? "") === "" ? null : jsx("div", {
+						style: { font: FONT.body, maxWidth: "42ch", color: INK.secondary },
+						children: note
+					}, "note"),
+					action ?? null
+				]
+			}, key);
+		}
+
+		/**
+		* A read that failed, with the two things the dashed box never had.
+		*
+		* THE RETRY IS THE POINT. All three screen-level load failures in this
+		* file offered no control at all: the only way to re-issue the read was
+		* to leave the tab and come back, and on the mission detail the only
+		* button on the screen was the one that leaves it. A failure a person
+		* cannot act on is a failure they have to work around.
+		*
+		* The endpoint stays, and stays LEGIBLE. It is the line that separates
+		* "the server said no" from "this build is pointed at a host that is not
+		* there", which is why it is INK.secondary in MONO rather than the
+		* INK.quiet the brief suggested — an address is read character by
+		* character, and `quiet` is 3.71:1 and is for decoration.
+		*
+		* No dev-only stack trace: this file has no build-time environment flag,
+		* so a `<details>` here would ship the stack to everybody.
+		* @param props - `{title, message, endpoint, onRetry, zh}`.
+		* @param key - the React key, as the second argument.
+		*/
+		function ErrorBox({ title, message, endpoint, onRetry, zh }, key) {
+			return EmptyBox({
+				mark: "alert",
+				tone: TONE.danger,
+				title: (title ?? "") === "" ? (zh ? "这一次读取失败了" : "That read failed") : title,
+				note: message,
+				action: jsxs("div", {
+					style: { display: "flex", flexDirection: "column", alignItems: "center", gap: SPACE.sm },
+					children: [
+						onRetry === null || onRetry === undefined ? null : jsxs("button", {
+							type: "button",
+							className: "swm-ctl swm-focus",
+							style: { ...controlStyle(), display: "inline-flex", alignItems: "center", gap: SPACE.xs },
+							onClick: onRetry,
+							children: [jsx(Icon, { name: "refresh", size: ICON.xs }, "glyph"), zh ? "重试" : "Retry"]
+						}, "retry"),
+						(endpoint ?? "") === "" ? null : jsx("div", {
+							style: { font: FONT.micro, fontFamily: MONO, color: INK.secondary },
+							children: (zh ? "接口：" : "Endpoint: ") + endpoint
+						}, "endpoint")
+					]
+				}, "actions")
+			}, key);
+		}
+
+		/**
+		* One block of a loading screen: the shape of a thing, before the thing.
+		*
+		* WHY A SHAPE AND NOT A SENTENCE. "加载中…" in a dashed box says a read
+		* is in flight and nothing else, and when the answer lands the page
+		* jumps from one 140px box to a screenful of rows. A skeleton says how
+		* much is coming and where it will be, so the arrival is a fill rather
+		* than a relayout.
+		*
+		* THE SKELETON SCREEN KEEPS THE WORD, on the container rather than in
+		* the middle of it: each of the four sites wraps its blocks in a
+		* `role="status"` box labelled 加载中…, because a pile of grey divs says
+		* nothing at all to a screen reader and the sentence it replaced said
+		* the one thing that mattered.
+		*
+		* NOT FOR AN INLINE STATUS. The one-line "读取中…" strings inside
+		* already-built panels stay text: replacing a working answer with a grey
+		* bar is a worse screen, not a better one.
+		* @param props - `{w, h, r}` — width, height, and an optional radius.
+		* @param key - the React key, as the second argument.
+		*/
+		function Skeleton({ w, h, r }, key) {
+			return jsx("div", {
+				className: "swm-skel",
+				style: { flex: "none", width: w ?? "100%", height: h ?? "14px", borderRadius: r ?? RADIUS.sm }
+			}, key);
+		}
+
+		/**
+		* The box the four skeleton screens are drawn in.
+		*
+		* One place, so the word a screen reader gets and the word the dashed
+		* box used to show cannot drift apart across four sites, and so a
+		* skeleton cannot be shipped without one.
+		* @param props - `{zh, style, children}`.
+		* @param key - the React key, as the second argument.
+		*/
+		function SkeletonScreen({ zh, style, children }, key) {
+			return jsx("div", {
+				role: "status",
+				"aria-label": zh ? "加载中…" : "Loading…",
+				style: style ?? undefined,
+				children
+			}, key);
+		}
+
+		/**
+		* One page tab. State comes from `.swm-tab`; this is the geometry and
+		* the identity colour.
+		*
+		* THREE THINGS CHANGED AND EACH WAS ITS OWN SMALL FAILURE.
+		*
+		* The active colour was `label-primary`, which is the colour of every
+		* other word on the page — so "which tab am I on" was carried by a
+		* weight and a 2px line and nothing else. It is `state-business-primary`
+		* now, which is what this file already treats as its selected colour on
+		* the trajectory strip, on a markdown link and on a pressed row.
+		*
+		* The padding was `10px 0`, so the hit target was exactly as wide as the
+		* word: a five-pixel miss to either side landed on the bar. TABBAR_STYLE
+		* gave up sixteen pixels of gap to pay for eight pixels of padding on
+		* each side, so nothing moved and the target grew.
+		*
+		* The underline is `::after` on the class rather than a `borderBottom`
+		* here, so it can inset itself to the padding — the line hugs the label
+		* instead of running the full width of a target that is deliberately
+		* wider than its label. `--swm-tab-inset` is how the rule learns this
+		* strip's padding; `marginBottom: -1px` stays, so the 2px line sits ON
+		* the bar's hairline rather than above it.
+		* @param active - whether this is the tab being shown.
+		* @returns a style object to spread.
+		*/
 		function tabStyle(active) {
 			return {
-				appearance: "none", border: "none", background: "transparent",
-				padding: "10px 0 12px", marginBottom: "-1px",
-				borderBottom: "2px solid " + (active ? "var(--dsw-alias-label-primary)" : "transparent"),
-				color: active ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)",
-				font: "inherit", fontSize: "14px", fontWeight: active ? 600 : 400,
-				lineHeight: "20px", cursor: "pointer", whiteSpace: "nowrap"
+				// The WHOLE shorthand swaps rather than a weight riding beside a
+				// size — `FONT.body` and `FONT.bodyStrong` are 13px on the same
+				// leading, so a tab does not physically move when it becomes the
+				// active one. All three strips in this product now take this
+				// pair; they used to take three sizes and three weights.
+				font: active ? FONT.bodyStrong : FONT.body,
+				padding: `10px ${SPACE.sm} 12px`, marginBottom: "-1px",
+				"--swm-tab-inset": SPACE.sm,
+				color: active ? "var(--dsw-alias-state-business-primary)" : INK.secondary
 			};
 		}
 		//#endregion
@@ -625,12 +2520,12 @@ window.__ModuleLoader__.load({
 		//#region explore styling
 		const SEARCH_STYLE = {
 			width: "100%", boxSizing: "border-box", height: "42px", padding: "0 14px",
-			border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "10px",
-			background: "transparent", color: "var(--dsw-alias-label-primary)",
-			font: "inherit", fontSize: "14px", outline: "none"
+			border: `1px solid ${LINE.rule}`, borderRadius: RADIUS.md,
+			background: "transparent", color: INK.primary,
+			font: FONT.base
 		};
 		const TOOLBAR_STYLE = {
-			display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", margin: "12px 0 18px"
+			display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", margin: "12px 0 18px"
 		};
 		/**
 		* Card surface. A card should read as a sheet lying above the page, and
@@ -641,12 +2536,26 @@ window.__ModuleLoader__.load({
 		* `l1` (`#0000000a`) keeps the top edge defined where a downward shadow
 		* cannot reach, without asserting itself as a frame.
 		*/
+		/**
+		* The panel recipe, in one place.
+		*
+		* This object was typed out three times — here at a 14px radius, and
+		* twice more as byte-identical `const CARD` objects declared INSIDE two
+		* component bodies, where nothing could see that they matched. Three
+		* copies of a surface is how a tab ends up with cards that are two
+		* pixels apart in the corner and one shadow step apart in depth.
+		*/
+		const PANEL_STYLE = {
+			border: `1px solid ${LINE.hair}`,
+			borderRadius: RADIUS.lg,
+			background: SURFACE.card,
+			boxShadow: ELEVATION.raised
+		};
+
 		const CARD_STYLE = {
-			display: "flex", gap: "16px", padding: "16px", marginBottom: "14px",
-			border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "14px",
-			background: "var(--dsw-specific-menu)",
-			boxShadow: "var(--dsw-shadow-lv1)",
-			transition: "box-shadow 160ms ease, transform 160ms ease"
+			...PANEL_STYLE,
+			display: "flex", gap: SPACE.lg, padding: SPACE.lg, marginBottom: SPACE.lg,
+			transition: `box-shadow ${MOTION.base}, transform ${MOTION.base}`
 		};
 
 		/**
@@ -658,7 +2567,7 @@ window.__ModuleLoader__.load({
 		*/
 		const CARD_HOVER_STYLE = {
 			...CARD_STYLE,
-			boxShadow: "var(--dsw-shadow-lv3)",
+			boxShadow: ELEVATION.floating,
 			transform: "translateY(-2px)"
 		};
 		// `label-tertiary` resolves to rgb(129,133,140) — 3.71:1 on white, under
@@ -667,12 +2576,12 @@ window.__ModuleLoader__.load({
 		// is 5.8:1. Hierarchy still reads: size and weight separate these rows
 		// from the title without asking the reader to squint.
 		const META_STYLE = {
-			display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap",
-			fontSize: "12px", color: "var(--dsw-alias-label-secondary)"
+			display: "flex", alignItems: "center", gap: SPACE.md, flexWrap: "wrap",
+			font: FONT.small, color: INK.secondary
 		};
 		const ACTIONS_STYLE = {
-			display: "flex", alignItems: "center", gap: "18px",
-			fontSize: "12px", color: "var(--dsw-alias-label-secondary)"
+			display: "flex", alignItems: "center", gap: SPACE.lg,
+			font: FONT.small, color: INK.secondary
 		};
 
 		/**
@@ -681,23 +2590,187 @@ window.__ModuleLoader__.load({
 		*/
 		function chipStyle(kind, active) {
 			return {
+				// THE HUE RIDES ON THE ELEMENT as a custom property, so ONE
+				// hover rule in SWM_CSS can serve six categories instead of six
+				// rules or none. React passes `--`-prefixed style keys straight
+				// through — that is the whole mechanism, and it is the only way
+				// an inline-styled element can take a state it did not compute.
+				"--swm-chip-h": kind.hue,
 				appearance: "none", display: "inline-flex", alignItems: "center",
-				height: "34px", padding: "0 14px", borderRadius: "8px",
-				border: "1px solid " + (active ? hue(kind, 0.45) : "var(--dsw-alias-border-l2)"),
-				background: active ? hue(kind, 0.1) : "transparent",
-				color: active ? hue(kind) : "var(--dsw-alias-label-secondary)",
-				font: "inherit", fontSize: "13px", fontWeight: active ? 600 : 400,
+				height: CONTROL.md, padding: `0 ${SPACE.lg}`, borderRadius: RADIUS.md,
+				border: "1px solid " + (active ? hue(kind, TINT.ring) : LINE.rule),
+				// INACTIVE IS `undefined`, NOT "transparent". The comment that
+				// stood here said an inline background would put the chip out of
+				// the hover rule’s reach and then wrote one — `transparent` is an
+				// inline declaration like any other, and it beat
+				// `.swm-chip:hover` on all six category chips. An undefined key is
+				// not emitted at all, so the class paints the resting state and
+				// the hover can win. The ACTIVE fill stays inline on purpose: a
+				// chip already filled with its own hue must not lighten under the
+				// pointer as though it were unpressed.
+				background: active ? hue(kind, TINT.soft) : undefined,
+				color: active ? hue(kind) : undefined,
+				// The WHOLE shorthand swaps, rather than a weight riding beside
+				// a size: swapping only the weight reflows the label when it
+				// becomes active, because the two weights have different
+				// advances at the same size.
+				font: active ? FONT.bodyStrong : FONT.body,
 				cursor: "pointer", whiteSpace: "nowrap"
 			};
 		}
 
-		/** Small neutral control used by the sort selector and the retry button. */
-		function controlStyle() {
+		/**
+		* The pressed look, as an INSET ring rather than a border.
+		*
+		* A border changes the box. A control that grows one pixel when it is
+		* selected pushes its neighbours, so a row of chips reflows as the eye
+		* moves along it — which reads as the layout being unstable rather than
+		* as one chip being chosen. An inset shadow paints inside the same box.
+		*
+		* Composes rather than replaces: several call sites already carry an
+		* `inset 3px 0 0 0` left bar, and this appends to it.
+		* @param on - whether the control is the selected one.
+		* @param tone - the colour triple to draw the ring in.
+		* @param existing - a boxShadow already on the element, or "".
+		* @returns a style fragment to spread AFTER the base style.
+		*/
+		function pressedStyle(on, tone, existing) {
+			const ring = `inset 0 0 0 2px rgb(${tone ?? TONE.info})`;
+			if (on !== true) return existing ? { boxShadow: existing } : {};
+			return { boxShadow: existing ? `${existing},${ring}` : ring };
+		}
+
+		/**
+		* Leaving a screen is not aborting one.
+		*
+		* Every back control in this tab took `controlStyle`, which is the same
+		* box as 取消 and 停止 — so the way out of a report looked like the way
+		* to kill the mission that wrote it. This is quieter: no border, and the
+		* hover comes from `.swm-back`.
+		* @returns the style object.
+		*/
+		function backStyle() {
 			return {
-				appearance: "none", height: "34px", padding: "0 10px", borderRadius: "8px",
-				border: "1px solid var(--dsw-alias-border-l2)", background: "transparent",
-				color: "var(--dsw-alias-label-secondary)", font: "inherit", fontSize: "13px",
-				cursor: "pointer"
+				font: FONT.body,
+				appearance: "none", display: "inline-flex", alignItems: "center", gap: SPACE.xs,
+				height: CONTROL.sm, padding: `0 ${SPACE.sm}`, borderRadius: RADIUS.sm,
+				// The resting background and ink are on `.swm-back`, not here:
+				// written inline they override `.swm-back:hover` and the control
+				// stops answering the pointer.
+				border: "none",
+				cursor: "pointer", whiteSpace: "nowrap"
+			};
+		}
+
+		/**
+		* A glyph-only button, with the one thing a glyph-only button always
+		* forgets: a name.
+		*
+		* Four of these in this file were bare `<button>`s with 2px of padding,
+		* no hover, no focus ring and no accessible name — a screen reader read
+		* them as "button". The class carries hover and focus from SWM_CSS,
+		* because an inline style object cannot express either.
+		* THE SECOND ARGUMENT IS THE REACT KEY, the way it is on Chip, RoleChip,
+		* Callout, Meter and SourceLink — this primitive was written without one
+		* and had no call site to notice, so its first use inside a children
+		* array would have been a keyed-list warning in the console and a wrong
+		* reconciliation on the page.
+		* @param props - `{label, onClick, size, tone, title, children}`.
+		* @param key - this button's key among its siblings.
+		*/
+		function IconButton({ label, onClick, size, tone, title, children }, key) {
+			const box = size ?? "24px";
+			return jsx("button", {
+				type: "button",
+				className: "swm-iconbtn",
+				"aria-label": label,
+				title: title ?? label,
+				onClick,
+				style: { width: box, height: box, color: tone === undefined ? undefined : `rgb(${tone})` },
+				children
+			}, key);
+		}
+
+		/**
+		* THE SEGMENTED CONTROL, once, for the two places that draw one.
+		*
+		* A segmented strip is not a tab strip and stays segmented — tabs say
+		* "these are different pages", a segment says "this is the same content
+		* arranged differently" — but the file's two of them were built out of
+		* different surfaces, different radii and different shadows, so the one
+		* widget looked like two widgets one pane apart: `fill-tertiary` on a 9px
+		* track with a 7px thumb and a hand-mixed `rgba(0,0,0,0.06)` shadow in
+		* the detail strip, `interactive-bg-hover` on a 10px track with an 8px
+		* thumb in the publish switcher.
+		*
+		* THE WEIGHT CHANGES AND THE METRICS DO NOT. `FONT.body` and
+		* `FONT.bodyStrong` are 13px at the same leading, so pressing a segment
+		* does not reflow the strip — which is what a `fontWeight` swap between
+		* two differently-metricked steps does, and it reads as the label
+		* physically moving away from the pointer.
+		*
+		* DECLARED HERE, beside `chipStyle`, `pressedStyle`, `backStyle` and
+		* `controlStyle` — every other style builder in this file is in this
+		* block, whatever the region comment above says. `//#region explore
+		* styling` is where the control vocabulary actually lives and `//#region
+		* page chrome styling` is seventy lines of layout constants; the label is
+		* wrong and predates all of them. Not renamed here, because a region
+		* rename is a diff across every batch still in flight — but do not go
+		* looking in the other one.
+		*/
+		const SEGMENT_TRACK = {
+			display: "inline-flex", alignItems: "center",
+			gap: SPACE.xs, padding: "3px",
+			background: SURFACE.hover,
+			borderRadius: RADIUS.lg,
+			width: "fit-content", maxWidth: "100%",
+			overflowX: "auto", scrollbarWidth: "none"
+		};
+
+		/**
+		* One segment of that strip.
+		* @param on - whether this is the chosen one.
+		* @returns a style object.
+		*/
+		function segmentStyle(on) {
+			return {
+				font: on === true ? FONT.bodyStrong : FONT.body,
+				appearance: "none", border: "none", cursor: "pointer",
+				display: "flex", alignItems: "center", gap: SPACE.xs,
+				flex: "none",
+				height: CONTROL.sm, padding: `0 ${SPACE.md}`,
+				borderRadius: RADIUS.md,
+				background: on === true ? SURFACE.card : "transparent",
+				color: on === true ? INK.primary : INK.secondary,
+				// THE RAISED STEP IS THE HARNESS'S, not `0 1px 2px rgba(0,0,0,0.06)`
+				// typed at the call site. A hand-mixed black shadow is a shadow that
+				// does not exist in the dark theme, where the surface under it is
+				// already darker than the shadow.
+				boxShadow: on === true ? ELEVATION.raised : "none",
+				transition: `background ${MOTION.fast},color ${MOTION.fast}`,
+				whiteSpace: "nowrap"
+			};
+		}
+
+		/** Small neutral control used by the sort selector and the retry button. */
+		function controlStyle(off) {
+			return {
+				appearance: "none", height: CONTROL.md, padding: "0 10px", borderRadius: RADIUS.md,
+				border: `1px solid ${LINE.rule}`, font: FONT.body,
+				// NO `background` AND NO `color` HERE. Both used to be written as
+				// inline keys, and an inline declaration beats a stylesheet — so
+				// `.swm-ctl:hover` was dead on every control in the file, with
+				// nothing on screen to say so. The resting pair is on `.swm-ctl`.
+				// A REFUSED CONTROL THAT LOOKS PRESSABLE IS A CLICK MADE TWICE.
+				// Twenty-five controls in this file set `disabled` and seven
+				// showed it, so most of them sat at full contrast under a
+				// `cursor: pointer` and answered nothing. `pointerEvents: none`
+				// as well as the cursor, because a `disabled` attribute stops
+				// the click but not the hover, and a hover that lights up on a
+				// dead button is the same lie one layer down.
+				opacity: off === true ? OPACITY.disabled : 1,
+				cursor: off === true ? "not-allowed" : "pointer",
+				pointerEvents: off === true ? "none" : undefined
 			};
 		}
 		//#endregion
@@ -735,11 +2808,10 @@ window.__ModuleLoader__.load({
 						onClick: () => { onOpen(row); },
 						"aria-hidden": "true",
 						tabIndex: -1,
-						style: {
-							flex: "none", width: thumbWidth, height: "104px", borderRadius: "8px",
+						style: { font: FONT.largeStrong,
+							flex: "none", width: thumbWidth, height: "104px", borderRadius: RADIUS.md,
 							overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center",
-							background: hue(kind, 0.08), color: hue(kind), border: "none", padding: 0,
-							fontSize: "16px", fontWeight: 600, cursor: "pointer"
+							background: hue(kind, TINT.soft), color: hue(kind), border: "none", padding: 0, cursor: "pointer"
 						},
 						children: thumbnail === undefined || broken
 							? sourceName.slice(0, 2)
@@ -757,17 +2829,16 @@ window.__ModuleLoader__.load({
 							})
 					}),
 					jsxs("div", {
-						style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "6px" },
+						style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: SPACE.sm },
 						children: [
 							jsxs("div", {
 								style: META_STYLE,
 								children: [
 									jsx("span", { children: formatDate(row.publishedAt) }),
 									sourceName === "" ? null : jsx("span", {
-										style: {
-											padding: "1px 8px", borderRadius: "999px",
-											background: hue(kind, 0.1), color: hue(kind),
-											fontSize: "11px", fontWeight: 500,
+										style: { font: FONT.microStrong,
+											padding: "1px 8px", borderRadius: RADIUS.pill,
+											background: hue(kind, TINT.soft), color: hue(kind),
 											maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
 										},
 										children: sourceName
@@ -779,10 +2850,9 @@ window.__ModuleLoader__.load({
 							jsx("button", {
 								type: "button",
 								onClick: () => { onOpen(row); },
-								style: {
+								style: { font: FONT.baseStrong,
 									appearance: "none", border: "none", background: "transparent",
 									padding: 0, textAlign: "left", font: "inherit", cursor: "pointer",
-									fontSize: "15px", fontWeight: 600, lineHeight: "22px",
 									color: hue(kind),
 									overflow: "hidden", display: "-webkit-box",
 									WebkitLineClamp: 2, WebkitBoxOrient: "vertical"
@@ -790,15 +2860,15 @@ window.__ModuleLoader__.load({
 								children: row.title
 							}),
 							description.text === "" ? null : jsx("p", {
-								style: {
-									margin: 0, fontSize: "12px", lineHeight: "18px",
-									color: "var(--dsw-alias-label-secondary)",
+								style: { font: FONT.small,
+									margin: 0,
+									color: INK.secondary,
 									overflow: "hidden", display: "-webkit-box",
 									WebkitLineClamp: 2, WebkitBoxOrient: "vertical"
 								},
 								children: description.text
 							}),
-							jsx("div", { style: { height: "1px", background: "var(--dsw-alias-border-l1)", margin: "6px 0 2px" } }),
+							jsx("div", { style: { height: "1px", background: LINE.hair, margin: "6px 0 2px" } }),
 							jsxs("div", {
 								style: ACTIONS_STYLE,
 								children: [
@@ -1000,6 +3070,127 @@ window.__ModuleLoader__.load({
 		* @param key - the key namespace for the node.
 		* @param refs - `{has, jump, zh}` from the report, or null in a chat answer.
 		*/
+		/**
+		* What is behind `[7]`, without leaving the sentence it is in.
+		*
+		* THE CLICK WAS THE ONLY AFFORDANCE, and it is the expensive one: it
+		* scrolls the page to the reference list, which loses the reader's place
+		* in the prose to answer a question — "is this a real source or a
+		* rate-limited stub" — that takes three lines to answer. Everything in the
+		* card is already in memory one render away: `missionReferences` built it
+		* for the list at the bottom of the same page.
+		*
+		* IT IS A COMPONENT, and it has to be. `missionCitationMark` is called
+		* from inside `renderInline`'s loop — once per marker, conditionally —
+		* so a hook in there would be a hook in a loop, which is the rule-of-hooks
+		* break that hands one marker another marker's state. The button itself is
+		* unchanged and still carries its `title`, so a reader with no pointer
+		* loses nothing.
+		* @param token - the raw `[N]`.
+		* @param index - the citation number.
+		* @param refs - `{has, jump, peek, zh}` from the report.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionCitationPeek({ token, index, refs, zh }) {
+			const [open, setOpen] = useState(false);
+			const timer = useRef(null);
+			const stop = () => {
+				if (timer.current === null) return;
+				clearTimeout(timer.current);
+				timer.current = null;
+			};
+			const hold = () => { stop(); setOpen(true); };
+			// A GRACE PERIOD ON THE WAY OUT, and it is not a flourish. The card
+			// floats six pixels above the marker, so a pointer travelling from the
+			// number to the card crosses a strip where neither element is hovered;
+			// closing on the first `mouseleave` makes the card unreachable by the
+			// only input that can open it. Re-entering cancels the timer.
+			const release = () => {
+				stop();
+				timer.current = setTimeout(() => { timer.current = null; setOpen(false); }, 150);
+				// Unref'd for the reason the other timers in this file are: this
+				// module is rendered in Node by tests/settings.test.mjs, which never
+				// unmounts anything.
+				timer.current?.unref?.();
+			};
+			useEffect(() => stop, []);
+			const source = typeof refs?.peek === "function" ? refs.peek(index) : null;
+			const mark = jsx("button", {
+				type: "button",
+				title: zh ? `跳到参考文献第 ${index} 条` : `Jump to reference ${index}`,
+				onClick: () => { refs.jump?.(index); },
+				// FOCUS OPENS IT TOO. The card is reachable by pointer and by tab,
+				// because a preview only a mouse can see is a preview half the
+				// people reading a report cannot.
+				onFocus: hold,
+				onBlur: release,
+				style: { font: FONT.micro,
+					appearance: "none", border: "none", background: "transparent",
+					padding: "0 1px", margin: 0, cursor: "pointer", font: "inherit", lineHeight: 1, verticalAlign: "super",
+					color: "var(--dsw-alias-state-business-primary)"
+				},
+				children: token
+			}, "mark");
+			// NO CARD WITHOUT A SOURCE TO PUT IN IT. `peek` is optional — a chat
+			// answer threads `has`/`jump` and nothing else — and an empty floating
+			// box on hover is worse than no box, so the marker stays exactly what
+			// it was.
+			if (source === null || source === undefined) return mark;
+			return jsxs("span", {
+				style: { position: "relative", display: "inline-block" },
+				onMouseEnter: hold,
+				onMouseLeave: release,
+				children: [
+					mark,
+					!open ? null : jsxs("span", {
+						role: "note",
+						style: {
+							font: FONT.small,
+							position: "absolute", bottom: "calc(100% + 6px)", left: "50%", transform: "translateX(-50%)",
+							zIndex: 40, width: "320px", boxSizing: "border-box",
+							display: "flex", flexDirection: "column", gap: SPACE.xs,
+							padding: "10px 12px", borderRadius: RADIUS.lg,
+							border: `1px solid ${LINE.hair}`, background: SURFACE.card, boxShadow: ELEVATION.floating,
+							textAlign: "left", whiteSpace: "normal", cursor: "default"
+						},
+						children: [
+							jsxs("span", {
+								style: { display: "flex", alignItems: "center", gap: SPACE.sm },
+								children: [
+									jsx("span", { style: COUNT_CHIP, children: String(index) }, "n"),
+									// THE VERDICT, in the state's own colour, because it is
+									// the reason to look: a citation whose source was never
+									// fetched and one that was quoted verbatim off a live
+									// page are the same blue number in the prose.
+									Chip({
+										tone: missionHue(MISSION_VERIFY_FACES, source.verifyState),
+										icon: missionIcon(MISSION_VERIFY_FACES, source.verifyState),
+										label: missionFace(MISSION_VERIFY_FACES, source.verifyState, zh)
+									}, "state")
+								]
+							}, "head"),
+							(source.title ?? "") === "" ? null : jsx("span", {
+								style: { font: FONT.smallStrong, color: INK.primary, ...clampBox(2) },
+								children: source.title
+							}, "title"),
+							(source.host ?? "") === "" ? null : jsx("span", {
+								style: { font: FONT.micro, fontFamily: MONO, color: INK.secondary },
+								children: source.host
+							}, "host"),
+							(source.quote ?? "") === "" ? null : jsx("span", {
+								// CAPPED AND SCROLLED, not clamped: a frozen quote is
+								// sometimes half an article, and this box floats over the
+								// prose — one that grew with its quote would cover the
+								// paragraph the reader is checking.
+								style: { color: INK.secondary, maxHeight: "120px", overflowY: "auto" },
+								children: `“${source.quote}”`
+							}, "quote")
+						]
+					}, "card")
+				]
+			});
+		}
+
 		function missionCitationMark(token, key, refs) {
 			const index = Number(token.slice(1, -1));
 			const zh = refs?.zh === true;
@@ -1012,25 +3203,16 @@ window.__ModuleLoader__.load({
 					title: zh
 						? "引用元数据缺失：这个编号后面没有留下来源，报告里也查不到它引的是哪一页。"
 						: "Citation metadata missing: nothing was stored behind this number, so the page it points at cannot be named.",
-					style: {
-						fontSize: "10px", verticalAlign: "super", padding: "0 1px",
-						color: "var(--dsw-alias-label-tertiary)", cursor: "help"
+					style: { font: FONT.micro, verticalAlign: "super", padding: "0 1px",
+						color: INK.quiet, cursor: "help"
 					},
 					children: token
 				}, key);
 			}
-			return jsx("button", {
-				type: "button",
-				title: zh ? `跳到参考文献第 ${index} 条` : `Jump to reference ${index}`,
-				onClick: () => { refs.jump?.(index); },
-				style: {
-					appearance: "none", border: "none", background: "transparent",
-					padding: "0 1px", margin: 0, cursor: "pointer", font: "inherit",
-					fontSize: "10px", lineHeight: 1, verticalAlign: "super",
-					color: "var(--dsw-alias-state-business-primary)"
-				},
-				children: token
-			}, key);
+			// The button and its hover card, which is a component because it
+			// holds state — see MissionCitationPeek. The `title` goes with it, so
+			// the no-pointer fallback is the same string it always was.
+			return jsx(MissionCitationPeek, { token, index, refs, zh }, key);
 		}
 
 		function renderInline(text, keyPrefix, refs) {
@@ -1043,16 +3225,16 @@ window.__ModuleLoader__.load({
 				const key = `${keyPrefix}-i${index++}`;
 				if (token.startsWith("`")) {
 					nodes.push(jsx("code", {
-						style: {
-							padding: "1px 5px", borderRadius: "4px",
-							background: "var(--dsw-alias-markdown-code-block)",
-							fontFamily: "var(--ds-font-family-code)", fontSize: "12px"
+						style: { font: FONT.small,
+							padding: "1px 5px", borderRadius: RADIUS.sm,
+							background: SURFACE.code,
+							fontFamily: "var(--ds-font-family-code)"
 						},
 						children: token.slice(1, -1)
 					}, key));
 				} else if (token.startsWith("**")) {
 					nodes.push(jsx("strong", {
-						style: { fontWeight: 650, color: "var(--dsw-alias-label-primary)" },
+						style: { fontWeight: 500, color: INK.primary },
 						children: token.slice(2, -2)
 					}, key));
 				} else if (token.startsWith("[")) {
@@ -1118,7 +3300,7 @@ window.__ModuleLoader__.load({
 				if (paragraph.length === 0) return;
 				const text = paragraph.join(" ");
 				blocks.push(jsx("p", {
-					style: { ...block, color: article ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)" },
+					style: { ...block, color: article ? INK.primary : INK.secondary },
 					children: renderInline(text, `p${key}`, refs)
 				}, `p${key++}`));
 				paragraph = [];
@@ -1130,7 +3312,7 @@ window.__ModuleLoader__.load({
 					children: renderInline(item, `l${key}-${at}`, refs)
 				}, `l${key}-${at}`));
 				blocks.push(jsx(list.ordered ? "ol" : "ul", {
-					style: { ...block, paddingLeft: "24px", color: article ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)" },
+					style: { ...block, paddingLeft: "24px", color: article ? INK.primary : INK.secondary },
 					children: items
 				}, `list${key++}`));
 				list = null;
@@ -1143,10 +3325,10 @@ window.__ModuleLoader__.load({
 					if (/^```/.test(line.trim())) {
 						blocks.push(jsx("pre", {
 							style: {
-								...MD_BLOCK, padding: "10px 12px", borderRadius: "8px", overflowX: "auto",
-								background: "var(--dsw-alias-markdown-code-block)",
-								fontFamily: "var(--ds-font-family-code)", fontSize: "12px", lineHeight: "18px",
-								color: "var(--dsw-alias-label-secondary)"
+								...MD_BLOCK, font: FONT.small, padding: "10px 12px", borderRadius: RADIUS.md, overflowX: "auto",
+								background: SURFACE.code,
+								fontFamily: "var(--ds-font-family-code)",
+								color: INK.secondary
 							},
 							children: fence.join("\n")
 						}, `pre${key++}`));
@@ -1181,7 +3363,7 @@ window.__ModuleLoader__.load({
 							fontWeight: article ? 700 : 650,
 							lineHeight: article ? "1.3" : "22px",
 							...(article && level <= 2 ? { fontFamily: ARTICLE_SERIF } : {}),
-							color: "var(--dsw-alias-label-primary)"
+							color: INK.primary
 						},
 						children: renderInline(heading[2], `h${key}`, refs)
 					}, `h${key++}`));
@@ -1213,9 +3395,9 @@ window.__ModuleLoader__.load({
 			if (fence !== null) {
 				blocks.push(jsx("pre", {
 					style: {
-						...MD_BLOCK, padding: "10px 12px", borderRadius: "8px", overflowX: "auto",
-						background: "var(--dsw-alias-markdown-code-block)",
-						fontFamily: "var(--ds-font-family-code)", fontSize: "12px"
+						...MD_BLOCK, font: FONT.small, padding: "10px 12px", borderRadius: RADIUS.md, overflowX: "auto",
+						background: SURFACE.code,
+						fontFamily: "var(--ds-font-family-code)"
 					},
 					children: fence.join("\n")
 				}, `pre${key++}`));
@@ -1351,43 +3533,43 @@ window.__ModuleLoader__.load({
 					jsx("button", {
 						type: "button",
 						"aria-expanded": open,
-						style: { ...controlStyle(), height: "24px", padding: "0 8px", fontSize: "11px" },
+						className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: CONTROL.xs, padding: "0 8px" },
 						onClick: () => { setOpen((value) => !value); },
 						children: zh ? "导出" : "Export"
 					}),
 					!open ? null : jsxs("div", {
 						style: {
 							position: "absolute", right: 0, top: "28px", zIndex: 5, width: "230px",
-							padding: "10px", borderRadius: "10px",
-							border: "1px solid var(--dsw-alias-border-l2)",
-							background: "var(--dsw-specific-menu)", boxShadow: "var(--dsw-shadow-lv3)"
+							padding: "10px", borderRadius: RADIUS.md,
+							border: `1px solid ${LINE.rule}`,
+							background: SURFACE.card, boxShadow: ELEVATION.floating
 						},
 						children: [
 							jsxs("label", {
-								style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)", cursor: "pointer" },
+								style: { font: FONT.small, display: "flex", alignItems: "center", gap: SPACE.sm, marginBottom: "6px", color: INK.secondary, cursor: "pointer" },
 								children: [
 									jsx("input", { type: "checkbox", checked: withTimestamps, onChange: (event) => { setWithTimestamps(event.target.checked); } }),
 									jsx("span", { children: zh ? "包含时间戳" : "Include timestamps" })
 								]
 							}),
 							jsxs("label", {
-								style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)", cursor: "pointer" },
+								style: { font: FONT.small, display: "flex", alignItems: "center", gap: SPACE.sm, marginBottom: "10px", color: INK.secondary, cursor: "pointer" },
 								children: [
 									jsx("input", { type: "checkbox", checked: withHeader, onChange: (event) => { setWithHeader(event.target.checked); } }),
 									jsx("span", { children: zh ? "包含标题与链接" : "Include title and link" })
 								]
 							}),
 							jsx("div", {
-								style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" },
+								style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: SPACE.sm },
 								children: EXPORT_FORMATS.map((entry) => jsx("button", {
 									type: "button",
-									style: { ...controlStyle(), height: "28px", fontSize: "12px", color: hue(kind) },
+									className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm, color: hue(kind) },
 									onClick: () => { run(entry.id); },
 									children: entry.label
 								}, entry.id))
 							}),
 							jsx("p", {
-								style: { margin: "10px 0 0", fontSize: "11px", lineHeight: "16px", color: "var(--dsw-alias-label-secondary)" },
+								style: { font: FONT.micro, margin: "10px 0 0", color: INK.secondary },
 								children: zh
 									? "SRT / WebVTT 按原始时轴导出，可直接载入播放器；TXT / Markdown 按语义块导出，便于阅读与引用。"
 									: "SRT and WebVTT carry the original cue timings and load into a player; TXT and Markdown carry the reading blocks."
@@ -1676,7 +3858,7 @@ window.__ModuleLoader__.load({
 						jsxs("div", {
 							children: [
 								jsx("div", {
-									style: { fontWeight: 600, color: "var(--dsw-alias-label-secondary)" },
+									style: { fontWeight: 500, color: INK.secondary },
 									children: zh ? "暂无字幕" : "No transcript"
 								}),
 								jsx("div", {
@@ -1684,11 +3866,11 @@ window.__ModuleLoader__.load({
 									children: state.error ?? (zh ? "该视频可能没有字幕，或字幕暂时无法获取。" : "This video may publish no captions, or they could not be fetched.")
 								}),
 								jsxs("div", {
-									style: { marginTop: "12px", display: "flex", gap: "8px", justifyContent: "center" },
+									style: { marginTop: "12px", display: "flex", gap: SPACE.sm, justifyContent: "center" },
 									children: [
 										jsx("button", {
 											type: "button",
-											style: { ...controlStyle(), height: "28px", fontSize: "12px" },
+											className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm },
 											onClick: () => { void load(true); },
 											children: zh ? "重试" : "Retry"
 										}),
@@ -1696,8 +3878,8 @@ window.__ModuleLoader__.load({
 											href: row.sourceUrl,
 											target: "_blank",
 											rel: "noreferrer noopener",
-											style: {
-												...controlStyle(), height: "28px", fontSize: "12px",
+											className: "swm-ctl swm-focus", style: {
+												...controlStyle(), font: FONT.small, height: CONTROL.sm,
 												display: "inline-flex", alignItems: "center",
 												textDecoration: "none", color: hue(kind)
 											},
@@ -1721,14 +3903,13 @@ window.__ModuleLoader__.load({
 						// "zh-Hans · cach…". Giving it its own row means the text
 						// that says what is happening is never the thing that gets
 						// clipped to say it.
-						style: {
-							flex: "none", display: "flex", flexDirection: "column", gap: "6px",
-							padding: "8px 12px", borderBottom: "1px solid var(--dsw-alias-border-l2)",
-							fontSize: "11px", color: "var(--dsw-alias-label-secondary)"
+						style: { font: FONT.micro,
+							flex: "none", display: "flex", flexDirection: "column", gap: SPACE.sm,
+							padding: "8px 12px", borderBottom: `1px solid ${LINE.rule}`, color: INK.secondary
 						},
 						children: [
 							jsxs("span", {
-								style: { minWidth: 0, display: "flex", alignItems: "center", gap: "6px", overflow: "hidden" },
+								style: { minWidth: 0, display: "flex", alignItems: "center", gap: SPACE.sm, overflow: "hidden" },
 								children: [
 									jsx("span", {
 										style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
@@ -1741,17 +3922,17 @@ window.__ModuleLoader__.load({
 									}),
 									running || untranslated === 0 ? null : jsx("button", {
 										type: "button",
-										style: { ...controlStyle(), height: "20px", padding: "0 6px", fontSize: "11px", color: hue(kind) },
+										className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: "20px", padding: "0 6px", color: hue(kind) },
 										onClick: () => { setRetryTick((tick) => tick + 1); },
 										children: zh ? "重译" : "Retry"
 									})
 								]
 							}),
 							jsxs("div", {
-								style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" },
+								style: { display: "flex", alignItems: "center", gap: SPACE.md, flexWrap: "wrap" },
 								children: [
 									jsxs("label", {
-										style: { display: "inline-flex", alignItems: "center", gap: "6px", cursor: "pointer" },
+										style: { display: "inline-flex", alignItems: "center", gap: SPACE.sm, cursor: "pointer" },
 										children: [
 											jsx("input", {
 												type: "checkbox",
@@ -1762,14 +3943,14 @@ window.__ModuleLoader__.load({
 										]
 									}),
 									jsxs("label", {
-										style: { display: "inline-flex", alignItems: "center", gap: "6px" },
+										style: { display: "inline-flex", alignItems: "center", gap: SPACE.sm },
 										children: [
 											jsx("span", { children: zh ? "翻译" : "Translate" }),
 											jsx("select", {
 												value: target,
 												"aria-label": zh ? "字幕翻译语言" : "Transcript translation language",
 												onChange: (event) => { setTarget(event.target.value); },
-												style: { ...controlStyle(), height: "24px", padding: "0 4px", fontSize: "11px" },
+												className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: CONTROL.xs, padding: "0 4px" },
 												children: [
 													jsx("option", { value: "", children: zh ? "关闭" : "Off" }, "off"),
 													...TARGET_LANGUAGES.map((entry) => jsx("option", { value: entry.code, children: entry.label }, entry.code))
@@ -1781,7 +3962,7 @@ window.__ModuleLoader__.load({
 									jsx(ExportMenu, { row, kind, zh, cues: state.cues ?? [], blocks }),
 									jsx("button", {
 										type: "button",
-										style: { ...controlStyle(), height: "24px", padding: "0 8px", fontSize: "11px" },
+										className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: CONTROL.xs, padding: "0 8px" },
 										onClick: () => { void load(true); },
 										children: zh ? "重取" : "Refetch"
 									})
@@ -1804,21 +3985,20 @@ window.__ModuleLoader__.load({
 							return jsx("div", {
 								ref: isActive ? activeRef : undefined,
 								onClick: () => { onSeek?.(block.start); },
-								style: {
+								style: { font: FONT.body,
 									cursor: "pointer",
 									padding: "12px",
-									fontSize: "13px",
-									background: isActive ? hue(kind, 0.06) : tint,
+									background: isActive ? hue(kind, TINT.soft) : tint,
 									borderLeft: `4px solid ${isActive ? hue(kind) : "transparent"}`,
-									transition: "background 160ms ease"
+									transition: `background ${MOTION.base}`
 								},
 								children: jsxs("div", {
-									style: { display: "flex", alignItems: "flex-start", gap: "12px" },
+									style: { display: "flex", alignItems: "flex-start", gap: SPACE.md },
 									children: [
 										jsx("span", {
-											style: {
-												flex: "none", fontSize: "11px", fontWeight: 500, lineHeight: "21px",
-												color: isActive ? hue(kind) : "var(--dsw-alias-label-secondary)"
+											style: { font: FONT.microStrong,
+												flex: "none",
+												color: isActive ? hue(kind) : INK.secondary
 											},
 											children: formatTime(block.start)
 										}),
@@ -1829,7 +4009,7 @@ window.__ModuleLoader__.load({
 													style: {
 														lineHeight: "21px",
 														fontWeight: isActive ? 500 : 400,
-														color: isActive ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)"
+														color: isActive ? INK.primary : INK.secondary
 													},
 													children: block.text
 												}),
@@ -1842,7 +4022,7 @@ window.__ModuleLoader__.load({
 												target === "" || !translated.has(block.start) ? null : jsx("div", {
 													style: {
 														marginTop: "4px", lineHeight: "21px",
-														color: hue(kind, 0.9)
+														color: hue(kind, TINT.fill)
 													},
 													children: translated.get(block.start)
 												})
@@ -1923,18 +4103,18 @@ window.__ModuleLoader__.load({
 				children: [
 					jsxs("div", {
 						style: {
-							flex: "none", display: "flex", alignItems: "center", gap: "8px",
-							padding: "12px 16px", borderBottom: "1px solid var(--dsw-alias-border-l2)"
+							flex: "none", display: "flex", alignItems: "center", gap: SPACE.sm,
+							padding: "12px 16px", borderBottom: `1px solid ${LINE.rule}`
 						},
 						children: [
 							jsx("span", {
-								style: { flex: 1, fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+								style: { font: FONT.bodyStrong, flex: 1, color: INK.primary },
 								children: zh ? "AI 助手" : "Assistant"
 							}),
 							...QUICK_ACTIONS.map((action) => jsx("button", {
 								type: "button",
 								disabled: busy,
-								style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px" },
+								className: "swm-ctl swm-focus", style: { ...controlStyle(busy), font: FONT.small, height: CONTROL.sm, padding: "0 10px" },
 								onClick: () => { void run("/quick-action", { action: action.id }, zh ? action.zh : action.en); },
 								children: zh ? action.zh : action.en
 							}, action.id))
@@ -1945,7 +4125,7 @@ window.__ModuleLoader__.load({
 						children: [
 							messages.length === 0
 								? jsx("p", {
-									style: { margin: 0, fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-secondary)" },
+									style: { font: FONT.body, margin: 0, color: INK.secondary },
 									children: zh
 										? "针对这条信源提问，或用上方的快捷操作。回答只依据本条信源的内容。"
 										: "Ask about this source, or use a quick action. Answers are grounded in this source only."
@@ -1960,18 +4140,18 @@ window.__ModuleLoader__.load({
 								const pending = message.text === "" && busy && index === messages.length - 1;
 								if (message.role === "user") {
 									return jsx("div", {
-										style: {
-											marginBottom: "12px", fontSize: "13px", lineHeight: "20px",
-											whiteSpace: "pre-wrap", fontWeight: 600,
-											color: "var(--dsw-alias-label-primary)"
+										style: { font: FONT.bodyStrong,
+											marginBottom: "12px",
+											whiteSpace: "pre-wrap",
+											color: INK.primary
 										},
 										children: message.text
 									}, String(index));
 								}
 								return jsx("div", {
-									style: { marginBottom: "16px", fontSize: "13px", color: "var(--dsw-alias-label-secondary)" },
+									style: { font: FONT.body, marginBottom: "16px", color: INK.secondary },
 									children: pending
-										? jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: zh ? "思考中…" : "Thinking…" })
+										? jsx("span", { style: { color: INK.secondary }, children: zh ? "思考中…" : "Thinking…" })
 										: renderMarkdown(message.text)
 								}, String(index));
 							}),
@@ -1980,8 +4160,8 @@ window.__ModuleLoader__.load({
 					}),
 					jsxs("div", {
 						style: {
-							flex: "none", display: "flex", gap: "8px", padding: "12px 16px",
-							borderTop: "1px solid var(--dsw-alias-border-l2)"
+							flex: "none", display: "flex", gap: SPACE.sm, padding: "12px 16px",
+							borderTop: `1px solid ${LINE.rule}`
 						},
 						children: [
 							jsx("input", {
@@ -1996,12 +4176,12 @@ window.__ModuleLoader__.load({
 									setDraft("");
 									void run("/chat", { message }, message);
 								},
-								style: { ...SEARCH_STYLE, height: "36px", flex: 1 }
+								className: "swm-focus", style: { ...SEARCH_STYLE, height: CONTROL.md, flex: 1 }
 							}),
 							jsx("button", {
 								type: "button",
 								disabled: busy || draft.trim() === "",
-								style: { ...controlStyle(), height: "36px" },
+								className: "swm-ctl swm-focus", style: { ...controlStyle(busy || draft.trim() === ""), height: CONTROL.md },
 								onClick: () => {
 									const message = draft.trim();
 									setDraft("");
@@ -2033,9 +4213,6 @@ window.__ModuleLoader__.load({
 
 		/** The same, written inline: `(00:00) Introduction (02:49) Why ...`. */
 		const CHAPTER_INLINE = /[([]((?:\d{1,2}:)?\d{1,2}:\d{2})[)\]]\s*/g;
-
-		/** A bare URL. */
-		const BARE_URL = /https?:\/\/[^\s<>()[\]]+[^\s<>()[\].,;:!?'"]/g;
 
 		/** `*A section heading*`, which is what YouTube's editor emits for bold. */
 		const SECTION_LINE = /^\*(.+?)\*:?\s*$/;
@@ -2144,32 +4321,6 @@ window.__ModuleLoader__.load({
 			return blocks;
 		}
 
-		/**
-		* Render one line, turning bare URLs into links.
-		* @param text - the line.
-		* @param key - a key prefix.
-		* @returns React children.
-		*/
-		function linkify(text, key) {
-			const source = String(text ?? "");
-			const nodes = [];
-			let at = 0;
-			let index = 0;
-			BARE_URL.lastIndex = 0;
-			for (;;) {
-				const match = BARE_URL.exec(source);
-				if (match === null) break;
-				if (match.index > at) nodes.push(source.slice(at, match.index));
-				nodes.push(jsx("a", {
-					href: match[0], target: "_blank", rel: "noreferrer noopener",
-					style: { color: "var(--dsw-alias-label-link)", wordBreak: "break-all" },
-					children: match[0].replace(/^https?:\/\/(?:www\.)?/, "")
-				}, `${key}u${index++}`));
-				at = match.index + match[0].length;
-			}
-			if (at < source.length) nodes.push(source.slice(at));
-			return nodes.length === 0 ? source : nodes;
-		}
 		//#endregion
 
 		function VideoDescription({ row, kind, zh, onSeek }) {
@@ -2214,20 +4365,20 @@ window.__ModuleLoader__.load({
 			return jsxs("section", {
 				style: {
 					marginTop: "16px", boxSizing: "border-box",
-					border: "1px solid var(--dsw-alias-border-l1)",
-					borderRadius: "14px", background: "var(--dsw-specific-menu)",
-					boxShadow: "var(--dsw-shadow-lv1)", padding: "14px 16px"
+					border: `1px solid ${LINE.hair}`,
+					borderRadius: RADIUS.lg, background: SURFACE.card,
+					boxShadow: ELEVATION.raised, padding: "14px 16px"
 				},
 				children: [
 					jsxs("div", {
-						style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: text === "" ? 0 : "10px" },
+						style: { display: "flex", alignItems: "center", gap: SPACE.md, marginBottom: text === "" ? 0 : "10px" },
 						children: [
 							jsx("span", {
-								style: { fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+								style: { font: FONT.bodyStrong, color: INK.primary },
 								children: zh ? "视频介绍" : "About this video"
 							}),
 							meta === undefined ? jsx("span", { style: { flex: 1 } }) : jsx("span", {
-								style: { flex: 1, fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+								style: { font: FONT.micro, flex: 1, color: INK.secondary },
 								children: [
 									meta.lengthSeconds > 0 ? formatTime(meta.lengthSeconds) : "",
 									meta.viewCount > 0 ? `${meta.viewCount.toLocaleString()} ${zh ? "次观看" : "views"}` : ""
@@ -2236,7 +4387,7 @@ window.__ModuleLoader__.load({
 							jsx("button", {
 								type: "button",
 								disabled: state.status === "loading",
-								style: { ...controlStyle(), height: "26px", padding: "0 10px", fontSize: "11px" },
+								className: "swm-ctl swm-focus", style: { ...controlStyle(state.status === "loading"), font: FONT.micro, height: CONTROL.sm, padding: "0 10px" },
 								onClick: () => { void load(true); },
 								children: state.status === "loading" ? (zh ? "获取中…" : "Fetching…") : (zh ? "刷新" : "Refresh")
 							})
@@ -2244,7 +4395,7 @@ window.__ModuleLoader__.load({
 					}),
 					text === ""
 						? jsx("p", {
-							style: { margin: 0, fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+							style: { font: FONT.small, margin: 0, color: INK.secondary },
 							children: state.status === "error"
 								? state.error
 								: state.status === "loading"
@@ -2254,13 +4405,12 @@ window.__ModuleLoader__.load({
 						: jsxs("div", {
 							children: [
 								jsx("div", {
-									style: { fontSize: "13px", lineHeight: "21px", color: "var(--dsw-alias-label-secondary)" },
+									style: { font: FONT.body, color: INK.secondary },
 									children: describeVideo(shown).map((piece, at) => {
 										if (piece.kind === "section") {
 											return jsx("div", {
-												style: {
-													margin: at === 0 ? "0 0 6px" : "14px 0 6px", fontSize: "12px",
-													fontWeight: 600, color: "var(--dsw-alias-label-primary)"
+												style: { font: FONT.smallStrong,
+													margin: at === 0 ? "0 0 6px" : "14px 0 6px", color: INK.primary
 												},
 												children: piece.text
 											}, `s${at}`);
@@ -2276,12 +4426,12 @@ window.__ModuleLoader__.load({
 													type: "button",
 													onClick: () => { onSeek?.(chapter.at); },
 													title: zh ? `跳到 ${chapter.stamp}` : `Jump to ${chapter.stamp}`,
-													style: {
-														appearance: "none", display: "flex", gap: "10px", width: "100%",
-														padding: "3px 6px", border: "none", borderRadius: "6px",
-														background: "transparent", font: "inherit", fontSize: "12px",
+													style: { font: FONT.small,
+														appearance: "none", display: "flex", gap: SPACE.md, width: "100%",
+														padding: "3px 6px", border: "none", borderRadius: RADIUS.sm,
+														background: "transparent", font: "inherit",
 														textAlign: "left", cursor: onSeek === undefined ? "default" : "pointer",
-														color: "var(--dsw-alias-label-secondary)"
+														color: INK.secondary
 													},
 													children: [
 														jsx("span", {
@@ -2308,9 +4458,9 @@ window.__ModuleLoader__.load({
 								long ? jsx("button", {
 									type: "button",
 									onClick: () => { setExpanded((value) => !value); },
-									style: {
+									style: { font: FONT.small,
 										appearance: "none", border: "none", background: "transparent", padding: "8px 0 0",
-										font: "inherit", fontSize: "12px", color: hue(kind), cursor: "pointer"
+										font: "inherit", color: hue(kind), cursor: "pointer"
 									},
 									children: expanded ? (zh ? "收起" : "Show less") : (zh ? "展开全部" : "Show more")
 								}) : null
@@ -2353,23 +4503,23 @@ window.__ModuleLoader__.load({
 						style: { flex: 1, minHeight: 0, overflowY: "auto", padding: "12px" },
 						children: notes.length === 0
 							? jsx("p", {
-								style: { margin: 0, fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-secondary)" },
+								style: { font: FONT.body, margin: 0, color: INK.secondary },
 								children: zh ? "还没有笔记。记下的内容存在本地信源库里，跟着这条信源走。" : "No notes yet. What you write is stored in the local library beside this source."
 							})
 							: notes.map((note) => jsxs("article", {
 								style: {
 									marginBottom: "10px", padding: "10px 12px",
-									border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "10px"
+									border: `1px solid ${LINE.rule}`, borderRadius: RADIUS.md
 								},
 								children: [
 									jsxs("div", {
-										style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+										style: { font: FONT.micro, display: "flex", alignItems: "center", gap: SPACE.sm, marginBottom: "6px", color: INK.secondary },
 										children: [
 											note.atSeconds === null ? null : jsx("span", { children: formatTime(note.atSeconds) }),
 											jsx("span", { style: { flex: 1 }, children: formatDate(note.createdAt) }),
 											jsx("button", {
 												type: "button",
-												style: { ...controlStyle(), height: "22px", padding: "0 8px", fontSize: "11px" },
+												className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: "22px", padding: "0 8px" },
 												onClick: async () => {
 													await fetch(`${apiBase()}/notes?id=${encodeURIComponent(note.id)}`, { method: "DELETE" });
 													await reload();
@@ -2379,32 +4529,32 @@ window.__ModuleLoader__.load({
 										]
 									}),
 									jsx("div", {
-										style: { fontSize: "13px", lineHeight: "20px", whiteSpace: "pre-wrap", color: "var(--dsw-alias-label-secondary)" },
+										style: { font: FONT.body, whiteSpace: "pre-wrap", color: INK.secondary },
 										children: note.body
 									})
 								]
 							}, note.id))
 					}),
 					jsxs("div", {
-						style: { flex: "none", padding: "10px 12px", borderTop: "1px solid var(--dsw-alias-border-l2)" },
+						style: { flex: "none", padding: "10px 12px", borderTop: `1px solid ${LINE.rule}` },
 						children: [
 							jsx("textarea", {
 								value: draft,
 								rows: 3,
 								placeholder: zh ? "写点什么…" : "Write a note…",
 								onChange: (event) => { setDraft(event.target.value); },
-								style: {
+								className: "swm-focus", style: { font: FONT.body,
 									width: "100%", boxSizing: "border-box", resize: "vertical",
-									padding: "8px 10px", borderRadius: "8px",
-									border: "1px solid var(--dsw-alias-border-l2)", background: "transparent",
-									color: "var(--dsw-alias-label-primary)", font: "inherit", fontSize: "13px", outline: "none"
+									padding: "8px 10px", borderRadius: RADIUS.md,
+									border: `1px solid ${LINE.rule}`, background: "transparent",
+									color: INK.primary, font: "inherit"
 								}
 							}),
 							jsxs("div", {
-								style: { display: "flex", alignItems: "center", gap: "10px", marginTop: "8px" },
+								style: { display: "flex", alignItems: "center", gap: SPACE.md, marginTop: "8px" },
 								children: [
 									jsxs("label", {
-										style: { display: "inline-flex", alignItems: "center", gap: "6px", flex: 1, fontSize: "11px", color: "var(--dsw-alias-label-secondary)", cursor: "pointer" },
+										style: { font: FONT.micro, display: "inline-flex", alignItems: "center", gap: SPACE.sm, flex: 1, color: INK.secondary, cursor: "pointer" },
 										children: [
 											jsx("input", { type: "checkbox", checked: pin, onChange: (event) => { setPin(event.target.checked); } }),
 											jsx("span", { children: zh ? `记录时间点 ${formatTime(currentTime)}` : `Pin at ${formatTime(currentTime)}` })
@@ -2413,7 +4563,7 @@ window.__ModuleLoader__.load({
 									jsx("button", {
 										type: "button",
 										disabled: draft.trim() === "",
-										style: controlStyle(),
+										className: "swm-ctl swm-focus", style: controlStyle(draft.trim() === ""),
 										onClick: () => { void add(); },
 										children: zh ? "保存" : "Save"
 									})
@@ -2484,26 +4634,26 @@ window.__ModuleLoader__.load({
 			}
 
 			const frame = {
-				width: "100%", height: "100%", border: "1px solid var(--dsw-alias-border-l1)",
-				borderRadius: "12px", boxShadow: "var(--dsw-shadow-lv1)",
-				background: "var(--dsw-specific-menu)"
+				width: "100%", height: "100%", border: `1px solid ${LINE.hair}`,
+				borderRadius: RADIUS.lg, boxShadow: ELEVATION.raised,
+				background: SURFACE.card
 			};
 
 			return jsxs("div", {
-				style: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0, gap: "10px" },
+				style: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0, gap: SPACE.md },
 				children: [
 					mode !== "html" ? null : jsxs("div", {
-						style: { flex: "none", display: "flex", gap: "8px" },
+						style: { flex: "none", display: "flex", gap: SPACE.sm },
 						children: [
 							jsx("button", {
 								type: "button",
-								style: view === "reader" ? { ...controlStyle(), borderColor: hue(kind, 0.45), color: hue(kind) } : controlStyle(),
+								className: "swm-ctl swm-focus", style: view === "reader" ? { ...controlStyle(), borderColor: hue(kind, TINT.ring), color: hue(kind) } : controlStyle(),
 								onClick: () => { setView("reader"); },
 								children: zh ? "阅读视图" : "Reader"
 							}),
 							jsx("button", {
 								type: "button",
-								style: view === "page" ? { ...controlStyle(), borderColor: hue(kind, 0.45), color: hue(kind) } : controlStyle(),
+								className: "swm-ctl swm-focus", style: view === "page" ? { ...controlStyle(), borderColor: hue(kind, TINT.ring), color: hue(kind) } : controlStyle(),
 								onClick: () => { setView("page"); },
 								children: zh ? "原始页面" : "Original page"
 							})
@@ -2520,38 +4670,36 @@ window.__ModuleLoader__.load({
 					error !== "" ? jsxs("div", {
 						style: {
 							flex: 1, minHeight: 0, display: "flex", flexDirection: "column",
-							alignItems: "center", justifyContent: "center", gap: "14px",
+							alignItems: "center", justifyContent: "center", gap: SPACE.md,
 							padding: "32px", textAlign: "center",
-							border: "1px dashed var(--dsw-alias-border-l2)", borderRadius: "12px"
+							border: `1px dashed ${LINE.rule}`, borderRadius: RADIUS.lg
 						},
 						children: [
 							jsx("div", {
-								style: { fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+								style: { font: FONT.bodyStrong, color: INK.primary },
 								children: zh ? "该站点拒绝了抓取" : "This site refused the fetch"
 							}),
 							jsx("div", {
-								style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)", maxWidth: "52ch" },
+								style: { font: FONT.small, color: INK.secondary, maxWidth: "52ch" },
 								children: (zh ? "在你自己的浏览器里通常可以正常打开。" : "It usually opens normally in your own browser. ") + error
 							}),
 							jsx("a", {
 								href: url, target: "_blank", rel: "noreferrer noopener",
-								style: {
-									display: "inline-flex", alignItems: "center", height: "32px", padding: "0 16px",
-									borderRadius: "8px", border: "1px solid " + hue(kind, 0.45),
-									background: hue(kind, 0.1), color: hue(kind),
-									fontSize: "13px", fontWeight: 500, textDecoration: "none"
+								style: { font: FONT.bodyStrong,
+									display: "inline-flex", alignItems: "center", height: CONTROL.md, padding: "0 16px",
+									borderRadius: RADIUS.md, border: "1px solid " + hue(kind, TINT.ring),
+									background: hue(kind, TINT.soft), color: hue(kind), textDecoration: "none"
 								},
 								children: zh ? "在浏览器中打开原文 ↗" : "Open the original ↗"
 							}),
 							summaryOf(row) === "" ? null : jsxs("div", {
-								style: {
+								style: { font: FONT.body,
 									marginTop: "8px", paddingTop: "16px", maxWidth: "72ch", textAlign: "left",
-									borderTop: "1px solid var(--dsw-alias-border-l1)",
-									fontSize: "13px", lineHeight: "21px", color: "var(--dsw-alias-label-secondary)"
+									borderTop: `1px solid ${LINE.hair}`, color: INK.secondary
 								},
 								children: [
 									jsx("div", {
-										style: { marginBottom: "6px", fontSize: "11px", fontWeight: 600, color: "var(--dsw-alias-label-secondary)" },
+										style: { font: FONT.microStrong, marginBottom: "6px", color: INK.secondary },
 										children: zh ? "库中已有的摘要" : "The summary already in the library"
 									}),
 									jsx("div", { children: summaryOf(row) })
@@ -2588,13 +4736,12 @@ window.__ModuleLoader__.load({
 										// 68-75 characters a line, on 18px/1.75 — measured from its own
 										// reader. Ours was 14px on 24px, and those four pixels are most
 										// of why theirs reads better.
-										style: {
+										style: { font: FONT.large,
 											maxWidth: wide ? "860px" : "720px",
 											margin: "0 auto",
 											padding: "8px 24px 40px",
 											boxSizing: "border-box",
-											fontSize: "18px", lineHeight: "1.75",
-											color: "var(--dsw-alias-label-primary)"
+											color: INK.primary
 										},
 										children: [
 											// An article opens with its own title. The header row above
@@ -2603,32 +4750,29 @@ window.__ModuleLoader__.load({
 												style: { marginBottom: "24px" },
 												children: [
 													jsx("h1", {
-														style: {
+														style: { font: FONT.displayStrong,
 															margin: "0 0 12px", fontFamily: ARTICLE_SERIF,
-															fontSize: "30px", fontWeight: 700, lineHeight: "1.375",
-															letterSpacing: "-0.025em", color: "var(--dsw-alias-label-primary)"
+															letterSpacing: "-0.025em", color: INK.primary
 														},
 														children: typeof reader.title === "string" && reader.title !== "" ? reader.title : row.title
 													}),
 													jsx("div", {
-														style: {
-															display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px",
-															fontSize: "14px", lineHeight: "20px", color: "var(--dsw-alias-label-secondary)"
+														style: { font: FONT.base,
+															display: "flex", flexWrap: "wrap", alignItems: "center", gap: SPACE.sm, color: INK.secondary
 														},
 														children: bylineParts(row, reader, zh).flatMap((part, at) => (at === 0
 															? [jsx("span", { style: { fontWeight: 500 }, children: part }, `by${at}`)]
 															: [jsx("span", { children: "·" }, `dot${at}`), jsx("span", { children: part }, `by${at}`)]))
 													}),
 													articleLead(row, reader) === "" ? null : jsx("p", {
-														style: {
+														style: { font: FONT.large,
 															margin: "16px 0 0", paddingLeft: "16px",
-															borderLeft: `4px solid ${hue(kind)}`,
-															fontSize: "16px", fontStyle: "italic", lineHeight: "1.625",
-															color: "var(--dsw-alias-label-secondary)"
+															borderLeft: `4px solid ${hue(kind)}`, fontStyle: "italic",
+															color: INK.secondary
 														},
 														children: articleLead(row, reader)
 													}),
-													jsx("div", { style: { marginTop: "24px", borderBottom: "1px solid var(--dsw-alias-border-l2)" } })
+													jsx("div", { style: { marginTop: "24px", borderBottom: `1px solid ${LINE.rule}` } })
 												]
 											}, "head"),
 											// Readability hands back structure; rendering it as Markdown
@@ -2749,7 +4893,7 @@ window.__ModuleLoader__.load({
 				// The guess was `calc(100vh - 190px)`, and it was 98px short of
 				// the space actually available — a hardcoded subtraction cannot
 				// track a header whose height it does not measure.
-				style: { display: "flex", gap: "20px", height: "100%", minHeight: 0, padding: "0 24px", boxSizing: "border-box" },
+				style: { display: "flex", gap: SPACE.xl, height: "100%", minHeight: 0, padding: "0 24px", boxSizing: "border-box" },
 				children: [
 					// ── the source itself ────────────────────────────────────
 					jsxs("div", {
@@ -2771,40 +4915,38 @@ window.__ModuleLoader__.load({
 								// title truncates and keeps its full text in `title`.
 								style: {
 									flex: "none", display: "flex", alignItems: "baseline",
-									gap: "10px", marginBottom: "10px", minWidth: 0
+									gap: SPACE.md, marginBottom: "10px", minWidth: 0
 								},
 								children: [
 									jsx("button", {
 										type: "button",
-										style: { ...controlStyle(), flex: "none", height: "28px", padding: "0 10px", fontSize: "12px" },
+										className: "swm-back swm-focus", style: { ...backStyle(), font: FONT.small, flex: "none", height: CONTROL.sm, padding: "0 10px" },
 										onClick: onBack,
-										children: zh ? "← 返回" : "← Back"
+										children: [jsx(Icon, { name: "arrowLeft", size: ICON.xs }, "glyph"), zh ? "返回" : "Back"]
 									}),
 									jsx("span", {
-										style: {
-											flex: "none", padding: "2px 10px", borderRadius: "999px",
-											background: hue(kind, 0.1), color: hue(kind),
-											fontSize: "12px", fontWeight: 500
+										style: { font: FONT.smallStrong,
+											flex: "none", padding: "2px 10px", borderRadius: RADIUS.pill,
+											background: hue(kind, TINT.soft), color: hue(kind)
 										},
 										children: zh ? kind.zh : kind.en
 									}),
 									jsx("h1", {
 										title: row.title,
-										style: {
+										style: { font: FONT.largeStrong,
 											flex: 1, minWidth: 0, margin: 0,
-											fontSize: "16px", lineHeight: "24px", fontWeight: 650,
-											color: "var(--dsw-alias-label-primary)",
+											color: INK.primary,
 											overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
 										},
 										children: row.title
 									}),
 									jsx("span", {
-										style: { flex: "none", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+										style: { font: FONT.micro, flex: "none", color: INK.secondary },
 										children: [formatDate(row.publishedAt), sourceNameOf(row)].filter((part) => part !== "").join(" · ")
 									}),
 									jsx("a", {
 										href: row.sourceUrl, target: "_blank", rel: "noreferrer noopener",
-										style: { flex: "none", fontSize: "12px", color: hue(kind), textDecoration: "none" },
+										style: { font: FONT.small, flex: "none", color: hue(kind), textDecoration: "none" },
 										children: zh ? "打开原文 ↗" : "Open original ↗"
 									})
 								]
@@ -2813,8 +4955,8 @@ window.__ModuleLoader__.load({
 								? jsx("div", {
 									style: {
 										flex: "none", position: "relative", width: "100%", aspectRatio: "16 / 9",
-										boxSizing: "border-box", borderRadius: "12px", overflow: "hidden",
-										border: "1px solid var(--dsw-alias-border-l1)"
+										boxSizing: "border-box", borderRadius: RADIUS.lg, overflow: "hidden",
+										border: `1px solid ${LINE.hair}`
 									},
 									children: jsx("iframe", {
 										ref: frameRef,
@@ -2841,9 +4983,9 @@ window.__ModuleLoader__.load({
 						style: {
 							flex: "none", width: "44px", display: "flex", flexDirection: "column",
 							alignItems: "center", padding: "10px 0",
-							border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "14px",
-							boxShadow: "var(--dsw-shadow-lv1)",
-							background: "var(--dsw-specific-menu)"
+							border: `1px solid ${LINE.hair}`, borderRadius: RADIUS.lg,
+							boxShadow: ELEVATION.raised,
+							background: SURFACE.card
 						},
 						children: jsx("button", {
 							type: "button",
@@ -2851,10 +4993,10 @@ window.__ModuleLoader__.load({
 							"aria-label": zh ? "展开阅读栏" : "Expand the reading column",
 							"aria-expanded": false,
 							onClick: () => { setCollapsed(false); },
-							style: {
-								appearance: "none", border: "none", borderRadius: "8px",
-								background: hue(kind, 0.1), color: hue(kind),
-								padding: "10px 4px", font: "inherit", fontSize: "12px", cursor: "pointer",
+							style: { font: FONT.small,
+								appearance: "none", border: "none", borderRadius: RADIUS.md,
+								background: hue(kind, TINT.soft), color: hue(kind),
+								padding: "10px 4px", font: "inherit", cursor: "pointer",
 								writingMode: "vertical-rl", letterSpacing: "0.08em"
 							},
 							children: `⟨⟨ ${activeTabs.map((entry) => (zh ? entry.zh : entry.en)).join(" · ")}`
@@ -2872,16 +5014,24 @@ window.__ModuleLoader__.load({
 							// A hairline this faint cannot hold a panel's edge on its
 							// own against a white page, so the panel gets the same
 							// resting elevation as a card.
-							border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "14px",
-							boxShadow: "var(--dsw-shadow-lv1)",
-							background: "var(--dsw-specific-menu)", overflow: "hidden"
+							border: `1px solid ${LINE.hair}`, borderRadius: RADIUS.lg,
+							boxShadow: ELEVATION.raised,
+							background: SURFACE.card, overflow: "hidden"
 						},
 						children: [
 							jsx("div", {
 								style: {
-									flex: "none", display: "flex", alignItems: "center", gap: "6px",
-									padding: "8px", borderBottom: "1px solid var(--dsw-alias-border-l2)"
+									flex: "none", display: "flex", alignItems: "center", gap: SPACE.sm,
+									padding: "8px", borderBottom: `1px solid ${LINE.rule}`,
+									// The same omission the page tab bar had: this row is
+									// three tabs and a 折叠 button inside a column capped
+									// at 400px and floored at 260px, so at the floor it
+									// had nowhere to put the fourth control and no way to
+									// reach it. It scrolls rather than shrinking its own
+									// labels to nothing.
+									minWidth: 0, overflowX: "auto", overflowY: "hidden", scrollbarWidth: "none"
 								},
+								className: "swm-tabbar",
 								role: "tablist",
 								children: [
 									...activeTabs.map((entry) => jsx("button", {
@@ -2890,11 +5040,17 @@ window.__ModuleLoader__.load({
 										"aria-selected": entry.id === tab,
 										onClick: () => { setTab(entry.id); },
 										style: {
-											appearance: "none", border: "none", borderRadius: "8px",
-											padding: "7px 14px", font: "inherit", fontSize: "13px", cursor: "pointer",
-											fontWeight: entry.id === tab ? 600 : 400,
-											background: entry.id === tab ? hue(kind, 0.12) : "transparent",
-											color: entry.id === tab ? hue(kind) : "var(--dsw-alias-label-secondary)"
+											// The whole shorthand swaps rather than a weight
+											// riding beside a size: two weights at one size
+											// have different advances, so the label moved
+											// under the pointer as its tab was pressed. First
+											// key, because `font` resets what follows it.
+											font: entry.id === tab ? FONT.bodyStrong : FONT.body,
+											appearance: "none", border: "none", borderRadius: RADIUS.md,
+											flex: "none",
+											padding: "7px 14px", cursor: "pointer",
+											background: entry.id === tab ? hue(kind, TINT.soft) : "transparent",
+											color: entry.id === tab ? hue(kind) : INK.secondary
 										},
 										children: zh ? entry.zh : entry.en
 									}, entry.id)),
@@ -2909,10 +5065,9 @@ window.__ModuleLoader__.load({
 										"aria-label": zh ? "折叠阅读栏" : "Collapse the reading column",
 										"aria-expanded": true,
 										onClick: () => { setCollapsed(true); },
-										style: {
-											...controlStyle(), height: "28px", padding: "0 10px",
-											display: "inline-flex", alignItems: "center", gap: "6px",
-											fontSize: "12px"
+										className: "swm-ctl swm-focus", style: {
+											...controlStyle(), font: FONT.small, height: CONTROL.sm, padding: "0 10px",
+											display: "inline-flex", alignItems: "center", gap: SPACE.sm
 										},
 										children: `⟩⟩ ${zh ? "折叠" : "Collapse"}`
 									}, "collapse")
@@ -3057,7 +5212,7 @@ window.__ModuleLoader__.load({
 						value: draft,
 						onChange: (event) => { setDraft(event.target.value); },
 						onKeyDown: (event) => { if (event.key === "Enter") setSearch(draft); },
-						style: SEARCH_STYLE
+						className: "swm-focus", style: SEARCH_STYLE
 					}),
 					jsxs("div", {
 						style: TOOLBAR_STYLE,
@@ -3066,7 +5221,7 @@ window.__ModuleLoader__.load({
 								type: "button",
 								role: "tab",
 								"aria-selected": candidate.id === kindId,
-								style: chipStyle(candidate, candidate.id === kindId),
+								className: "swm-chip swm-focus", style: chipStyle(candidate, candidate.id === kindId),
 								onClick: () => { setKindId(candidate.id); },
 								children: zh ? candidate.zh : candidate.en
 							}, candidate.id)),
@@ -3075,7 +5230,7 @@ window.__ModuleLoader__.load({
 								"aria-label": zh ? "排序" : "Sort",
 								value: sortBy,
 								onChange: (event) => { setSortBy(event.target.value); },
-								style: controlStyle(),
+								className: "swm-ctl swm-focus", style: controlStyle(),
 								children: SORTS.map((option) => jsx("option", {
 									value: option.id,
 									children: zh ? option.zh : option.en
@@ -3084,57 +5239,75 @@ window.__ModuleLoader__.load({
 						]
 					}),
 					status === "error"
-						? jsxs("div", {
-							style: NOTE_STYLE,
-							children: [
-								jsxs("div", {
-									children: [
-										jsx("div", { children: (zh ? "信源加载失败：" : "Could not load sources: ") + error }),
-										jsx("div", {
-											style: { marginTop: "10px", fontSize: "12px" },
-											children: (zh ? "接口：" : "Endpoint: ") + apiBase()
-										})
-									]
-								})
-							]
-						})
+						? ErrorBox({
+							title: zh ? "信源加载失败" : "Could not load the sources",
+							message: error,
+							endpoint: apiBase(),
+							// A NUDGE TO THE TICK, not a call to `load`. `load` is the
+							// APPEND path and closes over `rows`; calling it here
+							// would be a second definition of "read the first page"
+							// sitting beside the effect that already owns one. The
+							// tick re-runs that effect, which is also what the seed
+							// does when it finishes.
+							onRetry: () => { setReloadTick((tick) => tick + 1); },
+							zh
+						}, "error")
 						: null,
 					status === "loading"
-						? jsx("div", { style: NOTE_STYLE, children: zh ? "加载中…" : "Loading…" })
+						? SkeletonScreen({
+							zh,
+							children: [0, 1, 2].map((at) => jsxs("div", {
+								// BUILT OUT OF CARD_STYLE ITSELF, so a change to the
+								// card moves its placeholder with it. Nothing in a
+								// source test can compare a skeleton with the thing it
+								// becomes — the correspondence is per-pixel across two
+								// render paths — so the only defence against drift is
+								// to give both the same constant.
+								style: { ...CARD_STYLE, alignItems: "flex-start" },
+								children: [
+									Skeleton({ w: "168px", h: "104px", r: RADIUS.md }, "thumb"),
+									jsxs("div", {
+										style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: SPACE.sm },
+										children: [
+											Skeleton({ w: "40%", h: "12px" }, "meta"),
+											Skeleton({ w: "72%", h: "16px" }, "title"),
+											Skeleton({ w: "100%", h: "12px" }, "line1"),
+											Skeleton({ w: "86%", h: "12px" }, "line2")
+										]
+									}, "text")
+								]
+							}, `card${at}`))
+						}, "loading")
 						: null,
 					status !== "loading" && status !== "error" && rows.length === 0
-						? jsx("div", {
-							style: NOTE_STYLE,
-							children: jsxs("div", {
-								children: [
-									jsx("div", { children: zh ? "本地信源库中该类别为空。" : "The local library holds no source of this kind." }),
-									jsx("div", {
-										style: { marginTop: "6px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
-										children: zh
-											? "可从云端导入一批做种，之后由蜂群自行采集。"
-											: "Seed a batch from the upstream, then let the swarm collect on its own."
-									}),
-									jsx("button", {
-										type: "button",
-										style: { ...controlStyle(), marginTop: "14px" },
-										disabled: seeding,
-										onClick: () => { void runSeed(); },
-										children: seeding
-											? (zh ? "导入中…" : "Seeding…")
-											: (zh ? "从云端导入" : "Seed from upstream")
-									})
-								]
-							})
-						})
+						? EmptyBox({
+							mark: "book",
+							title: zh ? "本地信源库中该类别为空。" : "The local library holds no source of this kind.",
+							note: zh
+								? "可从云端导入一批做种，之后由蜂群自行采集。"
+								: "Seed a batch from the upstream, then let the swarm collect on its own.",
+							// The seed button was already here and was already the
+							// answer to this screen; it moves into the slot the
+							// primitive keeps for it rather than being re-typed.
+							action: jsx("button", {
+								type: "button",
+								className: "swm-ctl swm-focus", style: controlStyle(seeding),
+								disabled: seeding,
+								onClick: () => { void runSeed(); },
+								children: seeding
+									? (zh ? "导入中…" : "Seeding…")
+									: (zh ? "从云端导入" : "Seed from upstream")
+							}, "seed")
+						}, "empty")
 						: null,
 					seedReport === "" ? null : jsx("div", {
-						style: { margin: "10px 0", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						style: { font: FONT.small, margin: "10px 0", color: INK.secondary },
 						children: seedReport
 					}),
 					rows.length === 0 ? null : jsxs("div", {
 						children: [
 							jsx("div", {
-								style: { margin: "0 0 10px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+								style: { font: FONT.small, margin: "0 0 10px", color: INK.secondary },
 								children: (zh ? "共 " : "") + total + (zh ? " 条" : " results")
 							}),
 							...rows.map((row, index) => jsx(ResourceCard, { row, kind, zh, onOpen: setSelected }, row.id ?? String(index)))
@@ -3145,7 +5318,7 @@ window.__ModuleLoader__.load({
 							style: { display: "flex", justifyContent: "center", padding: "8px 0 4px" },
 							children: jsx("button", {
 								type: "button",
-								style: controlStyle(),
+								className: "swm-ctl swm-focus", style: controlStyle(),
 								onClick: () => { void load(true); },
 								children: zh ? "加载更多" : "Load more"
 							})
@@ -3153,7 +5326,7 @@ window.__ModuleLoader__.load({
 						: null,
 					status === "loading-more"
 						? jsx("div", {
-							style: { textAlign: "center", padding: "8px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+							style: { font: FONT.small, textAlign: "center", padding: "8px", color: INK.secondary },
 							children: zh ? "加载中…" : "Loading…"
 						})
 						: null
@@ -3205,13 +5378,13 @@ window.__ModuleLoader__.load({
 		* worth provoking from a chip.
 		*/
 		const MISSION_FILTERS = [
-			{ id: "", en: "All", zh: "全部", hue: "100,116,139" },
-			{ id: "running", en: "Running", zh: "运行中", hue: "2,132,199" },
-			{ id: "completed", en: "Completed", zh: "已完成", hue: "5,150,105" },
-			{ id: "quality-failed", en: "Not signed", zh: "未签署", hue: "217,119,6" },
-			{ id: "resumable", en: "Resumable", zh: "可继续", hue: "124,58,237" },
-			{ id: "failed", en: "Failed", zh: "失败", hue: "220,38,38" },
-			{ id: "cancelled", en: "Cancelled", zh: "已取消", hue: "100,116,139" }
+			{ id: "", en: "All", zh: "全部", hue: TONE.neutral },
+			{ id: "running", en: "Running", zh: "运行中", hue: TONE.info },
+			{ id: "completed", en: "Completed", zh: "已完成", hue: TONE.success },
+			{ id: "quality-failed", en: "Not signed", zh: "未签署", hue: TONE.warn },
+			{ id: "resumable", en: "Resumable", zh: "可继续", hue: TONE.accent },
+			{ id: "failed", en: "Failed", zh: "失败", hue: TONE.danger },
+			{ id: "cancelled", en: "Cancelled", zh: "已取消", hue: TONE.neutral }
 		];
 
 		/**
@@ -3227,14 +5400,20 @@ window.__ModuleLoader__.load({
 		* outcomes, and the second one still has something to read.
 		*/
 		const MISSION_PILL_FACES = {
-			running: { zh: "运行中", en: "Running", hue: "2,132,199" },
-			resumable: { zh: "可继续", en: "Resumable", hue: "124,58,237" },
-			completed: { zh: "完成", en: "Completed", hue: "5,150,105" },
-			failed: { zh: "失败", en: "Failed", hue: "220,38,38" },
-			cancelled: { zh: "已取消", en: "Cancelled", hue: "100,116,139" },
-			"quality-failed": { zh: "未签署", en: "Not signed off", hue: "217,119,6" },
-			unknown: { zh: "未知", en: "Unknown", hue: "100,116,139" },
-			"unknown-terminal": { zh: "未知（已结束）", en: "Unknown (ended)", hue: "220,38,38" }
+			// AND A MARK BESIDE THE COLOUR, on every one. `cancelled` and `unknown`
+			// share TONE.neutral and `failed` and `unknown-terminal` share
+			// TONE.danger, so on this table too the hue alone answers a question
+			// this table exists to answer precisely. The glyph is what carries the
+			// difference to a reader who cannot tell two tints apart — which is
+			// roughly one man in twelve, not an edge case.
+			running: { zh: "运行中", en: "Running", hue: TONE.info, icon: "spinner" },
+			resumable: { zh: "可继续", en: "Resumable", hue: TONE.accent, icon: "play" },
+			completed: { zh: "完成", en: "Completed", hue: TONE.success, icon: "check" },
+			failed: { zh: "失败", en: "Failed", hue: TONE.danger, icon: "close" },
+			cancelled: { zh: "已取消", en: "Cancelled", hue: TONE.neutral, icon: "minus" },
+			"quality-failed": { zh: "未签署", en: "Not signed off", hue: TONE.warn, icon: "alert" },
+			unknown: { zh: "未知", en: "Unknown", hue: TONE.neutral, icon: "circle" },
+			"unknown-terminal": { zh: "未知（已结束）", en: "Unknown (ended)", hue: TONE.danger, icon: "circle" }
 		};
 
 		/** The twelve stages, in the order they run. The ids are the Host half's; the words are ours. */
@@ -3253,23 +5432,108 @@ window.__ModuleLoader__.load({
 			"s12-persist": { zh: "归档", en: "Persist" }
 		};
 
-		/** Stage statuses. `skipped-by-tier` is not a failure and must not be drawn as one. */
-		const MISSION_STAGE_STATUS_FACES = {
-			pending: { zh: "待运行", en: "Pending", hue: "148,163,184" },
-			running: { zh: "运行中", en: "Running", hue: "2,132,199" },
-			done: { zh: "完成", en: "Done", hue: "5,150,105" },
-			degraded: { zh: "降级完成", en: "Degraded", hue: "217,119,6" },
-			failed: { zh: "失败", en: "Failed", hue: "220,38,38" },
-			"skipped-by-tier": { zh: "本档跳过", en: "Skipped at this tier", hue: "148,163,184" }
+		/**
+		* The same twelve, as positions.
+		*
+		* `Object.keys` on a literal returns the order it was written in, so this
+		* is the table above read a second way rather than a second table — which
+		* is the whole point: a thirteenth stage added to the catalogue lands here
+		* too, and a list row cannot start measuring against a denominator the
+		* detail screen has never heard of.
+		*/
+		const MISSION_STAGE_ORDER = Object.keys(MISSION_STAGE_FACES);
+
+		/**
+		* The seven agents and the run itself, in the reader's language.
+		*
+		* Keyed exactly as ROLE_TONE is keyed, and it carries NO `hue`. That is
+		* the decision worth recording: every other table here declares its own
+		* colour, but a role's colour is ROLE_TONE's and `roleTone()` is the
+		* lookup — copying the eight hues down here would be a second place for
+		* "researcher is blue" to be true, and the file already paid for that
+		* once when `running` was declared in five tables and changing it was
+		* five edits and a miss.
+		*
+		* The words are chosen not to collide with a STAGE's word: the reviewer
+		* is 评审员 rather than 复盘, which is s10's name, because an owner column
+		* and a stage column sit side by side on the task board and two things
+		* reading 复盘 in one row is a row that has to be re-read.
+		*/
+		const MISSION_AGENT_FACES = {
+			leader: { zh: "领队", en: "Leader" },
+			researcher: { zh: "研究员", en: "Researcher" },
+			analyst: { zh: "分析员", en: "Analyst" },
+			reconciler: { zh: "归一员", en: "Reconciler" },
+			writer: { zh: "撰稿人", en: "Writer" },
+			reviewer: { zh: "评审员", en: "Reviewer" },
+			verifier: { zh: "核验员", en: "Verifier" },
+			mission: { zh: "任务", en: "Mission" }
 		};
 
-		/** Dimension states, from `mission_dimensions.state`. */
+		/**
+		* WHAT KIND OF STEP a stage is, which the catalogue declares and nothing drew.
+		*
+		* Every stage carries a `mode` — it is on the projection at
+		* lib/mission-view.js:321 and on the synthesised rows beside it — and the
+		* board answered "why does this row exist" only for CHILD rows. For a
+		* stage the answer is always "the pipeline declares twelve", which says
+		* why the row is there and not what it does.
+		*
+		* ALL NINE, not the five that are obvious. `missionFace` falls through to
+		* the raw value, so a mode this table has never heard of prints
+		* `fan-out` — an English identifier on a Chinese screen — rather than
+		* nothing. The nine are lib/mission-runtime.js's own, read off the STAGES
+		* catalogue, and a source test holds this key set to that file's so a
+		* tenth mode cannot arrive silently.
+		*/
+		const MISSION_STAGE_MODE_FACES = {
+			gate: { zh: "闸门", en: "Gate", hue: TONE.warn },
+			plan: { zh: "规划", en: "Plan", hue: TONE.accent },
+			"fan-out": { zh: "并行分发", en: "Fan-out", hue: TONE.info },
+			review: { zh: "评审", en: "Review", hue: TONE.neutral },
+			synthesize: { zh: "综合", en: "Synthesize", hue: PALETTE.cyan },
+			draft: { zh: "起草", en: "Draft", hue: PALETTE.rose },
+			verify: { zh: "核验", en: "Verify", hue: TONE.success },
+			signoff: { zh: "签署", en: "Sign-off", hue: TONE.accent },
+			persist: { zh: "归档", en: "Persist", hue: TONE.muted }
+		};
+
+		/**
+		* Stage statuses. `skipped-by-tier` is not a failure and must not be drawn as one.
+		*
+		* WHICH IS EXACTLY WHY EVERY ROW ALSO CARRIES A GLYPH. Holding that line
+		* on the colour costs something: `pending` and `skipped-by-tier` end up
+		* on the same TONE.muted two lines apart, and a twelve-cell ruler drawn in
+		* tint alone then says the same grey about "has not started" and "will
+		* never start here". The fix is NOT to give the skip a colour — that would
+		* draw it as an outcome — it is to give both a mark, so the ruler is
+		* readable in one glance and still readable with the colour taken away.
+		*/
+		const MISSION_STAGE_STATUS_FACES = {
+			pending: { zh: "待运行", en: "Pending", hue: TONE.muted, icon: "circle" },
+			running: { zh: "运行中", en: "Running", hue: TONE.info, icon: "spinner" },
+			done: { zh: "完成", en: "Done", hue: TONE.success, icon: "check" },
+			degraded: { zh: "降级完成", en: "Degraded", hue: TONE.warn, icon: "alert" },
+			failed: { zh: "失败", en: "Failed", hue: TONE.danger, icon: "close" },
+			"skipped-by-tier": { zh: "本档跳过", en: "Skipped at this tier", hue: TONE.muted, icon: "minus" }
+		};
+
+		/**
+		* Dimension states, from `mission_dimensions.state`.
+		*
+		* Keyed to overlap MISSION_STAGE_STATUS_FACES where the two mean the same
+		* thing (`pending`, `degraded`, `failed`) and to differ where they do
+		* not, which is what lets the task board draw a stage row and a dimension
+		* row in one column: it looks here only when the stage table has never
+		* heard of the value. Same marks for the same meanings, for the same
+		* reason — a 采集中 row and a 运行中 row are the same shape of fact.
+		*/
 		const MISSION_DIMENSION_FACES = {
-			pending: { zh: "待采集", en: "Pending", hue: "148,163,184" },
-			collecting: { zh: "采集中", en: "Collecting", hue: "2,132,199" },
-			collected: { zh: "已采集", en: "Collected", hue: "5,150,105" },
-			degraded: { zh: "降级", en: "Degraded", hue: "217,119,6" },
-			failed: { zh: "失败", en: "Failed", hue: "220,38,38" }
+			pending: { zh: "待采集", en: "Pending", hue: TONE.muted, icon: "circle" },
+			collecting: { zh: "采集中", en: "Collecting", hue: TONE.info, icon: "spinner" },
+			collected: { zh: "已采集", en: "Collected", hue: TONE.success, icon: "check" },
+			degraded: { zh: "降级", en: "Degraded", hue: TONE.warn, icon: "alert" },
+			failed: { zh: "失败", en: "Failed", hue: TONE.danger, icon: "close" }
 		};
 
 		/**
@@ -3281,15 +5545,28 @@ window.__ModuleLoader__.load({
 		* undo that at the last step, on the one screen where it matters.
 		*/
 		const MISSION_VERIFY_FACES = {
-			"verified-source-text": { zh: "已核验", en: "Verified" },
-			"verified-adjacent-spans": { zh: "跨段核验", en: "Verified across spans" },
-			"verified-abstract": { zh: "仅摘要核验", en: "Verified against an abstract" },
-			misattributed: { zh: "出处不符", en: "Found in another source" },
-			unverifiable: { zh: "查无此文", en: "Found nowhere we hold" },
-			"too-short": { zh: "引语过短", en: "Below the quote floor" },
-			"unchecked-fetch-failed": { zh: "抓取失败", en: "Fetch failed" },
-			"unchecked-rate-limited": { zh: "被限流", en: "Rate limited" },
-			"unchecked-stale": { zh: "页面过期", en: "Page too old" }
+			// AND THE HUES SAY THE SAME SPLIT. This was the one vocabulary in the
+			// file with no colour at all, so `missionHue` answered TONE.neutral for
+			// all nine and 已核验 and 查无此文 were drawn as the same grey chip —
+			// which undoes the whole reason the column has nine values, on the one
+			// screen where it matters.
+			"verified-source-text": { zh: "已核验", en: "Verified", hue: TONE.success },
+			"verified-adjacent-spans": { zh: "跨段核验", en: "Verified across spans", hue: TONE.success },
+			// Verified against an ABSTRACT is not verified against the paper. Amber
+			// rather than green: it is a real check with a named limit, and drawing
+			// it green is the claim the limit exists to refuse.
+			"verified-abstract": { zh: "仅摘要核验", en: "Verified against an abstract", hue: TONE.warn },
+			misattributed: { zh: "出处不符", en: "Found in another source", hue: TONE.danger },
+			unverifiable: { zh: "查无此文", en: "Found nowhere we hold", hue: TONE.danger },
+			"too-short": { zh: "引语过短", en: "Below the quote floor", hue: TONE.warn },
+			// MUTED, NOT DANGER, and this is the half a colour ramp gets wrong. A
+			// fetch that 429'd is a quote NOBODY CHECKED; an unverifiable one is a
+			// quote that was checked and found nowhere. Drawing them alike says
+			// four invented citations and four rate-limited ones are the same
+			// result, which is exactly what the split above exists to prevent.
+			"unchecked-fetch-failed": { zh: "抓取失败", en: "Fetch failed", hue: TONE.muted },
+			"unchecked-rate-limited": { zh: "被限流", en: "Rate limited", hue: TONE.muted },
+			"unchecked-stale": { zh: "页面过期", en: "Page too old", hue: TONE.muted }
 		};
 
 		/**
@@ -3334,37 +5611,92 @@ window.__ModuleLoader__.load({
 			wall: { zh: "用时", en: "Wall clock" }
 		};
 
-		/** Every event type the Host half registers, in the reader's language. */
+		/**
+		* The tool doors, named and marked.
+		*
+		* Tool ids reached the screen as raw mono slugs — `web`, `fetch` — in a
+		* table whose whole subject is which door is failing, and once as the
+		* middle term of a `stamp · stage · tool · pace · code` sentence where
+		* the one word a reader is scanning for had nothing to make it findable.
+		*
+		* SEEDED FROM THE CEILINGS, deliberately: MISSION_METER_FACES above
+		* already names `web`, `fetch` and `arxiv`, and they are the closest
+		* thing to a tool vocabulary this half holds. The Host's registration is
+		* the authority and this list does NOT block on enumerating it, because
+		* it does not have to: `missionFace` returns the raw key for a tool it
+		* has never heard of and `missionHue` returns TONE.neutral, so an
+		* unlisted door degrades to its own slug under a wrench rather than
+		* rendering blank. Reconcile against lib/index.js when the ids are known;
+		* keep the fallback either way.
+		*/
+		const MISSION_TOOL_FACES = {
+			web: { zh: "网页搜索", en: "Web search", icon: "search", hue: TONE.info },
+			fetch: { zh: "抓取页面", en: "Page fetch", icon: "globe", hue: TONE.info },
+			arxiv: { zh: "arXiv", en: "arXiv", icon: "book", hue: PALETTE.violet },
+			"knowledge-base": { zh: "知识库", en: "Knowledge base", icon: "book", hue: TONE.success }
+		};
+
+		/**
+		* Every event type the Host half registers, in the reader's language — and,
+		* since this batch, in its colour.
+		*
+		* THIS WAS THE ONE VOCABULARY WITH NO HUE. `missionHue` (below) answers
+		* TONE.neutral for any entry whose `hue` is not a string, so 闸门拒绝 and
+		* 阶段完成 came out of it as the same grey and the event stream was a
+		* colourless log — on the screen that is shown exactly when the trajectory
+		* has failed and the log is all a person has left.
+		*
+		* A TABLE, NOT A REGEX, and it is worth recording why so it is not
+		* re-argued. The alternative on the table was to derive the tone in the
+		* renderer from the type string's own suffix — `/failed|refused/` → danger
+		* and so on. It reads as less to maintain and is not: the suffixes are the
+		* Host half's identifiers, not a designed vocabulary, so `postlude:pending`
+		* and `evidence:none` only match by accident, a new event type gets a
+		* colour nobody chose, and nothing in the source can be tested key by key.
+		* Every other vocabulary here declares its own colour beside its own words.
+		* This one now does too, and the source test counts the two columns.
+		*/
 		const MISSION_EVENT_FACES = {
-			"mission:created": { zh: "任务建立", en: "Mission created" },
-			"mission:claimed": { zh: "接管本次运行", en: "Run claimed" },
-			"mission:parked": { zh: "已挂起", en: "Parked" },
-			"mission:finalized": { zh: "任务收尾", en: "Mission finalized" },
-			"mission:started": { zh: "开始运行", en: "Mission started" },
-			"mission:resumed": { zh: "从检查点继续", en: "Resumed from a checkpoint" },
-			"stages:opened": { zh: "阶段表建立", en: "Stage rows opened" },
-			"stage:started": { zh: "阶段开始", en: "Stage started" },
-			"stage:done": { zh: "阶段完成", en: "Stage done" },
-			"stage:degraded": { zh: "阶段降级完成", en: "Stage degraded" },
-			"stage:failed": { zh: "阶段失败", en: "Stage failed" },
-			"stage:skipped-by-tier": { zh: "本档跳过", en: "Skipped at this tier" },
-			"stage:stalled": { zh: "阶段停滞", en: "Stage stalled" },
-			"gate:passed": { zh: "闸门通过", en: "Gate passed" },
-			"gate:soft-warning": { zh: "预算软警告", en: "Soft budget warning" },
-			"gate:hard-warning": { zh: "硬闸门告警", en: "Hard gate warning" },
-			"gate:refused": { zh: "闸门拒绝", en: "Gate refused" },
-			"artifact:written": { zh: "报告已归档", en: "Artefact written" },
-			"evidence:none": { zh: "没有任何可核验的证据", en: "No verifiable evidence" },
-			"evidence:thin": { zh: "证据偏薄", en: "Evidence is thin" },
-			"recollect:allowed": { zh: "允许补采", en: "Recollect allowed" },
-			"recollect:refused": { zh: "拒绝补采", en: "Recollect refused" },
-			"recollect:no-gain": { zh: "补采没有新增", en: "Recollect gained nothing" },
-			"checkpoint:divergence": { zh: "检查点分歧", en: "Checkpoint divergence" },
-			"runtime:orphan-reclaimed": { zh: "回收了孤儿任务", en: "Orphan reclaimed" },
-			"runtime:owner-conflict": { zh: "归属冲突", en: "Owner conflict" },
-			"runtime:reclaim-limit": { zh: "回收次数到顶", en: "Reclaim limit reached" },
-			"postlude:pending": { zh: "收尾待办", en: "Postlude pending" },
-			"postlude:handoff-failed": { zh: "收尾交接失败", en: "Postlude handoff failed" }
+			// Bookkeeping: the row exists, and that is all it says. A mission is
+			// CREATED by the form and STARTED by the runtime, and only the second
+			// one is news.
+			"mission:created": { zh: "任务建立", en: "Mission created", hue: TONE.muted },
+			"mission:claimed": { zh: "接管本次运行", en: "Run claimed", hue: TONE.info },
+			"mission:parked": { zh: "已挂起", en: "Parked", hue: TONE.muted },
+			"mission:finalized": { zh: "任务收尾", en: "Mission finalized", hue: TONE.success },
+			"mission:started": { zh: "开始运行", en: "Mission started", hue: TONE.info },
+			"mission:resumed": { zh: "从检查点继续", en: "Resumed from a checkpoint", hue: TONE.info },
+			"stages:opened": { zh: "阶段表建立", en: "Stage rows opened", hue: TONE.info },
+			"stage:started": { zh: "阶段开始", en: "Stage started", hue: TONE.info },
+			"stage:done": { zh: "阶段完成", en: "Stage done", hue: TONE.success },
+			"stage:degraded": { zh: "阶段降级完成", en: "Stage degraded", hue: TONE.warn },
+			"stage:failed": { zh: "阶段失败", en: "Stage failed", hue: TONE.danger },
+			// Muted, exactly as MISSION_STAGE_STATUS_FACES mutes it: a tier that
+			// does not run a stage has not failed to run it.
+			"stage:skipped-by-tier": { zh: "本档跳过", en: "Skipped at this tier", hue: TONE.muted },
+			"stage:stalled": { zh: "阶段停滞", en: "Stage stalled", hue: TONE.warn },
+			"gate:passed": { zh: "闸门通过", en: "Gate passed", hue: TONE.success },
+			"gate:soft-warning": { zh: "预算软警告", en: "Soft budget warning", hue: TONE.warn },
+			"gate:hard-warning": { zh: "硬闸门告警", en: "Hard gate warning", hue: TONE.warn },
+			"gate:refused": { zh: "闸门拒绝", en: "Gate refused", hue: TONE.danger },
+			"artifact:written": { zh: "报告已归档", en: "Artefact written", hue: TONE.success },
+			"evidence:none": { zh: "没有任何可核验的证据", en: "No verifiable evidence", hue: TONE.danger },
+			"evidence:thin": { zh: "证据偏薄", en: "Evidence is thin", hue: TONE.warn },
+			"recollect:allowed": { zh: "允许补采", en: "Recollect allowed", hue: TONE.success },
+			"recollect:refused": { zh: "拒绝补采", en: "Recollect refused", hue: TONE.warn },
+			"recollect:no-gain": { zh: "补采没有新增", en: "Recollect gained nothing", hue: TONE.warn },
+			"checkpoint:divergence": { zh: "检查点分歧", en: "Checkpoint divergence", hue: TONE.danger },
+			// WARN, not muted. The batch text listed this one with the quiet
+			// bookkeeping events, and its own regex sketch put `orphan` in the
+			// amber band; the amber sketch is right. A reclaim means a previous
+			// process abandoned this run mid-flight and something else picked it
+			// up — routine to the runtime, never routine to the person reading
+			// why a mission has two starts in its log.
+			"runtime:orphan-reclaimed": { zh: "回收了孤儿任务", en: "Orphan reclaimed", hue: TONE.warn },
+			"runtime:owner-conflict": { zh: "归属冲突", en: "Owner conflict", hue: TONE.danger },
+			"runtime:reclaim-limit": { zh: "回收次数到顶", en: "Reclaim limit reached", hue: TONE.warn },
+			"postlude:pending": { zh: "收尾待办", en: "Postlude pending", hue: TONE.warn },
+			"postlude:handoff-failed": { zh: "收尾交接失败", en: "Postlude handoff failed", hue: TONE.warn }
 		};
 
 		/**
@@ -3388,7 +5720,85 @@ window.__ModuleLoader__.load({
 		/** The colour a vocabulary value carries, neutral for one this page does not know. */
 		function missionHue(faces, value) {
 			const key = String(value ?? "");
-			return Object.hasOwn(faces, key) && typeof faces[key].hue === "string" ? faces[key].hue : "100,116,139";
+			return Object.hasOwn(faces, key) && typeof faces[key].hue === "string" ? faces[key].hue : TONE.neutral;
+		}
+
+		/**
+		* The MARK a vocabulary value carries, undefined for one this page does not know.
+		*
+		* Undefined rather than a fallback glyph, because `Chip` takes undefined
+		* to mean "no mark" and a placeholder tick on a state nobody named would
+		* be a claim about that state. Own-property for the same reason
+		* `missionFace` is: these tables are keyed by whatever a TEXT column
+		* holds, and `faces["constructor"].icon` is not undefined — it is a
+		* lookup on the prototype dressed as a glyph name.
+		* @param faces - the label table.
+		* @param value - the stored value.
+		* @returns an ICON_PATHS name, or undefined.
+		*/
+		function missionIcon(faces, value) {
+			const key = String(value ?? "");
+			return Object.hasOwn(faces, key) && typeof faces[key].icon === "string" ? faces[key].icon : undefined;
+		}
+
+		/**
+		* WHAT KIND OF STEP this is, badged — but only when it says something new.
+		*
+		* SUPPRESSION IS THE WHOLE DESIGN. Six of the twelve stages are named
+		* after their own mode: s6-synthesize is 综合 and its mode is
+		* `synthesize`, and s2/s9/s11/s12 collide the same way. Drawn
+		* unconditionally, half the board would print the stage's name twice in
+		* two shapes, which is worse than not drawing it — a badge that repeats
+		* the word beside it teaches the reader to stop looking at badges.
+		*
+		* The comparison is on the RESOLVED LABEL rather than on a hard-coded
+		* list of stage ids, because the collision is a fact about the words and
+		* the words are per-language. A list would be right in Chinese and wrong
+		* in English the first time one of the twelve is renamed.
+		* @param props - `{mode, stepId, zh}`.
+		* @param key - React's key.
+		* @returns the badge, or null when it would only repeat the stage's name.
+		*/
+		function StageModeChip({ mode, stepId, zh }, key) {
+			const id = String(mode ?? "").trim();
+			if (id === "") return null;
+			const label = missionFace(MISSION_STAGE_MODE_FACES, id, zh);
+			if (label === missionFace(MISSION_STAGE_FACES, stepId, zh)) return null;
+			return Chip({
+				tone: missionHue(MISSION_STAGE_MODE_FACES, id),
+				label,
+				title: label === id ? id : `${label} · ${id}`
+			}, key);
+		}
+
+		/**
+		* One tool door as a chip: its word, its mark, its colour and its tally.
+		*
+		* An unlisted id keeps its slug and takes the wrench, which is the same
+		* fallthrough `missionFace` gives every other vocabulary here — a door
+		* the Host registered after this table was written must draw as itself,
+		* not as nothing.
+		*
+		* THE COUNT ONLY RIDES ALONG WHEN THERE IS MORE THAN ONE. "web 1" is a
+		* badge that says nothing and takes the width of one that does.
+		* @param props - `{toolId, count, zh, size}`.
+		* @param key - React's key.
+		*/
+		function ToolChip({ toolId, count, zh, size }, key) {
+			const id = String(toolId ?? "").trim();
+			if (id === "") return null;
+			const label = missionFace(MISSION_TOOL_FACES, id, zh);
+			const n = Number(count ?? 0);
+			return Chip({
+				tone: missionHue(MISSION_TOOL_FACES, id),
+				icon: Object.hasOwn(MISSION_TOOL_FACES, id) ? MISSION_TOOL_FACES[id].icon : "wrench",
+				label,
+				count: Number.isFinite(n) && n > 1 ? String(n) : undefined,
+				size,
+				// The raw id stays reachable: it is what the Host logs and what a
+				// support question quotes, and the word above it is ours.
+				title: label === id ? id : `${label} · ${id}`
+			}, key);
 		}
 
 		/**
@@ -3400,14 +5810,16 @@ window.__ModuleLoader__.load({
 		* and only the second one says go and read it anyway.
 		* @param pill - `mission.pill` from the view route.
 		* @param zh - whether to write Chinese.
-		* @returns `{ label, hue, note }`; `note` is "" when nothing is degraded.
+		* @returns `{ label, hue, icon, note }`; `note` is "" when nothing is degraded.
 		*/
 		function missionPillFace(pill, zh) {
 			const code = String(pill?.code ?? "unknown");
 			const degraded = code.endsWith("-degraded");
 			const base = degraded ? code.slice(0, -"-degraded".length) : code;
 			const label = missionFace(MISSION_PILL_FACES, base, zh);
-			if (!degraded) return { label, hue: missionHue(MISSION_PILL_FACES, base), note: "" };
+			if (!degraded) {
+				return { label, hue: missionHue(MISSION_PILL_FACES, base), icon: missionIcon(MISSION_PILL_FACES, base), note: "" };
+			}
 			const total = Number(pill?.totalDimensions ?? 0);
 			const bad = Number(pill?.degradedDimensions ?? 0);
 			return {
@@ -3415,7 +5827,12 @@ window.__ModuleLoader__.load({
 				// Degradation is amber whatever the base outcome was, because the
 				// question it answers — can I trust all of this — is the same
 				// whether the mission completed or failed.
-				hue: "217,119,6",
+				hue: TONE.warn,
+				// AND THE MARK MOVES WITH THE COLOUR. The base outcome's glyph —
+				// a tick for 完成 — over an amber pill would be a tick and a
+				// warning on one badge, which is the reading this whole branch
+				// exists to refuse.
+				icon: "alert",
 				note: bad > 0
 					? (zh ? `${bad}/${total} 个维度降级` : `${bad}/${total} dimensions degraded`)
 					: (zh ? "报告降级" : "the report is degraded")
@@ -3467,6 +5884,76 @@ window.__ModuleLoader__.load({
 			}
 			const limit = wall ? missionDuration(meter.limit, zh) : String(meter.limit);
 			return `${used} / ${limit} · ${Math.round((meter.ratio ?? 0) * 100)}%`;
+		}
+
+		/**
+		* The degrade ladder the Host half froze, turned into a colour.
+		*
+		* It was a ternary inside MissionCostMeters' map, with the rungs read off
+		* `cost.ladder` so the meter and the runtime could not disagree. The
+		* header's token tile needs the same answer, and re-typing `0.9` and
+		* `0.7` up there is precisely how the two start disagreeing — the second
+		* copy is the one nobody edits.
+		* @param ratio - used over limit, or null.
+		* @param ladder - `cost.ladder`; the defaults are the contract's.
+		* @returns a TONE triple.
+		*/
+		function missionLadderHue(ratio, ladder) {
+			const at = Number(ratio) || 0;
+			const rungs = ladder ?? {};
+			return at >= (rungs.warn ?? 0.9) ? TONE.danger
+				: at >= (rungs.soften ?? 0.7) ? TONE.warn
+				: TONE.success;
+		}
+
+		/**
+		* The rungs a VERIFICATION rate is graded on, named once.
+		*
+		* `missionLadderHue` above grades a ratio where MORE IS WORSE — tokens
+		* against a ceiling — and three places on this tab grade one where more
+		* is better: the report's scorecard, the sources pane's coverage tile and
+		* the reference list's verified tile. Reading the spend ladder for those
+		* would paint a fully verified section red.
+		*
+		* All three typed `>= 0.8 ? … : >= 0.5 ? …` by hand in the reference this
+		* was drawn from, which is one decision in three copies and two of them
+		* are the copies nobody edits.
+		*/
+		const MISSION_RATE_GOOD = 0.8;
+		const MISSION_RATE_FAIR = 0.5;
+
+		/**
+		* How much of a population held up, as a share.
+		*
+		* `null` FOR AN EMPTY POPULATION, never 0 and never 1. `verified / total`
+		* at 0/0 is NaN — which CSS drops, leaving a bar at its full width — and
+		* `verified >= total` is TRUE at nought, which is the clean bill this
+		* file refuses to give in four other places.
+		* @param verified - how many passed.
+		* @param total - how many there were.
+		* @returns the share in 0..1, or null when there was nothing to check.
+		*/
+		function missionRate(verified, total) {
+			const all = Number(total) || 0;
+			if (all <= 0) return null;
+			return Math.max(0, Math.min(1, (Number(verified) || 0) / all));
+		}
+
+		/**
+		* The same share, as a colour.
+		* @param verified - how many passed.
+		* @param total - how many there were.
+		* @returns a TONE triple; neutral when nothing was checked at all.
+		*/
+		function missionRateHue(verified, total) {
+			const rate = missionRate(verified, total);
+			// NOT GREEN AT NOUGHT. A section nobody checked satisfies every
+			// threshold above, and drawing it green is the reading the whole
+			// scorecard exists to refuse.
+			if (rate === null) return TONE.neutral;
+			return rate >= MISSION_RATE_GOOD ? TONE.success
+				: rate >= MISSION_RATE_FAIR ? TONE.warn
+				: TONE.danger;
 		}
 
 		/**
@@ -3576,9 +6063,9 @@ window.__ModuleLoader__.load({
 		* values had been centralised, and nothing on either side said so.
 		*/
 		const MISSION_TIER_FACES = {
-			quick: { zh: "快速", en: "Quick", hue: "5,150,105" },
-			standard: { zh: "标准", en: "Standard", hue: "2,132,199" },
-			deep: { zh: "深度", en: "Deep", hue: "124,58,237" }
+			quick: { zh: "快速", en: "Quick", hue: TONE.success },
+			standard: { zh: "标准", en: "Standard", hue: TONE.info },
+			deep: { zh: "深度", en: "Deep", hue: TONE.accent }
 		};
 
 		/**
@@ -3605,8 +6092,9 @@ window.__ModuleLoader__.load({
 		* tier the server has never heard of is a 400 the person cannot act on.
 		* @param zh - whether to write Chinese.
 		* @param onStarted - called with the new mission id, to open it.
+		* @param topicRef - optional, so the empty list can put the cursor here.
 		*/
-		function MissionStarter({ zh, onStarted }) {
+		function MissionStarter({ zh, onStarted, topicRef }) {
 			const [topic, setTopic] = useState("");
 			const [depth, setDepth] = useState("");
 			const [tiers, setTiers] = useState(null);
@@ -3669,20 +6157,29 @@ window.__ModuleLoader__.load({
 			const table = tiers?.tiers ?? {};
 			const ready = topic.trim() !== "" && depth !== "" && !busy;
 
+			// NO CARD. This was a `CARD_STYLE` box because it was a card on a
+			// page of cards; it is the body of a dialog now, and a bordered,
+			// shadowed, 16px-margined panel inside a bordered, shadowed dialog
+			// is the same edge drawn twice. The dialog's body carries the
+			// padding, so the form is just its own column.
 			return jsxs("div", {
-				style: { ...CARD_STYLE, display: "flex", flexDirection: "column", gap: "12px", padding: "16px" },
+				style: { display: "flex", flexDirection: "column", gap: SPACE.md },
 				children: [
 					jsx("input", {
 						type: "text",
+						// The empty list's call to action lands HERE. An empty state
+						// that names the next step and cannot take you to it is a
+						// sentence, not an action.
+						ref: topicRef,
 						value: topic,
 						placeholder: zh ? "要调研什么？写一个问题，越具体越好。" : "What should the swarm research? A question, as specific as you can make it.",
 						"aria-label": zh ? "任务课题" : "Mission topic",
 						onChange: (event) => { setTopic(event.target.value); },
 						onKeyDown: (event) => { if (event.key === "Enter" && ready) void start(); },
-						style: SEARCH_STYLE
+						className: "swm-focus", style: SEARCH_STYLE
 					}, "topic"),
 					jsxs("div", {
-						style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" },
+						style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" },
 						children: [
 							...depths.map((id) => jsx("button", {
 								type: "button",
@@ -3690,7 +6187,7 @@ window.__ModuleLoader__.load({
 								"aria-selected": id === depth,
 								title: missionTierLine(table[id], zh),
 								onClick: () => { setDepth(id); },
-								style: chipStyle({ hue: missionHue(MISSION_TIER_FACES, id) }, id === depth),
+								className: "swm-chip swm-focus", style: chipStyle({ hue: missionHue(MISSION_TIER_FACES, id) }, id === depth),
 								children: missionFace(MISSION_TIER_FACES, id, zh)
 							}, id)),
 							jsx("span", { style: { flex: 1 } }, "spacer"),
@@ -3698,26 +6195,26 @@ window.__ModuleLoader__.load({
 								type: "button",
 								disabled: !ready,
 								onClick: () => { void start(); },
-								style: { ...controlStyle(), opacity: ready ? 1 : 0.5 },
+								className: "swm-ctl swm-focus", style: { ...controlStyle(!ready) },
 								children: busy ? (zh ? "正在建立…" : "Starting…") : (zh ? "开始调研" : "Start")
 							}, "go")
 						]
 					}, "controls"),
 					depth === "" ? null : jsx("div", {
-						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						style: { font: FONT.small, color: INK.secondary },
 						children: missionTierLine(table[depth], zh)
 					}, "tier"),
 					tiersError === "" ? null : jsx("div", {
-						style: { fontSize: "12px", color: "rgb(220,38,38)" },
+						style: { font: FONT.small, color: `rgb(${TONE.danger})` },
 						children: (zh ? "读不到档位表，暂时不能新建任务：" : "The tier table did not answer, so a mission cannot be started: ")
 							+ tiersError + ` (${apiBase()}/missions/budget-tiers)`
 					}, "tiersError"),
 					error === "" ? null : jsx("div", {
-						style: { fontSize: "12px", lineHeight: "18px", color: "rgb(220,38,38)" },
+						style: { font: FONT.small, color: `rgb(${TONE.danger})` },
 						children: error
 					}, "error"),
 					notice === "" ? null : jsx("div", {
-						style: { fontSize: "12px", lineHeight: "18px", color: "rgb(217,119,6)" },
+						style: { font: FONT.small, color: `rgb(${TONE.warn})` },
 						children: notice
 					}, "notice")
 				]
@@ -3726,6 +6223,34 @@ window.__ModuleLoader__.load({
 		//#endregion
 
 		//#region missions list
+		/**
+		* THE LIST IS A GRID, and the placeholder is drawn in the same one.
+		*
+		* It was a single column: a card holding a topic, a state pill and a
+		* five-part meta line, stretched across whatever the window gave it. On
+		* a wide overlay most of every row was empty and four missions filled
+		* the screen, which is the one thing a list of runs must not do — the
+		* whole value of it is how many you can compare at once.
+		*
+		* 340px AND NOT 320. `MissionListRow`'s meta line joins five pieces into
+		* one string; below 340 it wraps to four lines and the card stops being
+		* a card.
+		*
+		* `auto-fill` RATHER THAN `auto-fit`. With `auto-fit` an empty track
+		* collapses, so a filter matching one mission draws one card as wide as
+		* the window — the exact layout this replaces, arriving again on the
+		* screen where it looks most like a mistake.
+		*
+		* Declared here rather than inline because the loading skeleton is laid
+		* out in it too: the placeholder and the list have to agree about the
+		* shape or the page jumps when the answer lands, and two copies of a
+		* grid definition is how they stop agreeing.
+		*/
+		const MISSION_LIST_GRID = {
+			display: "grid", gap: SPACE.lg, alignItems: "stretch",
+			gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))"
+		};
+
 		/**
 		* One mission in the list: what was asked, how it ended, what it cost.
 		*
@@ -3768,11 +6293,44 @@ window.__ModuleLoader__.load({
 			}, [confirming, mission.id, onRemoved]);
 			const face = missionPillFace({ code: mission.status }, zh);
 			const stale = mission.status === "running" && !live;
+			// HOW FAR ALONG, in the list — where a running mission carried no
+			// ratio and no bar at all, only a start stamp and a spinner.
+			//
+			// AND IT IS NOT `progress.percent`. The list route hands back the raw
+			// mission row: `listMissions` attaches a verified count and a spend
+			// sum and nothing else, and the twelve-stage roll-up the projector
+			// computes lives one route over, on the detail view. So the fraction
+			// here is the ORDINAL of the stage the row says it is on, out of the
+			// twelve the catalogue freezes — the same denominator the detail
+			// screen draws against, deliberately, so the two bars cannot be read
+			// as measuring different things.
+			//
+			// It can sit ONE STAGE AHEAD of `stagesResolved`: a stage that is
+			// running counts here and does not count there. Named rather than
+			// smoothed over, because the alternative is a second definition of
+			// "done" that disagrees with the first without saying so.
+			// ONE NUMBER, drawn and announced. Written twice — once as the bar's
+			// value and once as its `aria-valuenow` — it is two numbers, and a
+			// mutation test proved it: the fill can be moved off by one while the
+			// screen reader keeps saying the old figure, and nothing on the page
+			// disagrees with anything a person can see.
+			//
+			// `null` for a stage the catalogue has never heard of, which includes
+			// a row that has not reached s1 yet.
+			const stageAt = MISSION_STAGE_ORDER.indexOf(mission.lastStage ?? "");
+			const stageOrdinal = stageAt < 0 ? null : stageAt + 1;
 			const meta = [
 				missionFace(MISSION_TIER_FACES, mission.depth, zh),
 				zh ? `第 ${mission.runCount} 次运行` : `run ${mission.runCount}`,
 				zh ? `已核验 ${mission.verifiedFindings ?? 0} 条` : `${mission.verifiedFindings ?? 0} verified`,
-				zh ? `${Number(mission.spend?.tokens ?? 0).toLocaleString()} 令牌` : `${Number(mission.spend?.tokens ?? 0).toLocaleString()} tokens`,
+				// SHORT, like everywhere else the same quantity is drawn. This was
+				// the site where the list and the detail header disagreed about one
+				// run: `412,000 令牌` here and `412k` four inches away on the screen
+				// the row opens. There is no per-figure hover to hang the exact
+				// number on — this meta line is one joined sentence — and it does
+				// not need one: the detail header's token tile prints the exact
+				// figure against its ceiling in its own hint.
+				zh ? `${missionCompact(mission.spend?.tokens ?? 0)} 令牌` : `${missionCompact(mission.spend?.tokens ?? 0)} tokens`,
 				formatStamp(mission.startedAt)
 			].filter((piece) => piece !== "").join(" · ");
 
@@ -3780,49 +6338,72 @@ window.__ModuleLoader__.load({
 			// card wrapped in one button puts flow content inside phrasing
 			// content and hands a screen reader one enormous label.
 			return jsx("article", {
-				style: hover ? CARD_HOVER_STYLE : CARD_STYLE,
+				// THE CARD'S OWN MARGIN IS OVERRIDDEN HERE AND NOT REMOVED FROM
+				// CARD_STYLE. That margin has four consumers — the 信源 feed, the
+				// starter, this row and MissionPanel — and stripping it re-flows
+				// two screens this batch never looked at. In a grid the gap is
+				// the rhythm, so the margin is cancelled at the one site that
+				// sits in one.
+				style: { ...(hover ? CARD_HOVER_STYLE : CARD_STYLE), marginBottom: 0, height: "100%", flexDirection: "column" },
 				onMouseEnter: () => { setHover(true); },
 				onMouseLeave: () => { setHover(false); },
 				children: jsxs("div", {
-					style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "8px" },
+					style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: SPACE.sm },
 					children: [
 						jsxs("div", {
-							style: { display: "flex", alignItems: "center", gap: "10px", width: "100%" },
+							style: { display: "flex", alignItems: "center", gap: SPACE.md, width: "100%" },
 							children: [
 								jsx("button", {
 									type: "button",
 									onClick: () => { onOpen(mission.id); },
-									style: {
+									style: { font: FONT.baseStrong,
 										appearance: "none", border: "none", background: "transparent", padding: 0,
 										flex: 1, minWidth: 0, textAlign: "left", font: "inherit", cursor: "pointer",
-										fontSize: "15px", fontWeight: 600, lineHeight: "22px",
-										color: "var(--dsw-alias-label-primary)"
+										color: INK.primary
 									},
 									children: mission.topic
 								}, "topic"),
-								jsx("span", {
-									style: {
-										flex: "none", padding: "1px 7px", borderRadius: "5px",
-										background: `rgba(${face.hue},0.12)`, color: `rgb(${face.hue})`,
-										fontSize: "11px", fontWeight: 600
-									},
-									children: face.label
-								}, "pill")
+								// The mission's STATE, so it takes the pill shape rather
+								// than the chip's. It was drawn at `1px 7px` on a 5px
+								// radius here and at `1px 8px` on a 6px one in the
+								// header of the screen this row opens.
+								//
+								// AND A MARK BESIDE THE WORD. 已取消 and 未知 are both
+								// TONE.neutral and 失败 and 未知（已结束） are both
+								// TONE.danger, so in a scanned list the colour narrows
+								// the answer to two and the glyph finishes it. A running
+								// mission gets the spinner, which is the one row in the
+								// list that is still moving.
+								Chip({ tone: face.hue, pill: true, icon: face.icon, label: face.label }, "pill")
 							]
 						}, "head"),
+						// Only while running, and only once a stage has been recorded.
+						// A row that has not reached s1 yet has nothing to measure —
+						// an empty track under it would say the mission is a twelfth
+						// of the way through nothing.
+						mission.status !== "running" || stageOrdinal === null ? null : Meter({
+							value: stageOrdinal, max: MISSION_STAGE_ORDER.length, tone: face.hue,
+							role: "progressbar",
+							"aria-valuenow": stageOrdinal,
+							"aria-valuemin": 0,
+							"aria-valuemax": MISSION_STAGE_ORDER.length,
+							"aria-label": zh
+								? `阶段 ${stageOrdinal}/${MISSION_STAGE_ORDER.length}`
+								: `stage ${stageOrdinal} of ${MISSION_STAGE_ORDER.length}`
+						}, "progress"),
 						jsx("div", { style: META_STYLE, children: meta }, "meta"),
 						// A row that says running while nothing is running it is the
 						// symptom of a process that died mid-mission. Named here
 						// rather than left for the person to infer from a clock that
 						// never moves.
 						!stale ? null : jsx("div", {
-							style: { fontSize: "12px", color: "rgb(217,119,6)" },
+							style: { font: FONT.small, color: `rgb(${TONE.warn})` },
 							children: zh
 								? "这一条写着运行中，但本进程没有在跑它 —— 多半是上次进程退出时留下的，打开后可以继续或重跑。"
 								: "This row says running, but this process is not running it — most likely left behind by an earlier exit. Open it to resume or rerun."
 						}, "stale"),
 						mission.errorMessage === null || mission.errorMessage === undefined || mission.errorMessage === "" ? null : jsx("div", {
-							style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+							style: { font: FONT.small, color: INK.secondary },
 							children: (mission.failureCode === null || mission.failureCode === undefined ? "" : `${mission.failureCode} · `) + mission.errorMessage
 						}, "error"),
 						// Delete. There was no way to remove a mission at all — no
@@ -3838,11 +6419,11 @@ window.__ModuleLoader__.load({
 							children: jsx("button", {
 								type: "button",
 								disabled: removing,
-								style: {
+								style: { font: FONT.micro,
 									appearance: "none", background: "transparent", cursor: "pointer",
-									border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "8px",
-									padding: "3px 10px", fontSize: "11px",
-									color: "var(--dsw-alias-label-secondary)"
+									border: `1px solid ${LINE.hair}`, borderRadius: RADIUS.md,
+									padding: "3px 10px",
+									color: INK.secondary
 								},
 								onClick: (event) => {
 									// The card's own click opens the mission; without this
@@ -3858,7 +6439,7 @@ window.__ModuleLoader__.load({
 							}, "delete")
 						}, "actions"),
 						trouble === "" ? null : jsx("div", {
-							style: { fontSize: "12px", color: "rgb(220,38,38)" },
+							style: { font: FONT.small, color: `rgb(${TONE.danger})` },
 							children: trouble
 						}, "trouble")
 					]
@@ -3876,6 +6457,16 @@ window.__ModuleLoader__.load({
 		*/
 		function MissionsTab({ zh }) {
 			const [filterId, setFilterId] = useState("");
+			// The empty list's call to action puts the cursor in the starter's
+			// topic field. Held here rather than inside MissionStarter because
+			// the control and the field are in two different components.
+			const topicRef = useRef(null);
+			// Whether the create form is open. It was not a state at all: the
+			// form was a permanently expanded card above the toolbar and above
+			// every mission, so the first thing this tab said on every visit was
+			// "ask a new question" — to a person who almost always came here to
+			// read an answer to an old one.
+			const [startOpen, setStartOpen] = useState(false);
 			const [missions, setMissions] = useState([]);
 			const [counts, setCounts] = useState({});
 			const [live, setLive] = useState([]);
@@ -3887,6 +6478,18 @@ window.__ModuleLoader__.load({
 			// Guards a stale answer from overwriting a newer one when the chip
 			// changes while a request is still in flight.
 			const requestId = useRef(0);
+
+			// THE CURSOR FOLLOWS THE FORM. The empty list's call to action used
+			// to focus the topic field directly, which worked because the field
+			// was always mounted four inches up the same screen. It is behind a
+			// control now, so the focus has to wait for the dialog to render —
+			// hence an effect on `startOpen` rather than a call in the handler,
+			// which would run one frame too early against a ref that is still
+			// null.
+			useEffect(() => {
+				if (!startOpen) return;
+				topicRef.current?.focus?.();
+			}, [startOpen]);
 
 			useEffect(() => {
 				let alive = true;
@@ -3938,9 +6541,13 @@ window.__ModuleLoader__.load({
 			return jsx("div", {
 				style: { height: "100%", minHeight: 0, overflowY: "auto" },
 				children: jsxs("div", {
-					style: { ...CONTENT_STYLE, padding: "0 24px" },
+					// THE FRAME, not the 1080px measure. CONTENT_STYLE was written
+					// for a column of prose read on its own; a grid of cards under
+					// it stops growing at three columns and leaves a band of dead
+					// page down the right. The detail view already made exactly this
+					// swap for exactly this reason.
+					style: { ...WIDE_STYLE, padding: "0 24px" },
 					children: [
-						jsx(MissionStarter, { zh, onStarted: (id) => { setOpenId(id); } }, "starter"),
 						jsxs("div", {
 							style: TOOLBAR_STYLE,
 							children: [
@@ -3948,7 +6555,7 @@ window.__ModuleLoader__.load({
 									type: "button",
 									role: "tab",
 									"aria-selected": entry.id === filterId,
-									style: chipStyle(entry, entry.id === filterId),
+									className: "swm-chip swm-focus", style: chipStyle(entry, entry.id === filterId),
 									onClick: () => { setFilterId(entry.id); },
 									children: entry.id === "" || counts[entry.id] === undefined
 										? (zh ? entry.zh : entry.en)
@@ -3957,54 +6564,174 @@ window.__ModuleLoader__.load({
 								jsx("span", { style: { flex: 1 } }, "spacer"),
 								jsx("button", {
 									type: "button",
-									style: controlStyle(),
+									className: "swm-ctl swm-focus", style: controlStyle(),
 									onClick: () => { setTick((value) => value + 1); },
 									children: zh ? "刷新" : "Refresh"
-								}, "refresh")
+								}, "refresh"),
+								// THE ONE THING ON THIS SCREEN THAT MAKES SOMETHING,
+								// and it is the last control in the row rather than a
+								// card above it. A tinted `controlStyle` rather than a
+								// tenth button geometry: the accent wash and ring are
+								// the same pair every chip in this file wears, spread
+								// over the control the row's other button already is.
+								//
+								// IT IS NOT IN THE PAGE HEADER, which is where the
+								// brief put it. That header is the shell's — it serves
+								// all five tabs, TABS carries no action for any of
+								// them, and B14 wrote the reason down: a slot with one
+								// tab's button in it either shows on the four tabs it
+								// means nothing on, or teaches the header to know
+								// which tab is open and hold that tab's state. This
+								// row is the list's own actions, and the state stays
+								// where the form's `onStarted` already lives.
+								jsx("button", {
+									type: "button",
+									className: "swm-ctl swm-focus",
+									style: {
+										...controlStyle(),
+										display: "inline-flex", alignItems: "center", gap: SPACE.xs,
+										border: `1px solid rgba(${TONE.accent},${TINT.ring})`,
+										background: `rgba(${TONE.accent},${TINT.soft})`,
+										color: `rgb(${TONE.accent})`
+									},
+									onClick: () => { setStartOpen(true); },
+									children: [
+										jsx(Icon, { name: "plus", size: ICON.xs }, "glyph"),
+										jsx("span", { children: zh ? "新建任务" : "New mission" }, "label")
+									]
+								}, "new")
 							]
 						}, "toolbar"),
-						state !== "error" ? null : jsx("div", {
-							style: NOTE_STYLE,
-							children: jsxs("div", {
-								children: [
-									jsx("div", { children: (zh ? "任务列表加载失败：" : "Could not load the missions: ") + error }),
-									jsx("div", {
-										style: { marginTop: "10px", fontSize: "12px" },
-										children: (zh ? "接口：" : "Endpoint: ") + apiBase() + "/missions/list"
-									})
-								]
-							})
+						state !== "error" ? null : ErrorBox({
+							title: zh ? "任务列表加载失败" : "Could not load the missions",
+							message: error,
+							endpoint: apiBase() + "/missions/list",
+							// THE SAME TICK THE TOOLBAR'S 刷新 NUDGES, deliberately. A
+							// retry that re-read the list some other way would be a
+							// second answer to "read the list again" a few lines from
+							// the first.
+							onRetry: () => { setTick((value) => value + 1); },
+							zh
 						}, "error"),
-						state !== "loading" ? null : jsx("div", { style: NOTE_STYLE, children: zh ? "加载中…" : "Loading…" }, "loading"),
-						state !== "ready" || missions.length > 0 ? null : jsx("div", {
-							style: NOTE_STYLE,
-							children: jsx("div", {
-								// Two different empties, two different sentences. A
-								// chip with nothing under it is a filter to undo; a
-								// library with nothing in it is waiting for somebody
-								// to ask a question.
+						state !== "loading" ? null : SkeletonScreen({
+							zh,
+							// The same grid the list is laid out in, so nothing moves
+							// sideways when the answer lands.
+							style: MISSION_LIST_GRID,
+							children: [0, 1, 2].map((at) => jsxs("div", {
+								style: { ...CARD_STYLE, marginBottom: 0, flexDirection: "column", gap: SPACE.sm },
+								children: [
+									jsxs("div", {
+										style: { display: "flex", alignItems: "center", gap: SPACE.md },
+										children: [
+											Skeleton({ w: "58%", h: "15px" }, "topic"),
+											jsx("span", { style: { flex: 1 } }, "spacer"),
+											Skeleton({ w: "64px", h: "18px", r: RADIUS.pill }, "pill")
+										]
+									}, "head"),
+									Skeleton({ w: "76%", h: "12px" }, "meta")
+								]
+							}, "row" + at))
+						}, "loading"),
+						// TWO DIFFERENT EMPTIES, two different sentences, two
+						// different next steps. A chip with nothing under it is a
+						// filter to undo; a library with nothing in it is waiting for
+						// somebody to ask a question.
+						//
+						// THE COLD ARM NOW OPENS THE FORM RATHER THAN SCROLLING TO
+						// IT. When the starter was a card four inches up this same
+						// screen, the note said so and left the reader to go and find
+						// it; the form is behind 新建任务 now, so the only honest
+						// action here is the one that opens it — and the effect above
+						// puts the cursor in the topic field once it has.
+						state !== "ready" || missions.length > 0 ? null : EmptyBox({
+							mark: filterId !== "" && known > 0 ? "search" : "sparkles",
+							title: filterId !== "" && known > 0
+								? (zh ? "这个筛选下没有任务。" : "No mission under this chip.")
+								: (zh ? "还没有跑过任何任务。" : "No mission has been run yet."),
+							note: filterId !== "" && known > 0
+								? (zh ? "换成“全部”看看。" : "Try All.")
+								// "在上面" IS GONE WITH THE CARD IT POINTED AT. The form
+								// is behind 新建任务 now, so a sentence telling the
+								// reader to look up the page describes a screen that
+								// no longer exists — and this note's own button is
+								// what opens it.
+								: (zh ? "写一个课题，选一个档位，按“开始调研”。" : "Pick a topic, pick a tier, and press Start."),
+							action: jsx("button", {
+								type: "button",
+								className: "swm-ctl swm-focus", style: controlStyle(),
+								onClick: filterId !== "" && known > 0
+									? () => { setFilterId(""); }
+									// It OPENS the form now rather than scrolling to
+									// it; the effect above puts the cursor in the topic
+									// field once the dialog has rendered. Optional
+									// chaining stays where the focus went, because this
+									// module is also executed in Node, where a ref's
+									// `current` stays null for ever.
+									: () => { setStartOpen(true); },
 								children: filterId !== "" && known > 0
-									? (zh ? "这个筛选下没有任务，换成“全部”看看。" : "No mission under this chip — try All.")
-									: (zh ? "还没有跑过任何任务。在上面写一个课题，选一个档位，按“开始调研”。" : "No mission has been run yet. Write a topic above, pick a tier, and press Start.")
-							})
+									? (zh ? "清除筛选" : "Clear the filter")
+									: (zh ? "去写一个课题" : "Write a topic")
+							}, "cta")
 						}, "empty"),
 						missions.length === 0 ? null : jsxs("div", {
 							children: [
-								jsx("div", {
-									style: { margin: "0 0 10px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
-									children: (zh ? `共 ${total} 个任务` : `${total} mission(s)`)
-										+ (live.length === 0 ? "" : (zh ? ` · 本进程正在跑 ${live.length} 个` : ` · ${live.length} running in this process`))
-								}, "tally"),
-								...missions.map((mission) => jsx(MissionListRow, {
+								// A SECTION, not a stray sentence. The count was a 12px
+								// grey line floating between the toolbar and the cards
+								// with nothing beside it saying what it was counting —
+								// the only heading on this screen belonged to the form
+								// above it. The figure keeps its place on the right,
+								// where a count belongs, and gains a subject.
+								jsxs("div", {
+									style: {
+										display: "flex", alignItems: "baseline", justifyContent: "space-between",
+										gap: SPACE.md, margin: `0 0 ${SPACE.md}`
+									},
+									children: [
+										jsx("h2", {
+											style: { font: FONT.baseStrong, margin: 0, color: INK.primary },
+											children: zh ? "我的任务" : "Missions"
+										}, "title"),
+										jsx("span", {
+											style: { font: FONT.small, color: INK.secondary },
+											children: (zh ? `共 ${total} 个任务` : `${total} mission(s)`)
+												+ (live.length === 0 ? "" : (zh ? ` · 本进程正在跑 ${live.length} 个` : ` · ${live.length} running in this process`))
+										}, "tally")
+									]
+								}, "head"),
+								jsx("div", { style: MISSION_LIST_GRID, children: missions.map((mission) => jsx(MissionListRow, {
 									mission, zh, live: live.includes(mission.id),
 									onOpen: (id) => { setOpenId(id); },
 									// The list refreshes on a tick rather than through a
 									// loader, so a delete nudges the tick instead of
 									// calling one that does not exist.
 									onRemoved: () => { setTick((value) => value + 1); }
-								}, mission.id))
+								}, mission.id)) }, "grid")
 							]
-						}, "rows")
+						}, "rows"),
+						// LAST IN THE FRAME, not first. The scrim is fixed and
+						// z-indexed so paint order is settled either way, but a
+						// dialog written above the list is a dialog that reads, in
+						// source and to a screen reader walking the tree, as the
+						// first thing on the page — which is exactly the mistake the
+						// expanded card was.
+						jsx(SwarmModal, {
+							open: startOpen,
+							onClose: () => { setStartOpen(false); },
+							zh,
+							title: zh ? "新建任务" : "New mission",
+							note: zh
+								? "写下要调研的问题，挑一个档位 —— 档位决定这次能花多少"
+								: "Write the question to research and pick a tier; the tier is what it may spend",
+							children: jsx(MissionStarter, {
+								zh, topicRef,
+								// CLOSED, AND THEN OPENED ONTO THE RUN. Without the
+								// first half the dialog is still open behind the
+								// detail view, and it is what the reader comes back
+								// to when they press 返回.
+								onStarted: (id) => { setStartOpen(false); setOpenId(id); }
+							}, "form")
+						}, "starter")
 					]
 				})
 			});
@@ -4012,98 +6739,193 @@ window.__ModuleLoader__.load({
 		//#endregion
 
 		//#region missions detail panels
-		/** A small section heading, so the detail view reads as panels rather than as one column of text. */
-		function MissionPanel({ title, note, children, bare }) {
+		/**
+		* A section heading that is actually a header: a rule, a count and a
+		* slot for whatever the panel wants on the right.
+		*
+		* THREE THINGS WERE WRONG WITH IT, and they compound.
+		*
+		*   1. IT DROPPED THE TITLE WHEN `bare`. `bare` was meant to say "no
+		*      card chrome" and was implemented as "no card chrome AND no
+		*      heading", so the four panes that use it — tasks, sources,
+		*      dimensions, trajectory, which are the four densest screens in the
+		*      tab — each arrived as an unlabelled slab. The task board had to
+		*      grow a header of its own to compensate, which is the copy this
+		*      component exists to prevent. `bare` now means only what its name
+		*      says.
+		*   2. THE HEADER WRAPPED. `flexWrap:"wrap"` with `alignItems:"baseline"`
+		*      and a `note` holding a whole sentence — "上限在建立任务时冻结，
+		*      之后每个阶段都读同一行" — means that on a narrow pane the
+		*      paragraph drops under the title and the header becomes three
+		*      lines tall. A header must not wrap. The note is prose, so it moves
+		*      out of the header entirely and becomes the first line of the body,
+		*      which is where a reader looks for prose anyway.
+		*   3. A COUNT WAS PROSE TOO. Six call sites buried a number in a
+		*      sentence — `已核验 9 条 · 共 23 条发现` — so the one fact a person
+		*      scans a panel header for was the one thing they had to read a
+		*      clause to find. `count` renders as the neutral badge `COUNT_CHIP`
+		*      already declares, beside the title where it is looked for.
+		*
+		* `accent`, `collapsible` and `defaultOpen` are NOT in this signature,
+		* though the batch spec named them. No call site in this file wants any
+		* of the three, and B7 already retired `dot` from `Chip` for exactly that
+		* reason: a prop nobody passes is not a head start, it is the next
+		* geometry, added by whoever first needs something near it.
+		* @param title - the heading word. Rendered as an eyebrow, always.
+		* @param count - a finite number renders as a badge; anything else renders nothing.
+		* @param note - a sentence, rendered as the first line of the BODY.
+		* @param action - a node for the right-hand end of the header row.
+		* @param children - the panel's content.
+		* @param bare - drop the card chrome, and only the card chrome.
+		*/
+		function MissionPanel({ title, count, note, action, children, bare }) {
 			return jsxs("section", {
-				// `bare` drops the card entirely. A pane whose only child is a
-				// panel titled the same as the tab above it is a border, a title
-				// and 28px of padding spent restating the tab.
+				// `bare` drops the CARD. A pane whose only child is a panel is a
+				// border and 32px of padding spent drawing a box around the whole
+				// screen; it does not drop the panel's own heading.
 				style: bare === true
-					? { display: "flex", flexDirection: "column", gap: "6px" }
-					: { ...CARD_STYLE, display: "flex", flexDirection: "column", gap: "8px", padding: "12px" },
+					? { display: "flex", flexDirection: "column", gap: SPACE.sm }
+					: { ...CARD_STYLE, display: "flex", flexDirection: "column", gap: SPACE.sm, padding: SPACE.md },
 				children: [
 					jsxs("div", {
-						style: { display: "flex", alignItems: "baseline", gap: "10px", flexWrap: "wrap" },
+						// NO `flexWrap`, and `center` rather than `baseline`. Wrapping
+						// is what made this three lines tall, and baseline-aligning a
+						// 16px badge to an 11px eyebrow sits the badge low.
+						style: {
+							display: "flex", alignItems: "center", gap: SPACE.sm,
+							padding: `0 0 ${SPACE.xs}`,
+							borderBottom: `1px solid ${LINE.rule}`
+						},
 						children: [
-							bare === true ? null : jsx("h3", {
-								style: { margin: 0, fontSize: "13px", fontWeight: 600, letterSpacing: "0.02em", color: "var(--dsw-alias-label-primary)" },
+							jsx("h3", {
+								style: {
+									font: FONT.smallStrong, margin: 0,
+									letterSpacing: "0.04em", textTransform: "uppercase",
+									color: INK.secondary,
+									whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+								},
 								children: title
 							}, "title"),
-							note === "" || note === undefined || note === null ? null : jsx("span", {
-								style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
-								children: note
-							}, "note")
+							// ZERO IS A COUNT. `Number.isFinite` and not `count > 0`,
+							// because the panels that survive an empty run are exactly
+							// the ones whose zero is the news — 0 anomalies repaired is
+							// a different statement from a panel that chose not to say.
+							!Number.isFinite(count) ? null : jsx("span", {
+								style: COUNT_CHIP, children: String(count)
+							}, "count"),
+							jsx("span", { style: { flex: 1, minWidth: SPACE.sm } }, "spacer"),
+							action === undefined || action === null ? null : jsx("div", {
+								style: { display: "flex", alignItems: "center", gap: SPACE.sm, flex: "none" },
+								children: action
+							}, "action")
 						]
 					}, "head"),
-					jsx("div", { children }, "body")
+					jsxs("div", {
+						children: [
+							// THE PROSE, out of the header and into the body. It reads as
+							// a lead line under the rule rather than as a caption
+							// competing with the title for the same baseline.
+							note === "" || note === undefined || note === null ? null : jsx("p", {
+								style: { font: FONT.small, color: INK.secondary, margin: `0 0 ${SPACE.md}` },
+								children: note
+							}, "note"),
+							jsx("div", { children }, "content")
+						]
+					}, "body")
 				]
 			});
 		}
 
+
 		/**
-		* The twelve stages, always twelve, in catalogue order.
+		* HOW FAR ALONG, drawn.
 		*
-		* The projector guarantees the count is invariant — a stage this tier
-		* does not run is `skipped-by-tier`, not a hole — so the strip is a fixed
-		* ruler a person can learn the shape of, rather than a list that grows.
-		* Degrade notes are printed UNDER the strip rather than left in a
-		* tooltip: a stage that finished by lowering its own bar has said why,
-		* and hiding that behind a hover is how a degraded run reads as a clean one.
-		* @param stages - `stages` from the view route.
+		* `progress.percent` has been computed by the projector since the view
+		* route was written — stagesResolved over stagesTotal, deliberately NOT
+		* blended with the dimension and chapter fractions — and it was read by
+		* nothing. The mission's entire progress display was the phrase
+		* `阶段 7/12` inside a dot-joined grey string, which is a figure a person
+		* has to find before they can read it.
+		*
+		* IT READS `percent` RATHER THAN DIVIDING AGAIN. The two integers are
+		* here for the label anyway and the temptation is to compute the width
+		* from them, which is a second answer to a question the projector has
+		* already answered — and the projector's answer is the one the route
+		* documents, the one the blend was deliberately left out of, and the one
+		* that will still be right when "resolved" grows a case.
+		*
+		* THE HUE IS THE PILL'S. It already carries degraded-amber and
+		* failed-red, so one mark says outcome and progress together — a bar that
+		* picked its own three colours would be a second opinion about a state
+		* the header states one line above.
+		*
+		* IT RECOMPUTES the ratio from stagesResolved/stagesTotal rather than
+		* taking `percent`, because it needs the two integers for the label
+		* anyway and `percent` is those two integers rounded. Reading both would
+		* be two sources for one number, which is what this component was added
+		* to end.
+		*
+		* NO PILL CHIP INSIDE IT, against the spec's flex row. The one mount is
+		* directly under a header row that already carries that chip beside the
+		* mission's title, one size up; drawing it again eight pixels lower is
+		* the double-statement the tiles below were added to stop.
+		* @param progress - `mission.progress` from the view route.
+		* @param face - the `missionPillFace` the header already resolved.
+		* @param elapsedMs - how long it has been running, for the estimate.
 		* @param zh - whether to write Chinese.
 		*/
-		function MissionStageStrip({ stages, zh, notes: withNotes }) {
-			// The notes are OFF by default. This strip sits above every pane, and
-			// the four degrade paragraphs it used to print under itself were the
-			// third copy of the same text on the screen: the task board carries
-			// each note on its own row, and the drawer holds it whole. Three
-			// copies of a paragraph is not emphasis, it is five lines of the pane
-			// underneath.
-			const notes = withNotes !== true
-				? []
-				: stages.filter((stage) => (stage.degradeNote ?? "") !== "" || stage.status === "failed" || stage.stalled);
+		function MissionProgressBar({ progress, face, elapsedMs, zh }) {
+			const total = Number(progress?.stagesTotal) || 0;
+			// A run whose stage catalogue has not been read yet has NOTHING to
+			// draw, and it renders as null with the reason rather than as an
+			// empty track: the projector answers `percent: 0` for a mission with
+			// no stages, and a 0% bar over the words 阶段 0/0 is a mission that
+			// reads as stalled at the start line rather than as one whose stages
+			// have not been read.
+			if (total <= 0) return null;
+			const resolved = Math.max(0, Math.min(total, Number(progress?.stagesResolved) || 0));
+			const percent = Math.max(0, Math.min(100, Number(progress?.percent) || 0));
+			const ratio = percent / 100;
+			const hue = face?.hue ?? TONE.info;
+			// The estimate, and only where it means something. At ratio 0 the
+			// division is infinite and at ratio 1 the answer is zero, and both
+			// are worse than saying nothing: "约还要 0 秒" beside a bar that is
+			// full is a countdown to an event that has already happened.
+			const left = ratio > 0 && ratio < 1 && Number(elapsedMs) > 0
+				? missionDuration((Number(elapsedMs) / ratio) * (1 - ratio), zh)
+				: "";
 			return jsxs("div", {
-				style: { display: "flex", flexDirection: "column", gap: "10px" },
+				style: { display: "flex", flexDirection: "column", gap: SPACE.xs, margin: `0 0 ${SPACE.md}` },
 				children: [
-					jsx("div", {
-						style: { display: "flex", flexWrap: "wrap", gap: "6px" },
-						children: stages.map((stage) => {
-							const hue = missionHue(MISSION_STAGE_STATUS_FACES, stage.status);
-							const duration = stage.durationMs === null || stage.durationMs === undefined
-								? "" : missionDuration(stage.durationMs, zh);
-							return jsxs("span", {
-								title: `${stage.stepId} · ${missionFace(MISSION_STAGE_STATUS_FACES, stage.status, zh)}`
-									+ (stage.agent === null ? "" : ` · ${stage.agent}`),
-								style: {
-									display: "inline-flex", alignItems: "center", gap: "6px",
-									padding: "3px 9px", borderRadius: "7px",
-									border: `1px solid rgba(${hue},0.35)`, background: `rgba(${hue},0.08)`,
-									color: `rgb(${hue})`, fontSize: "12px", lineHeight: "18px"
-								},
-								children: [
-									jsx("span", { children: missionFace(MISSION_STAGE_FACES, stage.stepId, zh) }, "name"),
-									duration === "" ? null : jsx("span", { style: { opacity: 0.75 }, children: duration }, "took"),
-									stage.attempts > 1 ? jsx("span", {
-										style: { opacity: 0.75 },
-										children: zh ? `第 ${stage.attempts} 次` : `attempt ${stage.attempts}`
-									}, "attempts") : null,
-									stage.stalled ? jsx("span", { children: zh ? "停滞" : "stalled" }, "stalled") : null
-								]
-							}, stage.stepId);
-						})
-					}, "strip"),
-					notes.length === 0 ? null : jsx("div", {
-						style: { display: "flex", flexDirection: "column", gap: "4px" },
-						children: notes.map((stage) => jsx("div", {
-							style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
-							children: `${missionFace(MISSION_STAGE_FACES, stage.stepId, zh)} · `
-								+ missionFace(MISSION_STAGE_STATUS_FACES, stage.status, zh)
-								+ ((stage.degradeNote ?? "") === "" ? "" : `：${stage.degradeNote}`)
-						}, stage.stepId))
-					}, "notes")
+					jsxs("div", {
+						style: { font: FONT.small, display: "flex", alignItems: "baseline", gap: SPACE.sm, color: INK.secondary },
+						children: [
+							jsx("span", {
+								style: { flex: 1, minWidth: 0 },
+								children: zh ? `阶段 ${resolved}/${total}` : `stages ${resolved}/${total}`
+							}, "stages"),
+							jsx("span", {
+								style: { flex: "none", fontVariantNumeric: "tabular-nums", color: `rgb(${hue})` },
+								children: `${percent}%`
+							}, "percent"),
+							left === "" ? null : jsx("span", {
+								style: { font: FONT.micro, flex: "none", color: INK.secondary },
+								children: zh ? `大约还要 ${left}` : `~${left} left`
+							}, "left")
+						]
+					}, "head"),
+					Meter({
+						value: percent, tone: hue,
+						role: "progressbar",
+						"aria-valuenow": percent,
+						"aria-valuemin": 0,
+						"aria-valuemax": 100,
+						"aria-label": zh ? "任务进度" : "Mission progress"
+					}, "bar")
 				]
 			});
 		}
+
 
 		/**
 		* Where the tokens went, by stage.
@@ -4125,10 +6947,10 @@ window.__ModuleLoader__.load({
 			const peak = rows.reduce((most, row) => Math.max(most, Number(row.tokens) || 0), 0);
 			const unbilled = rows.filter((row) => (Number(row.calls) || 0) > 0 && (Number(row.tokens) || 0) === 0);
 			return jsxs("div", {
-				style: { display: "flex", flexDirection: "column", gap: "8px" },
+				style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
 				children: [
 					jsx("div", {
-						style: { display: "flex", flexDirection: "column", gap: "7px" },
+						style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
 						children: rows.map((row) => {
 							const tokens = Number(row.tokens) || 0;
 							const calls = Number(row.calls) || 0;
@@ -4137,34 +6959,39 @@ window.__ModuleLoader__.load({
 								// The raw step id where a raw step id belongs: on the hover, beside
 								// the name a person reads. The strip above does the same.
 								title: `${row.stepId}${(row.role ?? null) === null ? "" : ` · ${row.role}`}`,
-								style: { display: "flex", flexDirection: "column", gap: "3px" },
+								style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
 								children: [
 									jsxs("div", {
-										style: { display: "flex", alignItems: "baseline", gap: "8px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+										style: { font: FONT.small, display: "flex", alignItems: "baseline", gap: SPACE.sm, color: INK.secondary },
 										children: [
 											jsx("span", { style: { flex: 1, minWidth: 0 }, children: missionFace(MISSION_STAGE_FACES, row.stepId, zh) }, "name"),
 											jsx("span", {
-												style: { flex: "none", fontFamily: MISSION_MONO, fontVariantNumeric: "tabular-nums", color: missing ? "rgb(217,119,6)" : undefined },
+												style: { flex: "none", fontFamily: MONO, fontVariantNumeric: "tabular-nums", color: missing ? `rgb(${TONE.warn})` : undefined },
 												children: (missing ? (zh ? "未记账" : "not billed") : (zh ? `${missionCompact(tokens)} 令牌` : `${missionCompact(tokens)} tokens`))
 													+ (zh ? ` · ${calls} 次调用` : ` · ${calls} calls`)
 											}, "spend")
 										]
 									}, "head"),
-									jsx("div", {
-										style: { height: "5px", borderRadius: "3px", background: "var(--dsw-alias-border-l1)", overflow: "hidden" },
-										children: jsx("div", {
-											style: {
-												width: peak === 0 ? "0%" : `${Math.max(1, Math.round((tokens / peak) * 100))}%`,
-												height: "100%", background: missing ? "rgba(217,119,6,0.45)" : "rgb(2,132,199)"
-											}
-										})
+									// THE FLOOR OF 1% SURVIVES the move to the primitive: a
+									// stage that spent a thousandth of the peak still spent,
+									// and a bar rounded to 0% is the "not billed" state drawn
+									// over a stage that WAS billed.
+									//
+									// The amber is solid now rather than `rgba(warn, ring)`.
+									// That 28% was doing the track's job — separating the fill
+									// from the ground — and TRACK does it properly, in both
+									// themes, so the tint was only making the one bar that
+									// reports a defect the faintest bar on the pane.
+									Meter({
+										value: peak === 0 ? 0 : Math.max(1, Math.round((tokens / peak) * 100)),
+										tone: missing ? TONE.warn : TONE.info
 									}, "bar")
 								]
 							}, row.stepId);
 						})
 					}, "rows"),
 					unbilled.length === 0 ? null : jsx("div", {
-						style: { fontSize: "11px", lineHeight: "17px", color: "rgb(217,119,6)" },
+						style: { font: FONT.micro, color: `rgb(${TONE.warn})` },
 						children: zh
 							? "标着未记账的阶段确实调用了模型，只是账本上没有留下令牌数 —— 这不等于没花钱。"
 							: "A stage marked not billed did call the model; the ledger simply has no token figure for it. That is not the same as free."
@@ -4186,32 +7013,42 @@ window.__ModuleLoader__.load({
 		*/
 		function MissionToolTable({ byTool, zh }) {
 			const rows = Array.isArray(byTool) ? byTool : [];
-			const head = {
-				padding: "6px 9px", textAlign: "left", fontSize: "11px", fontWeight: 600,
-				color: "var(--dsw-alias-label-secondary)", whiteSpace: "nowrap"
-			};
-			const cell = { padding: "6px 9px", fontSize: "12px", lineHeight: "18px", fontFamily: MISSION_MONO };
+			// EVERY COLUMN DECLARES A WIDTH, which is the half of the clipping
+			// fix that is not the scroller. Without `tableLayout:"fixed"` the
+			// browser resolves the table to its content's min-content width, and
+			// inside an `overflow:hidden` frame that means a long tool id pushes
+			// the mean-latency column off the right edge of the card and takes it
+			// with it — no scrollbar, no ellipsis, just a column that is not
+			// there. The task board avoided this from the start by declaring
+			// percentages; this table never did.
 			const columns = [
-				{ id: "tool", label: zh ? "工具" : "Tool", align: "left" },
-				{ id: "calls", label: zh ? "调用" : "Calls", align: "right" },
-				{ id: "failures", label: zh ? "失败" : "Failed", align: "right" },
-				{ id: "rate", label: zh ? "成功率" : "Success", align: "right" },
-				{ id: "cached", label: zh ? "缓存" : "Cached", align: "right" },
-				{ id: "latency", label: zh ? "平均延迟" : "Mean latency", align: "right" }
+				{ id: "tool", label: zh ? "工具" : "Tool", width: "30%", align: "left" },
+				{ id: "calls", label: zh ? "调用" : "Calls", width: "12%", align: "right" },
+				{ id: "failures", label: zh ? "失败" : "Failed", width: "12%", align: "right" },
+				{ id: "rate", label: zh ? "成功率" : "Success", width: "18%", align: "right" },
+				{ id: "cached", label: zh ? "缓存" : "Cached", width: "12%", align: "right" },
+				{ id: "latency", label: zh ? "平均延迟" : "Mean latency", width: "16%", align: "right" }
 			];
 			return jsx("div", {
+				// TWO BOXES, not one, and all three tables now have the same two.
+				// The frame owns the rounded corner, so it must clip; a scroller
+				// that clips cannot scroll. Putting the overflow on one element
+				// makes the two requirements the same property, and the corner
+				// wins silently.
 				style: {
-					border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "10px",
+					border: `1px solid ${LINE.rule}`, borderRadius: RADIUS.md,
 					overflow: "hidden", background: "var(--dsw-alias-bg-layer-1)"
 				},
-				children: jsxs("table", {
-					style: { width: "100%", borderCollapse: "collapse" },
+				children: jsx("div", {
+					style: { overflowX: "auto" },
+					children: jsxs("table", {
+					style: { width: "100%", minWidth: "560px", borderCollapse: "collapse", tableLayout: "fixed" },
 					children: [
 						jsx("thead", {
 							children: jsx("tr", {
-								style: { background: "var(--dsw-alias-bg-layer-2)", borderBottom: "1px solid var(--dsw-alias-border-l2)" },
+								style: { borderBottom: `1px solid ${LINE.rule}` },
 								children: columns.map((column) => jsx("th", {
-									style: { ...head, textAlign: column.align },
+									style: { ...TH, width: column.width, textAlign: column.align },
 									children: column.label
 								}, column.id))
 							})
@@ -4221,25 +7058,90 @@ window.__ModuleLoader__.load({
 								const calls = Number(row.calls) || 0;
 								const failures = Number(row.failures) || 0;
 								const unmeasured = Number(row.unmeasured) || 0;
-								const rate = calls === 0 ? "—" : `${Math.round(((calls - failures) / calls) * 100)}%`;
+								// NULL, NOT ZERO, for a tool nobody called. `calls === 0`
+								// through the arithmetic is a division by nought; through
+								// `?? 0` it is a 0% bar, which draws a door that has never
+								// been opened as a door that fails every time.
+								const pct = calls === 0 ? null : Math.round(((calls - failures) / calls) * 100);
+								// The SAME two thresholds the trajectory's duration column
+								// reads, from the same two names. A mean is not a call, so
+								// a tool whose average is over ten seconds is not one slow
+								// call — it is the door itself.
+								const mean = row.avgLatencyMs === null || row.avgLatencyMs === undefined
+									? null : Number(row.avgLatencyMs);
 								const latency = row.avgLatencyMs === null || row.avgLatencyMs === undefined
 									? (zh ? "未测量" : "not measured")
 									: `${row.avgLatencyMs}ms` + (unmeasured > 0
 										? (zh ? ` · ${unmeasured} 次未测量` : ` · ${unmeasured} not measured`)
 										: "");
 								return jsxs("tr", {
-									style: { borderTop: "1px solid var(--dsw-alias-border-l1)" },
+									className: "swm-tr",
 									children: [
-										jsx("td", { style: { ...cell, color: "var(--dsw-alias-label-primary)" }, children: row.tool ?? "—" }, "tool"),
-										jsx("td", { style: { ...cell, textAlign: "right" }, children: String(calls) }, "calls"),
+										// THE SUBJECT OF THE TABLE, drawn as one. Every other cell
+										// in this row is a figure and this one is a name, and as a
+										// bare mono slug it read as the smallest thing on the line.
+										jsx("td", { style: TD, children: ToolChip({ toolId: row.tool, zh }) ?? "—" }, "tool"),
+										jsx("td", { style: { ...TD, textAlign: "right" }, children: String(calls) }, "calls"),
 										jsx("td", {
-											style: { ...cell, textAlign: "right", color: failures > 0 ? "rgb(220,38,38)" : undefined },
+											style: { ...TD, textAlign: "right", color: failures > 0 ? `rgb(${TONE.danger})` : INK.primary },
 											children: String(failures)
 										}, "failures"),
-										jsx("td", { style: { ...cell, textAlign: "right" }, children: rate }, "rate"),
-										jsx("td", { style: { ...cell, textAlign: "right" }, children: String(Number(row.cached) || 0) }, "cached"),
+										// A SHARE, DRAWN AS A SHARE. It was the string "92%",
+										// right-aligned in the same grey as the count beside it,
+										// which makes "which door is failing" a question you
+										// answer by reading six numbers and holding them in your
+										// head. The bar answers it at a glance and the figure
+										// stays for the reader who needs the exact value; the
+										// grading is the same three-band ladder the latency
+										// column two cells along already uses.
 										jsx("td", {
-											style: { ...cell, textAlign: "right", color: unmeasured > 0 ? "rgb(217,119,6)" : undefined },
+											style: { ...TD, textAlign: "right" },
+											// A tool with no calls keeps the em dash and gets NO
+											// bar. An empty track reads as 0% — the one reading
+											// that is certainly wrong about a door nobody opened.
+											children: pct === null ? "—" : jsxs("div", {
+												style: {
+													display: "flex", alignItems: "center",
+													justifyContent: "flex-end", gap: SPACE.xs
+												},
+												children: [
+													// THE FIFTH TRACK, which the batch spec counted as
+													// four because this one was drawn a batch later —
+													// same shape, same `LINE.rule` fill, same defect on
+													// the dark theme. A `div` rather than the `span`
+													// pair it was, because `Meter` is a div and
+													// phrasing content is not allowed to hold flow
+													// content; a `td` is happy with either.
+													Meter({
+														value: pct,
+														tone: pct >= 90 ? TONE.success : pct >= 60 ? TONE.warn : TONE.danger,
+														style: { width: "56px", flex: "none" }
+													}, "track"),
+													// A FIXED-WIDTH FIGURE. Without it the bars step
+													// left and right by a digit between rows and the
+													// column stops being a column.
+													jsx("span", {
+														style: { width: "34px", flex: "none", textAlign: "right" },
+														children: `${pct}%`
+													}, "n")
+												]
+											})
+										}, "rate"),
+										jsx("td", { style: { ...TD, textAlign: "right" }, children: String(Number(row.cached) || 0) }, "cached"),
+										jsx("td", {
+											style: {
+												...TD, textAlign: "right",
+												// The unmeasured branch SURVIVES the banding: a
+												// partial mean is amber whatever it says, because
+												// the figure is being computed over fewer calls
+												// than the row counts and that is a caveat about
+												// the number rather than a reading of it.
+												color: mean !== null && mean >= MISSION_SLOW_MS
+													? `rgb(${TONE.danger})`
+													: (unmeasured > 0 || (mean !== null && mean >= MISSION_WARN_MS))
+													? `rgb(${TONE.warn})`
+													: INK.primary
+											},
 											children: latency
 										}, "latency")
 									]
@@ -4247,6 +7149,7 @@ window.__ModuleLoader__.load({
 							})
 						}, "body")
 					]
+					})
 				})
 			});
 		}
@@ -4263,36 +7166,30 @@ window.__ModuleLoader__.load({
 		*/
 		function MissionCostMeters({ cost, zh }) {
 			const order = ["tokens", "calls", "arxiv", "web", "fetch", "wall"];
-			const waste = cost.waste ?? {};
-			const wasted = [
-				waste.stageRetries > 0 ? (zh ? `阶段重试 ${waste.stageRetries} 次` : `${waste.stageRetries} stage retries`) : "",
-				waste.chapterRewrites > 0 ? (zh ? `章节重写 ${waste.chapterRewrites} 次` : `${waste.chapterRewrites} chapter rewrites`) : "",
-				waste.underDeliveredChapters > 0 ? (zh ? `字数不足的章节 ${waste.underDeliveredChapters} 个` : `${waste.underDeliveredChapters} under-delivered chapters`) : "",
-				waste.toolFailures > 0 ? (zh ? `工具调用失败 ${waste.toolFailures} 次` : `${waste.toolFailures} tool-call failures`) : "",
-				waste.toolCached > 0 ? (zh ? `命中缓存 ${waste.toolCached} 次` : `${waste.toolCached} cache hits`) : ""
-			].filter((piece) => piece !== "").join(" · ");
-
+			// THE FIVE REWORK COUNTERS ARE NOT HERE ANY MORE. They were built into
+			// one dot-joined grey sentence — five figures welded into prose, in the
+			// same weight as the caption under a meter — and they are a panel of
+			// their own now; see MissionRework.
 			return jsxs("div", {
-				style: { display: "flex", flexDirection: "column", gap: "10px" },
+				style: { display: "flex", flexDirection: "column", gap: SPACE.md },
 				children: [
 					jsx("div", {
-						style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" },
+						style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: SPACE.md },
 						children: order.map((key) => {
 							const meter = cost[key] ?? { dimension: key, used: 0, limit: null, ratio: null };
 							const ratio = meter.ratio ?? 0;
 							// The ladder the Host half froze, passed through on the
 							// cost object. Reading a second copy of 0.70 / 0.85 here
-							// is how the meter and the degrade steps start disagreeing.
-							const ladder = cost.ladder ?? {};
-							const hue = ratio >= (ladder.warn ?? 0.9) ? "220,38,38"
-								: ratio >= (ladder.soften ?? 0.7) ? "217,119,6"
-								: "5,150,105";
+							// is how the meter and the degrade steps start disagreeing
+							// — which is why the ternary that used to sit inline is now
+							// `missionLadderHue`, shared with the header's token tile.
+							const hue = missionLadderHue(ratio, cost.ladder);
 							const tight = cost.tight?.dimension === key;
 							return jsxs("div", {
-								style: { display: "flex", flexDirection: "column", gap: "4px" },
+								style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
 								children: [
 									jsxs("div", {
-										style: { display: "flex", alignItems: "baseline", gap: "6px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+										style: { font: FONT.small, display: "flex", alignItems: "baseline", gap: SPACE.sm, color: INK.secondary },
 										children: [
 											jsx("span", {
 												style: { fontWeight: tight ? 600 : 400, color: tight ? `rgb(${hue})` : "inherit" },
@@ -4304,32 +7201,20 @@ window.__ModuleLoader__.load({
 											}, "tight")
 										]
 									}, "head"),
+									Meter({ value: ratio * 100, tone: hue }, "bar"),
 									jsx("div", {
-										style: { height: "6px", borderRadius: "3px", background: "var(--dsw-alias-border-l1)", overflow: "hidden" },
-										children: jsx("div", {
-											style: {
-												width: `${Math.min(100, Math.round(ratio * 100))}%`,
-												height: "100%", background: `rgb(${hue})`
-											}
-										})
-									}, "bar"),
-									jsx("div", {
-										style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+										style: { font: FONT.micro, color: INK.secondary },
 										children: missionMeterLine(meter, zh)
 									}, "line")
 								]
 							}, key);
 						})
 					}, "meters"),
-					wasted === "" ? null : jsx("div", {
-						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
-						children: (zh ? "其中花在返工上的：" : "Spent on rework: ") + wasted
-					}, "waste"),
 					// Two quantities, reported as a disagreement rather than
 					// reconciled into whichever one is to hand. The exact figure is
 					// the ledger; the estimate is what the live pool was steering by.
 					cost.drift?.exceeds !== true ? null : jsx("div", {
-						style: { fontSize: "12px", color: "rgb(217,119,6)" },
+						style: { font: FONT.small, color: `rgb(${TONE.warn})` },
 						children: zh
 							? `预估用量与实际账本相差 ${Math.round((cost.drift.ratio ?? 0) * 100)}%（预估 ${cost.drift.estimated}，实际 ${cost.drift.exact}），超过 ${Math.round((cost.drift.tolerance ?? 0) * 100)}% 的容差 —— 运行中的预算表是估算，账本才是准的。`
 							: `The live estimate and the ledger differ by ${Math.round((cost.drift.ratio ?? 0) * 100)}% (estimated ${cost.drift.estimated}, exact ${cost.drift.exact}), past the ${Math.round((cost.drift.tolerance ?? 0) * 100)}% tolerance. The meter is an estimate; the ledger is the truth.`
@@ -4339,134 +7224,208 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		* One dimension: how much verified evidence it found, from how many
-		* hosts, and what stopped it.
+		* What this run spent twice.
 		*
-		* The floor is shown as a fraction rather than as a tick, because
-		* `verified` is the only currency the evidence gate spends and "3/4" is
-		* the difference between a dimension that nearly made it and one that
-		* found nothing.
+		* IT WAS A SENTENCE, and a sentence is the wrong shape for five counters:
+		* 阶段重试 2 次 · 章节重写 1 次 · 命中缓存 40 次 is three figures a reader
+		* has to parse out of punctuation, in the tertiary grey that means "you
+		* may skip this" — under a row of meters that are nothing but figures.
 		*
-		* The card OPENS. This is the part that was called unusable: it printed
-		* "已核验 6 条 · 1 个独立站点" and there was no way, anywhere, to see one of
-		* those six. The counts stay — they are the currency the evidence gate
-		* spends — but they have stopped being all there is.
-		* @param dimension - one card from the view route.
+		* TWO CORRECTIONS COME WITH THE SHAPE.
+		*
+		* A CACHE HIT IS A SAVING. `toolCached` was the fifth phrase in a list of
+		* four failures, so a run that avoided forty fetches read as a run that
+		* went wrong forty times. It is the one green counter here.
+		*
+		* AND ZERO REWORK IS AN ANSWER. The sentence rendered nothing at all when
+		* every counter was nought, which is the same blank space as a mission
+		* whose waste data never arrived — so the cleanest run this pipeline can
+		* produce had exactly as much to say for itself as a broken projection.
+		* @param waste - `cost.waste`, or null on an older Host half.
 		* @param zh - whether to write Chinese.
-		* @param expanded - whether this card is showing its evidence.
-		* @param onToggle - open or close it; omitted, the card does not open.
-		* @param children - the evidence list, rendered by the caller when open.
 		*/
-		function MissionDimensionCard({ dimension, zh, expanded, onToggle, children }) {
-			const hue = missionHue(MISSION_DIMENSION_FACES, dimension.state);
-			const axes = dimension.gradeAxes ?? {};
-			const rows = missionVerifyRows(dimension.counts, zh);
-			const chapters = dimension.chapters ?? {};
-			// Every finding this dimension recorded, verified or not. The verified
-			// count alone would make "0 verified, 9 rate-limited" look like a
-			// dimension with nothing behind it to open.
-			const recorded = rows.reduce((sum, row) => sum + row.n, 0);
+		function MissionRework({ waste, zh }) {
+			const counts = waste ?? {};
+			const n = (key) => Number(counts[key] ?? 0);
+			// ONLY THE NON-ZERO ONES, the same rule the dimension card's chapter
+			// chips follow: five tiles reading 0 on every healthy run is five tiles
+			// saying nothing happened, which is what the absence already says.
+			const cells = [
+				{
+					id: "stageRetries", n: n("stageRetries"), tone: TONE.warn,
+					label: zh ? "阶段重试" : "Stage retries",
+					hint: zh ? "整步重跑" : "whole steps re-run"
+				},
+				{
+					id: "chapterRewrites", n: n("chapterRewrites"), tone: TONE.warn,
+					label: zh ? "章节重写" : "Chapter rewrites",
+					hint: zh ? "写了不止一遍" : "written more than once"
+				},
+				{
+					id: "underDeliveredChapters", n: n("underDeliveredChapters"), tone: TONE.warn,
+					label: zh ? "字数不足" : "Under length",
+					hint: zh ? "没写到约定字数" : "short of the agreed length"
+				},
+				{
+					id: "toolFailures", n: n("toolFailures"), tone: TONE.danger,
+					label: zh ? "工具失败" : "Tool failures",
+					hint: zh ? "花了额度，没拿到东西" : "spent the allowance, returned nothing"
+				},
+				{
+					// GREEN, and this is the correction. A cache hit did not cost a
+					// fetch — it is the only line here that made the run cheaper.
+					id: "toolCached", n: n("toolCached"), tone: TONE.success,
+					label: zh ? "命中缓存" : "Cache hits",
+					hint: zh ? "省下的调用" : "calls that were saved"
+				}
+			].filter((cell) => cell.n > 0);
 
+			if (cells.length === 0) {
+				// The clean bill, SAID. Stated as the five counters it is derived
+				// from rather than as a verdict, because "no rework" on a mission
+				// that has not started yet is true of the counters and not of the
+				// run — and the hint is what keeps those two readings apart.
+				return MissionStatTiles({ tiles: [{
+					label: zh ? "返工" : "Rework",
+					value: "0",
+					tone: TONE.success,
+					hint: zh ? "没有重试、重写或失败的调用" : "no retries, rewrites or failed calls"
+				}] }, "clean");
+			}
+			return MissionStatTiles({
+				tiles: cells.map((cell) => ({ label: cell.label, value: String(cell.n), tone: cell.tone, hint: cell.hint }))
+			}, "rework");
+		}
+
+		/**
+		* What the Leader set out to do, in the Leader's own words.
+		*
+		* `goals` has been projected onto every mission for as long as the view
+		* route has existed and READ BY NOTHING — `grep goals lib/client.js`
+		* returned zero before this. It is the brief: the thing every stage under
+		* it is being judged against, and the screen showed the judging and not
+		* the brief.
+		*
+		* ITERATED, NEVER NAMED. The shape is `parseJson(row.goals, null)` — it is
+		* whatever the Leader wrote — so naming keys here would render exactly the
+		* three this file happened to see once and silently drop the fourth. An
+		* array is a list, a sentence is a sentence, and anything else is printed
+		* as the JSON it is rather than as `[object Object]`.
+		* @param goals - `mission.goals`.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionGoals({ goals, zh }) {
+			if (typeof goals !== "object" || goals === null) return null;
+			const entries = Object.entries(goals)
+				.filter(([, value]) => value !== null && value !== undefined && value !== "" && !(Array.isArray(value) && value.length === 0));
+			if (entries.length === 0) return null;
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: SPACE.md },
+				children: entries.map(([name, value]) => jsxs("div", {
+					style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
+					children: [
+						// THE KEY, VERBATIM. A lookup table would translate the three
+						// keys somebody once saw and leave the rest raw, which is worse
+						// than raw everywhere: it makes the untranslated ones look like
+						// a bug rather than like the Leader's own vocabulary.
+						jsx("div", {
+							style: { font: FONT.micro, letterSpacing: "0.04em", textTransform: "uppercase", color: INK.secondary },
+							children: name
+						}, "key"),
+						Array.isArray(value)
+							? jsx("ul", {
+								style: { margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: SPACE.xs },
+								children: value.map((item, at) => jsxs("li", {
+									style: { font: FONT.small, display: "flex", gap: SPACE.sm, color: INK.primary },
+									children: [
+										jsx("span", {
+											style: {
+												flex: "none", width: "4px", height: "4px", marginTop: "7px",
+												borderRadius: RADIUS.circle, background: `rgb(${TONE.accent})`
+											}
+										}, "dot"),
+										jsx("span", { style: { minWidth: 0 }, children: linkify(String(item), `g${at}-`) }, "text")
+									]
+								}, `i${at}`))
+							}, "list")
+							: jsx("div", {
+								style: { font: FONT.small, color: INK.primary },
+								// Clamped, because a goal is a sentence somebody wrote to
+								// be read and sometimes a paragraph somebody wrote to be
+								// thorough.
+								children: jsx(MissionClamp, {
+									text: typeof value === "object" ? JSON.stringify(value) : String(value),
+									lines: 3, zh
+								})
+							}, "value")
+					]
+				}, name))
+			});
+		}
+
+		/**
+		* Whether anybody put their name to this.
+		*
+		* THE MOST CONSEQUENTIAL LINE ON THE SCREEN WAS THE SAME GREY SENTENCE AS
+		* THE LEAST. Sign-off sat between the failure note and the no-artefact
+		* note, all three 13px `label-primary` prose — so "the Leader read this
+		* report and refused to sign it" had the visual weight of "no report yet".
+		*
+		* THE THREE-WAY GUARD IS UNCHANGED and lives at the call site: `null`
+		* means s11 never ran, and a run that was never judged must not be handed
+		* a verdict card at all — an unsigned report and a refused one are
+		* different failures with different next actions.
+		* @param mission - the projected mission.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionSignoffCard({ mission, zh }) {
+			const score = Number(mission.score);
+			const scored = Number.isFinite(score);
+			// A refusal is red whatever it scored. A signature is green only if the
+			// score backs it up: `signed: true` at 44 is a signature on a report
+			// the Leader itself graded badly, and drawing that green would be this
+			// screen endorsing something nobody endorsed.
+			const hue = mission.signed === false ? TONE.danger : scored && score >= 80 ? TONE.success : TONE.warn;
 			return jsxs("div", {
 				style: {
-					display: "flex", flexDirection: "column", gap: "6px", padding: "10px 12px",
-					border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "10px"
+					display: "flex", alignItems: "center", gap: SPACE.md,
+					padding: "10px 12px", borderRadius: RADIUS.lg,
+					border: `1px solid rgba(${hue},${TINT.ring})`, background: `rgba(${hue},${TINT.soft})`,
+					margin: `0 0 ${SPACE.md}`
 				},
 				children: [
-					jsxs(onToggle === undefined ? "div" : "button", {
-						type: onToggle === undefined ? undefined : "button",
-						onClick: onToggle,
-						"aria-expanded": onToggle === undefined ? undefined : expanded === true,
-						style: {
-							appearance: "none", width: "100%", boxSizing: "border-box",
-							display: "flex", alignItems: "center", gap: "8px",
-							padding: 0, border: "none", background: "transparent",
-							font: "inherit", textAlign: "left",
-							cursor: onToggle === undefined ? "default" : "pointer"
-						},
+					jsx("span", {
+						style: { font: FONT.title, flex: "none", display: "flex", color: `rgb(${hue})` },
+						children: jsx(Icon, { name: mission.signed ? "check" : "close", size: ICON.md })
+					}, "mark"),
+					jsx("span", {
+						// THE SCORE IS NOT IN THE SENTENCE ANY MORE. It was 评分 88 in
+						// the prose and it is a 20px figure four inches to the right;
+						// the same figure twice in one row is the reader checking
+						// whether they are the same figure. The verdict — the Leader's
+						// own word for it — stays in the sentence, because it is the
+						// only place it appears at all.
+						style: { font: FONT.body, flex: 1, minWidth: 0, color: INK.primary },
+						children: mission.signed
+							? (zh ? `领队已签署${(mission.verdict ?? "") === "" ? "" : `（${mission.verdict}）`}。` : `Signed off by the leader${(mission.verdict ?? "") === "" ? "" : ` (${mission.verdict})`}.`)
+							: (zh ? "领队读过报告后拒绝签署。报告仍然可读。" : "The leader read the report and declined to sign it. The report is still readable.")
+					}, "words"),
+					jsxs("span", {
+						style: { flex: "none", display: "flex", flexDirection: "column", alignItems: "flex-end" },
 						children: [
-							onToggle === undefined ? null : jsx("span", {
-								style: { flex: "none", width: "10px", color: "var(--dsw-alias-label-secondary)", fontSize: "10px" },
-								children: expanded === true ? "▾" : "▸"
-							}, "caret"),
 							jsx("span", {
-								style: { flex: 1, minWidth: 0, fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
-								children: dimension.name
-							}, "name"),
-							onToggle === undefined ? null : jsx("span", {
-								style: { flex: "none", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
-								children: expanded === true
-									? (zh ? "收起证据" : "Hide the evidence")
-									: (zh ? `看这 ${recorded} 条证据` : `Read the ${recorded} finding(s)`)
-							}, "toggle"),
-							jsx("span", {
-								style: {
-									flex: "none", padding: "1px 7px", borderRadius: "5px",
-									background: `rgba(${hue},0.12)`, color: `rgb(${hue})`, fontSize: "11px", fontWeight: 600
-								},
-								children: missionFace(MISSION_DIMENSION_FACES, dimension.state, zh)
-							}, "state")
+								style: { font: FONT.title, fontFamily: MONO, fontVariantNumeric: "tabular-nums", color: `rgb(${hue})` },
+								// The file's own em dash for "not measured". `score ?? 0`
+								// here would hand a run nobody graded a zero it never got.
+								children: scored ? String(score) : "—"
+							}, "n"),
+							jsx("span", { style: { font: FONT.micro, color: INK.quiet }, children: "/100" }, "of")
 						]
-					}, "head"),
-					jsx("div", {
-						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
-						children: [
-							// `floor: null` means s3 has not measured supply yet. It
-							// must not render as 0, or every dimension reads as
-							// passing a bar nobody has set.
-							dimension.floor === null || dimension.floor === undefined
-								? (zh ? `已核验 ${dimension.verified} 条 · 门槛还没算出来` : `${dimension.verified} verified · floor not derived yet`)
-								: (zh ? `已核验 ${dimension.verified}/${dimension.floor} 条` : `${dimension.verified}/${dimension.floor} verified`),
-							zh ? `${dimension.uniqueHosts} 个独立站点` : `${dimension.uniqueHosts} independent host(s)`,
-								chapters.total > 0 ? (zh ? `章节 ${chapters.done}/${chapters.total}` : `chapters ${chapters.done}/${chapters.total}`) : ""
-						].filter((piece) => piece !== "").join(" · ")
-					}, "counts"),
-				// THE NUMBERS THE GRADE WAS COMPUTED FROM, which are not the same as the
-				// live counts above them: `gradeAxes` is frozen at the moment s4 judged
-				// this dimension, and a re-collection since then moves one and not the
-				// other. It is present on every live dimension and was rendered nowhere.
-				Object.keys(axes).length === 0 ? null : jsx("div", {
-					style: { fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-tertiary)" },
-					children: (zh ? "打分时的数：" : "Graded on: ") + [
-						axes.verified === undefined ? "" : (zh ? `已核验 ${axes.verified}` : `${axes.verified} verified`),
-						axes.uniqueHosts === undefined ? "" : (zh ? `独立站点 ${axes.uniqueHosts}` : `${axes.uniqueHosts} host(s)`),
-						axes.pagesFetched === undefined ? "" : (zh ? `抓到 ${axes.pagesFetched} 页` : `${axes.pagesFetched} page(s) fetched`),
-						axes.seedTarget === undefined ? "" : (zh ? `种子目标 ${axes.seedTarget}` : `seed target ${axes.seedTarget}`),
-						dimension.grade === null || dimension.grade === undefined ? "" : (zh ? `得分 ${dimension.grade}` : `grade ${dimension.grade}`)
-					].filter((piece) => piece !== "").join(" · ")
-				}, "axes"),					rows.length === 0 ? null : jsx("div", {
-						style: { display: "flex", flexWrap: "wrap", gap: "6px" },
-						children: rows.map((row) => jsx("span", {
-							style: {
-								padding: "1px 7px", borderRadius: "5px",
-								border: "1px solid var(--dsw-alias-border-l2)",
-								fontSize: "11px", color: "var(--dsw-alias-label-secondary)"
-							},
-							children: `${row.label} ${row.n}`
-						}, row.state))
-					}, "states"),
-					!dimension.blocked ? null : jsx("div", {
-						style: { fontSize: "12px", color: "rgb(217,119,6)" },
-						children: zh
-							? "这个维度有请求被限流 —— 这是取不到，不是没有。"
-							: "Requests under this dimension were rate limited — that is an availability result, not evidence of absence."
-					}, "blocked"),
-					(dimension.summary ?? "") === "" ? null : jsx("div", {
-						style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
-						// The researcher's own closing note, in the mission's
-						// language, verbatim. It is the only sentence that says what
-						// this dimension actually ran into.
-						children: dimension.summary
-					}, "summary"),
-					// The evidence itself, when the card is open. Rendered by the
-					// caller rather than fetched here, so one component owns which
-					// finding is selected and one panel shows it — a card that
-					// fetched and displayed its own detail would be a second
-					// renderer for the same row.
-					expanded !== true ? null : jsx("div", { children }, "findings")
+					}, "score")
 				]
 			});
 		}
+
 
 		/**
 		* What was tried, for a mission that verified nothing.
@@ -4493,72 +7452,86 @@ window.__ModuleLoader__.load({
 			const toolRows = Object.entries(tools);
 
 			return jsxs("div", {
-				style: { display: "flex", flexDirection: "column", gap: "10px" },
+				style: { display: "flex", flexDirection: "column", gap: SPACE.md },
 				children: [
 					report.why === "" ? null : jsx("div", {
-						style: { fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-primary)" },
+						style: { font: FONT.body, color: INK.primary },
 						// The evidence gate's own sentence. Reused rather than
 						// re-worded: two wordings of one refusal is the same defect
-						// as two names for one method.
-						children: report.why
+						// as two names for one method. Three lines, because it is the
+						// first thing on this panel and the diagnostics under it are
+						// what the panel is for.
+						children: jsx(MissionClamp, { text: report.why, lines: 3, zh })
 					}, "why"),
 					diagnostics === null ? jsx("div", {
-						style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+						style: { font: FONT.small, color: INK.secondary },
 						children: zh
 							? "这次运行没有留下采集诊断，或者它已经滚出了事件尾部。事件是完整存着的：用 /events?since=0 可以从头读。"
 							: "No collection diagnostics were recorded for this run, or they have scrolled out of the event tail. The log itself is complete — read it from the beginning with /events?since=0."
 					}, "none") : null,
 					typeof diagnostics?.unavailable === "string" ? jsx("div", {
-						style: { fontSize: "12px", color: "rgb(217,119,6)" },
+						style: { font: FONT.small, color: `rgb(${TONE.warn})` },
 						children: (zh ? "采集诊断本身失败了：" : "The diagnostics query itself failed: ") + diagnostics.unavailable
 					}, "unavailable") : null,
 					toolRows.length === 0 ? null : jsxs("div", {
 						children: [
 							jsx("div", {
-								style: { fontSize: "12px", fontWeight: 600, marginBottom: "4px", color: "var(--dsw-alias-label-primary)" },
+								style: { font: FONT.smallStrong, marginBottom: "4px", color: INK.primary },
 								children: zh ? "调用过的工具" : "Tools called"
 							}, "head"),
 							jsx("div", {
-								style: { display: "flex", flexWrap: "wrap", gap: "6px" },
-								children: toolRows.map(([tool, tally]) => jsx("span", {
-									style: {
-										padding: "1px 7px", borderRadius: "5px",
-										border: "1px solid var(--dsw-alias-border-l2)",
-										fontSize: "11px", color: "var(--dsw-alias-label-secondary)"
-									},
-									children: zh
-										? `${tool} 调用 ${tally.calls} 次，成功 ${tally.ok}，失败 ${tally.failed}`
-										: `${tool}: ${tally.calls} call(s), ${tally.ok} ok, ${tally.failed} failed`
+								style: { display: "flex", flexWrap: "wrap", gap: SPACE.sm },
+								// The tool is the subject and the calls are the count, so
+								// the two stop being one run-on string. The tone follows
+								// the tally: a tool that failed at all is the reason
+								// anybody opens this block.
+								children: toolRows.map(([tool, tally]) => Chip({
+									tone: tally.failed > 0 ? TONE.warn : TONE.neutral,
+									label: tool,
+									count: zh
+										? `${tally.calls} 次 · 成功 ${tally.ok} · 失败 ${tally.failed}`
+										: `${tally.calls} · ${tally.ok} ok · ${tally.failed} failed`
 								}, tool))
 							}, "tools")
 						]
 					}, "toolBlock"),
 					hosts.length === 0 ? null : jsx("div", {
-						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						style: { font: FONT.small, color: INK.secondary },
 						children: (zh ? "已核验证据来自这些站点：" : "Verified evidence came from these hosts: ") + hosts.join("、")
 					}, "hosts"),
 					findings.length === 0 ? null : jsx("div", {
-						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						style: { font: FONT.small, color: INK.secondary },
 						children: (zh ? "写下来的发现按核验结果分：" : "Recorded findings by verify state: ")
 							+ findings.map((row) => `${row.label} ${row.n}`).join(" · ")
 					}, "findings"),
 					failed.length === 0 ? null : jsxs("div", {
 						children: [
 							jsx("div", {
-								style: { fontSize: "12px", fontWeight: 600, marginBottom: "4px", color: "var(--dsw-alias-label-primary)" },
+								style: { font: FONT.smallStrong, marginBottom: "4px", color: INK.primary },
 								children: zh ? `失败或被拒绝的工具调用（最近 ${failed.length} 条）` : `Tool calls that failed or were refused (latest ${failed.length})`
 							}, "head"),
 							jsx("div", {
-								style: { display: "flex", flexDirection: "column", gap: "3px" },
-								children: failed.map((row, at) => jsx("div", {
-									style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
-									children: `${formatStamp(row.at)} · ${missionFace(MISSION_STAGE_FACES, row.stepId, zh)} · ${row.tool}`
-										+ (row.paceKey === null || row.paceKey === undefined ? "" : ` · ${row.paceKey}`)
-										+ ` · ${row.errorCode ?? (zh ? "未记录错误码" : "no error code recorded")}`
+								style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
+								// THE TOOL COMES OUT OF THE SENTENCE. It was the middle term of
+								// a five-part join, which is the one word a reader scanning a
+								// failure list is actually looking for — "is it always fetch?"
+								// — and a join cannot be scanned. The rest stays a sentence,
+								// because the rest is context and not a category.
+								children: failed.map((row, at) => jsxs("div", {
+									style: { font: FONT.small, display: "flex", alignItems: "center", gap: SPACE.sm, color: INK.secondary },
+									children: [
+										ToolChip({ toolId: row.tool, zh }, "tool"),
+										jsx("span", {
+											style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+											children: `${formatStamp(row.at)} · ${missionFace(MISSION_STAGE_FACES, row.stepId, zh)}`
+												+ (row.paceKey === null || row.paceKey === undefined ? "" : ` · ${row.paceKey}`)
+												+ ` · ${row.errorCode ?? (zh ? "未记录错误码" : "no error code recorded")}`
+										}, "rest")
+									]
 								}, `${row.tool}-${row.at}-${at}`))
 							}, "list"),
 							jsx("div", {
-								style: { marginTop: "6px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+								style: { font: FONT.micro, marginTop: "6px", color: INK.secondary },
 								children: zh
 									? "工具调用只记了工具名、配额键和参数哈希，没有记检索词本身，所以这里给不出具体搜了什么。"
 									: "Tool calls are recorded with the tool, the pace key and a hash of the arguments — not the arguments — so the search terms themselves cannot be listed here."
@@ -4576,40 +7549,110 @@ window.__ModuleLoader__.load({
 		* line worth seeing is the one that just landed. The read is bounded and
 		* the panel says so, so an absent event is "not in this window" rather
 		* than "never happened".
+		*
+		* WHERE THIS IS SEEN, which is worth knowing before deciding how much it
+		* deserves: exactly one mount, the trajectory's ERROR FALLBACK. When the
+		* trace route answers and this component never renders. When it does
+		* render, the richest screen in the tab has just failed and this log is
+		* the only account of the run a person has left — which is an argument
+		* for more care here, not less. It also means nothing else in the tab
+		* becomes tonal because this did: the trajectory's own rows are coloured
+		* by MISSION_ROLE_FACES at their own call site.
 		* @param timeline - `timeline` from the view route.
 		* @param zh - whether to write Chinese.
 		*/
 		function MissionTimeline({ timeline, zh }) {
 			const events = Array.isArray(timeline?.events) ? timeline.events : [];
 			const shown = events.slice(-60).reverse();
+			// The zero this stream measures against is the earliest event IT HOLDS,
+			// which on a long run is the start of the window and not the start of
+			// the mission. Said here rather than silently: the view route hands
+			// over a tail, and an offset computed against a tail is honest about
+			// distance between rows and makes no claim about distance from s1.
+			const anchor = events.length === 0 ? null : events[0].ts;
 			if (shown.length === 0) {
 				return jsx("div", {
-					style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+					style: { font: FONT.small, color: INK.secondary },
 					children: zh ? "这一段窗口里还没有事件。" : "No events in this window yet."
 				});
 			}
-			return jsx("div", {
-				style: { display: "flex", flexDirection: "column", gap: "4px" },
-				children: shown.map((event) => {
-					const detail = missionEventDetail(event, zh);
-					return jsxs("div", {
-						style: { display: "flex", gap: "8px", fontSize: "12px", lineHeight: "18px" },
-						children: [
-							jsx("span", {
-								style: { flex: "none", color: "var(--dsw-alias-label-secondary)", fontVariantNumeric: "tabular-nums" },
-								children: formatStamp(event.ts)
-							}, "at"),
-							jsx("span", {
-								style: { flex: "none", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
-								children: missionFace(MISSION_EVENT_FACES, event.type, zh)
-							}, "type"),
-							detail === "" ? null : jsx("span", {
-								style: { flex: 1, minWidth: 0, color: "var(--dsw-alias-label-secondary)", wordBreak: "break-word" },
-								children: detail
-							}, "detail")
-						]
-					}, String(event.seq));
-				})
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
+				children: [
+					// HOW MUCH THERE IS, above how much is shown. The window is
+					// bounded at sixty and said nothing about it, so a run with four
+					// hundred events and a run with sixty looked identical — and the
+					// difference is whether the line you are looking for is missing
+					// or simply never happened.
+					jsx("div", {
+						style: { font: FONT.micro, color: INK.quiet },
+						children: events.length > shown.length
+							? (zh ? `共 ${events.length} 条 · 显示最近 ${shown.length} 条` : `${events.length} events · showing the last ${shown.length}`)
+							: (zh ? `共 ${events.length} 条` : `${events.length} event(s)`)
+					}, "tally"),
+					jsx("div", {
+						// The rail and its dots are what turn a list of lines into a
+						// stream you can read the shape of: five amber dots in a row
+						// is a stalling run, visible before a single word is read.
+						// The line itself is a `::before`, which is why the class
+						// carries it rather than a style object.
+						className: "swm-rail",
+						style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
+						children: shown.map((event) => {
+							const hue = missionHue(MISSION_EVENT_FACES, event.type);
+							const detail = missionEventDetail(event, zh);
+							return jsxs("div", {
+								className: "swm-ev",
+								style: { font: FONT.small, background: `rgba(${hue},${TINT.soft})`, color: INK.secondary },
+								children: [
+									jsx("span", {
+										style: {
+											position: "absolute", left: "-16px", top: "9px",
+											width: "7px", height: "7px", flex: "none",
+											borderRadius: RADIUS.circle, background: `rgb(${hue})`
+										}
+									}, "dot"),
+									// THE CLOCK, NOT THE STAMP. `formatStamp` prints to the
+									// minute, and a tail is read at the moment six things
+									// happened inside one minute — where a column of
+									// identical stamps says nothing about which came
+									// first. The date is not lost, it is on the hover.
+									jsxs("span", {
+										title: formatStamp(event.ts),
+										style: {
+											font: FONT.micro, fontFamily: MONO, fontVariantNumeric: "tabular-nums",
+											flex: "none", width: "64px", textAlign: "right", color: INK.quiet,
+											display: "flex", flexDirection: "column"
+										},
+										children: [
+											// The same two lines the trajectory row draws, in the
+											// same order, because this stream is the fallback that
+											// renders when the trajectory cannot be read — and a
+											// fallback that reorders the facts is a second screen
+											// to learn at the worst possible moment.
+											jsx("span", { children: missionSince(event.ts, anchor, zh) }, "since"),
+											jsx("span", { style: { opacity: OPACITY.quiet }, children: missionClock(event.ts) }, "clock")
+										]
+									}, "at"),
+									jsx("span", {
+										style: { font: FONT.smallStrong, flex: "none", color: `rgb(${hue})` },
+										children: missionFace(MISSION_EVENT_FACES, event.type, zh)
+									}, "type"),
+									// ONE LINE, with the whole of it on the hover. The
+									// detail used to wrap, so a single event carrying a
+									// long refusal reason pushed every row under it down
+									// the page and the stream stopped being scannable at
+									// the exact moment it mattered most.
+									detail === "" ? null : jsx("span", {
+										title: detail,
+										style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+										children: detail
+									}, "detail")
+								]
+							}, String(event.seq));
+						})
+					}, "rail")
+				]
 			});
 		}
 		//#endregion
@@ -4641,6 +7684,36 @@ window.__ModuleLoader__.load({
 		const MISSION_TRACE_TAKE = 120;
 
 		/**
+		* And how much of it the STAGE DRAWER asks for.
+		*
+		* Twenty, not a hundred and twenty: the drawer is a 320px column beside a
+		* board, and it is answering "what did this step do" rather than "show me
+		* everything". The route caps and orders the slice, so the twenty are the
+		* first twenty of the step, and the jump button under them opens the same
+		* rows in the pane that is built to hold four hundred.
+		*/
+		const MISSION_STAGE_TRACE_TAKE = 20;
+
+		/**
+		* When a duration stops being a figure and starts being the answer.
+		*
+		* TWO NAMES, NOT TWO NUMBERS PER SITE. The trajectory's trailing column
+		* and the tool table's mean latency both answer "which door is slow", and
+		* both drew every duration in the same tertiary grey — a 12-second call
+		* and a 4ms one rendered identically, in the column that exists to tell
+		* them apart. Banding them each against a number typed at its own call
+		* site is how two screens end up disagreeing about what slow means, which
+		* is worse than neither of them saying.
+		*
+		* 3s is where a person notices a wait; 10s is where a tool call is
+		* usually a retry, a rate limit or a hang rather than work. Both are
+		* thresholds for DRAWING, never for behaviour: nothing here retries,
+		* fails or refuses on them.
+		*/
+		const MISSION_WARN_MS = 3000;
+		const MISSION_SLOW_MS = 10000;
+
+		/**
 		* How many findings one dimension shows before it says there are more.
 		*
 		* Bounded because a `deep` mission's dimension can hold hundreds and this
@@ -4648,15 +7721,6 @@ window.__ModuleLoader__.load({
 		* hidden, so a truncated list reads as truncated instead of complete.
 		*/
 		const MISSION_FINDINGS_TAKE = 50;
-
-		/**
-		* Mono where the text is DATA rather than prose.
-		*
-		* A tool name, a JSON argument and a source host are things a person
-		* compares character by character across rows, and a proportional face
-		* makes two nearly-identical queries look identical.
-		*/
-		const MISSION_MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
 		/**
 		* The chip at the left of a row, keyed by the Host half's `TRACE_ROLES`.
@@ -4668,11 +7732,11 @@ window.__ModuleLoader__.load({
 		* them is a bug.
 		*/
 		const MISSION_ROLE_FACES = {
-			STAGE: { zh: "阶段", en: "STAGE", hue: "2,132,199" },
-			TOOL: { zh: "工具", en: "TOOL", hue: "124,58,237" },
-			EVIDENCE: { zh: "证据", en: "EVIDENCE", hue: "5,150,105" },
-			GATE: { zh: "闸门", en: "GATE", hue: "217,119,6" },
-			SYSTEM: { zh: "系统", en: "SYSTEM", hue: "100,116,139" }
+			STAGE: { zh: "阶段", en: "STAGE", hue: TONE.info },
+			TOOL: { zh: "工具", en: "TOOL", hue: TONE.accent },
+			EVIDENCE: { zh: "证据", en: "EVIDENCE", hue: TONE.success },
+			GATE: { zh: "闸门", en: "GATE", hue: TONE.warn },
+			SYSTEM: { zh: "系统", en: "SYSTEM", hue: TONE.neutral }
 		};
 
 		/**
@@ -4685,11 +7749,11 @@ window.__ModuleLoader__.load({
 		* wrong one.
 		*/
 		const MISSION_TRACE_KINDS = [
-			{ id: "", zh: "全部记录", en: "All rows", hue: "100,116,139" },
-			{ id: "stage", zh: "阶段", en: "Stages", hue: "2,132,199" },
-			{ id: "tool", zh: "工具", en: "Tools", hue: "124,58,237" },
-			{ id: "finding", zh: "发现", en: "Findings", hue: "5,150,105" },
-			{ id: "event", zh: "事件", en: "Events", hue: "217,119,6" }
+			{ id: "", zh: "全部记录", en: "All rows", hue: TONE.neutral },
+			{ id: "stage", zh: "阶段", en: "Stages", hue: TONE.info },
+			{ id: "tool", zh: "工具", en: "Tools", hue: TONE.accent },
+			{ id: "finding", zh: "发现", en: "Findings", hue: TONE.success },
+			{ id: "event", zh: "事件", en: "Events", hue: TONE.warn }
 		];
 
 		/** The four tabs of the detail panel, in the reference's order. */
@@ -4716,6 +7780,40 @@ window.__ModuleLoader__.load({
 			const when = new Date(at);
 			const pad = (value) => String(value).padStart(2, "0");
 			return `${pad(when.getHours())}:${pad(when.getMinutes())}:${pad(when.getSeconds())}`;
+		}
+
+		/**
+		* How far into the run this happened.
+		*
+		* WALL-CLOCK ANSWERS A DIFFERENT QUESTION. `14:02:11` is what you need to
+		* line a row up against a log on another machine; what a person reading a
+		* trajectory wants is "the collect stage started four minutes in and the
+		* fetch that hung came eleven minutes after that", and getting there from
+		* a column of absolute stamps is subtraction done by hand, once per row.
+		*
+		* Same guard style as `missionClock` and `missionLatency`: an instant that
+		* will not parse is "" rather than `NaN`. So is a NEGATIVE offset, and
+		* that branch is the load-bearing one — a row recorded before the anchor
+		* is not "-3s into the run", it is a row whose anchor is wrong, and a
+		* minus sign would present a broken anchor as a measurement.
+		* @param iso - the instant.
+		* @param anchorIso - the run's own zero.
+		* @param zh - whether to write Chinese.
+		* @returns `+2m 14s`, or "" when either end is missing.
+		*/
+		function missionSince(iso, anchorIso, zh) {
+			const at = Date.parse(iso);
+			const zero = Date.parse(anchorIso);
+			if (Number.isNaN(at) || Number.isNaN(zero)) return "";
+			const ms = at - zero;
+			if (ms < 0) return "";
+			// Sub-second, for the same reason missionLatency exists: a dozen tool
+			// calls inside one second are a dozen rows reading `+0s` otherwise.
+			if (ms < 1000) return `+${Math.round(ms)}ms`;
+			const seconds = Math.round(ms / 1000);
+			if (seconds < 60) return `+${seconds}s`;
+			const minutes = Math.floor(seconds / 60);
+			return zh ? `+${minutes} 分 ${seconds % 60} 秒` : `+${minutes}m ${seconds % 60}s`;
 		}
 
 		/**
@@ -4749,9 +7847,9 @@ window.__ModuleLoader__.load({
 		* @returns `{ mark, hue, label }`.
 		*/
 		function missionOkFace(ok, zh) {
-			if (ok === true) return { mark: "✓", hue: "5,150,105", label: zh ? "通过" : "Passed" };
-			if (ok === false) return { mark: "✗", hue: "220,38,38", label: zh ? "未通过" : "Failed" };
-			return { mark: "·", hue: "100,116,139", label: zh ? "没有判定" : "No verdict was recorded" };
+			if (ok === true) return { mark: "✓", hue: TONE.success, label: zh ? "通过" : "Passed" };
+			if (ok === false) return { mark: "✗", hue: TONE.danger, label: zh ? "未通过" : "Failed" };
+			return { mark: "·", hue: TONE.neutral, label: zh ? "没有判定" : "No verdict was recorded" };
 		}
 
 		/**
@@ -4838,23 +7936,44 @@ window.__ModuleLoader__.load({
 		*/
 		const TRACE_STYLE_ID = "dsw-swarm-trace-style";
 		const TRACE_CSS = [
-			".swt-row{display:flex;align-items:center;box-sizing:border-box;height:38px;padding:0 8px 0 10px;gap:12px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);min-width:0;width:100%;appearance:none;font:inherit;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary)}",
+			`.swt-row{display:flex;align-items:center;box-sizing:border-box;height:38px;padding:0 8px 0 10px;gap:12px;border-radius:8px;border:1px solid ${LINE.rule};background:var(--dsw-alias-bg-layer-3);min-width:0;width:100%;appearance:none;font:inherit;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary)}`,
 			".swt-row:hover{background:var(--dsw-alias-interactive-bg-hover)}",
 			'.swt-row[aria-pressed="true"]{border-color:transparent;box-shadow:inset 0 0 0 2px var(--dsw-alias-state-business-primary)}',
 			".swt-row:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}",
 			".swt-idx{flex:none;width:24px;font:var(--dsw-font-xs-13);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}",
-			".swt-clock{flex:none;width:58px;font:11px/16px var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}",
-			".swt-tagslot{flex:none;width:64px;display:flex;align-items:center;min-width:0}",
-			".swt-tag{display:inline-flex;align-items:center;box-sizing:border-box;height:22px;max-width:100%;padding:0 6px;border-radius:6px;font-size:11px;font-weight:600;line-height:22px;white-space:nowrap}",
+			// TWO LINES IN THE SAME SLOT: the offset from the run's start over
+			// the wall clock. 58px held one `14:02:11`; `+11m 4s` needs the extra
+			// six. The line-height comes AFTER the `font` shorthand, which sets
+			// one of its own — written before it, it is silently discarded and the
+			// two lines sit 32px apart in a 38px row.
+			".swt-clock{flex:none;width:64px;display:flex;flex-direction:column;justify-content:center;font:11px/16px var(--ds-font-family-code,monospace);line-height:13px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}",
+			// 96px, up from 64. The slot now carries TWO marks — what kind of record
+			// this is, and who made it — because either one alone answers half of
+			// what a person scanning a hundred rows is asking.
+			".swt-tagslot{flex:none;width:96px;display:flex;align-items:center;gap:4px;min-width:0}",
+			// THE GEOMETRY IS THE CHIP'S; THE COLOUR NOW IS TOO. This kept the
+			// harness's state-token pairs for one batch longer than the rest of the
+			// file, on the argument that `missionTagFace` chose them deliberately.
+			// It did — and what it chose them BY was `row.ok` and `row.kind`, so
+			// every row on the densest screen in the tab was one of four colours
+			// and the tag repeated in colour what its own word already said. It is
+			// tinted from MISSION_ROLE_FACES's `hue` at the call site now, which
+			// the table has carried since it was written and nothing ever read.
+			// It ELLIPSISES now, because it is no longer alone in the slot. A tag that
+			// only shrank would push the role mark past the slot's right edge and
+			// into the name column — and the mark is fixed-width, so it is the tag
+			// that has to give. EVIDENCE is the long one and it fits; a longer role
+			// word added later clips instead of breaking the row.
+			`.swt-tag{display:inline-flex;align-items:center;box-sizing:border-box;height:22px;min-width:0;max-width:100%;padding:0 6px;border-radius:${RADIUS.sm};font:${FONT.microStrong};white-space:nowrap;overflow:hidden;text-overflow:ellipsis}`,
 			".swt-title{flex:none;width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 12px/16px var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-primary)}",
 			".swt-text{flex:2 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}",
 			".swt-arrow{flex:none;color:var(--dsw-alias-label-caption)}",
 			".swt-res{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}",
 			".swt-trail{flex:none;display:flex;align-items:center;justify-content:flex-end;width:72px;min-width:0}",
 			".swt-metric{flex:none;width:69px;text-align:right;font:var(--dsw-font-xs-13);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
-			".swt-band{flex:none;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;overflow:hidden;user-select:none;margin-bottom:10px}",
+			`.swt-band{flex:none;border:1px solid ${LINE.rule};border-radius:8px;overflow:hidden;user-select:none;margin-bottom:10px}`,
 			".swt-plot{display:grid;grid-template-columns:44px minmax(0,1fr);height:50px;overflow:hidden;background:var(--dsw-alias-bg-layer-2)}",
-			".swt-lanelabels{position:relative;border-right:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-caption);font-size:10px;line-height:1}",
+			`.swt-lanelabels{position:relative;border-right:1px solid ${LINE.rule};color:var(--dsw-alias-label-caption);font-size:10px;line-height:1}`,
 			".swt-lanelabels span{position:absolute;right:4px;display:flex;align-items:center;justify-content:flex-end;height:8px}",
 			".swt-lanelabels span:nth-child(1){top:7px}",
 			".swt-lanelabels span:nth-child(2){top:21px}",
@@ -4868,34 +7987,59 @@ window.__ModuleLoader__.load({
 			'.swt-span[data-tone="finding"]{background:var(--dsw-alias-state-success-primary)}',
 			'.swt-span[data-tone="tool"]{background:var(--dsw-alias-state-warn-label);opacity:1}',
 			'.swt-span[data-tone="bad"]{background:var(--dsw-alias-state-error-primary);opacity:1}',
-			".swt-wrap{display:flex;align-items:stretch;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-layer-1)}",
+			`.swt-wrap{display:flex;align-items:stretch;border:1px solid ${LINE.rule};border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-layer-1)}`,
 			".swt-list{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:2px;padding:8px}",
-			".swt-pane{position:relative;display:flex;flex:none;flex-direction:column;width:clamp(300px,32%,392px);min-width:0;min-height:0;border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1)}",
-			".swt-panehead{display:flex;flex:none;align-items:center;justify-content:space-between;box-sizing:border-box;height:42px;padding:0 8px 0 12px;border-bottom:1px solid var(--dsw-alias-border-l2);gap:8px}",
+			`.swt-pane{position:relative;display:flex;flex:none;flex-direction:column;width:clamp(300px,32%,392px);min-width:0;min-height:0;border-left:1px solid ${LINE.rule};background:var(--dsw-alias-bg-layer-1)}`,
+			`.swt-panehead{display:flex;flex:none;align-items:center;justify-content:space-between;box-sizing:border-box;height:42px;padding:0 8px 0 12px;border-bottom:1px solid ${LINE.rule};gap:8px}`,
 			".swt-panetitle{display:flex;align-items:center;min-width:0;gap:8px;color:var(--dsw-alias-label-primary)}",
 			".swt-dot{flex:none;width:5px;height:5px;border-radius:50%;background:var(--dsw-alias-label-secondary)}",
 			".swt-panename{flex:none;font:500 12px/16px var(--ds-font-family-code,monospace)}",
 			".swt-paneref{min-width:0;overflow:hidden;color:var(--dsw-alias-label-tertiary);font:11px/16px var(--ds-font-family-code,monospace);text-overflow:ellipsis;white-space:nowrap}",
-			".swt-close{display:inline-flex;flex:none;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer;font-size:18px;line-height:18px}",
-			".swt-close:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}",
-			".swt-tabs{display:flex;flex:none;box-sizing:border-box;width:100%;height:34px;padding:0 8px;overflow-x:auto;overflow-y:hidden;gap:1px;border-bottom:1px solid var(--dsw-alias-border-l2);white-space:nowrap;scrollbar-width:none}",
+			`.swt-tabs{display:flex;flex:none;box-sizing:border-box;width:100%;height:34px;padding:0 8px;overflow-x:auto;overflow-y:hidden;gap:1px;border-bottom:1px solid ${LINE.rule};white-space:nowrap;scrollbar-width:none}`,
 			".swt-tabs::-webkit-scrollbar{display:none}",
-			".swt-tab{position:relative;flex:none;padding:0 9px;border:0;color:var(--dsw-alias-label-tertiary);background:transparent;cursor:pointer;font:var(--dsw-font-xs-13)}",
-			".swt-tab:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}",
-			'.swt-tab[aria-selected="true"]{color:var(--dsw-alias-state-business-primary)}',
-			'.swt-tab[aria-selected="true"]::after{position:absolute;right:9px;bottom:0;left:9px;height:2px;border-radius:1px 1px 0 0;background:var(--dsw-alias-state-business-primary);content:""}',
-			".swt-tab:focus-visible,.swt-close:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}",
+			// `.swt-tab` IS GONE AND IS NOW `.swm-tab`, on SWM_RULES. The rules
+			// were complete and they were on the wrong sheet: this one mounts
+			// only when the trace pane opens, so the two OTHER tab strips in this
+			// product could not wear them without being unstyled until somebody
+			// happened to open a trajectory. The drawer loses nothing — every
+			// caller of this sheet injects SWM_SHEET in the same breath.
 			".swt-panebody{flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;padding-bottom:12px}",
 			".swt-kv{margin:0;padding:8px 0;font:var(--dsw-font-xs-13)}",
 			".swt-kv>div{display:grid;grid-template-columns:94px minmax(0,1fr);min-height:22px;padding:0 14px;align-items:center;gap:8px}",
 			".swt-kv dt{color:var(--dsw-alias-label-tertiary);margin:0}",
 			".swt-kv dd{min-width:0;margin:0;overflow:hidden;color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap}",
 			".swt-secthead{margin:0;padding:6px 14px 2px;color:var(--dsw-alias-label-secondary);font-size:13px;font-weight:600;user-select:none}",
-			".swt-code{margin:0 14px;padding:8px 10px;border-radius:6px;overflow:auto;max-height:340px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);font:11px/17px var(--ds-font-family-code,monospace);white-space:pre-wrap;word-break:break-word}",
+			// A DIFFERENT MATERIAL FROM THE PROSE ABOVE IT. Layer 2 is what the
+			// pane itself is drawn on, so a payload block sat on its own
+			// background with no edge — a wall of monospace that began and ended
+			// nowhere. Layer 3 and a hairline give it a lid.
+			`.swt-code{margin:0 14px;padding:8px 10px;border-radius:6px;overflow:auto;max-height:340px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3);border:1px solid ${LINE.rule};font:11px/17px var(--ds-font-family-code,monospace);white-space:pre-wrap;word-break:break-word}`,
+			// THE THREE RULES THAT WERE NEVER WRITTEN. `missionColourJson` has
+			// been emitting `k`, `s` and `n` on every payload since it was
+			// added and no stylesheet in this file defined any of them, so the
+			// tokeniser ran, allocated a span per token, and produced a block of
+			// one colour. Dead code with a cost — and invisible to every test in
+			// the repo, because the classes were emitted exactly as intended.
+			//
+			// SCOPED UNDER `.swt-code`, without exception. These are one-letter
+			// names on a sheet shared with the whole tab; unscoped, `.k` would
+			// paint anything anyone ever gives that class.
+			`.swt-code .k{color:rgb(${PALETTE.blue})}`,
+			`.swt-code .s{color:rgb(${PALETTE.green})}`,
+			`.swt-code .n{color:rgb(${PALETTE.amber})}`,
 			".swt-scrim{position:fixed;inset:0;z-index:40;display:flex;justify-content:flex-end;background:rgba(0,0,0,0.30);backdrop-filter:blur(2px)}",
-			".swt-drawer{display:flex;height:100%;width:100%;max-width:672px;flex-direction:column;overflow:hidden;border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);box-shadow:-10px 0 34px rgba(0,0,0,0.20)}",
+			`.swt-drawer{display:flex;height:100%;width:100%;max-width:672px;flex-direction:column;overflow:hidden;border-left:1px solid ${LINE.rule};background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-shadow-lv3)}`,
 			".swt-drawer .swt-pane{width:100%;max-width:none;border-left:0;height:100%}",
-			".swt-quote{margin:0 14px;padding:10px 12px;border-radius:6px;border-left:2px solid var(--dsw-alias-state-success-primary);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-13);line-height:19px;white-space:pre-wrap;word-break:break-word}"
+			// `currentColor`, WHERE THIS HARD-CODED THE SUCCESS GREEN. One rule
+			// with one colour served two opposite things: the verbatim quote
+			// behind a finding — which may be REFUTED — and the sentence a stage
+			// wrote about why it degraded. Both were drawn behind a green rule,
+			// which is a verdict, and in both of those cases the wrong one.
+			//
+			// The rule now inherits, and each call site passes `borderLeftColor`
+			// for what it actually is. With no override it resolves to the text
+			// colour, which is a neutral rule rather than a claim.
+			".swt-quote{margin:0 14px;padding:10px 12px;border-radius:6px;border-left:2px solid currentColor;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-13);line-height:19px;white-space:pre-wrap;word-break:break-word}"
 		].join("\n");
 
 		/**
@@ -4906,20 +8050,11 @@ window.__ModuleLoader__.load({
 		* bundle that throws at load time there is a bundle nobody can test.
 		*/
 		function ensureTraceStyle() {
-			try {
-				if (typeof document?.getElementById !== "function") return;
-				if (document.getElementById(TRACE_STYLE_ID) !== null) return;
-				const node = document.createElement("style");
-				node.id = TRACE_STYLE_ID;
-				node.textContent = TRACE_CSS;
-				const host = document.head ?? document.documentElement;
-				if (typeof host?.appendChild === "function") host.appendChild(node);
-			} catch {
-				// A host that will not take a stylesheet still gets a working
-				// trajectory: every rule above is presentation, and the geometry
-				// it carries degrades to the browser's own box model rather than
-				// to a blank screen.
-			}
+			// Both sheets, in one call, because the trajectory's own rules use
+			// the tone vars: a drawer that got its geometry and not its colours
+			// is the half-styled state this pairing exists to make unreachable.
+			ensureStyle(SWM_STYLE_ID, SWM_SHEET);
+			ensureStyle(TRACE_STYLE_ID, TRACE_CSS);
 		}
 		//#endregion
 		/**
@@ -4940,9 +8075,11 @@ window.__ModuleLoader__.load({
 		* @param active - whether this row is the one open in the panel.
 		* @param onOpen - called with the row's `ref`.
 		*/
-		function MissionTraceRow({ row, zh, active, onOpen }) {
-			const face = missionTagFace(row);
+		function MissionTraceRow({ row, zh, active, onOpen, anchor }) {
 			const name = missionRowTitle(row, zh);
+			// The KIND's colour, from the table that has always carried it. Five
+			// hues over five kinds, rather than four over "did it fail".
+			const kindHue = missionHue(MISSION_ROLE_FACES, row.role);
 			const verdict = missionOkFace(row.ok, zh);
 			const took = row.kind === "tool" ? missionLatency(row.ms, zh) : missionDuration(row.ms, zh);
 			return jsxs("button", {
@@ -4956,22 +8093,45 @@ window.__ModuleLoader__.load({
 				"aria-pressed": active,
 				children: [
 					jsx("span", { className: "swt-idx", children: String(row.seq) }, "seq"),
-					jsx("span", { className: "swt-clock", children: missionClock(row.at) }, "at"),
-					jsx("span", {
+					jsxs("span", {
+						className: "swt-clock",
+						children: [
+							// THE OFFSET ON TOP, because it is the one a reader of this
+							// screen is actually asking for. It is "" when there is no
+							// anchor — an empty span in a flex column takes no room, so
+							// the slot falls back to exactly what it drew before.
+							jsx("span", { children: missionSince(row.at, anchor, zh) }, "since"),
+							// The wall clock keeps its place and steps back a shade. It
+							// is what a person greps a server log with, so it stays
+							// readable; it is not what they are scanning the column for.
+							jsx("span", { style: { opacity: OPACITY.quiet }, children: missionClock(row.at) }, "clock")
+						]
+					}, "at"),
+					jsxs("span", {
 						className: "swt-tagslot",
-						children: jsx("span", {
-							className: "swt-tag",
-							style: { color: face.fg, background: face.bg },
-							children: missionFace(MISSION_ROLE_FACES, row.role, zh)
-						}, "tag")
+						children: [
+							jsx("span", {
+								className: "swt-tag",
+								style: { color: `rgb(${kindHue})`, background: `rgba(${kindHue},${TINT.soft})` },
+								children: missionFace(MISSION_ROLE_FACES, row.role, zh)
+							}, "tag"),
+							// WHO, at last, and only as a mark. The agent id reached the
+							// DOM in the `title` attribute and nowhere else, so the one
+							// screen that shows every step of a run could not answer which
+							// researcher took it without a hover per row. Icon-only
+							// because the word does not fit and the colour is the answer:
+							// a column of blue sparks and one amber is a handoff, visible
+							// without reading a word.
+							RoleChip({ agentId: row.agentId, zh, size: "xs", iconOnly: true }, "who")
+						]
 					}, "role"),
 					jsx("span", {
 						className: "swt-title",
-						style: name.mono ? undefined : { fontFamily: "inherit", fontWeight: 600 },
+						style: name.mono ? undefined : { fontFamily: "inherit", fontWeight: 500 },
 						children: name.text
 					}, "title"),
 					jsx("span", { className: "swt-text", children: row.detail }, "detail"),
-					jsx("span", { className: "swt-arrow", children: "→" }, "arrow"),
+					jsx("span", { className: "swt-arrow", children: jsx(Icon, { name: "arrowRight", size: ICON.xs }) }, "arrow"),
 					jsx("span", {
 						// The verdict is CARRIED BY the result rather than repeated
 						// beside it. A separate 通过/未通过 column said the same thing
@@ -4986,35 +8146,24 @@ window.__ModuleLoader__.load({
 					}, "result"),
 					jsx("span", {
 						className: "swt-trail",
-						children: jsx("span", { className: "swt-metric", children: took }, "took")
+						children: jsx("span", {
+							className: "swt-metric",
+							// GEOMETRY ON THE CLASS, TONE AT THE CALL SITE. `.swt-metric`
+							// owns the width, the alignment and the tabular figures for
+							// every row; only this row knows how long it took. `undefined`
+							// leaves the class's tertiary grey in place, which is the
+							// right answer for the majority of rows — a band that
+							// coloured everything would be a band that says nothing.
+							style: Number(row.ms) >= MISSION_SLOW_MS
+								? { color: `rgb(${TONE.danger})` }
+								: Number(row.ms) >= MISSION_WARN_MS
+								? { color: `rgb(${TONE.warn})` }
+								: undefined,
+							children: took
+						}, "took")
 					}, "trail")
 				]
 			});
-		}
-
-		/**
-		* The two colours of one row's tag, from the host app's own state tokens.
-		*
-		* Not a hue triple: the reference tab draws every tag as a token pair, and
-		* a plugin that mixes its own rgb() beside them is the plugin that looks
-		* almost right in light mode and wrong in dark. Tokens follow the theme;
-		* literals do not.
-		* @param row - one trajectory row.
-		*/
-		function missionTagFace(row) {
-			if (row.ok === false) {
-				return { fg: "var(--dsw-alias-state-error-primary)", bg: "var(--dsw-alias-state-error-tertiary, rgba(220,38,38,0.12))" };
-			}
-			if (row.kind === "tool") {
-				return { fg: "var(--dsw-alias-state-warn-label)", bg: "var(--dsw-alias-state-warn-tertiary)" };
-			}
-			if (row.kind === "finding") {
-				return { fg: "var(--dsw-alias-state-success-primary)", bg: "var(--dsw-alias-state-success-tertiary)" };
-			}
-			if (row.kind === "stage") {
-				return { fg: "var(--dsw-alias-state-business-primary)", bg: "var(--dsw-alias-state-business-tertiary)" };
-			}
-			return { fg: "var(--dsw-alias-label-secondary)", bg: "var(--dsw-alias-bg-module-platform)" };
 		}
 
 		/**
@@ -5035,7 +8184,7 @@ window.__ModuleLoader__.load({
 		* @param onClose - close the panel.
 		* @param onOpenSource - open a finding's page in the reader.
 		*/
-		function MissionTraceDetail({ missionId, traceRef, zh, onClose, onOpenSource }) {
+		function MissionTraceDetail({ missionId, traceRef, zh, onClose, onOpenSource, anchor }) {
 			const [tab, setTab] = useState("summary");
 			const [held, setHeld] = useState(null);
 			const [error, setError] = useState("");
@@ -5077,7 +8226,7 @@ window.__ModuleLoader__.load({
 					}, "title"),
 					jsx("button", {
 						type: "button",
-						className: "swt-close",
+						className: "swm-iconbtn",
 						"aria-label": zh ? "关闭" : "Close",
 						onClick: onClose,
 						children: "\u00d7"
@@ -5099,9 +8248,20 @@ window.__ModuleLoader__.load({
 						children: MISSION_TRACE_TABS.map((entry) => jsx("button", {
 							type: "button",
 							role: "tab",
-							className: "swt-tab",
+							className: "swm-tab",
 							"aria-selected": entry.id === tab,
 							onClick: () => { setTab(entry.id); },
+							// Geometry inline, state on the class. The resting
+							// colour is `secondary` rather than the `tertiary`
+							// the old rule used: a tab label is a word the reader
+							// has to read, and INK's own docblock puts tertiary at
+							// 3.71:1 — the decoration budget.
+							style: {
+								font: entry.id === tab ? FONT.bodyStrong : FONT.body,
+								padding: `0 ${SPACE.sm}`,
+								"--swm-tab-inset": SPACE.sm,
+								color: entry.id === tab ? "var(--dsw-alias-state-business-primary)" : INK.secondary
+							},
 							children: zh ? entry.zh : entry.en
 						}, entry.id))
 					}, "tabs"),
@@ -5111,7 +8271,7 @@ window.__ModuleLoader__.load({
 
 			if (held === null || held.ref !== traceRef) {
 				return shell(jsx("div", {
-					style: { fontSize: "12px", lineHeight: "18px", color: error === "" ? "var(--dsw-alias-label-secondary)" : "rgb(217,119,6)" },
+					style: { font: FONT.small, color: error === "" ? INK.secondary : `rgb(${TONE.warn})` },
 					children: error === ""
 						? (zh ? "读取中…" : "Loading…")
 						// The 404 this route answers names the WINDOW, not just the
@@ -5135,6 +8295,27 @@ window.__ModuleLoader__.load({
 					jsx("dd", { title: String(value), children: String(value) }, "v")
 				]
 			}, label));
+			// The same row for a value that is a NODE. `line` calls `String()` on
+			// what it is handed, which is what keeps a number, a duration and a
+			// timestamp on one grid — and is also why a chip passed to it renders
+			// "[object Object]". The two are one row with one difference, so the
+			// `title` is passed separately: a `dd` whose text is a chip still owes
+			// the reader the raw string on hover.
+			const node = (label, value, title) => (value === null || value === undefined ? null : jsxs("div", {
+				children: [
+					jsx("dt", { children: label }, "k"),
+					jsx("dd", { title: title === null || title === undefined ? undefined : String(title), children: value }, "v")
+				]
+			}, label));
+			// An instant, said both ways: where it sits on the wall and how far
+			// into the run it is. The offset is the half a person can act on —
+			// this panel is opened FROM a list that is now ordered by it — and it
+			// disappears silently when there is no anchor to measure against.
+			const when = (iso) => {
+				if (iso === null || iso === undefined || iso === "") return "";
+				const offset = missionSince(iso, anchor, zh);
+				return `${formatStamp(iso)} ${missionClock(iso)}${offset === "" ? "" : ` · ${offset}`}`;
+			};
 
 			const block = (text) => jsx("pre", { className: "swt-code", children: missionColourJson(text) });
 
@@ -5149,30 +8330,43 @@ window.__ModuleLoader__.load({
 				className: "swt-kv",
 				children: [
 					finding === null ? null : jsx("div", {
-						style: {
-							padding: "10px 14px 6px", fontSize: "13px", lineHeight: "20px",
-							fontWeight: 600, color: "var(--dsw-alias-label-primary)"
+						// `display: block`, and it is not cosmetic. These three divs
+						// are children of the `.swt-kv` list, and `.swt-kv>div` makes
+						// every direct child a two-column grid whose first column is
+						// 94px — so the claim, which has no `dt`, was being laid out
+						// INSIDE that 94px column while the rest of the panel sat
+						// empty beside it. The grid is for label/value rows; these are
+						// not label/value rows.
+						style: { font: FONT.bodyStrong,
+							display: "block", padding: "10px 14px 6px", color: INK.primary
 						},
 						children: finding.claim
 					}, "claim"),
 					finding === null ? null : jsx("div", {
 						className: "swt-quote",
+						// THE TONE OF THE VERDICT, not of success. A quote that was
+						// checked and REFUTED was drawn behind the same green rule as
+						// one that was confirmed — the single most confident-looking
+						// element on the panel, saying the opposite of what the panel
+						// says. `verdict` is already computed above from the row's
+						// own `ok`.
+						style: { display: "block", borderLeftColor: `rgb(${verdict.hue})` },
 						// Verbatim and whole. The list clips it and this is the only
 						// place it can be read, which is the point of the panel.
 						children: `“${finding.quote}”`
 					}, "quote"),
 					finding === null ? null : jsxs("div", {
-						style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", margin: "0 0 6px", fontSize: "11px" },
+						style: { font: FONT.micro, display: "flex", alignItems: "center", gap: SPACE.md, flexWrap: "wrap", margin: "0 0 6px" },
 						children: [
 							!openable ? jsx("span", {
-								style: { color: "var(--dsw-alias-label-secondary)" },
+								style: { color: INK.secondary },
 								children: zh ? "这条发现没有带回可打开的地址" : "no openable address travelled with this finding"
 							}, "noUrl") : jsx("button", {
 								type: "button",
 								onClick: () => { onOpenSource?.(finding); },
-								style: {
+								style: { font: FONT.micro,
 									appearance: "none", border: "none", background: "transparent", padding: 0,
-									color: `rgb(${verdict.hue})`, font: "inherit", fontSize: "11px", cursor: "pointer"
+									color: `rgb(${verdict.hue})`, font: "inherit", cursor: "pointer"
 								},
 								// 信源's own reader: the Host half re-fetches the page
 								// and extracts it, which is the only thing that can
@@ -5182,7 +8376,7 @@ window.__ModuleLoader__.load({
 							}, "open"),
 							!openable ? null : jsx("a", {
 								href: finding.sourceUrl, target: "_blank", rel: "noreferrer noopener",
-								style: { color: "var(--dsw-alias-label-secondary)", textDecoration: "none" },
+								style: { color: INK.secondary, textDecoration: "none" },
 								children: zh ? "原始链接" : "Original link"
 							}, "raw")
 						]
@@ -5197,10 +8391,15 @@ window.__ModuleLoader__.load({
 					finding === null ? null : line(zh ? "出处" : "Source",
 						[finding.sourceTitle ?? "", finding.sourceHost ?? "", finding.sourceUrl ?? ""].filter((piece) => piece !== "" && piece !== null).join(" · ")),
 					line(zh ? "类别" : "Kind", `${detail.kind} · ${missionFace(MISSION_ROLE_FACES, detail.role, zh)}`),
-					line(zh ? "时刻" : "At", `${formatStamp(detail.at)} ${missionClock(detail.at)}`),
+					line(zh ? "时刻" : "At", when(detail.at)),
 					detail.stepId === null || detail.stepId === undefined ? null
 						: line(zh ? "阶段" : "Stage", `${missionFace(MISSION_STAGE_FACES, detail.stepId, zh)} (${detail.stepId})`),
-					detail.agentId === null || detail.agentId === undefined ? null : line(zh ? "执行者" : "Agent", detail.agentId),
+					// A NODE, not a string. `line` stringifies its value — that is what
+					// keeps a number and a timestamp on one grid — so the one row whose
+					// value is a person goes through `node` instead, which is the same
+					// row with the `String()` taken off the `dd`.
+					detail.agentId === null || detail.agentId === undefined ? null
+						: node(zh ? "执行者" : "Agent", RoleChip({ agentId: detail.agentId, zh }), detail.agentId),
 					detail.dimension === null || detail.dimension === undefined ? null : line(zh ? "维度" : "Dimension",
 						`${detail.dimension.name} · ${missionFace(MISSION_DIMENSION_FACES, detail.dimension.state, zh)} · `
 						+ (zh
@@ -5211,14 +8410,14 @@ window.__ModuleLoader__.load({
 						+ (zh ? `第 ${detail.stage.attempts} 次尝试` : `attempt ${detail.stage.attempts}`)
 						+ (detail.stage.durationMs === null || detail.stage.durationMs === undefined ? "" : ` · ${missionDuration(detail.stage.durationMs, zh)}`)),
 					(detail.stage?.degradeNote ?? "") === "" ? null : jsx("div", {
-						style: { marginTop: "4px", fontSize: "12px", lineHeight: "18px", color: "rgb(217,119,6)" },
+						style: { font: FONT.small, marginTop: "4px", color: `rgb(${TONE.warn})` },
 						children: detail.stage.degradeNote
 					}, "degrade"),
 					// A position, said to be a position. The trajectory is assembled
 					// from bounded windows over three tables, so `seq` slides when the
 					// oldest end falls off; the `ref` above is what survives.
 					jsx("div", {
-						style: { marginTop: "6px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+						style: { font: FONT.micro, marginTop: "6px", color: INK.secondary },
 						children: zh
 							? `第 ${detail.seq} 行 —— 这是当前这份快照里的位置，不是身份；身份是上面那个 ref。`
 							: `Row ${detail.seq} — a position in this snapshot, not an identity. The identity is the ref above.`
@@ -5230,15 +8429,15 @@ window.__ModuleLoader__.load({
 			const timing = detail.timing ?? {};
 
 			return shell(jsxs("div", {
-				style: { display: "flex", flexDirection: "column", gap: "8px" },
+				style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
 				children: [
 					tab !== "summary" ? null : summary,
 					tab !== "payload" ? null : jsxs("div", {
-						style: { display: "flex", flexDirection: "column", gap: "6px" },
+						style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
 						children: [
 							block(JSON.stringify(detail.payload ?? null, null, 2)),
 							detail.kind !== "tool" ? null : jsx("div", {
-								style: { fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+								style: { font: FONT.micro, color: INK.secondary },
 								// The cap is the COLUMN's, not this panel's. Saying which
 								// layer cut the string is the difference between a reader
 								// who goes looking for the rest and one who knows there
@@ -5250,16 +8449,16 @@ window.__ModuleLoader__.load({
 						]
 					}, "payloadTab"),
 					tab !== "result" ? null : jsxs("div", {
-						style: { display: "flex", flexDirection: "column", gap: "6px" },
+						style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
 						children: [
 							result.text === null || result.text === undefined || result.text === ""
 								? jsx("div", {
-									style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+									style: { font: FONT.small, color: INK.secondary },
 									children: zh ? "这一行没有留下结果文本。" : "This row recorded no result text."
 								}, "empty")
 								: block(result.text),
 							result.note === null || result.note === undefined || result.note === "" ? null : jsx("div", {
-								style: { fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+								style: { font: FONT.micro, color: INK.secondary },
 								// The route's own sentence about what the column does and
 								// does not hold. Re-worded here it would become a second
 								// answer to the same question.
@@ -5268,14 +8467,14 @@ window.__ModuleLoader__.load({
 						]
 					}, "resultTab"),
 					tab !== "timing" ? null : jsxs("div", {
-						style: { display: "flex", flexDirection: "column", gap: "4px" },
+						style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
 						children: [
-							line(zh ? "记录于" : "Recorded", timing.at === null || timing.at === undefined ? "" : `${formatStamp(timing.at)} ${missionClock(timing.at)}`),
-							line(zh ? "开始" : "Started", timing.startedAt === null || timing.startedAt === undefined ? "" : `${formatStamp(timing.startedAt)} ${missionClock(timing.startedAt)}`),
-							line(zh ? "结束" : "Ended", timing.endedAt === null || timing.endedAt === undefined ? "" : `${formatStamp(timing.endedAt)} ${missionClock(timing.endedAt)}`),
+							line(zh ? "记录于" : "Recorded", when(timing.at)),
+							line(zh ? "开始" : "Started", when(timing.startedAt)),
+							line(zh ? "结束" : "Ended", when(timing.endedAt)),
 							line(zh ? "用时" : "Duration", detail.kind === "tool" ? missionLatency(timing.ms, zh) : missionDuration(timing.ms, zh)),
 							timing.source === null || timing.source === undefined || timing.source === "" ? null : jsx("div", {
-								style: { marginTop: "4px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+								style: { font: FONT.micro, marginTop: "4px", color: INK.secondary },
 								// WHERE the number came from. A tool call's start is
 								// computed — the row is written when the call returns —
 								// and a derived instant presented as a recorded one is a
@@ -5530,23 +8729,38 @@ window.__ModuleLoader__.load({
 			const agentOptions = Array.isArray(vocabulary.agents) ? vocabulary.agents : [];
 			const paging = data?.page ?? {};
 			const bounds = data?.window ?? {};
+			// THE RUN'S OWN ZERO, for the offset the rows now print.
+			//
+			// NOT `rows[0].at`, which is what it looks like it should be: this
+			// list defaults to NEWEST FIRST, so row zero is the last thing that
+			// happened and every offset under it would come out negative — which
+			// `missionSince` renders as nothing at all, so the column would be
+			// blank on one sort order and full on the other. The stage rows come
+			// out of the same event log and carry `startedAt` regardless of how
+			// the list is ordered, so the earliest of those is the zero; a
+			// trajectory with no stage rows yet falls back to the earliest instant
+			// among the rows it does have.
+			const anchor = [
+				...stages.map((stage) => stage.startedAt),
+				...rows.map((row) => row.at)
+			].filter((at) => typeof at === "string" && at !== "").sort()[0] ?? null;
 			const saturated = ["events", "toolCalls", "findings"].filter((stream) => bounds[stream]?.saturated === true);
 			const gained = Math.max(0, Number(fresh?.data?.page?.total ?? 0) - Number(paging.total ?? 0));
 
 			const selectStyle = {
-				appearance: "none", height: "28px", padding: "0 8px", borderRadius: "8px",
-				border: "1px solid var(--dsw-alias-border-l2)", background: "transparent",
-				color: "var(--dsw-alias-label-secondary)", font: "inherit", fontSize: "12px", cursor: "pointer"
+				appearance: "none", height: CONTROL.sm, padding: "0 8px", borderRadius: RADIUS.md,
+				border: `1px solid ${LINE.rule}`, background: "transparent",
+				color: INK.secondary, font: FONT.small, cursor: "pointer"
 			};
 
 			const filters = jsxs("div", {
-				style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", marginBottom: "8px" },
+				style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", marginBottom: "8px" },
 				children: [
 					...MISSION_TRACE_KINDS.map((entry) => jsx("button", {
 						type: "button",
 						role: "tab",
 						"aria-selected": entry.id === kind,
-						style: { ...chipStyle(entry, entry.id === kind), height: "28px", padding: "0 10px", fontSize: "12px" },
+						className: "swm-chip swm-focus", style: { ...chipStyle(entry, entry.id === kind), font: FONT.small, height: CONTROL.sm, padding: "0 10px" },
 						onClick: () => { setKind(entry.id); },
 						children: zh ? entry.zh : entry.en
 					}, entry.id === "" ? "all" : entry.id)),
@@ -5595,17 +8809,17 @@ window.__ModuleLoader__.load({
 						value: search,
 						placeholder: zh ? "搜索工具名、参数、结果…" : "Search calls, arguments, results…",
 						"aria-label": zh ? "搜索轨迹" : "Search the trajectory",
-						style: {
+						className: "swm-focus", style: { font: FONT.small,
 							flex: "1 1 180px", minWidth: "140px", boxSizing: "border-box",
-							height: "28px", padding: "0 10px", borderRadius: "8px",
-							border: "1px solid var(--dsw-alias-border-l2)", background: "transparent",
-							color: "var(--dsw-alias-label-primary)", font: "inherit", fontSize: "12px", outline: "none"
+							height: CONTROL.sm, padding: "0 10px", borderRadius: RADIUS.md,
+							border: `1px solid ${LINE.rule}`, background: "transparent",
+							color: INK.primary, font: "inherit"
 						},
 						onChange: (event) => { setSearch(event.target.value); }
 					}, "search"),
 					jsx("button", {
 						type: "button",
-						style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px" },
+						className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm, padding: "0 10px" },
 						onClick: () => { setOrder(order === "newest" ? "oldest" : "newest"); },
 						children: order === "newest" ? (zh ? "最新在前" : "Newest first") : (zh ? "最早在前" : "Oldest first")
 					}, "order")
@@ -5621,15 +8835,15 @@ window.__ModuleLoader__.load({
 			// this distinction for its own read; the trajectory now draws it too.
 			const body = data === null && error === ""
 				? jsx("div", {
-					style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+					style: { font: FONT.small, color: INK.secondary },
 					children: zh ? "正在读取轨迹…" : "Reading the trajectory…"
 				}, "loading")
 				: error !== "" && data === null
 				? jsxs("div", {
-					style: { display: "flex", flexDirection: "column", gap: "8px" },
+					style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
 					children: [
 						jsx("div", {
-							style: { fontSize: "12px", lineHeight: "18px", color: "rgb(217,119,6)" },
+							style: { font: FONT.small, color: `rgb(${TONE.warn})` },
 							children: (zh ? "读不到轨迹：" : "Could not read the trajectory: ") + error
 								+ (zh ? " 下面是视图里带的那一小段事件尾部。" : " What follows is the short event tail the view route carries.")
 						}, "why"),
@@ -5652,7 +8866,7 @@ window.__ModuleLoader__.load({
 							className: "swt-list",
 							children: rows.length === 0
 								? jsx("div", {
-									style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+									style: { font: FONT.small, color: INK.secondary },
 									// "0" and "0 of 431" are different sentences: the first
 									// says the mission did nothing, the second says this
 									// filter matches nothing.
@@ -5661,7 +8875,7 @@ window.__ModuleLoader__.load({
 										: (zh ? "这个任务还没有留下任何轨迹。" : "This mission has not recorded a trajectory yet.")
 								}, "empty")
 								: rows.map((row) => jsx(MissionTraceRow, {
-									row, zh,
+									row, zh, anchor,
 									active: row.ref === selected,
 									onOpen: (ref) => { setSelected(ref === selected ? null : ref); }
 								}, row.ref))
@@ -5675,7 +8889,7 @@ window.__ModuleLoader__.load({
 							open: selected !== null,
 							onClose: () => { setSelected(null); },
 							children: selected === null ? null : jsx(MissionTraceDetail, {
-								missionId, traceRef: selected, zh,
+								missionId, traceRef: selected, zh, anchor,
 								onClose: () => { setSelected(null); },
 								onOpenSource
 							})
@@ -5689,7 +8903,7 @@ window.__ModuleLoader__.load({
 					filters,
 					fresh === null ? null : jsx("button", {
 						type: "button",
-						style: { ...controlStyle(), height: "26px", marginBottom: "8px", fontSize: "12px", alignSelf: "flex-start" },
+						className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm, marginBottom: "8px", alignSelf: "flex-start" },
 						onClick: () => { applied.current = fresh.signature; setPage(fresh); setFresh(null); },
 						children: gained > 0
 							? (zh ? `又有 ${gained} 条记录 · 点这里更新（正在看的那一行不会动）` : `${gained} more row(s) · load them (the open row stays)`)
@@ -5699,13 +8913,13 @@ window.__ModuleLoader__.load({
 					// the page keeps drawing the last good answer beside a clock that
 					// never moves, which is the most convincing wrong screen here.
 					error === "" || data === null ? null : jsx("div", {
-						style: { marginBottom: "8px", fontSize: "12px", lineHeight: "18px", color: "rgb(217,119,6)" },
+						style: { font: FONT.small, marginBottom: "8px", color: `rgb(${TONE.warn})` },
 						children: (zh ? "这一次刷新失败了，下面是上一次读到的轨迹：" : "The latest refresh failed; what follows is the trajectory as it was last read: ") + error
 					}, "stale"),
 					rows.length === 0 ? null : jsx(MissionTraceBand, { rows, zh }, "band"),
 					body,
 					data === null ? null : jsx("div", {
-						style: { marginTop: "8px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+						style: { font: FONT.micro, marginTop: "8px", color: INK.secondary },
 						children: [
 							zh ? `显示 ${rows.length} / ${paging.total ?? 0} 条` : `showing ${rows.length} of ${paging.total ?? 0}`,
 							Number(paging.unfiltered ?? 0) === Number(paging.total ?? 0) ? "" : (zh ? `未筛选共 ${paging.unfiltered} 条` : `${paging.unfiltered} unfiltered`),
@@ -5722,418 +8936,8 @@ window.__ModuleLoader__.load({
 			});
 		}
 
-		/**
-		* One finding, as a row: the mark, the claim, the quote, the state.
-		*
-		* Three lines rather than one, unlike a trajectory row, because a finding
-		* IS the claim and the quote — a list of claims with the quotes hidden
-		* behind a click would be the same withholding this rebuild is undoing,
-		* one level down.
-		* @param finding - one row from `/missions/:id/findings`.
-		* @param zh - whether to write Chinese.
-		* @param active - whether this finding is the one open in the panel.
-		* @param onOpen - called with the finding's trajectory `ref`.
-		*/
-		function MissionFindingRow({ finding, zh, active, onOpen }) {
-			// Three-valued, and `null` is grey rather than red: `unchecked-*` means
-			// the check never happened, and a rate limit drawn as a refuted quote is
-			// the one confusion the verify-state column exists to prevent.
-			const verdict = missionOkFace(finding.verified, zh);
-			return jsxs("button", {
-				type: "button",
-				onClick: () => { onOpen(`finding:${finding.id}`); },
-				"aria-pressed": active,
-				title: finding.sourceUrl ?? "",
-				style: {
-					appearance: "none", width: "100%", boxSizing: "border-box",
-					display: "flex", alignItems: "flex-start", gap: "8px",
-					padding: "5px 8px", borderRadius: "8px",
-					border: "1px solid " + (active ? `rgba(${verdict.hue},0.45)` : "transparent"),
-					background: active ? `rgba(${verdict.hue},0.10)` : "transparent",
-					font: "inherit", textAlign: "left", cursor: "pointer",
-					color: "var(--dsw-alias-label-secondary)"
-				},
-				children: [
-					jsx("span", {
-						style: { flex: "none", color: `rgb(${verdict.hue})`, fontSize: "12px", lineHeight: "19px" },
-						children: verdict.mark
-					}, "mark"),
-					jsxs("span", {
-						style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "1px" },
-						children: [
-							jsx("span", {
-								style: {
-									fontSize: "12px", lineHeight: "19px", color: "var(--dsw-alias-label-primary)",
-									overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
-								},
-								children: finding.claim
-							}, "claim"),
-							jsx("span", {
-								style: {
-									fontSize: "11px", lineHeight: "17px",
-									overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
-								},
-								children: `“${finding.quote}”`
-							}, "quote"),
-							jsx("span", {
-								style: { fontSize: "10px", lineHeight: "16px", fontFamily: MISSION_MONO },
-								children: [
-									missionFace(MISSION_VERIFY_FACES, finding.verifyState, zh),
-									finding.sourceHost ?? "",
-									zh ? `${finding.quoteChars} 字` : `${finding.quoteChars} chars`
-								].filter((piece) => piece !== "" && piece !== null && piece !== undefined).join(" · ")
-							}, "meta")
-						]
-					}, "body")
-				]
-			});
-		}
 
-		/**
-		* A dimension's evidence, at last.
-		*
-		* `/missions/:id/findings?dimensionId=…` is the route whose absence was the
-		* complaint. The counts stay on the card above; this is the part that
-		* stops them being all there is.
-		*
-		* Read once when the card opens, and not polled. A running mission's
-		* dimension gains findings while it is open, and prepending them would
-		* move the row under the reader's cursor for a gain nobody asked for;
-		* closing and reopening the card reads it again.
-		* @param missionId - the mission.
-		* @param dimensionId - the dimension to list.
-		* @param zh - whether to write Chinese.
-		* @param selected - the `ref` currently open in the panel, if any.
-		* @param onOpen - called with a finding's trajectory `ref`.
-		*/
-		function MissionDimensionFindings({ missionId, dimensionId, zh, selected, onOpen, runCount }) {
-			const [held, setHeld] = useState(null);
-			const [error, setError] = useState("");
-			// THE CONTROLS THE ROUTE HAS BEEN VALIDATING ALL ALONG. Every one of these
-			// is a parameter `/missions/:id/findings` already accepts and already 400s
-			// on a bad value; this pane sent three of them and offered none, so a
-			// dimension of ninety findings was a wall with a dead-end sentence at the
-			// bottom saying the other forty exist somewhere.
-			const [verifyState, setVerifyState] = useState("");
-			const [sourceHost, setSourceHost] = useState("");
-			const [order, setOrder] = useState("");
-			const [skip, setSkip] = useState(0);
 
-			useEffect(() => {
-				let alive = true;
-				const query = new URLSearchParams();
-				query.set("dimensionId", dimensionId);
-				query.set("take", String(MISSION_FINDINGS_TAKE));
-				// The run this pane is showing, which is NOT always the mission's
-				// current one — see MissionDimensions.
-				if (runCount !== null && runCount !== undefined) query.set("runCount", String(runCount));
-				if (verifyState !== "") query.set("verifyState", verifyState);
-				if (sourceHost !== "") query.set("sourceHost", sourceHost);
-				if (order !== "") query.set("order", order);
-				// Sent only when it is not the first page: a `skip=0` on every request is
-				// noise in the log and one more thing that can be wrong.
-				if (skip > 0) query.set("skip", String(skip));
-				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/findings?${query.toString()}`)
-					.then(missionData)
-					.then((data) => {
-						if (!alive) return;
-						const signature = missionFindingsSignature(data);
-						setHeld((previous) => (previous !== null && previous.signature === signature ? previous : { signature, data }));
-						setError("");
-					})
-					.catch((cause) => {
-						if (!alive) return;
-						setError(String(cause?.message ?? cause));
-					});
-				return () => { alive = false; };
-			}, [missionId, dimensionId, runCount, verifyState, sourceHost, order, skip]);
-
-			if (held === null) {
-				return jsx("div", {
-					style: { fontSize: "12px", lineHeight: "18px", color: error === "" ? "var(--dsw-alias-label-secondary)" : "rgb(217,119,6)" },
-					children: error === ""
-						? (zh ? "读取中…" : "Loading…")
-						// The route answers a mistyped dimension with a 400 naming the
-						// dimensions that exist, which is worth far more than the empty
-						// list it could have sent instead.
-						: (zh ? "读不到这个维度的证据：" : "Could not read this dimension's evidence: ") + error
-				});
-			}
-
-			const data = held.data;
-			const findings = Array.isArray(data.findings) ? data.findings : [];
-			const counts = data.counts ?? {};
-			const hosts = Array.isArray(data.hosts) ? data.hosts : [];
-			const paging = data.page ?? {};
-			const vocabulary = data.vocabulary ?? {};
-			// The states this dimension ACTUALLY holds, with their counts — not the
-			// nine-value enum. An option that can only ever come back empty teaches a
-			// reader that the control is decorative.
-			const stateOptions = Object.entries(counts.byState ?? {}).filter(([, n]) => n > 0);
-			// Every host in scope, verified or not: `hosts` above is the verified-only
-			// roll-up, and filtering to a host whose findings all failed verification
-			// is exactly what a reader chasing a bad source wants to do.
-			const hostOptions = Array.isArray(data.allHosts) ? data.allHosts : hosts;
-			const orderOptions = Array.isArray(vocabulary.orders) ? vocabulary.orders : [];
-			const filterStyle = {
-				appearance: "none", height: "24px", padding: "0 6px", borderRadius: "6px",
-				border: "1px solid var(--dsw-alias-border-l2)", background: "transparent",
-				color: "var(--dsw-alias-label-secondary)", font: "inherit", fontSize: "11px", cursor: "pointer"
-			};
-			// Any change of filter is a new list, so the page offset goes back to the
-			// top with it. Keeping it would answer "page 3 of a list that now has one
-			// page" with an empty pane and no explanation.
-			const refilter = (apply) => { apply(); setSkip(0); };
-
-			return jsxs("div", {
-				style: { display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" },
-				children: [
-					stateOptions.length === 0 && hostOptions.length === 0 && orderOptions.length === 0 ? null : jsxs("div", {
-						style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", marginBottom: "4px" },
-						children: [
-							stateOptions.length === 0 ? null : jsx("select", {
-								value: verifyState,
-								"aria-label": zh ? "按核验状态筛选" : "Filter by verify state",
-								style: filterStyle,
-								onChange: (event) => { refilter(() => { setVerifyState(event.target.value); }); },
-								children: [
-									jsx("option", { value: "", children: zh ? "所有核验状态" : "Every verify state" }, "any"),
-									...stateOptions.map(([state, n]) => jsx("option", {
-										value: state,
-										children: `${missionFace(MISSION_VERIFY_FACES, state, zh)} (${n})`
-									}, state))
-								]
-							}, "verifyState"),
-							hostOptions.length === 0 ? null : jsx("select", {
-								value: sourceHost,
-								"aria-label": zh ? "按站点筛选" : "Filter by host",
-								style: filterStyle,
-								onChange: (event) => { refilter(() => { setSourceHost(event.target.value); }); },
-								children: [
-									jsx("option", { value: "", children: zh ? "所有站点" : "Every host" }, "any"),
-									...hostOptions.map((entry) => jsx("option", {
-										value: entry.host,
-										children: `${entry.host} (${entry.findings})`
-									}, entry.host))
-								]
-							}, "sourceHost"),
-							orderOptions.length === 0 ? null : jsx("select", {
-								value: order,
-								"aria-label": zh ? "排序" : "Order",
-								style: filterStyle,
-								onChange: (event) => { refilter(() => { setOrder(event.target.value); }); },
-								children: orderOptions.map((entry) => jsx("option", {
-									value: entry === "created" ? "" : entry,
-									children: missionFace(MISSION_FINDING_ORDER_FACES, entry, zh)
-								}, entry))
-							}, "order")
-						]
-					}, "filters"),
-					hosts.length === 0 ? null : jsx("div", {
-						style: { fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
-						// WHICH sites, not how many. "1 个独立站点" gave the reader a
-						// number and withheld the only part of it that can be judged.
-						children: (zh ? "站点：" : "Hosts: ")
-							+ hosts.map((host) => `${host.host} (${host.findings})`).join(zh ? "、" : ", ")
-					}, "hosts"),
-					findings.length === 0 ? jsx("div", {
-						style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
-						children: zh
-							? "这个维度没有写下任何发现 —— 不是没显示，是确实一条也没有。"
-							: "This dimension recorded no findings at all — nothing is being hidden; there is nothing."
-					}, "none") : jsx("div", {
-						style: { display: "flex", flexDirection: "column", gap: "2px" },
-						children: findings.map((finding) => jsx(MissionFindingRow, {
-							finding, zh,
-							active: selected === `finding:${finding.id}`,
-							onOpen
-						}, finding.id))
-					}, "rows"),
-					// A PAGE, not a dead end. What stood here said the other forty findings
-					// exist and offered no way to reach them, which is the same as not saying
-					// it: `skip` was a parameter the route took the whole time.
-					paging.hasMore !== true && skip === 0 ? null : jsxs("div", {
-						style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", marginTop: "2px" },
-						children: [
-							jsx("span", {
-								style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
-								children: zh
-									? `第 ${skip + 1}–${skip + (paging.returned ?? 0)} 条，共 ${counts.total ?? 0} 条`
-									: `${skip + 1}–${skip + (paging.returned ?? 0)} of ${counts.total ?? 0}`
-							}, "range"),
-							skip === 0 ? null : jsx("button", {
-								type: "button",
-								style: { ...controlStyle(), height: "24px", padding: "0 9px", fontSize: "11px" },
-								onClick: () => { setSkip(Math.max(0, skip - MISSION_FINDINGS_TAKE)); },
-								children: zh ? "上一页" : "Previous"
-							}, "prev"),
-							paging.hasMore !== true ? null : jsx("button", {
-								type: "button",
-								style: { ...controlStyle(), height: "24px", padding: "0 9px", fontSize: "11px" },
-								onClick: () => { setSkip(skip + MISSION_FINDINGS_TAKE); },
-								children: zh ? "下一页" : "Next"
-							}, "next")
-						]
-					}, "more")
-				]
-			});
-		}
-
-		/**
-		* The dimension pane: cards that open, and the panel they open into.
-		*
-		* Master-detail, the same arrangement as the trajectory and with the same
-		* component doing the detail, so a finding reached from a dimension and a
-		* finding reached from the trajectory are read in one place rather than in
-		* two renderers that will drift apart.
-		* @param missionId - the mission.
-		* @param dimensions - `dimensions` from the view route.
-		* @param zh - whether to write Chinese.
-		* @param onOpenSource - open a finding's page in the reader.
-		*/
-		function MissionDimensions({ missionId, dimensions, zh, onOpenSource }) {
-			const [openId, setOpenId] = useState(null);
-			const [selected, setSelected] = useState(null);
-			// Which run's evidence is on screen, and every run that holds any.
-			// `null` means "not chosen yet", which is what lets the effect below
-			// pick the newest run that actually collected something.
-			const [runs, setRuns] = useState([]);
-			const [run, setRun] = useState(null);
-			const [current, setCurrent] = useState(null);
-			// Per-dimension counts for the run on screen. Without this the cards
-			// keep drawing the CURRENT run's zeroes under a banner that says the
-			// evidence is in an earlier one — the same withholding, one line down.
-			const [byDimension, setByDimension] = useState(null);
-
-			// WHY THIS FETCH EXISTS. Every other reader scopes to the mission's
-			// current run. That is right while a mission runs and wrong the moment
-			// it is re-run: measured on a real mission, five runs, all fourteen
-			// findings in run 1, and eight dimension cards reading "0 verified of
-			// 0" because run 5 settled without collecting. The evidence was one
-			// integer away and the screen said there was none.
-			useEffect(() => {
-				let alive = true;
-				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/findings?take=1`)
-					.then(missionData)
-					.then((data) => {
-						if (!alive) return;
-						const rows = Array.isArray(data?.runs) ? data.runs : [];
-						setRuns(rows);
-						setCurrent(data?.runCount ?? null);
-						setByDimension(data?.byDimension ?? null);
-						setRun((previous) => {
-							if (previous !== null) return previous;
-							const here = rows.find((entry) => entry.runCount === data?.runCount);
-							if (here !== undefined && here.total > 0) return here.runCount;
-							// Newest run that collected anything. Falling back to the
-							// current run when nothing did keeps "this mission found
-							// nothing" sayable — it is sometimes the truth.
-							const best = rows.find((entry) => entry.total > 0);
-							return best === undefined ? (data?.runCount ?? null) : best.runCount;
-						});
-					})
-					.catch(() => {
-						// A picker that cannot load is not a reason to hide the
-						// dimensions; they fall back to the mission's current run.
-					});
-				return () => { alive = false; };
-			}, [missionId]);
-
-			// A second read, once a run is chosen: the first one answered for the
-			// mission's current run, which is the one the banner is about to say
-			// is empty.
-			useEffect(() => {
-				if (run === null) return undefined;
-				let alive = true;
-				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/findings?take=1&runCount=${run}`)
-					.then(missionData)
-					.then((data) => { if (alive) setByDimension(data?.byDimension ?? null); })
-					.catch(() => {});
-				return () => { alive = false; };
-			}, [missionId, run]);
-
-			const chosen = runs.find((entry) => entry.runCount === run) ?? null;
-			const elsewhere = current !== null && run !== null && run !== current;
-			const picker = runs.length <= 1 ? null : jsxs("div", {
-				style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", margin: "0 0 10px" },
-				children: [
-					jsx("span", {
-						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
-						children: zh ? "运行：" : "Run:"
-					}, "label"),
-					...runs.map((entry) => jsx("button", {
-						type: "button",
-						"aria-pressed": entry.runCount === run,
-						style: {
-							...controlStyle(), height: "24px", padding: "0 9px", fontSize: "11px",
-							fontWeight: entry.runCount === run ? 600 : 400,
-							color: entry.total === 0 ? "var(--dsw-alias-label-tertiary)" : undefined
-						},
-						onClick: () => { setRun(entry.runCount); setOpenId(null); setSelected(null); },
-						children: zh
-							? `第 ${entry.runCount} 次 · ${entry.verified}/${entry.total}`
-							: `run ${entry.runCount} · ${entry.verified}/${entry.total}`
-					}, `run-${entry.runCount}`))
-				]
-			}, "runs");
-
-			// Said out loud, not inferred from a highlighted button. A reader who
-			// does not notice the picker must still not believe they are looking
-			// at the latest run.
-			const elsewhereNote = !elsewhere ? null : jsx("div", {
-				style: {
-					margin: "0 0 10px", padding: "6px 10px", borderRadius: "8px",
-					background: "rgba(217,119,6,0.08)", border: "1px solid rgba(217,119,6,0.25)",
-					fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-primary)"
-				},
-				children: zh
-					? `第 ${current} 次运行没有留下任何发现；下面是第 ${run} 次运行的 ${chosen?.total ?? 0} 条（已核验 ${chosen?.verified ?? 0} 条）。`
-					: `Run ${current} recorded no findings. What follows is run ${run}: ${chosen?.total ?? 0} findings, ${chosen?.verified ?? 0} verified.`
-			}, "elsewhere");
-
-			return jsxs("div", {
-				children: [
-					picker,
-					elsewhereNote,
-					jsx("div", {
-						// The grid does not change when a finding opens. It used to
-						// collapse to a single column to make room for a panel beside
-						// it, so reading one finding re-laid-out every card on the
-						// screen — the cards you were comparing it against.
-						style: {
-							minWidth: 0, display: "grid",
-							gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-							gap: "10px"
-						},
-						children: dimensions.map((dimension) => jsx(MissionDimensionCard, {
-							dimension: byDimension === null ? dimension : {
-								...dimension,
-								verified: byDimension[dimension.dimensionId]?.verified ?? 0,
-								counts: { ...(dimension.counts ?? {}), total: byDimension[dimension.dimensionId]?.total ?? 0 },
-								uniqueHosts: byDimension[dimension.dimensionId]?.hosts ?? 0
-							},
-							zh,
-							expanded: dimension.dimensionId === openId,
-							onToggle: () => { setOpenId(dimension.dimensionId === openId ? null : dimension.dimensionId); },
-							children: dimension.dimensionId !== openId ? null : jsx(MissionDimensionFindings, {
-								missionId, dimensionId: dimension.dimensionId, zh, selected,
-								runCount: run,
-								onOpen: (ref) => { setSelected(ref === selected ? null : ref); }
-							})
-						}, dimension.dimensionId))
-					}, "cards"),
-					jsx(MissionDrawer, {
-						open: selected !== null,
-						onClose: () => { setSelected(null); },
-						children: selected === null ? null : jsx(MissionTraceDetail, {
-							missionId, traceRef: selected, zh,
-							onClose: () => { setSelected(null); },
-							onOpenSource
-						})
-					}, "drawer")
-				]
-			});
-		}
 
 		/**
 		* The page behind one quote, read through 信源's own reader.
@@ -6149,14 +8953,14 @@ window.__ModuleLoader__.load({
 		*/
 		function MissionSourceReader({ source, zh, back, onBack }) {
 			return jsxs("div", {
-				style: { height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: "10px", padding: "0 24px 16px" },
+				style: { height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: SPACE.md, padding: "0 24px 16px" },
 				children: [
 					jsxs("div", {
-						style: { flex: "none", display: "flex", alignItems: "center", gap: "10px" },
+						style: { flex: "none", display: "flex", alignItems: "center", gap: SPACE.md },
 						children: [
-							jsx("button", { type: "button", style: controlStyle(), onClick: onBack, children: back }, "back"),
+							jsx("button", { type: "button", className: "swm-ctl swm-focus", style: controlStyle(), onClick: onBack, children: back }, "back"),
 							jsx("span", {
-								style: { flex: 1, minWidth: 0, fontSize: "13px", color: "var(--dsw-alias-label-secondary)" },
+								style: { font: FONT.body, flex: 1, minWidth: 0, color: INK.secondary },
 								children: ((source.sourceTitle ?? "") === "" ? hostOf(source.sourceUrl) : source.sourceTitle)
 									+ (zh ? " · 引语：" : " · quote: ") + `“${source.quote}”`
 							}, "which")
@@ -6286,6 +9090,103 @@ window.__ModuleLoader__.load({
 				})
 			});
 		}
+
+		/**
+		* The centred dialog, for a form that is not a page.
+		*
+		* NOT A SECOND DRAWER. `MissionDrawer` is the right slide-over and it is
+		* the correct shape for a DETAIL — a finding, a stage, a source — because
+		* it leaves the table it was opened from in place beside it. A create
+		* form has nothing behind it to keep in view; it is a task with a start
+		* and an end, and it belongs in the middle of the screen. The file had no
+		* such shell at all, which is why the starter was a permanently expanded
+		* card sitting above every mission in the list: not a design decision, an
+		* absence of one.
+		*
+		* THE ESCAPE HANDLER IS MissionDrawer's, INCLUDING THE stopPropagation,
+		* and that line is the whole reason this is a copy rather than a fresh
+		* effect. The host app closes the entire 智能体 panel on Escape, so one
+		* press with an overlay open closed the overlay AND the panel behind it —
+		* measured once already, on the drawer, at the cost of the whole page.
+		* Capture phase, for the same reason: this has to run before the panel's
+		* own handler rather than after it has already closed.
+		*
+		* NO FOCUS TRAP, and it is named here rather than left to be discovered.
+		* Tab still walks out of this dialog into the list behind it. Nothing in
+		* this file traps focus today, a trap needs a live DOM to be written
+		* against and a live DOM to be tested in, and half a trap — a first-node
+		* focus with no wrap — is worse than none, because it looks like the
+		* behaviour is handled.
+		* @param open - whether to render at all.
+		* @param onClose - backdrop click, Escape, or the head's own control.
+		* @param title - the dialog's name, which is also its accessible name.
+		* @param note - one sentence under the title; omitted when empty.
+		* @param zh - whether to write Chinese. Taken as a PROP, not read from
+		*   `isChinese()`: every caller already has one, and a shell that asks
+		*   the document while its caller was handed a language is a dialog
+		*   whose close button can disagree with the form inside it.
+		* @param children - the body, which scrolls on its own.
+		*/
+		function SwarmModal({ open, onClose, title, note, zh, children }) {
+			useEffect(() => {
+				if (open !== true) return undefined;
+				const onKey = (event) => {
+					if (event.key !== "Escape") return;
+					// STOPPED HERE, exactly as the drawer stops it. Without this
+					// line one Escape closes this dialog and the whole 智能体
+					// panel behind it, and the person who pressed it to abandon a
+					// half-typed topic loses the page.
+					event.stopPropagation();
+					if (typeof event.preventDefault === "function") event.preventDefault();
+					onClose?.();
+				};
+				// Guarded: this module is executed in Node by the render tests
+				// against a hand-written window stub.
+				if (typeof window?.addEventListener !== "function") return undefined;
+				window.addEventListener("keydown", onKey, true);
+				return () => { window.removeEventListener("keydown", onKey, true); };
+			}, [open, onClose]);
+
+			if (open !== true) return null;
+			return jsx("div", {
+				className: "swm-modal-scrim",
+				role: "dialog",
+				"aria-modal": "true",
+				"aria-label": title,
+				onClick: () => { onClose?.(); },
+				children: jsxs("div", {
+					className: "swm-modal",
+					// The backdrop closes and the sheet does not. Without this the
+					// first click inside the dialog closes it, which is the most
+					// confusing possible answer to "I clicked on the form".
+					onClick: (event) => { event.stopPropagation(); },
+					children: [
+						jsxs("div", {
+							className: "swm-modalhead",
+							children: [
+								jsxs("div", {
+									style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: SPACE.xs },
+									children: [
+										jsx("h2", { style: { font: FONT.baseStrong, margin: 0, color: INK.primary }, children: title }, "title"),
+										(note ?? "") === "" ? null : jsx("p", {
+											style: { font: FONT.small, margin: 0, color: INK.secondary },
+											children: note
+										}, "note")
+									]
+								}, "words"),
+								IconButton({
+									label: zh ? "关闭" : "Close",
+									size: CONTROL.xs,
+									onClick: () => { onClose?.(); },
+									children: jsx(Icon, { name: "close", size: ICON.sm })
+								}, "close")
+							]
+						}, "head"),
+						jsx("div", { className: "swm-modalbody", children }, "body")
+					]
+				})
+			});
+		}
 		/**
 		* The task board: one row per stage, in playground's column shape.
 		*
@@ -6329,7 +9230,12 @@ window.__ModuleLoader__.load({
 			// leaves behind. The three reasons the board can be empty want three
 			// different reactions, and only one of them is "wait".
 			if (rows.length === 0) {
-				return jsx(MissionEmptyPane, {
+				// THE HEADING SURVIVES THE EMPTY STATE. It used to be dropped twice
+				// over — once by `bare`, once by returning the notice bare — so a run
+				// with no tasks yet showed a paragraph floating on an unlabelled pane.
+				return jsx(MissionPanel, {
+					bare: true, title: zh ? "任务" : "Tasks", count: 0,
+					children: jsx(MissionEmptyPane, {
 					mission, zh,
 					waiting: zh
 						? "暂无任务：等 Leader 拆完维度，任务会动态出现。"
@@ -6337,6 +9243,7 @@ window.__ModuleLoader__.load({
 					finished: zh
 						? "这次运行结束时，任务表里暂无任何一条阶段记录 —— 不是没显示，是确实一条也没落下。"
 						: "This run ended with nothing in the task table at all — nothing is being hidden; not one stage row was written."
+					})
 				});
 			}
 			// Who ran it. `agents` is keyed by role and carries `lastStepId`, so a
@@ -6347,11 +9254,6 @@ window.__ModuleLoader__.load({
 					owner.set(agent.lastStepId, agent);
 				}
 			}
-			const head = {
-				padding: "7px 10px", textAlign: "left", fontSize: "11px", fontWeight: 600,
-				color: "var(--dsw-alias-label-secondary)", whiteSpace: "nowrap"
-			};
-			const cell = { padding: "7px 10px", fontSize: "12px", lineHeight: "18px", verticalAlign: "top" };
 			const columns = [
 				{ id: "idx", label: "#", width: "40px", align: "center" },
 				{ id: "name", label: zh ? "任务" : "Task", width: "42%" },
@@ -6386,11 +9288,51 @@ window.__ModuleLoader__.load({
 				display.push({ node: parent, depth: 0 });
 				for (const kid of kids.get(parent.id) ?? []) display.push({ node: kid, depth: 1 });
 			}
+			// RESOLVED ONCE, HERE, because two things read it now. The row draws
+			// its spine and its status chip from this; the legend above the table
+			// counts it. Resolving it twice — once per row and once per tally —
+			// is how a header that says 3 完成 ends up over four green rows, and
+			// the two copies would be forty lines apart.
+			for (const entry of display) {
+				// A parent row IS a stage, so it keeps the stage row's timings and
+				// attempt count. A child is a decision — a dimension somebody
+				// planned, a re-collect the Leader called for — and carries its own.
+				entry.stage = entry.depth > 0 ? null : (rows.find((row) => `stage:${row.stepId}` === entry.node.id) ?? null);
+				entry.status = entry.stage?.status ?? entry.node.state ?? "pending";
+			}
+
+			// BOTH VOCABULARIES, because the rows come from both tables: a parent
+			// is a stage and its state is 运行中; a child is a dimension and its
+			// state is 采集中, which MISSION_STAGE_STATUS_FACES has never heard
+			// of. `missionHue` answers TONE.neutral for a value it does not hold,
+			// so before this a 采集中 row drew a grey spine and a grey chip while
+			// its own word said it was working.
+			const faceOf = (status) => (Object.hasOwn(MISSION_STAGE_STATUS_FACES, String(status))
+				? missionFace(MISSION_STAGE_STATUS_FACES, status, zh)
+				: missionFace(MISSION_DIMENSION_FACES, status, zh));
+			const hueOf = (status) => (Object.hasOwn(MISSION_STAGE_STATUS_FACES, String(status))
+				? missionHue(MISSION_STAGE_STATUS_FACES, status)
+				: missionHue(MISSION_DIMENSION_FACES, status));
+			const iconOf = (status) => (Object.hasOwn(MISSION_STAGE_STATUS_FACES, String(status))
+				? missionIcon(MISSION_STAGE_STATUS_FACES, status)
+				: missionIcon(MISSION_DIMENSION_FACES, status));
+
+			// What the board adds up to, in the order the pipeline runs — which is
+			// the one question a table of thirty rows cannot answer by being read.
+			// A tally is printed only when it is non-zero: a legend listing every
+			// state a board COULD be in is six greyed words that say nothing about
+			// this run.
+			const tally = new Map();
+			for (const entry of display) tally.set(entry.status, (tally.get(entry.status) ?? 0) + 1);
+			const legend = [
+				...Object.keys(MISSION_STAGE_STATUS_FACES),
+				...Object.keys(MISSION_DIMENSION_FACES).filter((id) => !Object.hasOwn(MISSION_STAGE_STATUS_FACES, id))
+			].filter((id) => (tally.get(id) ?? 0) > 0);
 
 			const chosen = rows.find((row) => row.stepId === selected) ?? null;
 			const table = jsx("div", {
 				style: {
-					border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "10px",
+					border: `1px solid ${LINE.rule}`, borderRadius: RADIUS.md,
 					overflow: "hidden", background: "var(--dsw-alias-bg-layer-1)"
 				},
 				children: jsxs("table", {
@@ -6398,9 +9340,9 @@ window.__ModuleLoader__.load({
 					children: [
 						jsx("thead", {
 							children: jsx("tr", {
-								style: { background: "var(--dsw-alias-bg-layer-2)", borderBottom: "1px solid var(--dsw-alias-border-l2)" },
+								style: { borderBottom: `1px solid ${LINE.rule}` },
 								children: columns.map((column) => jsx("th", {
-									style: { ...head, width: column.width, textAlign: column.align ?? "left" },
+									style: { ...TH, width: column.width, textAlign: column.align ?? "left" },
 									children: column.label
 								}, column.id))
 							})
@@ -6409,15 +9351,10 @@ window.__ModuleLoader__.load({
 							children: display.map((entry, at) => {
 								const node = entry.node;
 								const child = entry.depth > 0;
-								// A parent row IS a stage, so it keeps the stage row's
-								// timings and attempt count. A child is a decision — a
-								// dimension somebody planned, a re-collect the Leader
-								// called for — and carries its own.
-								const stage = child ? null : (rows.find((row) => `stage:${row.stepId}` === node.id) ?? null);
-								const status = stage?.status ?? node.state ?? "pending";
-								const face = missionFace(MISSION_STAGE_STATUS_FACES, status, zh)
-									|| missionFace(MISSION_DIMENSION_FACES, status, zh);
-								const hue = missionHue(MISSION_STAGE_STATUS_FACES, status);
+								const stage = entry.stage;
+								const status = entry.status;
+								const face = faceOf(status);
+								const hue = hueOf(status);
 								const ran = status !== "pending" && status !== "skipped-by-tier";
 								const key = stage === null ? node.id : stage.stepId;
 								// The Leader's sentence about THIS dimension when there is
@@ -6431,103 +9368,153 @@ window.__ModuleLoader__.load({
 								const attempts = Number(stage?.attempts ?? node.counts?.attempts ?? 0);
 								const open = key === selected;
 								return jsxs("tr", {
+									className: "swm-tr",
 									onClick: () => { onSelect?.(open ? null : key); },
 									style: {
-										borderBottom: "1px solid var(--dsw-alias-border-l2)",
 										cursor: "pointer",
-										background: open ? "var(--dsw-alias-interactive-bg-hover)" : "transparent",
+										// UNDEFINED, NOT "transparent". An inline declaration beats
+										// a stylesheet, so writing a colour here for every unselected
+										// row would silently kill `.swm-tr:hover` — the rule would be
+										// in the sheet, the class would be on the row, and nothing
+										// would ever light up. The selected row still writes its own,
+										// which is correct: it is already lit.
+										background: open ? SURFACE.hover : undefined,
 										boxShadow: `inset 3px 0 0 0 rgba(${hue},${ran ? 0.9 : 0.25})`
 									},
 									children: [
 										jsx("td", {
-											style: { ...cell, textAlign: "center", color: "var(--dsw-alias-label-tertiary)", fontVariantNumeric: "tabular-nums" },
+											style: { ...TD, textAlign: "center", color: INK.quiet },
 											children: child ? "" : String(at + 1)
 										}, "idx"),
+										// THE ONE CELL THAT IS NOT A FIGURE, and the only one allowed
+										// its own geometry: it is a flex row of a badge, a mode mark,
+										// a name and the Leader's sentence about the row. It keeps
+										// `TD`'s height and rhythm and overrides only the padding-left
+										// that draws the tree indent. `verticalAlign:"top"` is gone
+										// with the old local `cell` — it was there for a wrapping cell
+										// that has since been made a single ellipsised line, so it was
+										// pinning one row's contents a few pixels above its neighbours'
+										// for a reason that had stopped existing.
 										jsxs("td", {
-											style: { ...cell, display: "flex", alignItems: "center", gap: "8px", minWidth: 0, paddingLeft: child ? "26px" : "10px" },
+											style: { ...TD, display: "flex", alignItems: "center", gap: SPACE.sm, minWidth: 0, paddingLeft: child ? "26px" : "10px" },
 											children: [
 												// The origin, on the child only. "Why does this row
 												// exist" is the whole difference between a plan and a
 												// progress bar, and for a stage the answer is always
 												// "the pipeline declares twelve".
-												!child ? null : jsx("span", {
-													style: {
-														flex: "none", padding: "0 5px", borderRadius: "5px",
-														background: node.origin === "leader-assess-recollect"
-															? "var(--dsw-alias-state-warn-tertiary)"
-															: "var(--dsw-alias-state-business-tertiary)",
-														color: node.origin === "leader-assess-recollect"
-															? "var(--dsw-alias-state-warn-label)"
-															: "var(--dsw-alias-state-business-primary)",
-														fontSize: "10px", fontWeight: 600, whiteSpace: "nowrap"
-													},
-													children: node.origin === "leader-assess-recollect"
+												// A CATEGORY, so it keeps the chip's corner. It also
+												// stops mixing vocabularies: this one chip reached
+												// for the harness's state tokens by hand while every
+												// other chip on the screen took a TONE, which is how
+												// one badge ends up a slightly different amber.
+												!child ? null : Chip({
+													tone: node.origin === "leader-assess-recollect" ? TONE.warn : TONE.info,
+													label: node.origin === "leader-assess-recollect"
 														? (zh ? "领队要求重采" : "re-collect")
 														: (zh ? "维度" : "dimension")
 												}, "origin"),
+												// And WHAT KIND OF STEP, on the parent. The origin badge
+												// above answers "why does this row exist" for a child
+												// and deliberately not for a stage, on the grounds that
+												// the pipeline declares twelve — which leaves the stage
+												// row with nothing saying whether it is a gate, a
+												// fan-out or a draft. The catalogue has declared that all
+												// along and it reached the projection and stopped there.
+												child ? null : StageModeChip({ mode: stage?.mode ?? null, stepId: stage?.stepId ?? null, zh }, "mode"),
 												jsx("span", {
 													style: {
 														fontWeight: child ? 400 : 600,
-														color: "var(--dsw-alias-label-primary)",
+														color: INK.primary,
 														whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
 														maxWidth: child ? "40%" : "none"
 													},
 													children: child ? node.title : missionFace(MISSION_STAGE_FACES, stage?.stepId ?? node.title, zh)
 												}, "name"),
 												note === "" ? null : jsx("span", {
-													style: {
+													style: { font: FONT.micro,
 														flex: "1 1 0", minWidth: 0,
-														overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-														fontSize: "11px", color: "var(--dsw-alias-label-tertiary)"
+														overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: INK.secondary
 													},
 													title: note,
 													children: note
 												}, "note")
 											]
 										}, "name"),
+										// THE ELLIPSIS STAYS ON THE CELL, not on the chip. A chip
+										// is `nowrap` by definition and clipping it would cut the
+										// role word itself; what has to give in a narrow column is
+										// the dimension slug, and RoleChip already ellipsises that
+										// half on its own.
 										jsx("td", {
-											style: { ...cell, fontFamily: MISSION_MONO, fontSize: "11px", color: "var(--dsw-alias-label-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-											children: who === null || who === undefined ? "—" : who
+											style: { ...TD, color: INK.secondary },
+											children: RoleChip({ agentId: who, zh }) ?? "—"
 										}, "owner"),
 										jsxs("td", {
-											style: cell,
+											style: TD,
 											children: [
-												jsx("span", {
-													style: {
-														display: "inline-block", padding: "1px 7px", borderRadius: "6px",
-														background: `rgba(${hue},0.12)`, color: `rgb(${hue})`,
-														fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap"
-													},
-													children: face
+												// The row's STATE, so it takes the pill — and the
+												// attempt count rides INSIDE it. It used to hang off
+												// the right as a separate grey span, which made three
+												// sibling spans in three colours out of one fact.
+												Chip({
+													tone: hue,
+													pill: true,
+													// The same mark the ruler above draws, from the
+													// same tables. 待运行 and 本档跳过 share
+													// TONE.muted deliberately, so on this column too
+													// the glyph is the only thing between "not yet"
+													// and "not here".
+													icon: iconOf(status),
+													label: face,
+													count: attempts <= 1 ? undefined : (zh ? `第 ${attempts} 次` : `×${attempts}`)
 												}, "pill"),
-												attempts <= 1 ? null : jsx("span", {
-													style: { marginLeft: "6px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary)" },
-													children: zh ? `第 ${attempts} 次` : `try ${attempts}`
-												}, "attempts"),
 												// A dimension's own arithmetic, where it is the row's
 												// point: 已核验 N/下限 is what says whether this piece
-												// of work succeeded, and the status word does not.
+												// of work succeeded, and the status word does not — so
+												// it is drawn as a verdict rather than in the tertiary
+												// grey that says "ignore me". `floor: null` means s3
+												// has not derived the bar yet and MUST NOT render as
+												// `/0`, which would read as a bar this row cleared.
 												!child || node.counts?.verified === undefined || node.counts?.verified === null ? null : jsx("span", {
-													style: { marginLeft: "6px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary)", fontVariantNumeric: "tabular-nums" },
-													children: node.counts.floor === null || node.counts.floor === undefined
-														? (zh ? `已核验 ${node.counts.verified}` : `${node.counts.verified} verified`)
-														: (zh ? `已核验 ${node.counts.verified}/${node.counts.floor}` : `${node.counts.verified}/${node.counts.floor} verified`)
+													// NO `fontVariantNumeric` HERE ANY MORE, and it was never
+													// doing anything: its only child is a Chip, and a Chip
+													// sets a `font` shorthand, which resets font-variant on
+													// the way past. The cell it sits in carries the figures
+													// setting now, from `TD`, where it applies once.
+													style: { marginLeft: SPACE.xs },
+													children: Chip({
+														// A null floor is NEUTRAL, not a bar cleared.
+														// `?? 0` here would be the same defect as
+														// printing `/0`: a dimension whose bar s3 has
+														// not derived yet would be drawn green for
+														// having beaten nothing.
+														tone: node.counts.floor === null || node.counts.floor === undefined
+															? TONE.neutral
+															: node.counts.verified >= node.counts.floor ? TONE.success : TONE.warn,
+														// The WORD stays in the label rather than being
+														// replaced by a tick: the glyph is aria-hidden,
+														// so a chip reading only "1/3" is a fraction of
+														// nothing to anyone not looking at it.
+														label: node.counts.floor === null || node.counts.floor === undefined
+															? (zh ? `已核验 ${node.counts.verified}` : `${node.counts.verified} verified`)
+															: (zh ? `已核验 ${node.counts.verified}/${node.counts.floor}` : `${node.counts.verified}/${node.counts.floor} verified`)
+													})
 												}, "verified")
 											]
 										}, "status"),
 										jsx("td", {
-											style: { ...cell, textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-secondary)" },
+											style: { ...TD, textAlign: "right", color: INK.secondary },
 											children: stage === null || stage.durationMs === null || stage.durationMs === undefined
 												? "—"
 												: missionDuration(stage.durationMs, zh)
 										}, "took"),
 										jsx("td", {
-											style: { ...cell, textAlign: "right" },
+											style: { ...TD, textAlign: "right" },
 											children: !ran || stage === null ? null : jsx("button", {
 												type: "button",
-												style: {
+												style: { font: FONT.micro,
 													appearance: "none", border: "none", background: "transparent",
-													padding: 0, cursor: "pointer", font: "inherit", fontSize: "11px",
+													padding: 0, cursor: "pointer", font: "inherit",
 													color: "var(--dsw-alias-state-business-primary)"
 												},
 												onClick: (event) => { event.stopPropagation(); onOpenStage?.(stage.stepId); },
@@ -6540,8 +9527,63 @@ window.__ModuleLoader__.load({
 						}, "body")
 					]
 				})
-			});
-			return jsxs("div", {
+			}, "table");
+			// THE LEGEND IS THE PANEL'S `action` NOW, which is what B9 left a note
+			// asking for: it was a header the board hand-built because MissionPanel
+			// had no slot for one, and a second header shape eight pixels above the
+			// panel's own is the duplication this batch exists to remove.
+			//
+			// It WRAPS, alone among the things in that row, and the exception is
+			// deliberate. The header must not wrap on PROSE — that is the defect
+			// that made it three lines tall — but a legend is six short pairs, each
+			// one atomic, and the alternative is clipping a key whose whole job is to
+			// say what the colours down the left of the table mean. A key that is
+			// cut off says it about four of them.
+			const key = jsxs("div", {
+				style: {
+					display: "flex", alignItems: "center", justifyContent: "flex-end",
+					gap: SPACE.md, flexWrap: "wrap", minWidth: 0
+				},
+				children: legend.map((id) => jsxs("span", {
+					style: {
+						display: "inline-flex", alignItems: "center", gap: SPACE.xs,
+						font: FONT.micro, color: INK.secondary, whiteSpace: "nowrap"
+					},
+					children: [
+						// A DOT, NOT THE ROW'S CHIP. The legend keys the spine
+						// down the left of each row, and the spine is a bar of
+						// flat colour — so the key is the same flat colour. A
+						// tinted chip up here would be a fourth shape for one
+						// vocabulary on one screen.
+						jsx("span", {
+							className: id === "running" || id === "collecting" ? "swm-live" : undefined,
+							style: {
+								width: "6px", height: "6px", flex: "none",
+								borderRadius: RADIUS.circle, background: `rgb(${hueOf(id)})`
+							}
+						}, "dot"),
+						jsx("span", { children: faceOf(id) }, "word"),
+						jsx("span", {
+							style: { font: FONT.micro, fontVariantNumeric: "tabular-nums", color: INK.primary },
+							children: String(tally.get(id) ?? 0)
+						}, "n")
+					]
+				}, id))
+			}, "legend");
+			// THE BOARD MOUNTS ITS OWN PANEL, against this file's usual shape, where
+			// the detail view mounts the panel and passes the component as children.
+			// The reason is arithmetic, not taste: the number a reader needs is
+			// `display.length` — what SURVIVED grouping, which is not
+			// `stages.length` and not `work.length`, because a child whose parent
+			// fell outside the window is in neither. Computing it again at the mount
+			// would be the second copy of a resolution the comment ninety lines above
+			// exists to forbid, and the two would disagree exactly when the board is
+			// most worth reading.
+			return jsxs(MissionPanel, {
+				bare: true,
+				title: zh ? "任务" : "Tasks",
+				count: display.length,
+				action: key,
 				children: [
 					table,
 					jsx(MissionDrawer, {
@@ -6549,6 +9591,13 @@ window.__ModuleLoader__.load({
 						onClose: () => { onSelect?.(null); },
 						children: chosen === null ? null : jsx(MissionStageDetail, {
 							stage: chosen, owner: owner.get(chosen.stepId) ?? null, zh,
+							missionId: mission?.id ?? null,
+							// EFFECTIVE START, not `startedAt`. A mission that was
+							// resumed carries both, and measuring this run's stages
+							// against the original start prints an offset that includes
+							// however long the run sat stopped — which is a number about
+							// the outage, not about the step.
+							anchor: mission?.effectiveStartAt ?? mission?.startedAt ?? null,
 							onClose: () => { onSelect?.(null); },
 							onOpenStage
 						})
@@ -6570,9 +9619,46 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @param onClose - close the panel.
 		* @param onOpenStage - open the trajectory filtered to this stage.
+		* @param missionId - the mission, for the step's own trajectory.
+		* @param anchor - the run's zero, so the timings read as offsets too.
 		*/
-		function MissionStageDetail({ stage, owner, zh, onClose, onOpenStage }) {
+		function MissionStageDetail({ stage, owner, zh, onClose, onOpenStage, missionId, anchor }) {
 			ensureTraceStyle();
+			// WHAT THIS STEP DID, which the drawer could not say. It listed seven
+			// properties OF the stage — status, attempts, took, owner, tokens,
+			// started, ended — and not one thing the stage actually performed,
+			// while `/missions/:id/trace` has accepted a `stepId` filter since it
+			// was written.
+			//
+			// `null` is "not read yet" and `[]` is "read, and this step recorded
+			// nothing" — the same three-state distinction the trajectory pane
+			// draws for the same reason: they are the same list and they must not
+			// disagree about what an empty one means.
+			const [steps, setSteps] = useState(null);
+			const [stepsError, setStepsError] = useState("");
+			useEffect(() => {
+				if (missionId === null || missionId === undefined || missionId === "") return;
+				let alive = true;
+				const query = new URLSearchParams();
+				query.set("stepId", stage.stepId);
+				query.set("take", String(MISSION_STAGE_TRACE_TAKE));
+				// OLDEST FIRST, unlike the pane. The pane is a log you watch; this
+				// is a step you read through, and a step read backwards is a
+				// sequence of consequences before their causes.
+				query.set("order", "oldest");
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/trace?${query.toString()}`)
+					.then(missionData)
+					.then((data) => {
+						if (!alive) return;
+						setSteps(Array.isArray(data.rows) ? data.rows : []);
+						setStepsError("");
+					})
+					.catch((cause) => {
+						if (!alive) return;
+						setStepsError(String(cause?.message ?? cause));
+					});
+				return () => { alive = false; };
+			}, [missionId, stage.stepId]);
 			const face = missionFace(MISSION_STAGE_STATUS_FACES, stage.status, zh);
 			const note = stage.degradeNote ?? "";
 			const line = (label, value) => (value === "" || value === null || value === undefined ? null : jsxs("div", {
@@ -6581,6 +9667,26 @@ window.__ModuleLoader__.load({
 					jsx("dd", { title: String(value), children: String(value) }, "v")
 				]
 			}, label));
+			// The same row for a value that is a NODE. `line` calls `String()` on
+			// what it is handed, which is what keeps a number, a duration and a
+			// timestamp on one grid — and is also why a chip passed to it renders
+			// "[object Object]". The two are one row with one difference, so the
+			// `title` is passed separately: a `dd` whose text is a chip still owes
+			// the reader the raw string on hover.
+			const node = (label, value, title) => (value === null || value === undefined ? null : jsxs("div", {
+				children: [
+					jsx("dt", { children: label }, "k"),
+					jsx("dd", { title: title === null || title === undefined ? undefined : String(title), children: value }, "v")
+				]
+			}, label));
+			// The wall clock and the offset from the run's start, in that order,
+			// exactly as the trajectory drawer says it. A stage that began `+4m 2s`
+			// in is a fact about the run; `14:02:11` is a fact about the machine.
+			const when = (iso) => {
+				if (iso === null || iso === undefined || iso === "") return null;
+				const offset = missionSince(iso, anchor, zh);
+				return `${formatStamp(iso)} ${missionClock(iso)}${offset === "" ? "" : ` · ${offset}`}`;
+			};
 			return jsxs("div", {
 				className: "swt-pane",
 				style: { alignSelf: "flex-start" },
@@ -6593,11 +9699,12 @@ window.__ModuleLoader__.load({
 								children: [
 									jsx("span", { className: "swt-dot" }, "dot"),
 									jsx("span", { className: "swt-panename", children: missionFace(MISSION_STAGE_FACES, stage.stepId, zh) }, "name"),
+									StageModeChip({ mode: stage.mode ?? null, stepId: stage.stepId, zh }, "mode"),
 									jsx("span", { className: "swt-paneref", children: stage.stepId }, "ref")
 								]
 							}, "title"),
 							jsx("button", {
-								type: "button", className: "swt-close",
+								type: "button", className: "swm-iconbtn",
 								"aria-label": zh ? "关闭" : "Close",
 								onClick: onClose,
 								children: "\u00d7"
@@ -6607,30 +9714,124 @@ window.__ModuleLoader__.load({
 					jsxs("div", {
 						className: "swt-panebody",
 						children: [
+							// THE THREE FIGURES THIS STEP COST, out of the property list
+							// and above it. `calls` is the one that was nowhere: the
+							// projector has attached it to every stage since the ledger
+							// was wired up and no screen in this file read it, so "this
+							// step took four minutes" was on the page and "it took
+							// eleven model calls to do it" was not.
+							//
+							// Padded to 14px, which is `.swt-kv>div`'s own horizontal
+							// padding, so the chips start at the same x as the labels
+							// under them instead of at a second margin nobody chose.
+							jsxs("div", {
+								style: { display: "flex", flexWrap: "wrap", gap: SPACE.sm, padding: `${SPACE.sm} 14px 0` },
+								children: [
+									// SHORT ON THE CHIP, EXACT ON THE HOVER — the same
+									// split the roster makes, so one quantity has one
+									// shape wherever it is drawn.
+									stage.tokens === null || stage.tokens === undefined ? null : Chip({
+										tone: TONE.accent, icon: "sparkles",
+										label: zh ? "令牌" : "Tokens",
+										count: missionCompact(stage.tokens),
+										title: String(stage.tokens)
+									}, "tokens"),
+									// EXACT, because 11 calls and 12 calls is a comparison
+									// a person makes between two stages of one run.
+									stage.calls === null || stage.calls === undefined ? null : Chip({
+										tone: TONE.info, icon: "refresh",
+										label: zh ? "模型调用" : "Calls",
+										count: String(stage.calls)
+									}, "calls"),
+									stage.durationMs === null || stage.durationMs === undefined ? null : Chip({
+										tone: TONE.neutral, icon: "clock",
+										label: zh ? "用时" : "Took",
+										count: missionDuration(stage.durationMs, zh)
+									}, "took")
+								]
+							}, "stats"),
 							jsxs("dl", {
 								className: "swt-kv",
 								children: [
 									line(zh ? "状态" : "Status", face),
 									line(zh ? "尝试" : "Attempts", stage.attempts),
 									line(zh ? "用时" : "Took", stage.durationMs === null || stage.durationMs === undefined ? null : missionDuration(stage.durationMs, zh)),
-									line(zh ? "负责人" : "Owner", owner === null ? null : (owner.agentId ?? owner.role ?? null)),
-									line(zh ? "令牌" : "Tokens", stage.tokens === null || stage.tokens === undefined ? null : Number(stage.tokens).toLocaleString("en-US")),
-									line(zh ? "开始" : "Started", stage.startedAt === null || stage.startedAt === undefined ? null : `${formatStamp(stage.startedAt)} ${missionClock(stage.startedAt)}`),
-									line(zh ? "结束" : "Ended", stage.endedAt === null || stage.endedAt === undefined ? null : `${formatStamp(stage.endedAt)} ${missionClock(stage.endedAt)}`)
+									// The owner is the only value in this panel that is a person
+									// rather than a figure, and it was drawn as the same grey
+									// string as 令牌 and 尝试.
+									owner === null ? null : node(
+										zh ? "负责人" : "Owner",
+										RoleChip({ agentId: owner.agentId, role: owner.role, zh }),
+										owner.agentId ?? owner.role ?? null
+									),
+									// NO TOKENS ROW. It is a chip four lines above now, and
+									// the same figure twice in one panel is the reader
+									// checking whether they are the same figure.
+									line(zh ? "开始" : "Started", when(stage.startedAt)),
+									line(zh ? "结束" : "Ended", when(stage.endedAt))
 								]
 							}, "kv"),
 							note === "" ? null : jsx("p", { className: "swt-secthead", children: zh ? "降级说明" : "Why it degraded" }, "noteHead"),
 							// WHOLE, and in a block that is allowed to wrap. This is
 							// the sentence a degraded stage wrote about itself, and it
 							// was being clipped to two lines inside a table cell.
-							note === "" ? null : jsx("div", { className: "swt-quote", children: note }, "note"),
+							// AMBER. A stage that finished by lowering its own bar wrote
+							// this sentence, and a green rule beside it read as the
+							// stage endorsing itself.
+							note === "" ? null : jsx("div", {
+								className: "swt-quote",
+								style: { borderLeftColor: `rgb(${TONE.warn})` },
+								children: note
+							}, "note"),
+							missionId === null || missionId === undefined || missionId === ""
+								? null : jsx("p", { className: "swt-secthead", children: zh ? "这一步做了什么" : "What this step did" }, "didHead"),
+							missionId === null || missionId === undefined || missionId === "" ? null : jsx("div", {
+								style: { display: "flex", flexDirection: "column", gap: SPACE.xs, padding: "0 14px" },
+								// THE SAME RENDERER THE TRAJECTORY PANE USES, filtered to
+								// this step. Not a second row component: two renderers for
+								// one row is how the drawer and the pane start saying
+								// different things about the same call, and this row shape
+								// already carries the kind, the agent, the verdict and the
+								// latency banding that took three batches to get right.
+								children: steps === null
+									? jsx("div", {
+										style: { font: FONT.small, color: stepsError === "" ? INK.secondary : `rgb(${TONE.warn})` },
+										// Three states, not two: a read that has not come
+										// back has the same shape as a step that did nothing.
+										children: stepsError === ""
+											? (zh ? "正在读这一步的轨迹…" : "Reading this step's trajectory…")
+											: (zh ? "读不到这一步的轨迹：" : "Could not read this step's trajectory: ") + stepsError
+									}, "loading")
+									: steps.length === 0
+									? jsx("div", {
+										style: { font: FONT.small, color: INK.secondary },
+										children: zh
+											? "这一步没有留下任何轨迹 —— 它没有调用工具，也没有记录事件。"
+											: "This step recorded no trajectory at all: no tool calls, no events."
+									}, "empty")
+									: steps.map((row) => jsx(MissionTraceRow, {
+										row, zh, anchor,
+										active: false,
+										// A ROW IN HERE GOES WHERE THE JUMP BUTTON GOES. The
+										// drawer has no panel of its own to open a row into,
+										// and a row that does nothing when pressed says there
+										// is somewhere to go and then refuses — so it opens
+										// the trajectory on this step, which is the pane where
+										// that row is selectable.
+										onOpen: () => { onOpenStage?.(stage.stepId); }
+									}, row.ref))
+							}, "did"),
 							jsx("div", {
 								style: { padding: "10px 14px 0" },
 								children: jsx("button", {
 									type: "button",
-									style: { ...controlStyle(), height: "26px", padding: "0 10px", fontSize: "12px" },
+									className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm, padding: "0 10px" },
 									onClick: () => { onOpenStage?.(stage.stepId); },
-									children: zh ? "在轨迹里看这一步 →" : "See this step in the trajectory →"
+									children: steps !== null && steps.length >= MISSION_STAGE_TRACE_TAKE
+										// The list above is capped, and a capped list that
+										// does not say so reads as the whole of it.
+										? (zh ? `在轨迹里看全部（这里只显示前 ${MISSION_STAGE_TRACE_TAKE} 条）→` : `See all of it in the trajectory (the first ${MISSION_STAGE_TRACE_TAKE} are shown) →`)
+										: (zh ? "在轨迹里看这一步 →" : "See this step in the trajectory →")
 								})
 							}, "jump")
 						]
@@ -6665,12 +9866,18 @@ window.__ModuleLoader__.load({
 				toolCached: sum.toolCached + Number(row?.toolCached ?? 0)
 			}), { calls: 0, tokens: 0, toolCalls: 0, toolFailures: 0, toolCached: 0 });
 
-			const head = { fontSize: "11px", color: "var(--dsw-alias-label-tertiary)", fontWeight: 400, textAlign: "right", padding: "0 0 6px" };
-			const cell = {
-				fontSize: "12px", lineHeight: "26px", textAlign: "right",
-				fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-primary)"
-			};
-			const name = { ...cell, textAlign: "left", fontFamily: MISSION_MONO };
+			// THE FIGURES COLUMN, right-aligned, over the shared cell. This table
+			// used to declare its own head and cell and get BOTH wrong in the same
+			// direction: the header had no padding at all and sat at the plain
+			// weight, so it read as a first data row, and the cell bought its height
+			// from a 26px line rather than from a height, so the roster's rows were
+			// eight pixels taller than the tool table's on the same pane.
+			const figure = { ...TD, textAlign: "right" };
+			// NOT MONO ANY MORE. The column holds a chip with a word in it now, and
+			// mono is for text a person compares character by character — a tool
+			// name, a hash, an argument — which is what the figures to its right
+			// are and what a role name is not.
+			const name = { ...TD, textAlign: "left" };
 			const columns = [
 				{ id: "calls", label: zh ? "模型调用" : "Calls", of: (row) => row.calls },
 				{ id: "tokens", label: zh ? "令牌" : "Tokens", of: (row) => row.tokens },
@@ -6683,49 +9890,79 @@ window.__ModuleLoader__.load({
 				{ id: "toolCached", label: zh ? "命中缓存" : "Cached", of: (row) => row.toolCached, good: true }
 			];
 
+			// THE FRAME THIS TABLE NEVER HAD. It was the one of the three with a
+			// scroller and no border, so on the cost pane it sat under two framed
+			// cards as a bare list — the same data at a different altitude, which
+			// reads as an unfinished panel rather than as a third table.
 			return jsx("div", {
-				style: { overflowX: "auto" },
-				children: jsxs("table", {
-					style: { width: "100%", borderCollapse: "collapse", minWidth: "620px" },
+				style: {
+					border: `1px solid ${LINE.rule}`, borderRadius: RADIUS.md,
+					overflow: "hidden", background: "var(--dsw-alias-bg-layer-1)"
+				},
+				children: jsx("div", {
+					style: { overflowX: "auto" },
+					children: jsxs("table", {
+					style: { width: "100%", borderCollapse: "collapse", minWidth: "620px", tableLayout: "fixed" },
 					children: [
 						jsx("thead", {
 							children: jsxs("tr", {
-								style: { borderBottom: "1px solid var(--dsw-alias-border-l2)" },
+								style: { borderBottom: `1px solid ${LINE.rule}` },
 								children: [
-									jsx("th", { style: { ...head, textAlign: "left" }, children: zh ? "执行者" : "Agent" }, "agent"),
-									jsx("th", { style: { ...head, textAlign: "left" }, children: zh ? "停在" : "Last step" }, "step"),
-									...columns.map((column) => jsx("th", { style: head, children: column.label }, column.id))
+									// THE WIDTHS ARE DECLARED because `tableLayout:"fixed"` with
+									// none divides the table into seven equal columns, and two of
+									// these hold words while five hold four-digit figures. Left to
+									// itself the roster would ellipsise 撰写 · 完成 to make room for
+									// whitespace beside a 12.
+									jsx("th", { style: { ...TH, width: "18%" }, children: zh ? "执行者" : "Agent" }, "agent"),
+									jsx("th", { style: { ...TH, width: "22%" }, children: zh ? "停在" : "Last step" }, "step"),
+									...columns.map((column) => jsx("th", { style: { ...TH, width: "12%", textAlign: "right" }, children: column.label }, column.id))
 								]
 							})
 						}, "head"),
 						jsx("tbody", {
 							children: rows.map((row, at) => jsxs("tr", {
-								style: { borderBottom: "1px solid var(--dsw-alias-border-l2)" },
+								className: "swm-tr",
 								children: [
 									// `agentId` is null until an agent actually runs; `role` is
 									// what the planner named it. A table of "?" for every
 									// agent the tier skipped is a table that looks broken.
-									jsx("td", { style: name, children: row.agentId ?? row.role ?? "—" }, "agent"),
+									//
+									// This is the ROSTER — the one table whose subject is who —
+									// and it printed the raw id in the same mono face as the
+									// token counts beside it, so the column that names people
+									// looked like another column of data.
 									jsx("td", {
-										style: { ...cell, textAlign: "left", color: "var(--dsw-alias-label-secondary)" },
+										style: name,
+										children: RoleChip({ agentId: row.agentId, role: row.role, zh, size: "sm" }) ?? "—"
+									}, "agent"),
+									jsx("td", {
+										style: { ...TD, color: INK.secondary },
 										children: row.lastStepId === null || row.lastStepId === undefined
 											? "—"
 											: `${missionFace(MISSION_STAGE_FACES, row.lastStepId, zh)} · ${missionFace(MISSION_STAGE_STATUS_FACES, row.state, zh)}`
 									}, "step"),
+									// TOKENS SHORT, EVERYTHING ELSE EXACT, and the split is
+									// not a matter of column width. 40 calls versus 41 is a
+									// comparison a reader actually makes — a researcher that
+									// took one more turn than its neighbour is the thing
+									// this table is read for — and 412,431 tokens versus
+									// 412,208 is not. The exact figure stays one hover away
+									// on every cell, so nothing is lost, only unstacked.
 									...columns.map((column) => {
 										const value = Number(column.of(row) ?? 0);
 										return jsx("td", {
 											style: {
-												...cell,
+												...figure,
 												color: value === 0
-													? "var(--dsw-alias-label-tertiary)"
+													? INK.quiet
 													: column.bad === true
 														? "var(--dsw-alias-state-error-primary)"
 														: column.good === true
 															? "var(--dsw-alias-state-success-primary)"
-															: cell.color
+															: INK.primary
 											},
-											children: value.toLocaleString("en-US")
+											title: String(value),
+											children: column.id === "tokens" ? missionCompact(value) : String(value)
 										}, column.id);
 									})
 								]
@@ -6734,16 +9971,27 @@ window.__ModuleLoader__.load({
 						jsx("tfoot", {
 							children: jsxs("tr", {
 								children: [
-									jsx("td", { style: { ...cell, textAlign: "left", color: "var(--dsw-alias-label-secondary)" }, children: zh ? "合计" : "Total" }, "agent"),
-									jsx("td", { style: cell, children: "" }, "step"),
-									...columns.map((column) => jsx("td", {
-										style: { ...cell, fontWeight: 600 },
-										children: Number(totals[column.id] ?? 0).toLocaleString("en-US")
-									}, column.id))
+									jsx("td", { style: { ...TD, color: INK.secondary }, children: zh ? "合计" : "Total" }, "agent"),
+									jsx("td", { style: TD, children: "" }, "step"),
+									// THE SHORTHAND FIRST, AND THE FIGURES AGAIN AFTER IT. `TD`
+									// sets `font` and then `fontVariantNumeric`; overriding `font`
+									// on the spread puts a shorthand BELOW that variant in the
+									// merged order and silently resets it, so the totals row would
+									// stop lining up under the columns it totals — which is the one
+									// row where that alignment is the entire point.
+									...columns.map((column) => {
+										const total = Number(totals[column.id] ?? 0);
+										return jsx("td", {
+											style: { ...TD, font: FONT.smallStrong, fontVariantNumeric: "tabular-nums", textAlign: "right" },
+											title: String(total),
+											children: column.id === "tokens" ? missionCompact(total) : String(total)
+										}, column.id);
+									})
 								]
 							})
 						}, "foot")
 					]
+					})
 				})
 			});
 		}
@@ -6882,43 +10130,37 @@ window.__ModuleLoader__.load({
 				? (zh ? "这次运行失败了。" : "This run failed.")
 				: (zh ? face.zh : face.en);
 			const next = face === null ? "" : (zh ? face.zhNext : face.enNext);
-			return jsxs("div", {
-				style: {
-					margin: "0 0 8px", padding: "8px 10px", borderRadius: "8px",
-					background: "rgba(220,38,38,0.06)", border: "1px solid rgba(220,38,38,0.25)",
-					fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-primary)"
-				},
+			// The fourth copy of the tinted box, and the last: what stood here
+			// was its own padding, its own alpha and its own type pair, which is
+			// how the failure banner and the degrade banner ended up two
+			// different widths on the same column. The sentence is the lead, the
+			// 详情 toggle is the meta slot, and the raw text is the body.
+			return Callout({
+				tone: TONE.danger,
+				icon: "alert",
+				label: what,
+				meta: raw === "" ? null : jsx("button", {
+					type: "button",
+					style: { font: FONT.small,
+						appearance: "none", border: "none", background: "transparent", padding: 0,
+						cursor: "pointer",
+						color: "var(--dsw-alias-state-business-primary)"
+					},
+					onClick: () => { setOpen((was) => !was); },
+					children: open ? (zh ? "收起详情" : "Hide details") : (zh ? "详情" : "Details")
+				}),
 				children: [
-					jsxs("div", {
-						style: { display: "flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap" },
-						children: [
-							jsx("span", { style: { fontWeight: 600 }, children: what }, "what"),
-							next === "" ? null : jsx("span", {
-								style: { color: "var(--dsw-alias-label-secondary)" },
-								children: next
-							}, "next"),
-							raw === "" ? null : jsx("button", {
-								type: "button",
-								style: {
-									appearance: "none", border: "none", background: "transparent", padding: 0,
-									font: "inherit", fontSize: "12px", cursor: "pointer",
-									color: "var(--dsw-alias-state-business-primary)"
-								},
-								onClick: () => { setOpen((was) => !was); },
-								children: open ? (zh ? "收起详情" : "Hide details") : (zh ? "详情" : "Details")
-							}, "toggle")
-						]
-					}, "line"),
+					next === "" ? null : jsx("div", { style: { color: INK.secondary }, children: next }, "next"),
 					!open ? null : jsx("pre", {
 						// The runtime's own words, verbatim, where the person who can
 						// act on them will look. Not re-worded: two phrasings of one
 						// failure is the same defect as two names for one method.
-						style: {
-							margin: "8px 0 0", padding: "8px 10px", borderRadius: "6px",
-							background: "var(--dsw-alias-bg-layer-2)",
-							fontFamily: MISSION_MONO, fontSize: "11px", lineHeight: "17px",
+						style: { font: FONT.micro,
+							fontFamily: MONO,
+							margin: `${SPACE.sm} 0 0`, padding: `${SPACE.sm} 10px`, borderRadius: RADIUS.sm,
+							background: SURFACE.subtle,
 							whiteSpace: "pre-wrap", wordBreak: "break-word",
-							color: "var(--dsw-alias-label-secondary)"
+							color: INK.secondary
 						},
 						children: (code === null || code === undefined ? "" : `${code}\n\n`) + raw
 					}, "raw")
@@ -6937,8 +10179,21 @@ window.__ModuleLoader__.load({
 		function missionCompact(value) {
 			const n = Number(value);
 			if (!Number.isFinite(n)) return "—";
-			if (Math.abs(n) >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-			if (Math.abs(n) >= 1000) return `${Math.round(n / 1000)}k`;
+			// ONE DECIMAL, AND NEVER A TRAILING ZERO. `Math.round(n / 1000)`
+			// collapsed 1,499 to `1k` and 1,501 to `2k` — a two-unit jump across
+			// two tokens, in the one figure a person reads to compare two runs.
+			// One decimal makes both of them `1.5k`.
+			//
+			// `412.0k` would be the opposite defect: a decimal place of precision
+			// on a figure whose last three digits are noise, in a slot that exists
+			// because the exact number did not fit. So a round thousand keeps its
+			// round shape and the docblock's own example still holds.
+			const short = (scale, unit) => {
+				const scaled = (n / scale).toFixed(1);
+				return (scaled.endsWith(".0") ? scaled.slice(0, -2) : scaled) + unit;
+			};
+			if (Math.abs(n) >= 1000000) return short(1000000, "M");
+			if (Math.abs(n) >= 1000) return short(1000, "k");
 			return String(n);
 		}
 
@@ -6961,7 +10216,7 @@ window.__ModuleLoader__.load({
 			const message = mission?.errorMessage ?? "";
 			const failed = failureCode !== null || message !== "";
 			const terminal = mission?.terminal === true;
-			const hue = failed ? "220,38,38" : terminal ? "100,116,139" : "217,119,6";
+			const hue = failed ? TONE.danger : terminal ? TONE.neutral : TONE.warn;
 			// The same table the failure banner reads, so a pane and the banner over it
 			// cannot name the same code two different ways.
 			const face = failureCode !== null && Object.hasOwn(MISSION_FAILURE_FACES, failureCode)
@@ -6976,21 +10231,45 @@ window.__ModuleLoader__.load({
 				].filter((line) => line !== "")
 				: [terminal ? finished : waiting];
 
-			return jsx("div", {
-				style: {
-					padding: "10px 12px", borderRadius: "10px",
-					border: `1px solid rgba(${hue},0.25)`, background: `rgba(${hue},0.06)`,
-					display: "flex", flexDirection: "column", gap: "4px"
-				},
-				children: lines.map((line, at) => jsx("div", {
-					style: {
-						fontSize: "12px", lineHeight: "19px",
-						color: at === 0 ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)"
-					},
-					children: line
-				}, `l${at}`))
+			// The fifth copy of the tinted box, on its own padding and its own
+			// border. The first line is the lead — it is the one that says which
+			// nothing this is — and the rest are the body.
+			return Callout({
+				tone: hue,
+				icon: failed ? "alert" : terminal ? "check" : "clock",
+				label: lines[0],
+				children: jsx("div", {
+					style: { display: "flex", flexDirection: "column", gap: SPACE.xs, color: INK.secondary },
+					children: lines.slice(1).map((line, at) => jsx("div", { children: line }, `l${at}`))
+				})
 			});
 		}
+
+		/**
+		* The four ways to arrange what was read, named once.
+		*
+		* All four are computable from fields the row already carries — findings,
+		* host, verified, firstSeenAt — which is why there are four and not two:
+		* the pane had a two-state toggle whose off position was UNNAMED. The
+		* button read 按站点分组 while flat and 按引用次数排 while grouped, so
+		* the label was always the arrangement you were not looking at, which is
+		* the one control shape that cannot be read without pressing it.
+		*/
+		const MISSION_SOURCE_ORDERS = [
+			{ id: "cites", zh: "按引用", en: "By citations" },
+			{ id: "host", zh: "按站点", en: "By host" },
+			// THE PANE THAT USED TO BE A TAB. 证据 was a sixth pane holding
+			// dimension cards over the findings they produced, and every layer of
+			// it was a third copy: the per-dimension verified counts are columns
+			// in the task table, and a finding's quote is readable in the
+			// trajectory and again under the report's own citations, where it is
+			// the FROZEN evidence the signature was given against. What it alone
+			// carried was this axis — which dimension a page was read for — so
+			// the axis moved here and the tab went.
+			{ id: "dim", zh: "按维度", en: "By dimension" },
+			{ id: "rate", zh: "按核验率", en: "By verified rate" },
+			{ id: "seen", zh: "按首次读到", en: "By first read" }
+		];
 
 		/**
 		* Everything this mission read, once each.
@@ -7012,7 +10291,11 @@ window.__ModuleLoader__.load({
 			const [held, setHeld] = useState(null);
 			const [error, setError] = useState("");
 			const [run, setRun] = useState(null);
-			const [byHost, setByHost] = useState(false);
+			const [order, setOrder] = useState("cites");
+			// Grouping is ONE OF THE FOUR arrangements rather than a switch beside
+			// them — see MISSION_SOURCE_ORDERS for why the old two-state toggle
+			// could not be read without being pressed.
+			const byHost = order === "host";
 
 			useEffect(() => {
 				let alive = true;
@@ -7044,7 +10327,7 @@ window.__ModuleLoader__.load({
 
 			if (held === null) {
 				return jsx("div", {
-					style: { fontSize: "12px", lineHeight: "18px", color: error === "" ? "var(--dsw-alias-label-secondary)" : "rgb(217,119,6)" },
+					style: { font: FONT.small, color: error === "" ? INK.secondary : `rgb(${TONE.warn})` },
 					children: error === ""
 						? (zh ? "读取中…" : "Loading…")
 						: (zh ? "读不到这次任务的来源清单：" : "Could not read this mission's sources: ") + error
@@ -7058,19 +10341,20 @@ window.__ModuleLoader__.load({
 			const current = held.runCount ?? null;
 
 			const picker = runs.length <= 1 ? null : jsxs("div", {
-				style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", margin: "0 0 10px" },
+				style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", margin: "0 0 10px" },
 				children: [
 					jsx("span", {
-						style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						style: { font: FONT.small, color: INK.secondary },
 						children: zh ? "运行：" : "Run:"
 					}, "label"),
 					...runs.map((entry) => jsx("button", {
 						type: "button",
 						"aria-pressed": entry.runCount === current,
-						style: {
-							...controlStyle(), height: "24px", padding: "0 9px", fontSize: "11px",
-							fontWeight: entry.runCount === current ? 600 : 400,
-							color: entry.total === 0 ? "var(--dsw-alias-label-tertiary)" : undefined
+						className: "swm-ctl swm-focus", style: {
+							...controlStyle(), height: CONTROL.xs, padding: "0 9px",
+							font: entry.runCount === current ? FONT.microStrong : FONT.micro,
+							color: entry.total === 0 ? INK.quiet : undefined,
+							...pressedStyle(entry.runCount === current)
 						},
 						onClick: () => { setRun(entry.runCount); },
 						children: zh
@@ -7079,6 +10363,82 @@ window.__ModuleLoader__.load({
 					}, `run-${entry.runCount}`))
 				]
 			}, "runs");
+
+			// EVERY DIMENSION, EVEN WITH NOTHING UNDER IT. A page can feed more
+			// than one dimension, so this is a fan-out rather than a partition and
+			// the page counts do not sum to the row count; the heading says so
+			// rather than hiding it.
+			//
+			// The empty groups are the reason this is not merely a sort. A
+			// dimension that read two pages and verified nothing has no rows, and
+			// dropping it would make a mission that half-failed look like a
+			// mission that was half as ambitious. This is computed ABOVE the
+			// no-sources return for the same reason: a run that read nothing at
+			// all is exactly the run whose dimensions most need to say why.
+			const byDimension = (Array.isArray(held.dimensions) ? held.dimensions : []).map((dimension) => {
+				const rows = sources.filter((source) => (Array.isArray(source.dimensionIds) ? source.dimensionIds : [])
+					.includes(dimension.dimensionId));
+				return {
+					id: dimension.dimensionId,
+					name: dimension.name ?? dimension.dimensionId,
+					state: dimension.state ?? null,
+					summary: String(dimension.summary ?? ""),
+					rows,
+					findings: rows.reduce((sum, source) => sum + (source.findings ?? 0), 0)
+				};
+			});
+
+			/** One dimension's group: its heading, and either its pages or its account. */
+			const dimensionGroup = (entry) => jsxs("div", {
+				children: [
+					jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: SPACE.sm, margin: `0 0 ${SPACE.xs}` },
+						children: [
+							jsx("span", {
+								style: {
+									font: FONT.smallStrong, color: INK.primary,
+									minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+								},
+								title: entry.name,
+								children: entry.name
+							}, "name"),
+							jsx("span", {
+								style: { ...COUNT_CHIP, flex: "none" },
+								children: zh ? `${entry.rows.length} 页` : `${entry.rows.length} page(s)`
+							}, "pages"),
+							jsx("span", { style: { flex: 1 } }, "spacer"),
+							entry.rows.length === 0 ? null : jsx("span", {
+								style: { ...COUNT_CHIP, flex: "none" },
+								children: zh ? `${entry.findings} 条发现` : `${entry.findings} finding(s)`
+							}, "findings")
+						]
+					}, "head"),
+					// THE DIMENSION'S OWN ACCOUNT, WHENEVER IT HAS ONE — not only when
+					// the group is empty. The case this sentence exists for is a
+					// dimension that READ and verified nothing: it has rows, so an
+					// empty-only rule would print pages and say nothing about the
+					// fact that none of them survived core-checking. That was the
+					// 证据 pane's reason to exist and it must not be what the merge
+					// drops.
+					//
+					// With no summary the fallback still separates the two empties.
+					// A dimension nobody has collected yet and one that read and came
+					// back with nothing want opposite reactions, and "no pages" says
+					// neither.
+					entry.summary === "" && entry.rows.length > 0 ? null : jsx("div", {
+						style: { font: FONT.small, color: INK.secondary, margin: `0 0 ${SPACE.xs}` },
+						children: entry.summary !== ""
+							? entry.summary
+							: entry.state === "pending"
+								? (zh ? "还没有采集这个维度。" : "This dimension has not been collected yet.")
+								: (zh ? "这个维度没有留下任何读过的页面。" : "This dimension left no page behind.")
+					}, "account"),
+					entry.rows.length === 0 ? null : jsx("div", {
+						style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
+						children: entry.rows.map(row)
+					}, "rows")
+				]
+			}, entry.id);
 
 			if (sources.length === 0) {
 				return jsxs("div", { children: [picker, jsx(MissionEmptyPane, {
@@ -7089,7 +10449,15 @@ window.__ModuleLoader__.load({
 					finished: zh
 						? "这次运行结束时，一个来源也没有留下 —— 不是没显示，是确实一页都没读成。"
 						: "This run ended with no sources at all — nothing is being hidden; not one page was read."
-				}, "empty")] });
+				}, "empty"),
+				// AND WHY, PER DIMENSION. "Not one page was read" is the run's
+				// answer; each dimension has its own, and this is the only screen
+				// left that carries it. Without this the pane that replaced 证据
+				// would be silent in exactly the case 证据 was most worth opening.
+				byDimension.length === 0 ? null : jsx("div", {
+					style: { display: "flex", flexDirection: "column", gap: SPACE.lg, marginTop: SPACE.lg },
+					children: byDimension.map(dimensionGroup)
+				}, "dims")] });
 			}
 
 			// Sorted by how much each host carried, not alphabetically: the question a
@@ -7102,71 +10470,171 @@ window.__ModuleLoader__.load({
 			}
 			const grouped = [...hosts.values()].sort((a, b) => b.findings - a.findings);
 
-			const row = (source) => jsxs("div", {
-				style: {
-					display: "flex", flexDirection: "column", gap: "2px",
-					padding: "7px 0", borderTop: "1px solid var(--dsw-alias-border-l1)"
-				},
-				children: [
-					jsx("a", {
-						href: source.url,
-						target: "_blank",
-						rel: "noreferrer noopener",
-						style: { fontSize: "13px", color: "var(--dsw-alias-state-business-primary)", textDecoration: "none" },
-						// The page's own title where it has one. A column of raw addresses is
-						// what this pane looks like without the join, and it is unreadable.
-						children: (source.title ?? "") === "" ? source.url : source.title
-					}, "link"),
-					jsx("div", {
-						style: { fontSize: "11px", lineHeight: "17px", fontFamily: MISSION_MONO, color: "var(--dsw-alias-label-tertiary)" },
-						children: [
-							byHost ? "" : source.host,
-							zh ? `${source.findings} 条发现` : `${source.findings} finding(s)`,
-							// Verified against the page, not merely recorded from it. A source
-							// that produced six findings of which none verified is a source that
-							// carried nothing, and one number cannot say that.
-							zh ? `已核验 ${source.verified} 条` : `${source.verified} verified`,
-							(Array.isArray(source.dimensionIds) ? source.dimensionIds : [])
-								.map((id) => names.get(id) ?? id).join(zh ? "、" : ", "),
-							source.firstSeenAt === null || source.firstSeenAt === undefined ? "" : formatStamp(source.firstSeenAt)
-						].filter((piece) => piece !== "" && piece !== null && piece !== undefined).join(" · ")
-					}, "meta")
-				]
-			}, source.url);
+
+			// WHEN A PAGE WAS FIRST READ, as a number a comparator can use. A row
+			// with no stamp sorts LAST rather than first: NaN in a comparator is a
+			// sort that quietly stops sorting, and a page nobody stamped is not
+			// the first thing this mission read.
+			const seenAt = (value) => {
+				const at = Date.parse(String(value ?? ""));
+				return Number.isFinite(at) ? at : Number.POSITIVE_INFINITY;
+			};
+			// `cites` IS THE ROUTE'S OWN ORDER — `ORDER BY findings DESC` in the
+			// store — and re-sorting it here would be a second copy of that
+			// decision, drifting the first time either side is touched. It is left
+			// alone on purpose, not by omission.
+			const ordered = order === "rate"
+				? [...sources].sort((a, b) => (missionRate(b.verified, b.findings) ?? -1) - (missionRate(a.verified, a.findings) ?? -1))
+				: order === "seen"
+					? [...sources].sort((a, b) => seenAt(a.firstSeenAt) - seenAt(b.firstSeenAt))
+					: sources;
+
+			const row = (source) => {
+				const fed = (Array.isArray(source.dimensionIds) ? source.dimensionIds : [])
+					.map((id) => names.get(id) ?? id).join(zh ? "、" : ", ");
+				return SourceLink({
+					zh,
+					title: sourceTitleOf(source.title, "", source.url),
+					url: source.url,
+					// The host is the group's own heading when grouped, so repeating
+					// it on every card underneath is the same word twenty times down
+					// one column.
+					host: byHost ? "" : source.host,
+					meta: [
+						jsx("span", {
+							style: { ...COUNT_CHIP, flex: "none" },
+							children: zh ? `${source.findings} 条发现` : `${source.findings} finding(s)`
+						}, "findings"),
+						// VERIFIED AGAINST THE PAGE, not merely recorded from it — and
+						// now a mark rather than the third clause of five. A source
+						// that produced six findings of which none verified is a source
+						// that carried nothing, and one grey number in a row of grey
+						// numbers cannot say that.
+						//
+						// THE HUE IS AN EQUALITY, not the 0.8/0.5 ladder the tiles use:
+						// a page whose every finding held up is a different kind of fact
+						// from one that mostly did, and this row is where that
+						// difference is the reader's whole question. The GLYPH carries
+						// it too — a bare coloured dot, which is what the reference
+						// asked for, says nothing at all to a reader who cannot
+						// separate the two tints.
+						Chip({
+							tone: source.verified === 0 ? TONE.muted
+								: source.verified >= source.findings ? TONE.success
+									: TONE.warn,
+							icon: source.verified === 0 ? "minus"
+								: source.verified >= source.findings ? "check" : "alert",
+							label: zh ? `已核验 ${source.verified} 条` : `${source.verified} verified`
+						}, "verified"),
+						fed === "" ? null : jsx("span", {
+							style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+							title: fed,
+							children: fed
+						}, "dims"),
+						source.firstSeenAt === null || source.firstSeenAt === undefined ? null : jsx("span", {
+							style: { flex: "none", fontFamily: MONO },
+							children: formatStamp(source.firstSeenAt)
+						}, "seen")
+					]
+				}, source.url);
+			};
 
 			return jsxs("div", {
 				children: [
 					picker,
+					// THE FOURTH DOT-JOINED SENTENCE, and the last one this batch
+					// reaches. Four figures — findings, sources, hosts, verified —
+					// were one 12px grey clause, and the one a reader is actually
+					// here for is the last of the four: how much of what was read
+					// held up. It is a tile with a rate under it now.
+					MissionStatTiles({ tiles: [
+						{ label: zh ? "发现" : "Findings", value: String(totals.findings) },
+						{
+							label: zh ? "已核验" : "Verified",
+							value: String(totals.verified),
+							// THE COVERAGE LADDER, shared with the report's scorecard and
+							// the reference list rather than typed a third time here. Its
+							// "not green at nought" rule — nothing recorded means nothing
+							// to have verified, and `verified >= total` is true at zero —
+							// now lives inside `missionRateHue` where all three readers
+							// get it.
+							tone: missionRateHue(totals.verified, totals.findings),
+							meter: missionRate(totals.verified, totals.findings),
+							hint: totals.findings === 0 ? "" : `${Math.round((totals.verified / totals.findings) * 100)}%`
+						},
+						{ label: zh ? "来源" : "Sources", value: String(totals.sources) },
+						{ label: zh ? "站点" : "Hosts", value: String(totals.hosts) }
+					] }, "totals"),
+					// The spacer that used to push this control away from the totals
+					// went with the totals. One element in a row does not need
+					// something empty beside it to be on the right.
 					jsxs("div", {
-						style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", margin: "0 0 8px" },
+						style: { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: SPACE.md, flexWrap: "wrap", margin: `0 0 ${SPACE.sm}` },
 						children: [
-							jsx("span", {
-								style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
-								children: zh
-									? `${totals.findings} 条发现 · ${totals.sources} 个来源 · ${totals.hosts} 个站点 · 已核验 ${totals.verified} 条`
-									: `${totals.findings} findings · ${totals.sources} sources · ${totals.hosts} hosts · ${totals.verified} verified`
-							}, "totals"),
-							jsx("span", { style: { flex: 1 } }, "spacer"),
-							jsx("button", {
-								type: "button",
-								"aria-pressed": byHost,
-								style: { ...controlStyle(), height: "26px", padding: "0 10px", fontSize: "12px" },
-								onClick: () => { setByHost(!byHost); },
-								children: byHost ? (zh ? "按引用次数排" : "By citation count") : (zh ? "按站点分组" : "Group by host")
-							}, "group")
+							jsx("div", {
+								style: SEGMENT_TRACK,
+								role: "group",
+								"aria-label": zh ? "来源排列方式" : "How to arrange the sources",
+								children: MISSION_SOURCE_ORDERS.map((mode) => jsx("button", {
+									type: "button",
+									"aria-pressed": order === mode.id,
+									className: "swm-focus",
+									style: segmentStyle(order === mode.id),
+									onClick: () => { setOrder(mode.id); },
+									children: zh ? mode.zh : mode.en
+								}, mode.id))
+							}, "orders")
 						]
 					}, "head"),
-					!byHost ? jsx("div", { children: sources.map(row) }, "flat") : jsx("div", {
-						style: { display: "flex", flexDirection: "column", gap: "12px" },
+					order === "dim" ? jsx("div", {
+						style: { display: "flex", flexDirection: "column", gap: SPACE.lg },
+						children: byDimension.map(dimensionGroup)
+					}, "dims") : !byHost ? jsx("div", {
+						style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
+						children: ordered.map(row)
+					}, "flat") : jsx("div", {
+						style: { display: "flex", flexDirection: "column", gap: SPACE.lg },
 						children: grouped.map((entry) => jsxs("div", {
 							children: [
-								jsx("div", {
-									style: { fontSize: "12px", fontWeight: 600, fontFamily: MISSION_MONO, color: "var(--dsw-alias-label-primary)" },
-									children: zh
-										? `${entry.host} · ${entry.rows.length} 页 · ${entry.findings} 条发现`
-										: `${entry.host} · ${entry.rows.length} page(s) · ${entry.findings} finding(s)`
+								jsxs("div", {
+									style: { display: "flex", alignItems: "center", gap: SPACE.sm, margin: `0 0 ${SPACE.xs}` },
+									children: [
+										jsx("span", {
+											style: {
+												font: FONT.smallStrong, fontFamily: MONO, color: INK.primary,
+												minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+											},
+											children: entry.host
+										}, "name"),
+										jsx("span", {
+											style: { ...COUNT_CHIP, flex: "none" },
+											children: zh ? `${entry.rows.length} 页` : `${entry.rows.length} page(s)`
+										}, "pages"),
+										jsx("span", { style: { flex: 1 } }, "spacer"),
+										jsx("span", {
+											style: { ...COUNT_CHIP, flex: "none" },
+											children: zh ? `${entry.findings} 条发现` : `${entry.findings} finding(s)`
+										}, "findings")
+									]
 								}, "host"),
-								jsx("div", { children: entry.rows.map(row) }, "rows")
+								// THE COMPARISON THE GROUPING EXISTS TO ANSWER, which was a
+								// `·` between two numbers. The question on this pane is
+								// whether one site is holding the whole report up, and the
+								// answer to that is a LENGTH beside the length above it —
+								// not two figures three rows apart that the reader has to
+								// divide by eye.
+								//
+								// Measured against the biggest host rather than against the
+								// total, because the total is already four tiles up and what
+								// is being compared here is hosts to each other.
+								Meter({
+									value: entry.findings, max: grouped[0].findings, tone: TONE.info,
+									style: { margin: `0 0 ${SPACE.sm}` }
+								}, "share"),
+								jsx("div", {
+									style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
+									children: entry.rows.map(row)
+								}, "rows")
 							]
 						}, entry.host))
 					}, "grouped")
@@ -7183,7 +10651,14 @@ window.__ModuleLoader__.load({
 		* left the state pointing at a tab that no longer existed: a pressed-nothing
 		* strip over an empty body, which is a blank screen with chrome on top.
 		*/
-		const MISSION_PANES = ["tasks", "trace", "report", "sources", "dimensions", "cost"];
+		// FIVE, and 证据 is the one that went. It held dimension cards over their
+		// findings, and every layer of it was stated somewhere better: the
+		// per-dimension verified counts are columns in the task table, and a
+		// finding's quote reads in the trajectory and again under the report's own
+		// citations — where it is the FROZEN evidence the signature was given
+		// against, rather than live rows that a rerun moves. Its one unique axis,
+		// which dimension a page was read for, is now an arrangement on 参考文献.
+		const MISSION_PANES = ["tasks", "trace", "report", "sources", "cost"];
 
 		/**
 		* The six panes of one mission, as a tab strip.
@@ -7218,41 +10693,59 @@ window.__ModuleLoader__.load({
 				{ id: "tasks", label: zh ? "任务" : "Tasks", count: stages },
 				{ id: "trace", label: zh ? "轨迹" : "Trajectory", count: steps },
 				{ id: "report", label: zh ? "报告" : "Report", count: null },
-				{ id: "sources", label: zh ? "参考文献" : "References", count: null },
-				{ id: "dimensions", label: zh ? "证据" : "Evidence", count: findings },
+				// The findings count rides on 参考文献 now. It was the evidence
+				// tab's count and it is still the same number — what was read is
+				// what produced them — so losing the tab must not lose the figure.
+				{ id: "sources", label: zh ? "参考文献" : "References", count: findings },
 				{ id: "cost", label: zh ? "成本" : "Cost", count: null }
 			];
+			// THE THIRD TAB VOCABULARY, RETIRED. This strip was a segmented pill
+			// track — a `fill-tertiary` rail, a raised thumb, `aria-pressed` — one
+			// screen away from a page strip that underlines and a trajectory strip
+			// that underlines. A segmented control says "the same content,
+			// arranged differently"; these six are six different pages of one
+			// mission, which is what a tab says. It underlines now, off the same
+			// `.swm-tab` the other two wear.
+			//
+			// `aria-selected` REPLACES `aria-pressed`, and it is not a rename:
+			// `aria-pressed` on a bare button announces a toggle that is down,
+			// which is what six mutually exclusive panes are not, and it is also
+			// the attribute the shared CSS matches to draw the underline. The
+			// row is a real `tablist` of real `tab`s for the same reason.
 			const strip = jsx("div", {
+				role: "tablist",
+				className: "swm-tabbar",
 				style: {
-					display: "flex", alignItems: "center", gap: "4px",
-					margin: 0, padding: "3px",
-					borderRadius: "9px", background: "var(--dsw-alias-fill-tertiary)",
-					width: "fit-content"
+					display: "flex", alignItems: "center", gap: SPACE.md,
+					flex: 1, minWidth: 0,
+					overflowX: "auto", overflowY: "hidden", scrollbarWidth: "none"
 				},
 				children: panes.map((entry) => {
 					const on = entry.id === pane;
 					return jsxs("button", {
 						type: "button",
-						"aria-pressed": on,
+						role: "tab",
+						className: "swm-tab",
+						"aria-selected": on,
 						onClick: () => { setPane(entry.id); },
 						style: {
-							appearance: "none", border: "none", cursor: "pointer",
-							display: "flex", alignItems: "center", gap: "6px",
-							height: "28px", padding: "0 14px", borderRadius: "7px",
-							font: "inherit", fontSize: "13px",
-							fontWeight: on ? 600 : 400,
-							background: on ? "var(--dsw-alias-bg-primary)" : "transparent",
-							color: on ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)",
-							boxShadow: on ? "0 1px 2px rgba(0,0,0,0.06)" : "none"
+							// The same 13px pair as the page strip and the
+							// trajectory strip, so a label does not shift under the
+							// pointer when its pane opens.
+							font: on ? FONT.bodyStrong : FONT.body,
+							display: "flex", alignItems: "center", gap: SPACE.xs,
+							padding: `${SPACE.sm} 2px 10px`,
+							color: on ? "var(--dsw-alias-state-business-primary)" : INK.secondary
 						},
 						children: [
 							jsx("span", { children: entry.label }, "label"),
+							// A BADGE, not grey text. "6" beside a pane name in
+							// `INK.quiet` reads as an artefact of the label rather
+							// than as the answer to how many, and `INK.quiet` is the
+							// decoration weight — 3.71:1, under what a value the
+							// reader has to read is allowed to be.
 							entry.count === null || entry.count === 0 ? null : jsx("span", {
-								style: {
-									fontFamily: MISSION_MONO, fontSize: "11px",
-									fontVariantNumeric: "tabular-nums",
-									color: "var(--dsw-alias-label-tertiary)"
-								},
+								style: COUNT_CHIP,
 								children: String(entry.count)
 							}, "count")
 						]
@@ -7264,20 +10757,34 @@ window.__ModuleLoader__.load({
 			// it. A span rather than a control: the strip's buttons are the strip's
 			// buttons, and a seventh clickable thing in that row would be read as a
 			// seventh pane.
+			// THE RULE RUNS UNDER THE WHOLE ROW, not just under the six tabs,
+			// which is why the border is here and not on the tablist: a hairline
+			// that stops where the tabs stop draws a line to nowhere with the
+			// spend hanging off the end of it. `flex-end` puts the spend on the
+			// tabs' baseline instead of on their optical centre.
+			//
+			// AND THE ROW NO LONGER WRAPS. It could, and the strip is the one
+			// thing on this screen that must not: a second line of tabs appearing
+			// under the first at a narrow width reads as twelve panes. The strip
+			// scrolls instead.
 			return jsxs("div", {
-				style: { display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap", margin: "0 0 12px" },
+				style: {
+					display: "flex", alignItems: "flex-end", gap: SPACE.md,
+					margin: `0 0 ${SPACE.md}`,
+					borderBottom: `1px solid ${LINE.rule}`
+				},
 				children: [
 					strip,
 					(spend ?? "") === "" ? null : jsx("span", {
-						style: {
-							fontSize: "11px", fontFamily: MISSION_MONO, fontVariantNumeric: "tabular-nums",
-							color: "var(--dsw-alias-label-tertiary)"
+						style: { font: FONT.micro, fontFamily: MONO, fontVariantNumeric: "tabular-nums",
+							flex: "none", paddingBottom: "10px", color: INK.quiet
 						},
 						children: spend
 					}, "spend")
 				]
 			});
 		}
+
 
 		function MissionDetail({ missionId, zh, onBack, initialPane }) {
 			const [view, setView] = useState(null);
@@ -7307,6 +10814,20 @@ window.__ModuleLoader__.load({
 			// dimension. Switched in place, the way the report does it, so the
 			// frame never moves under the reader.
 			const [source, setSource] = useState(null);
+			// ABOVE THE EARLY RETURNS, and that is the whole reason it is here
+			// rather than beside the flag that reads it. This component returns
+			// early three times — loading, error, and the source reader — so a
+			// `useState` written further down runs on some renders and not
+			// others, and React counts hooks by call order: the render that
+			// crosses from loading to ready calls one more than the last one did
+			// and throws before it paints. It is not a subtle failure. The tab
+			// does not open.
+			//
+			// The render harness in tests/settings.test.mjs does NOT catch this:
+			// it stores hook slots by call order per instance and simply grows
+			// the array, so a conditional hook works there and only there. The
+			// source guard in tests/design-tokens.test.mjs is what holds it.
+			const [failureOpen, setFailureOpen] = useState(false);
 
 			useEffect(() => {
 				let alive = true;
@@ -7359,31 +10880,77 @@ window.__ModuleLoader__.load({
 			}, [missionId, zh]);
 
 			if (state === "loading" && view === null) {
-				// With the back control, not without it. A slow first read that
-				// offers no way out is a tab a person has to close the whole
-				// page to leave.
+				// WITH THE BACK CONTROL, not without it. A slow first read that
+				// offers no way out is a tab a person has to close the whole page
+				// to leave.
 				return jsxs("div", {
-					style: { ...CONTENT_STYLE, padding: "0 24px" },
+					// WIDE_STYLE, matching the screen this becomes. It was
+					// CONTENT_STYLE — a 1080px cap the built view does not have —
+					// so on a wide overlay the whole page slid sideways at the
+					// moment the answer landed, which is the one jump a skeleton
+					// exists to remove.
+					style: { ...WIDE_STYLE, padding: "0 24px" },
 					children: [
 						jsx("button", {
-							type: "button", style: controlStyle(), onClick: onBack,
-							children: zh ? "← 返回任务列表" : "← Back to missions"
+							type: "button", className: "swm-back swm-focus", style: backStyle(), onClick: onBack,
+							children: [jsx(Icon, { name: "arrowLeft", size: ICON.xs }, "glyph"), zh ? "返回任务列表" : "Back to missions"]
 						}, "back"),
-						jsx("div", { style: { ...NOTE_STYLE, marginTop: "14px" }, children: zh ? "加载中…" : "Loading…" }, "note")
+						// THE REAL FRAME, in the real order: the header row, the meta
+						// line, the tab strip on its rule, then the panes. This
+						// screen is the one where a dashed box cost the most — the
+						// built view is five stacked regions and the read behind it
+						// is the slowest in the tab.
+						SkeletonScreen({
+							zh,
+							style: { display: "flex", flexDirection: "column", gap: SPACE.md, marginTop: SPACE.md },
+							children: [
+								jsxs("div", {
+									style: { display: "flex", alignItems: "center", gap: SPACE.sm },
+									children: [
+										Skeleton({ w: "88px", h: "28px", r: RADIUS.sm }, "back"),
+										Skeleton({ w: "220px", h: "20px" }, "topic"),
+										Skeleton({ w: "64px", h: "18px", r: RADIUS.pill }, "pill")
+									]
+								}, "bar"),
+								Skeleton({ w: "60%", h: "12px" }, "meta"),
+								jsxs("div", {
+									// Six labels over the strip's own hairline. The
+									// spec asked for six pills in a tinted track,
+									// which is what this strip was before it became
+									// an underlined tablist; a skeleton drawn to a
+									// retired shape is a page that jumps twice.
+									style: {
+										display: "flex", alignItems: "center", gap: SPACE.lg,
+										padding: "0 0 10px", borderBottom: `1px solid ${LINE.rule}`
+									},
+									children: [0, 1, 2, 3, 4, 5].map((at) => Skeleton({ w: "48px", h: "14px" }, "t" + at))
+								}, "tabs"),
+								...[0, 1, 2].map((at) => jsx("div", {
+									style: { ...CARD_STYLE, marginBottom: 0, height: "96px" }
+								}, "card" + at))
+							]
+						}, "skeleton")
 					]
 				});
 			}
 			if (state === "error" && view === null) {
 				return jsxs("div", {
-					style: { ...CONTENT_STYLE, padding: "0 24px" },
+					style: { ...WIDE_STYLE, padding: "0 24px" },
 					children: [
 						jsx("button", {
-							type: "button", style: controlStyle(), onClick: onBack,
-							children: zh ? "← 返回任务列表" : "← Back to missions"
+							type: "button", className: "swm-back swm-focus", style: backStyle(), onClick: onBack,
+							children: [jsx(Icon, { name: "arrowLeft", size: ICON.xs }, "glyph"), zh ? "返回任务列表" : "Back to missions"]
 						}, "back"),
-						jsx("div", {
-							style: { ...NOTE_STYLE, marginTop: "14px" },
-							children: (zh ? "读不到这个任务：" : "Could not read this mission: ") + error
+						// THE ONLY CONTROL ON THIS SCREEN USED TO BE THE ONE THAT
+						// LEAVES IT. A mission whose view route blipped could only be
+						// re-read by going back to the list and opening it again —
+						// two navigations to repeat one GET.
+						ErrorBox({
+							title: zh ? "读不到这个任务" : "Could not read this mission",
+							message: error,
+							endpoint: `${apiBase()}/missions/${missionId}/view`,
+							onRetry: () => { setTick((value) => value + 1); },
+							zh
 						}, "note")
 					]
 				});
@@ -7414,29 +10981,86 @@ window.__ModuleLoader__.load({
 			const shownVersion = reportVersion > 0 ? reportVersion : Number(artifact.version ?? 0);
 			const progress = mission.progress ?? {};
 
+			// SEVEN FIGURES IN ONE SENTENCE was the shape, and two of them have
+			// left it. The stage fraction is the bar's now — it is drawn AND
+			// spelled there — and the elapsed clock is a tile, where it sits
+			// beside the wall-clock ceiling it is running out of. Stating either
+			// one twice on the same screen is the defect this whole batch is
+			// about.
+			//
+			// THE DIMENSION AND CHAPTER FRACTIONS STAY. They are not progress in
+			// the same sense: they say WHICH of the three ran short, they have no
+			// tile and no bar, and nothing else on this screen carries them.
 			const meta = [
 				missionFace(MISSION_TIER_FACES, mission.depth, zh),
 				zh ? `第 ${mission.runCount} 次运行` : `run ${mission.runCount}`,
-				zh ? `阶段 ${progress.stagesResolved}/${progress.stagesTotal}` : `stages ${progress.stagesResolved}/${progress.stagesTotal}`,
 				progress.dimensionsTotal > 0
 					? (zh ? `维度 ${progress.dimensionsResolved}/${progress.dimensionsTotal}` : `dimensions ${progress.dimensionsResolved}/${progress.dimensionsTotal}`)
 					: "",
 				progress.chaptersTotal > 0
 					? (zh ? `章节 ${progress.chaptersDone}/${progress.chaptersTotal}` : `chapters ${progress.chaptersDone}/${progress.chaptersTotal}`)
 					: "",
-				zh ? `已用 ${missionDuration(mission.elapsedMs, zh)}` : `${missionDuration(mission.elapsedMs, zh)} elapsed`,
 				formatStamp(mission.startedAt)
 			].filter((piece) => piece !== "").join(" · ");
 
-			// What this run has spent, for the tab row. Compact on purpose: it is a
-			// glance, and the meters one pane over are the reading.
-			const spend = [
-				zh ? `令牌 ${missionCompact(view.cost?.tokens?.used ?? 0)}` : `${missionCompact(view.cost?.tokens?.used ?? 0)} tokens`,
-				zh ? `调用 ${view.cost?.calls?.used ?? 0} 次` : `${view.cost?.calls?.used ?? 0} calls`,
-				mission.score === null || mission.score === undefined
-					? ""
-					: (zh ? `评分 ${mission.score}` : `score ${mission.score}`)
-			].filter((piece) => piece !== "").join(" · ");
+			// WHAT IS LEFT of the strip's spend line. Tokens and the score moved
+			// up into the tiles, four inches higher and in the same viewport, so
+			// keeping them here as well would be the same two figures twice on
+			// one screen. Calls is the one spend figure with no tile — a tile for
+			// it would be a fifth column of the same fact the token tile already
+			// carries a ceiling for — and the strip is where it already lived.
+			const spend = zh ? `调用 ${view.cost?.calls?.used ?? 0} 次` : `${view.cost?.calls?.used ?? 0} calls`;
+
+			// THE FOUR FIGURES A PERSON OPENS THIS SCREEN FOR. Every one of them
+			// was inside a dot-joined string: two in the meta line above and two
+			// on the tab strip below, at 11px, in the decoration weight.
+			//
+			// The token hue is `missionLadderHue` — the SAME function the six
+			// ceiling meters read, not a second copy of 0.9 and 0.7 written up
+			// here. That was the whole reason the ternary came out of
+			// MissionCostMeters' map.
+			const tokenMeter = view.cost?.tokens ?? null;
+			const wallLimit = missionDuration(view.cost?.wall?.limit, zh);
+			// Whether the reader has asked why this run failed. The STATE is
+			// declared with the other hooks at the top of this component; only
+			// the derived flag belongs here, where `mission` exists.
+			const hasFailure = (mission.errorMessage ?? "") !== "" || (mission.failureCode ?? null) !== null;
+			const statTiles = [
+				{
+					label: zh ? "令牌" : "Tokens",
+					value: missionCompact(tokenMeter?.used ?? 0),
+					tone: missionLadderHue(tokenMeter?.ratio, view.cost?.ladder),
+					hint: tokenMeter === null ? "" : missionMeterLine(tokenMeter, zh)
+				},
+				{
+					label: zh ? "评分" : "Score",
+					// null, not 0. `score ?? 0` would hand an unfinished run a
+					// failing grade it was never given — MetricStat's em dash is
+					// the file's own word for "not measured".
+					value: mission.score === null || mission.score === undefined ? null : String(mission.score),
+					tone: TONE.accent,
+					hint: mission.verdict ?? ""
+				},
+				{
+					label: zh ? "已用" : "Elapsed",
+					value: missionDuration(mission.elapsedMs, zh),
+					tone: TONE.info,
+					hint: wallLimit === "" ? "" : (zh ? `上限 ${wallLimit}` : `ceiling ${wallLimit}`)
+				},
+				{
+					label: zh ? "已核验" : "Verified",
+					value: String(evidence.verified ?? 0),
+					// GREEN IS NOT THE DEFAULT. A run that recorded nothing at all
+					// has a verified count of nought and a total of nought, and
+					// painting that success is the clean bill the report tallies
+					// were already caught giving. Nothing recorded is neutral;
+					// something recorded and none of it verified is red.
+					tone: (evidence.total ?? 0) === 0
+						? TONE.neutral
+						: (evidence.verified ?? 0) > 0 ? TONE.success : TONE.danger,
+					hint: zh ? `共 ${evidence.total ?? 0} 条发现` : `of ${evidence.total ?? 0} recorded`
+				}
+			];
 
 			// The mission's four actions, hoisted so they can sit on the header
 			// row rather than under it. They were a row of their own, which cost
@@ -7445,7 +11069,7 @@ window.__ModuleLoader__.load({
 				mission.terminal ? null : jsx("button", {
 					type: "button",
 					disabled: busy !== "",
-					style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px", flex: "none" },
+					className: "swm-ctl swm-focus", style: { ...controlStyle(busy !== ""), font: FONT.small, height: CONTROL.sm, padding: "0 10px", flex: "none" },
 					onClick: () => { void act("cancel"); },
 					children: busy === "cancel" ? (zh ? "正在中止…" : "Cancelling…") : (zh ? "中止" : "Cancel")
 				}, "cancel"),
@@ -7453,21 +11077,21 @@ window.__ModuleLoader__.load({
 					type: "button",
 					disabled: busy !== "",
 					title: resume.detail ?? "",
-					style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px", flex: "none" },
+					className: "swm-ctl swm-focus", style: { ...controlStyle(busy !== ""), font: FONT.small, height: CONTROL.sm, padding: "0 10px", flex: "none" },
 					onClick: () => { void act("resume"); },
 					children: busy === "resume" ? (zh ? "正在继续…" : "Resuming…") : (zh ? "从检查点继续" : "Resume")
 				}, "resume"),
 				!mission.terminal ? null : jsx("button", {
 					type: "button",
 					disabled: busy !== "",
-					style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px", flex: "none" },
+					className: "swm-ctl swm-focus", style: { ...controlStyle(busy !== ""), font: FONT.small, height: CONTROL.sm, padding: "0 10px", flex: "none" },
 					onClick: () => { void act("rerun", { mode: "fresh" }); },
 					children: busy === "rerun" ? (zh ? "正在重跑…" : "Rerunning…") : (zh ? "全新重跑" : "Rerun from scratch")
 				}, "rerun"),
 				!mission.terminal ? null : jsx("button", {
 					type: "button",
 					disabled: busy !== "",
-					style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px", flex: "none" },
+					className: "swm-ctl swm-focus", style: { ...controlStyle(busy !== ""), font: FONT.small, height: CONTROL.sm, padding: "0 10px", flex: "none" },
 					onClick: () => { void act("rerun", { mode: "incremental" }); },
 					children: zh ? "增量重跑" : "Rerun incrementally"
 				}, "rerunIncremental"),
@@ -7479,7 +11103,7 @@ window.__ModuleLoader__.load({
 					href: `${apiBase()}/missions/${encodeURIComponent(missionId)}/report.md`
 						+ (reportVersion > 0 ? `?version=${reportVersion}` : ""),
 					download: `${missionId}${shownVersion > 0 ? `-v${shownVersion}` : ""}.md`,
-					style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px", flex: "none", display: "inline-flex", alignItems: "center", textDecoration: "none" },
+					className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm, padding: "0 10px", flex: "none", display: "inline-flex", alignItems: "center", textDecoration: "none" },
 					children: zh ? "下载 .md" : "Download .md"
 				}, "download")
 			].filter((entry) => entry !== null);
@@ -7503,7 +11127,7 @@ window.__ModuleLoader__.load({
 						// and a two-pane reader. The report keeps its own measure on the
 						// paragraph itself, where a measure belongs.
 						...WIDE_STYLE,
-						padding: "0 24px", height: "100%", minHeight: 0, flex: "1 1 auto",
+						padding: "0 16px", height: "100%", minHeight: 0, flex: "1 1 auto",
 						display: "flex", flexDirection: "column"
 					},
 					children: [
@@ -7512,78 +11136,145 @@ window.__ModuleLoader__.load({
 						// first row of actual content began 396px down a 1050px
 						// screen — thirty-eight per cent of the window spent on
 						// chrome, above a list whose whole value is how many rows fit.
+						// A BAND, NOT A ROW FLOATING IN THE GUTTER. This header is the
+						// reader's fixed point — which mission this is, how far it got,
+						// and how to leave — and it was drawn as four unbordered items
+						// on the same background as the pane beneath them, so nothing
+						// on the screen said where the chrome stopped and the content
+						// began. The negative margin is the escape from the frame's
+						// own 24px gutter that the pane scroller already uses further
+						// down this component; it is a proven move here, not a new one.
 						jsxs("div", {
-							style: { display: "flex", alignItems: "center", gap: "8px", margin: "0 0 4px", minHeight: "30px" },
+							style: {
+								display: "flex", alignItems: "center", gap: SPACE.md, flexWrap: "wrap",
+								padding: `${SPACE.sm} ${SPACE.lg}`, margin: `0 -${SPACE.lg} ${SPACE.sm}`,
+								borderBottom: `1px solid ${LINE.rule}`, background: SURFACE.subtle
+							},
 							children: [
 								jsx("button", {
 									type: "button",
-									style: { ...controlStyle(), height: "28px", padding: "0 10px", fontSize: "12px", flex: "none" },
+									className: "swm-back swm-focus", style: { ...backStyle(), font: FONT.small, height: CONTROL.sm, padding: "0 10px", flex: "none" },
 									onClick: onBack,
-									children: zh ? "← 任务" : "← Missions"
+									children: [jsx(Icon, { name: "arrowLeft", size: ICON.xs }, "glyph"), zh ? "任务" : "Missions"]
 								}, "back"),
-								jsx("h2", {
+								// THE RUN'S OWN MARK, in the Leader's hue and drawn from
+								// the Leader's glyph. This screen is where every role's
+								// work is gathered under one owner, and the roster below
+								// it already paints that owner this colour — so the
+								// mark is the identity ramp doing its job, not a
+								// decoration picked to fill the corner.
+								jsx("div", {
 									style: {
-										margin: 0, flex: "0 1 auto", minWidth: "60px",
-										overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-										fontSize: "16px", lineHeight: "24px", fontWeight: 600,
-										color: "var(--dsw-alias-label-primary)"
+										flex: "none", width: CONTROL.sm, height: CONTROL.sm, borderRadius: RADIUS.md,
+										display: "flex", alignItems: "center", justifyContent: "center",
+										background: `rgba(${roleTone("leader")},${TINT.soft})`, color: `rgb(${roleTone("leader")})`
 									},
-									title: mission.topic,
-									children: mission.topic
-								}, "topic"),
-								jsx("span", {
-									style: {
-										flex: "none", padding: "1px 8px", borderRadius: "6px",
-										background: `rgba(${face.hue},0.12)`, color: `rgb(${face.hue})`,
-										fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap"
-									},
-									children: face.note === "" ? face.label : `${face.label} · ${face.note}`
-								}, "pill"),
-								jsx("span", { style: { flex: 1, minWidth: "8px" } }, "spacer"),
+									children: jsx(Icon, { name: ROLE_ICON.leader, size: ICON.md }, "glyph")
+								}, "mark"),
+								// TITLE AND META ARE ONE BLOCK. The meta line used to be
+								// a SIBLING of this row — a second line of grey text
+								// under it, belonging to neither the header nor the
+								// pane — so the two halves of the answer to "which run
+								// is this, and when" were separated by an edge.
+								jsxs("div", {
+									style: { flex: "1 1 200px", minWidth: 0, display: "flex", flexDirection: "column" },
+									children: [
+										jsx("h2", {
+											style: { font: FONT.largeStrong,
+												margin: 0, minWidth: 0,
+												overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+												color: INK.primary
+											},
+											title: mission.topic,
+											children: mission.topic
+										}, "topic"),
+										jsx("div", { style: META_STYLE, children: meta }, "meta")
+									]
+								}, "who"),
+								// The same state pill the list row carries, one size up
+								// because it sits beside a 16px title — not one radius
+								// and one padding away from it, which is what the two
+								// literals used to be.
+								// A CHIP WHEN THERE IS NOTHING BEHIND IT, A BUTTON WHEN
+								// THERE IS. A control that opens nothing is worse than a
+								// label — it says there is somewhere to go — so the
+								// pressable form exists only for a run that actually
+								// recorded a failure to show.
+								hasFailure
+									? jsx("button", {
+										type: "button",
+										className: "swm-focus",
+										"aria-label": zh ? `失败详情：${face.label}` : `Failure details: ${face.label}`,
+										title: zh ? "看这次失败的原始报错" : "Read the raw failure",
+										onClick: () => { setFailureOpen(true); },
+										style: {
+											appearance: "none", border: "none", background: "transparent",
+											padding: 0, cursor: "pointer", display: "inline-flex"
+										},
+										children: Chip({
+											tone: face.hue, pill: true, size: "sm", icon: face.icon,
+											label: face.note === "" ? face.label : `${face.label} · ${face.note}`
+										}, "pill")
+									}, "pill")
+									: Chip({
+										tone: face.hue, pill: true, size: "sm", icon: face.icon,
+										label: face.note === "" ? face.label : `${face.label} · ${face.note}`
+									}, "pill"),
 								...missionActions
 							]
 						}, "bar"),
-						jsx("div", { style: { ...META_STYLE, margin: "0 0 8px" }, children: meta }, "meta"),
+						// ONLY WHILE IT IS STILL RUNNING. A finished mission's
+						// progress is its outcome, which the pill above states in a
+						// word; a full green bar under a completed run is a control
+						// surface reporting the obvious, and a bar frozen at 58%
+						// under a failed one invites the reader to wait for it.
+						mission.terminal === true ? null : jsx(MissionProgressBar, {
+							progress, face, elapsedMs: mission.elapsedMs, zh
+						}, "progress"),
 
-						notice === "" ? null : jsx("div", {
-							style: { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
-							children: notice
-						}, "notice"),
-						actionError === "" ? null : jsx("div", {
-							style: { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "rgb(220,38,38)" },
-							children: actionError
-						}, "actionError"),
+						// THREE NOTICES THAT WERE NEVER BANNERS. All three were bare
+						// coloured text — no box, no mark, no cap — sitting directly
+						// under the header while the same file drew a tinted banner
+						// three times elsewhere. The one that mattered is the
+						// middle: an action error carries a RESPONSE BODY, and a
+						// 409's body is a paragraph that used to push the whole
+						// header stack down the page. The Callout caps its own body
+						// and scrolls it.
+						notice === "" ? null : Callout({ tone: TONE.info, icon: "clock", children: notice }, "notice"),
+						actionError === "" ? null : Callout({ tone: TONE.danger, icon: "alert", children: actionError }, "actionError"),
 						// A refresh that failed over a view we already have. Without
 						// this line the page keeps drawing the last good answer with
 						// a clock that never moves, which is the most convincing
 						// wrong screen this tab can produce.
-						state !== "error" ? null : jsx("div", {
-							style: { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "rgb(217,119,6)" },
-							children: (zh ? "这一次刷新失败了，下面是上一次读到的状态：" : "The latest refresh failed; what follows is the last state that was read: ") + error
+						state !== "error" ? null : Callout({
+							tone: TONE.warn,
+							icon: "refresh",
+							label: zh ? "这一次刷新失败了，下面是上一次读到的状态：" : "The latest refresh failed; what follows is the last state that was read:",
+							children: error
 						}, "staleView"),
-						// The mission's own failure, with the code beside it. The
-						// code is what makes a failure countable across missions;
-						// the sentence is what makes this one actionable.
-						(mission.errorMessage ?? "") === "" && (mission.failureCode ?? null) === null ? null : jsx(MissionFailureNote, {
-							code: mission.failureCode ?? null,
-							message: mission.errorMessage ?? "",
-							zh
-						}, "failure"),
+						// THE FAILURE IS NOT A BAND ACROSS THE TOP. It was: a tinted
+						// box with a glyph, a lead, a next-step sentence and a 详情
+						// toggle, sitting above the tiles and the ruler on the one
+						// screen whose next element is a table. Three of those four
+						// lines are the same fact the 失败 pill in the header already
+						// states, and the fourth — the provider's own words — is what
+						// the reader actually needs, one press away rather than
+						// permanently on screen.
+						//
+						// So the pill became the door. It is where a person looks to
+						// answer "did this work"; pressing it opens the diagnosis in
+						// the dialog this file already has, and the main window keeps
+						// the height for the rows.
 						// Sign-off, when there is one. `signed: null` means s11 never
 						// ran; `false` means the Leader read the report and refused.
 						// Different failures, different next actions.
-						mission.signed === null || mission.signed === undefined ? null : jsx("div", {
-							style: { margin: "0 0 14px", fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-primary)" },
-							children: mission.signed
-								? (zh ? `领队已签署，评分 ${mission.score ?? "—"}${(mission.verdict ?? "") === "" ? "" : `（${mission.verdict}）`}。` : `Signed off by the leader at ${mission.score ?? "—"}${(mission.verdict ?? "") === "" ? "" : ` (${mission.verdict})`}.`)
-								: (zh ? `领队读过报告后拒绝签署，评分 ${mission.score ?? "—"}。报告仍然可读。` : `The leader read the report and declined to sign it, at ${mission.score ?? "—"}. The report is still readable.`)
-						}, "signature"),
+						mission.signed === null || mission.signed === undefined ? null : jsx(MissionSignoffCard, { mission, zh }, "signature"),
 						// Not when the banner above already said why. "The mission
 						// ended without a report" under "budget_exhausted: calls
 						// reached 40 of 40" is the same sentence twice, and the
 						// second one costs a row of the list below it.
 						hasReport || (mission.errorMessage ?? "") !== "" ? null : jsx("div", {
-							style: { margin: "0 0 14px", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+							style: { font: FONT.small, margin: "0 0 14px", color: INK.secondary },
 							// Three reasons, three sentences. A sentinel that means
 							// both "not yet" and "we tried and it did not land" is a
 							// default wearing a costume.
@@ -7600,197 +11291,231 @@ window.__ModuleLoader__.load({
 						// strip, the meters and five dimension cards is how it went
 						// unnoticed. Every pane reads the same `view`; switching one does
 						// not refetch.
-						// The twelve-stage ruler, over every pane rather than inside one. The
-						// projector guarantees the count is invariant, so this is a shape a
-						// person learns once and then reads at a glance — which is worth
-						// nothing if it is only visible on the tab they are not on. It was
-						// defined, exported, and rendered nowhere at all.
-						(view.stages ?? []).length === 0 ? null : jsx("div", {
-							style: { margin: "0 0 10px" },
-							children: jsx(MissionStageStrip, { stages: view.stages, zh })
-						}, "ruler"),
-						jsx(MissionDetailTabs, {
-							pane: activePane, setPane, zh,
-							findings: evidence.total ?? 0,
-							steps: view.timeline?.lastEventSeq ?? null,
-							stages: (view.stages ?? []).length,
-							spend
-						}, "panes"),
-
-						// THE ONE SCROLLER on this screen. Everything above it stays put.
-						jsxs("div", {
-							// The bar belongs to the FRAME, not to a column inside it. The
-						// scroller sat inside the page's 24px gutter, so its scrollbar
-						// drew 24px in from the right edge — a rail floating in the
-						// middle of the screen with dead page beside it. Negative
-						// margin widens the scroll box to the frame edge; the padding
-						// puts the content back where it was.
-						style: {
-							flex: "1 1 auto", minHeight: 0, overflowY: "auto",
-							marginRight: "-24px", paddingRight: "24px", paddingBottom: "24px"
-						},
-							children: [
-						...(activePane !== "tasks" ? [] : [
-						jsx(MissionPanel, {
-							bare: true,
-							title: zh ? "任务" : "Tasks",
-							note: "",
-							children: jsx(MissionTaskBoard, {
-								mission,
-								stages: view.stages ?? [],
-								work: view.work ?? [],
-								agents: view.agents ?? [],
-								zh,
-								selected: task,
-								onSelect: (stepId) => { setTask(stepId); },
-								onOpenStage: (stepId) => { setFocusStep(stepId); setPane("trace"); }
+						// NO TILE ROW HERE, AND THAT IS THE POINT. The four figures it
+						// carried — tokens, score, elapsed, verified — are each stated
+						// again inside one screen: tokens and elapsed on the 成本 pane,
+						// verified as the 证据 count on the tab strip eight pixels below,
+						// and the score is a number a failed run does not have (it read
+						// 0, which is not "zero quality" but "never graded"). Four
+						// tinted boxes restating the row above them cost 100px of a
+						// window whose next element is a table, and a table is the one
+						// thing on this screen that gets better with height.
+						//
+						// MissionStatTiles itself stays — six other screens use it for
+						// figures that ARE their screen's subject.
+						// The diagnosis, out of the flow. `SwarmModal` returns null
+						// when it is shut, so a run that did not fail — and a failed
+						// run nobody has asked about — renders nothing at all here.
+						!hasFailure ? null : jsx(SwarmModal, {
+							open: failureOpen,
+							onClose: () => { setFailureOpen(false); },
+							title: zh ? "这次运行为什么失败" : "Why this run failed",
+							zh,
+							children: jsx(MissionFailureNote, {
+								code: mission.failureCode ?? null,
+								message: mission.errorMessage ?? "",
+								zh
 							})
-						}, "board"),
-						preflight === null || (preflight.messages ?? []).length === 0 ? null : jsx(MissionPanel, {
-							title: zh ? "核验风险" : "Verification risk",
-							note: preflight.known
-								? (zh ? "已经过核验阶段" : "measured after the verify stage")
-								: (zh ? "核验阶段还没跑完，这是临时值" : "provisional: the verify stage has not run yet"),
-							children: jsx("div", {
-								style: { display: "flex", flexDirection: "column", gap: "6px" },
-								children: preflight.messages.map((message, at) => jsx("div", {
-									style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
-									children: message
-								}, String(at)))
-							})
-						}, "preflight"),
+						}, "failureDialog"),
+						// NO RULER HERE EITHER. The twelve-stage strip and the task
+						// table under it are the same twelve rows: the table carries
+						// each stage's status, its owner, its duration AND a way into
+						// its trajectory, and the strip carried the first two in a
+						// shape that had to be learned. Two drawings of one list, and
+						// the weaker one was on top.
+						//
+						// The strip survives as a component because the task board's
+						// own header is where a ruler earns its place — beside the rows
+						// it indexes, not stacked above a copy of them.
+						// THE SECOND AXIS, and it starts HERE rather than at the top of
+								jsxs("div", {
+									// `minWidth: 0` IS LOAD-BEARING. A flex child's default
+									// minimum is its content, and the panes hold tables with
+									// their own `minWidth` — without it the tables would push
+									// this column wider than the frame and the rail would be
+									// scrolled off the left of the page instead of the table
+									// scrolling inside its own card.
+									style: { flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" },
+									children: [
+										jsx(MissionDetailTabs, {
+											pane: activePane, setPane, zh,
+											findings: evidence.total ?? 0,
+											steps: view.timeline?.lastEventSeq ?? null,
+											stages: (view.stages ?? []).length,
+											spend
+										}, "panes"),
 
-						// The panel that keeps a failed mission from being a blank
-						// screen. Shown whenever the run recorded that it verified
-						// nothing, whatever the mission then went on to do.
-						noEvidence === null ? null : jsx(MissionPanel, {
-							title: zh ? "这次都试了什么" : "What was tried",
-							note: zh ? "零条通过核验时留下的采集诊断" : "the collection diagnostics frozen when nothing verified",
-							children: jsx(MissionTried, { report: noEvidence, zh })
-						}, "tried"),
-						// The projector's own health. Anomalies are things it had to
-						// repair while reading — a stage still marked running on a
-						// finished mission, a stage id the catalogue does not know —
-						// and they are shown rather than silently smoothed over.
-						(view.swept ?? []).length === 0 ? null : jsx(MissionPanel, {
-							title: zh ? "读取时修正的异常" : "Anomalies repaired while reading",
-							note: zh ? "这些是显示层的修补，不是任务本身的输出" : "display-time repairs, not the mission's own output",
-							children: jsx("div", {
-								style: { display: "flex", flexDirection: "column", gap: "6px" },
-								children: view.swept.map((entry, at) => jsx("div", {
-									style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
-									children: `${entry.kind} · ${entry.key} · ${entry.reason}`
-								}, `${entry.kind}-${entry.key}-${at}`))
-							})
-						}, "swept")
-						]),
+										// THE ONE SCROLLER on this screen. Everything above it stays put.
+										jsxs("div", {
+											// The bar belongs to the FRAME, not to a column inside it. The
+										// scroller sat inside the page's 24px gutter, so its scrollbar
+										// drew 24px in from the right edge — a rail floating in the
+										// middle of the screen with dead page beside it. Negative
+										// margin widens the scroll box to the frame edge; the padding
+										// puts the content back where it was.
+										style: {
+											flex: "1 1 auto", minHeight: 0, overflowY: "auto",
+											marginRight: "-24px", paddingRight: "24px", paddingBottom: "24px"
+										},
+											children: [
+										...(activePane !== "tasks" ? [] : [
+										// NO MissionPanel WRAPPER HERE. The board mounts its own, because
+										// the count and the status key in that header are arithmetic only
+										// the board has done — see the note at its return.
+										jsx(MissionTaskBoard, {
+											mission,
+											stages: view.stages ?? [],
+											work: view.work ?? [],
+											agents: view.agents ?? [],
+											zh,
+											selected: task,
+											onSelect: (stepId) => { setTask(stepId); },
+											onOpenStage: (stepId) => { setFocusStep(stepId); setPane("trace"); }
+										}, "board"),
+										// THE BRIEF, ABOVE THE JUDGING. Every row on the board is being
+										// measured against this and it was on the wire and on no screen.
+										mission.goals === null || mission.goals === undefined ? null : jsx(MissionPanel, {
+											title: zh ? "立项目标" : "Mission goals",
+											note: zh
+												? "领队立项时写下的，原样呈现"
+												: "written by the leader when the mission was opened, verbatim",
+											children: jsx(MissionGoals, { goals: mission.goals, zh })
+										}, "goals"),
+										preflight === null || (preflight.messages ?? []).length === 0 ? null : jsx(MissionPanel, {
+											title: zh ? "核验风险" : "Verification risk",
+											count: preflight.messages.length,
+											note: preflight.known
+												? (zh ? "已经过核验阶段" : "measured after the verify stage")
+												: (zh ? "核验阶段还没跑完，这是临时值" : "provisional: the verify stage has not run yet"),
+											children: jsx("div", {
+												style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
+												children: preflight.messages.map((message, at) => jsx("div", {
+													style: { font: FONT.small, color: INK.secondary },
+													children: message
+												}, String(at)))
+											})
+										}, "preflight"),
 
-						...(activePane !== "report" ? [] : [
-						// The deliverable, in the frame rather than instead of it. It
-						// used to replace the whole screen, which meant leaving the
-						// report was leaving the mission — so the evidence behind a
-						// sentence was two navigations away from the sentence.
-						!hasReport ? jsx(MissionEmptyPane, {
-							mission, zh,
-							waiting: zh
-								? "还没有生成报告 —— 任务还没有走到归档那一步。写好之后会出现在这里。"
-								: "No report yet: the mission has not reached the persist stage. It appears here once it is written.",
-							finished: zh
-								? "还没有生成报告：这次运行结束了，却一版也没有落下 —— 每条结束路径都应该写一版，所以这是失败路径上的一个洞。"
-								: "No report exists: this run ended without storing a version, and every terminal path is supposed to write one, so this is a hole in a failure path."
-						}, "noReport") : jsx(MissionReport, {
-							missionId, zh, onBack: null,
-							version: reportVersion, onVersion: setReportVersion
-						}, "report")
-						]),
-						...(activePane !== "sources" ? [] : [
-						jsx(MissionPanel, {
-							bare: true,
-							title: zh ? "参考文献" : "References",
-							note: "",
-							children: jsx(MissionSources, { missionId, zh, mission })
-						}, "sources")
-						]),
+										// The panel that keeps a failed mission from being a blank
+										// screen. Shown whenever the run recorded that it verified
+										// nothing, whatever the mission then went on to do.
+										noEvidence === null ? null : jsx(MissionPanel, {
+											title: zh ? "这次都试了什么" : "What was tried",
+											note: zh ? "零条通过核验时留下的采集诊断" : "the collection diagnostics frozen when nothing verified",
+											children: jsx(MissionTried, { report: noEvidence, zh })
+										}, "tried"),
+										// The projector's own health. Anomalies are things it had to
+										// repair while reading — a stage still marked running on a
+										// finished mission, a stage id the catalogue does not know —
+										// and they are shown rather than silently smoothed over.
+										(view.swept ?? []).length === 0 ? null : jsx(MissionPanel, {
+											title: zh ? "读取时修正的异常" : "Anomalies repaired while reading",
+											count: view.swept.length,
+											note: zh ? "这些是显示层的修补，不是任务本身的输出" : "display-time repairs, not the mission's own output",
+											children: jsx("div", {
+												style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
+												children: view.swept.map((entry, at) => jsx("div", {
+													style: { font: FONT.small, color: INK.secondary },
+													children: `${entry.kind} · ${entry.key} · ${entry.reason}`
+												}, `${entry.kind}-${entry.key}-${at}`))
+											})
+										}, "swept")
+										]),
 
-						...(activePane !== "dimensions" ? [] : [
-						(view.dimensions ?? []).length === 0 ? jsx(MissionEmptyPane, {
-							mission, zh,
-							waiting: zh
-								? "还没有维度：等 Leader 把课题拆开，维度和它们的证据会一个个出现。"
-								: "No dimensions yet: once the leader breaks the topic apart, they and their evidence appear here one at a time.",
-							finished: zh
-								? "这次运行没有留下任何维度，也就没有任何证据可看。"
-								: "This run recorded no dimensions at all, so there is no evidence to read."
-						}, "noDimensions") : jsx(MissionPanel, {
-							bare: true,
-							title: zh ? "维度" : "Dimensions",
-							// The counts stay — they are facts about this mission — but
-							// the instruction ("open a dimension to read them") does
-							// not: the cards say 看这 N 条证据 on themselves.
-							note: zh
-								? `已核验 ${evidence.verified ?? 0} 条 · 共 ${evidence.total ?? 0} 条发现`
-								: `${evidence.verified ?? 0} verified of ${evidence.total ?? 0} findings`,
-							children: jsx(MissionDimensions, {
-								missionId, dimensions: view.dimensions, zh,
-								onOpenSource: (entry) => { setSource(entry); }
-							})
-						}, "dimensions")
-						]),
+										...(activePane !== "report" ? [] : [
+										// The deliverable, in the frame rather than instead of it. It
+										// used to replace the whole screen, which meant leaving the
+										// report was leaving the mission — so the evidence behind a
+										// sentence was two navigations away from the sentence.
+										!hasReport ? jsx(MissionEmptyPane, {
+											mission, zh,
+											waiting: zh
+												? "还没有生成报告 —— 任务还没有走到归档那一步。写好之后会出现在这里。"
+												: "No report yet: the mission has not reached the persist stage. It appears here once it is written.",
+											finished: zh
+												? "还没有生成报告：这次运行结束了，却一版也没有落下 —— 每条结束路径都应该写一版，所以这是失败路径上的一个洞。"
+												: "No report exists: this run ended without storing a version, and every terminal path is supposed to write one, so this is a hole in a failure path."
+										}, "noReport") : jsx(MissionReport, {
+											missionId, zh, onBack: null,
+											version: reportVersion, onVersion: setReportVersion
+										}, "report")
+										]),
+										...(activePane !== "sources" ? [] : [
+										jsx(MissionPanel, {
+											bare: true,
+											title: zh ? "参考文献" : "References",
+											note: "",
+											children: jsx(MissionSources, { missionId, zh, mission })
+										}, "sources")
+										]),
 
-						...(activePane !== "trace" ? [] : [
-						// The trajectory, in place of the event tail that used to sit
-						// here. The tail showed one of the four things a mission does
-						// and none of the three that answer "why did this dimension
-						// come back empty" — the tool calls with their arguments, the
-						// findings with their quotes, and the stage transitions those
-						// two happened under.
-						jsx(MissionPanel, {
-							bare: true,
-							title: zh ? "轨迹" : "Trajectory",
-							// The sentence explaining what a trajectory is belongs on
-							// the tab that opens it, not on a line above it that is
-							// re-read every single visit.
-							note: "",
-							children: jsx(MissionTrace, {
-								missionId, zh,
-								live: !mission.terminal,
-								timeline: view.timeline,
-								focusStep,
-								onOpenSource: (entry) => { setSource(entry); }
-							})
-						}, "trace")
-						]),
 
-						...(activePane !== "cost" ? [] : [
-						jsx(MissionPanel, {
-							title: zh ? "额度" : "Allowances",
-							note: zh ? "上限在建立任务时冻结，之后每个阶段都读同一行" : "the ceilings were frozen when the mission was opened",
-							children: jsx(MissionCostMeters, { cost: view.cost ?? {}, zh })
-						}, "cost"),
-						(view.cost?.byStage ?? []).length === 0 ? null : jsx(MissionPanel, {
-							title: zh ? "哪一步花的" : "Which stage spent it",
-							note: zh
-								? "按阶段分解 —— 一份总数说不出是哪一步在烧"
-								: "broken down by stage — one total cannot say which step is burning it",
-							children: jsx(MissionStageSpend, { byStage: view.cost.byStage, zh })
-						}, "byStage"),
-						(view.cost?.byTool ?? []).length === 0 ? null : jsx(MissionPanel, {
-							title: zh ? "哪个工具在失败" : "Which tool is failing",
-							note: zh
-								? "失败和缓存都算在调用里 —— 一次失败的抓取和一次命中缓存都花了额度"
-								: "failures and cache hits are calls too — both spent the allowance",
-							children: jsx(MissionToolTable, { byTool: view.cost.byTool, zh })
-						}, "byTool"),
-						(view.agents ?? []).length === 0 ? null : jsx(MissionPanel, {
-							title: zh ? "谁花的" : "Who spent it",
-							note: zh
-								? "按执行者分解 —— 一份总数说不出哪个维度在返工"
-								: "broken down by agent — one total cannot say which dimension was redoing its work",
-							children: jsx(MissionAgentTable, { agents: view.agents, zh })
-						}, "agents")
-						])
-							]
-						}, "paneBody")
+										...(activePane !== "trace" ? [] : [
+										// The trajectory, in place of the event tail that used to sit
+										// here. The tail showed one of the four things a mission does
+										// and none of the three that answer "why did this dimension
+										// come back empty" — the tool calls with their arguments, the
+										// findings with their quotes, and the stage transitions those
+										// two happened under.
+										jsx(MissionPanel, {
+											bare: true,
+											title: zh ? "轨迹" : "Trajectory",
+											// The sentence explaining what a trajectory is belongs on
+											// the tab that opens it, not on a line above it that is
+											// re-read every single visit.
+											note: "",
+											children: jsx(MissionTrace, {
+												missionId, zh,
+												live: !mission.terminal,
+												timeline: view.timeline,
+												focusStep,
+												onOpenSource: (entry) => { setSource(entry); }
+											})
+										}, "trace")
+										]),
+
+										...(activePane !== "cost" ? [] : [
+										jsx(MissionPanel, {
+											title: zh ? "额度" : "Allowances",
+											note: zh ? "上限在建立任务时冻结，之后每个阶段都读同一行" : "the ceilings were frozen when the mission was opened",
+											children: jsx(MissionCostMeters, { cost: view.cost ?? {}, zh })
+										}, "cost"),
+										jsx(MissionPanel, {
+											title: zh ? "返工" : "Rework",
+											note: zh
+												? "花了两次的部分 —— 缓存是省下的，所以它是绿的"
+												: "what was paid for twice — cache hits are the saving, which is why they are green",
+											children: jsx(MissionRework, { waste: view.cost?.waste ?? null, zh })
+										}, "rework"),
+										(view.cost?.byStage ?? []).length === 0 ? null : jsx(MissionPanel, {
+											title: zh ? "哪一步花的" : "Which stage spent it",
+											count: view.cost.byStage.length,
+											note: zh
+												? "按阶段分解 —— 一份总数说不出是哪一步在烧"
+												: "broken down by stage — one total cannot say which step is burning it",
+											children: jsx(MissionStageSpend, { byStage: view.cost.byStage, zh })
+										}, "byStage"),
+										(view.cost?.byTool ?? []).length === 0 ? null : jsx(MissionPanel, {
+											title: zh ? "哪个工具在失败" : "Which tool is failing",
+											count: view.cost.byTool.length,
+											note: zh
+												? "失败和缓存都算在调用里 —— 一次失败的抓取和一次命中缓存都花了额度"
+												: "failures and cache hits are calls too — both spent the allowance",
+											children: jsx(MissionToolTable, { byTool: view.cost.byTool, zh })
+										}, "byTool"),
+										(view.agents ?? []).length === 0 ? null : jsx(MissionPanel, {
+											title: zh ? "谁花的" : "Who spent it",
+											count: view.agents.length,
+											note: zh
+												? "按执行者分解 —— 一份总数说不出哪个维度在返工"
+												: "broken down by agent — one total cannot say which dimension was redoing its work",
+											children: jsx(MissionAgentTable, { agents: view.agents, zh })
+										}, "agents")
+										])
+											]
+										}, "paneBody")
+									]
+								}, "workbench")
 					]
 				})
 			});
@@ -7807,7 +11532,7 @@ window.__ModuleLoader__.load({
 		* all. A neutral entry is the difference between a grey badge and a
 		* reader that renders nothing.
 		*/
-		const MISSION_SOURCE_KIND = { id: "other", type: "", en: "Source", zh: "信源", hue: "100,116,139" };
+		const MISSION_SOURCE_KIND = { id: "other", type: "", en: "Source", zh: "信源", hue: TONE.neutral };
 
 		/**
 		* One frozen piece of evidence: what was claimed, the sentence it rests
@@ -7823,37 +11548,55 @@ window.__ModuleLoader__.load({
 		*/
 		function MissionEvidenceRow({ row, zh, onOpen }) {
 			const verified = String(row.verifyState ?? "").startsWith("verified");
-			const accent = verified ? "5,150,105" : "217,119,6";
-			const name = (row.sourceTitle ?? "") !== "" ? row.sourceTitle
-				: (row.sourceHost ?? "") !== "" ? row.sourceHost
-				: hostOf(row.sourceUrl ?? "");
+			const accent = verified ? TONE.success : TONE.warn;
+			// THE SAME FOUR-STEP FALLBACK THE SOURCE CARDS USE, so one page named
+			// on this row and on the sources pane is named the same thing. This
+			// was the third hand-written copy of the ladder, and it was the short
+			// one: title, host, host — no path segment at all, so a titleless page
+			// on a site with twenty of them was indistinguishable from the other
+			// nineteen. `sourceHost` still gets the last word where the address
+			// itself did not survive, because the row carries it and `hostOf("")`
+			// cannot.
+			const name = sourceTitleOf(row.sourceTitle, "", row.sourceUrl) || (row.sourceHost ?? "");
 			const openable = typeof row.sourceUrl === "string" && row.sourceUrl !== "";
 
 			return jsxs("div", {
 				style: {
-					display: "flex", alignItems: "flex-start", gap: "9px",
-					padding: "8px 10px", borderRadius: "8px", background: `rgba(${accent},0.06)`
+					display: "flex", alignItems: "flex-start", gap: SPACE.sm,
+					padding: "8px 10px", borderRadius: RADIUS.md, background: `rgba(${accent},${TINT.soft})`
 				},
 				children: [
 					jsx("span", {
-						style: { flex: "none", color: `rgb(${accent})`, fontSize: "13px", lineHeight: "20px" },
-						children: verified ? "✓" : "!"
+						style: { font: FONT.body, flex: "none", color: `rgb(${accent})` },
+						children: jsx(Icon, { name: verified ? "check" : "alert", size: ICON.xs })
 					}, "mark"),
 					jsxs("div", {
-						style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "3px" },
+						style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: SPACE.xs },
 						children: [
 							jsx("div", {
-								style: { fontSize: "13px", lineHeight: "20px", color: "var(--dsw-alias-label-primary)" },
+								style: { font: FONT.body, color: INK.primary },
 								children: row.claim
 							}, "claim"),
+							// THE QUOTE, CAPPED. This row is a div rather than a button,
+							// so unlike the finding row above it can carry a real
+							// expander — and it needs one: a frozen evidence quote is
+							// whatever the extractor pulled off the page, which is
+							// sometimes two sentences and sometimes half an article.
 							jsx("div", {
-								style: { fontSize: "12px", lineHeight: "19px", color: "var(--dsw-alias-label-secondary)" },
-								children: `“${row.quote}”`
+								style: { font: FONT.small, color: INK.secondary },
+								children: jsx(MissionClamp, { text: `“${row.quote}”`, lines: 3, zh })
 							}, "quote"),
 							jsxs("div", {
-								style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+								style: { font: FONT.micro, display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", color: INK.secondary },
 								children: [
-									jsx("span", { children: missionFace(MISSION_VERIFY_FACES, row.verifyState, zh) }, "state"),
+									// The verdict, as a chip in the state's own colour. It used
+									// to be the first of four identical grey spans on one line,
+									// which made "this quote was found in another source" and
+									// "fetched at 14:02" the same weight of fact.
+									Chip({
+										tone: missionHue(MISSION_VERIFY_FACES, row.verifyState),
+										label: missionFace(MISSION_VERIFY_FACES, row.verifyState, zh)
+									}, "state"),
 									jsx("span", { children: name }, "name"),
 									row.fetchedAt === null || row.fetchedAt === undefined ? null
 										: jsx("span", { children: (zh ? "抓取于 " : "fetched ") + formatStamp(row.fetchedAt) }, "fetched"),
@@ -7875,9 +11618,9 @@ window.__ModuleLoader__.load({
 									}, "noUrl") : jsx("button", {
 										type: "button",
 										onClick: () => { onOpen(row); },
-										style: {
+										style: { font: FONT.micro,
 											appearance: "none", border: "none", background: "transparent", padding: 0,
-											color: `rgb(${accent})`, font: "inherit", fontSize: "11px", cursor: "pointer"
+											color: `rgb(${accent})`, font: "inherit", cursor: "pointer"
 										},
 										children: (zh ? "在阅读器里打开 · " : "Open in the reader · ") + hostOf(row.sourceUrl)
 									}, "open"),
@@ -7885,7 +11628,7 @@ window.__ModuleLoader__.load({
 										href: row.sourceUrl,
 										target: "_blank",
 										rel: "noreferrer noopener",
-										style: { color: "var(--dsw-alias-label-secondary)", textDecoration: "none" },
+										style: { color: INK.secondary, textDecoration: "none" },
 										children: zh ? "原始链接" : "Original link"
 									}, "raw")
 								]
@@ -8008,7 +11751,15 @@ window.__ModuleLoader__.load({
 						: "The sign-off stage was never reached, so nobody put their name to this report.");
 				}
 				if ((reason.accountabilityNote ?? "") !== "") {
-					lines.push((zh ? "领队留下的话：" : "The leader's own note: ") + reason.accountabilityNote);
+					// THE ONE LINE IN THIS BOX THAT IS A PERSON'S SENTENCE rather than
+					// the runtime's own vocabulary, and the only one that runs to a
+					// paragraph. The Callout scrolls its body at 128px, so an
+					// uncapped note here pushes the guard's own findings — the lines
+					// above it — out of sight inside their own box.
+					lines.push(jsx(MissionClamp, {
+						text: (zh ? "领队留下的话：" : "The leader's own note: ") + reason.accountabilityNote,
+						lines: 3, zh
+					}, "note"));
 				}
 				if ((reason.failureCode ?? null) !== null) {
 					lines.push(missionFace(MISSION_FAILURE_FACES, reason.failureCode, zh));
@@ -8018,23 +11769,25 @@ window.__ModuleLoader__.load({
 				if (lines.length === 0) {
 					lines.push((reason.guardMessage ?? "") === ""
 						? (zh ? "这一版被标成了降级，但归档时没有留下任何原因 —— 这本身是一处缺陷。" : "This version is flagged degraded and no reason was recorded with it, which is itself a defect.")
-						: reason.guardMessage);
+						// The guard's raw sentence, which is machine-written and
+						// unbounded — the only text in this box nobody wrote for a
+						// reader. Clamped for the same reason as the note above, and
+						// the fallback beside it stays a plain string because this
+						// file wrote that one and knows how long it is.
+						: jsx(MissionClamp, { text: reason.guardMessage, lines: 3, zh }, "guard"));
 				}
 			}
-			return jsxs("div", {
-				style: {
-					margin: "0 0 12px", padding: "8px 11px", borderRadius: "8px",
-					background: "rgba(217,119,6,0.08)", border: "1px solid rgba(217,119,6,0.25)",
-					fontSize: "12px", lineHeight: "19px", color: "var(--dsw-alias-label-primary)"
-				},
+			return Callout({
+				tone: TONE.warn,
+				icon: "alert",
+				// The hand-set weight goes with it: this was the only one of the
+				// three boxes that tinted its lead, and the tint is the Callout's
+				// job now rather than a rule this one site remembered.
+				label: zh ? "这一版是降级归档的。" : "This version was stored degraded.",
 				children: [
-					jsx("div", {
-						style: { fontWeight: 600, color: "rgb(217,119,6)" },
-						children: zh ? "这一版是降级归档的。" : "This version was stored degraded."
-					}, "lead"),
 					...lines.map((line, at) => jsx("div", { children: line }, `l${at}`)),
 					jsx("div", {
-						style: { color: "var(--dsw-alias-label-secondary)" },
+						style: { color: INK.secondary },
 						children: zh
 							? "报告仍然写出来了，就是为了让你能看见问题出在哪。"
 							: "It was written anyway so the problem is readable."
@@ -8055,62 +11808,101 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		*/
 		function MissionReferenceList({ references, zh }) {
+			// FOUR FIGURES THE LIST ALREADY KNOWS AND NEVER SAID. The pane opened
+			// straight onto row [1] with no summary at all, so "how much of what
+			// this report cites was actually checked" — the one question a reader
+			// brings to a bibliography — could only be answered by counting the
+			// chips down the column by eye.
+			const hosts = new Set(references.map((entry) => entry.host).filter((host) => host !== ""));
+			const verified = references.filter((entry) => String(entry.verifyState ?? "").startsWith("verified")).length;
+			const quoted = references.filter((entry) => entry.quote !== "").length;
+			const missing = references.filter((entry) => !entry.joined).length;
 			return jsxs("div", {
 				style: { maxWidth: "760px", margin: "0 0 18px" },
 				children: [
 					jsx("h3", {
-						style: {
-							margin: "0 0 10px", fontSize: "15px", fontWeight: 700,
-							fontFamily: ARTICLE_SERIF, color: "var(--dsw-alias-label-primary)"
+						style: { font: FONT.baseStrong,
+							margin: "0 0 10px",
+							fontFamily: ARTICLE_SERIF, color: INK.primary
 						},
 						children: zh ? "参考文献" : "References"
 					}, "head"),
+					MissionStatTiles({ tiles: [
+						{
+							label: zh ? "引用" : "References",
+							value: String(references.length),
+							hint: zh ? `${hosts.size} 个站点` : `${hosts.size} host(s)`
+						},
+						{
+							label: zh ? "已核验" : "Verified",
+							value: String(verified),
+							tone: missionRateHue(verified, references.length),
+							meter: missionRate(verified, references.length)
+						},
+						{ label: zh ? "有引语" : "Quoted", value: String(quoted) },
+						// OMITTED WHEN ZERO, like the scorecard's residuals. A tile
+						// reading 元数据缺失 0 is the same defect one size up as the
+						// chip that printed 未通过 0，未检查 0，被反驳 0 on a clean
+						// section: three zeros read, at a glance, as three problems.
+						missing === 0 ? null : {
+							label: zh ? "元数据缺失" : "Metadata missing",
+							value: String(missing),
+							tone: TONE.warn
+						}
+					] }, "totals"),
 					jsx("div", {
-						style: { display: "flex", flexDirection: "column", gap: "10px" },
+						style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
 						children: references.map((entry) => jsxs("div", {
 							id: `ref-${entry.index}`,
-							style: {
-								display: "flex", alignItems: "flex-start", gap: "8px",
-								fontSize: "12px", lineHeight: "19px", color: "var(--dsw-alias-label-secondary)"
+							style: { font: FONT.small,
+								display: "flex", alignItems: "flex-start", gap: SPACE.sm, color: INK.secondary
 							},
 							children: [
 								jsx("span", {
-									style: { flex: "none", minWidth: "26px", fontFamily: MISSION_MONO, color: "var(--dsw-alias-label-primary)" },
+									// THE ORDINAL IS DECORATION, and INK's docblock is
+									// explicit that tertiary is the decoration budget: `[7]`
+									// is how the marker in the prose finds this row, not a
+									// value anybody reads for its own sake.
+									style: { flex: "none", minWidth: "26px", paddingTop: SPACE.sm, fontFamily: MONO, color: INK.quiet },
 									children: `[${entry.index}]`
 								}, "index"),
 								jsxs("span", {
-									style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "2px" },
+									style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: SPACE.xs },
 									children: [
-										entry.url === "" ? jsx("span", {
-											style: { color: "var(--dsw-alias-label-tertiary)" },
-											children: zh ? "这条引用没有留下地址。" : "No address was stored for this citation."
-										}, "noUrl") : jsx("a", {
-											href: entry.url,
-											target: "_blank",
-											rel: "noreferrer noopener",
-											style: { color: "var(--dsw-alias-state-business-primary)", textDecoration: "none" },
-											// The title where there is one, the host where there is not — never a
-											// bare address as a name. A column of URLs is what a citation list built
-											// from `citations` alone looks like, and it is unreadable.
-											children: entry.title !== "" ? entry.title : entry.host !== "" ? entry.host : entry.url
-										}, "link"),
-										jsx("div", {
-											style: { fontSize: "11px", fontFamily: MISSION_MONO, color: "var(--dsw-alias-label-tertiary)" },
-											children: [
-												entry.host,
-												zh ? `文中 ${entry.inText} 处` : `cited ${entry.inText}× in the text`,
-												entry.verifyState === null ? "" : missionFace(MISSION_VERIFY_FACES, entry.verifyState, zh),
-												entry.status === null || entry.status === undefined ? "" : `HTTP ${entry.status}`,
-												entry.fetchedAt === null ? "" : formatStamp(entry.fetchedAt)
-											].filter((piece) => piece !== "" && piece !== null && piece !== undefined).join(" · ")
-										}, "meta"),
+										SourceLink({
+											zh,
+											// A citation whose address did not survive still gets
+											// the card, and the sentence saying so IS its name.
+											// Dropping the row would leave a report claiming
+											// twelve references and listing eleven.
+											title: entry.url === ""
+												? (zh ? "这条引用没有留下地址。" : "No address was stored for this citation.")
+												: sourceTitleOf(entry.title, "", entry.url),
+											url: entry.url,
+											host: entry.host,
+											verifyState: entry.verifyState,
+											meta: [
+												jsx("span", {
+													style: { ...COUNT_CHIP, flex: "none" },
+													children: zh ? `文中 ${entry.inText} 处` : `cited ${entry.inText}× in the text`
+												}, "inText"),
+												entry.status === null || entry.status === undefined ? null : jsx("span", {
+													style: { flex: "none", fontFamily: MONO },
+													children: `HTTP ${entry.status}`
+												}, "status"),
+												entry.fetchedAt === null || entry.fetchedAt === undefined ? null : jsx("span", {
+													style: { flex: "none", fontFamily: MONO },
+													children: formatStamp(entry.fetchedAt)
+												}, "fetched")
+											]
+										}, "card"),
 										!entry.joined ? jsx("div", {
-											style: { color: "rgb(217,119,6)" },
+											style: { color: `rgb(${TONE.warn})` },
 											children: zh
 												? "引用元数据缺失：这个编号没有对上任何一条冻结证据，所以引语和核验状态都查不到。"
 												: "Citation metadata missing: this index matched no frozen evidence row, so neither the quote nor its verify state can be shown."
 										}, "unjoined") : entry.quote === "" ? null : jsx("div", {
-											style: { color: "var(--dsw-alias-label-secondary)" },
+											style: { color: INK.secondary },
 											children: `“${entry.quote}”`
 										}, "quote")
 									]
@@ -8147,6 +11939,10 @@ window.__ModuleLoader__.load({
 			const [state, setState] = useState("loading");
 			const [error, setError] = useState("");
 			const [showEvidence, setShowEvidence] = useState(true);
+			// The retry counter behind the failed-read screen. The pane had no
+			// way at all to re-issue its own GET: the only route back to this
+			// artefact was to leave the mission and open it again.
+			const [tick, setTick] = useState(0);
 			// report | source, switched in place: the same arrangement 信源 uses
 			// when a card is opened, so the frame never moves under the reader.
 			const [source, setSource] = useState(null);
@@ -8168,15 +11964,15 @@ window.__ModuleLoader__.load({
 						setState("error");
 					});
 				return () => { alive = false; };
-			}, [missionId, version]);
+			}, [missionId, version, tick]);
 
 			// Null when the report is a PANE rather than a screen: there is
 			// nothing to go back to, because the mission is still around it. A
 			// back button that unmounts the tab strip it lives under is worse
 			// than no back button.
 			const back = onBack === null || onBack === undefined ? null : jsx("button", {
-				type: "button", style: controlStyle(), onClick: onBack,
-				children: zh ? "← 返回任务" : "← Back to the mission"
+				type: "button", className: "swm-back swm-focus", style: backStyle(), onClick: onBack,
+				children: [jsx(Icon, { name: "arrowLeft", size: ICON.xs }, "glyph"), zh ? "返回任务" : "Back to the mission"]
 			}, "back");
 
 			// The source behind one quote, read through 信源's own reader: the
@@ -8193,27 +11989,55 @@ window.__ModuleLoader__.load({
 			}
 
 			if (state === "loading") {
-				return jsx("div", { style: NOTE_STYLE, children: zh ? "加载中…" : "Loading…" });
+				// PROSE, SO THE PLACEHOLDER IS PROSE. Six lines at the widths a
+				// paragraph actually has — the short one is where a paragraph ends,
+				// and a column of six identical bars reads as a table.
+				return jsxs("div", {
+					style: { ...CONTENT_STYLE, padding: "0 24px" },
+					children: [back, SkeletonScreen({
+						zh,
+						style: { display: "flex", flexDirection: "column", gap: SPACE.md, marginTop: SPACE.lg },
+						children: [
+							Skeleton({ w: "46%", h: "20px" }, "title"),
+							...["100%", "96%", "88%", "100%", "72%", "90%"].map((w, at) => Skeleton({ w, h: "14px" }, "line" + at))
+						]
+					}, "skeleton")]
+				});
 			}
 			if (state === "error") {
 				return jsxs("div", {
 					style: { ...CONTENT_STYLE, padding: "0 24px" },
-					children: [back, jsx("div", {
-						style: { ...NOTE_STYLE, marginTop: "14px" },
-						children: (zh ? "读不到这份报告：" : "Could not read this report: ") + error
+					children: [back, ErrorBox({
+						title: zh ? "读不到这份报告" : "Could not read this report",
+						message: error,
+						endpoint: `${apiBase()}/missions/${missionId}/artifact`,
+						onRetry: () => { setTick((value) => value + 1); },
+						zh
 					}, "note")]
 				});
 			}
 			if (artifact === null || artifact.kind === "empty-artifact") {
+				// THREE ABSENCES, THREE MARKS. A write that failed is a failure and
+				// takes the danger disc; a version that does not exist is a wrong
+				// address; a mission that has not written one yet is simply not
+				// finished. Drawn identically — which is what the one dashed box
+				// did — the first of the three reads as the third, and a report
+				// nobody will ever get looks like a report to wait for.
+				const failed = artifact?.reason === "write-failed";
+				const missing = artifact?.reason === "no-such-version";
 				return jsxs("div", {
 					style: { ...CONTENT_STYLE, padding: "0 24px" },
-					children: [back, jsx("div", {
-						style: { ...NOTE_STYLE, marginTop: "14px" },
-						children: artifact?.reason === "write-failed"
-							? (zh ? "报告写失败了：任务已经结束，但没有落下任何一版。" : "The artefact write failed: the mission ended and no version was stored.")
-							: artifact?.reason === "no-such-version"
+					children: [back, EmptyBox({
+						mark: failed ? "alert" : missing ? "search" : "penLine",
+						tone: failed ? TONE.danger : undefined,
+						title: failed
+							? (zh ? "报告写失败了。" : "The artefact write failed.")
+							: missing
 							? (zh ? "没有这一版报告。" : "There is no such version.")
-							: (zh ? "还没有生成报告。" : "No report has been produced yet.")
+							: (zh ? "还没有生成报告。" : "No report has been produced yet."),
+						note: failed
+							? (zh ? "任务已经结束，但没有落下任何一版。" : "The mission ended and no version was stored.")
+							: ""
 					}, "note")]
 				});
 			}
@@ -8223,6 +12047,7 @@ window.__ModuleLoader__.load({
 			// anything behind it, and the list under the article is the same set.
 			const references = missionReferences(artifact);
 			const numbered = new Set(references.map((entry) => entry.index));
+			const byIndex = new Map(references.map((entry) => [entry.index, entry]));
 			const evidence = Array.isArray(artifact.evidence) ? artifact.evidence : [];
 			const citations = Array.isArray(artifact.citations) ? artifact.citations : [];
 			const tallies = [
@@ -8230,6 +12055,65 @@ window.__ModuleLoader__.load({
 				["interpretive", zh ? "解读章节" : "Interpretive"],
 				["unplaced", zh ? "无法归章" : "Unplaced"]
 			].filter(([key]) => Number(quality[key]?.total ?? 0) > 0);
+			// THE SCORECARD, GRADED AND ORDERED. It was up to three neutral
+			// outlined chips, each carrying a four-number sentence — 有据章节 ·
+			// 3/4 已核验，未通过 1，未检查 0，被反驳 0 — with no hue at all, in
+			// declaration order. Three things were wrong with that and all three
+			// are fixed here rather than one at a time:
+			//
+			//   1. NO COLOUR. The one place on the report where a ratio is the
+			//      whole point was the one place drawn in the same grey whatever
+			//      the ratio said.
+			//   2. ALL FOUR REMAINDERS, ALWAYS. A section where everything held
+			//      up still printed 未通过 0，未检查 0，被反驳 0 — three zeros
+			//      that read at a glance as three problems.
+			//   3. DECLARATION ORDER. `evidenced, interpretive, unplaced` is the
+			//      order the buckets happen to be written in one file away, so
+			//      the worst section type was first on some runs and last on
+			//      others for no reason a reader could use. Worst ratio first
+			//      now, so the eye lands on the section that needs it.
+			//
+			// PER SECTION TYPE AND NEVER AVERAGED, which is the property the
+			// whole block exists for: "chapter seven cites nothing" has to stay
+			// visible instead of disappearing into a healthy-looking total.
+			const graded = tallies.map(([key, label]) => {
+				const tally = quality[key] ?? {};
+				const total = Number(tally.total ?? 0);
+				const verified = Number(tally.verified ?? 0);
+				const rest = [
+					[Number(tally.unverified ?? 0), zh ? "未通过" : "unverified"],
+					[Number(tally.unchecked ?? 0), zh ? "未检查" : "unchecked"],
+					[Number(tally.contradicted ?? 0), zh ? "被反驳" : "contradicted"]
+				].filter(([count]) => count > 0).map(([count, word]) => (zh ? `${word} ${count}` : `${count} ${word}`));
+				return {
+					// `?? 1` rather than `?? 0` for the SORT KEY only. A bucket with
+					// no citations is already filtered out above, so this can only be
+					// reached if that filter changes — and an unmeasured section
+					// sorting to the front as if it were the worst one is a false
+					// alarm at the top of the report.
+					rank: missionRate(verified, total) ?? 1,
+					tile: {
+						label,
+						value: `${verified}/${total}`,
+						tone: missionRateHue(verified, total),
+						meter: missionRate(verified, total),
+						hint: rest.length === 0 ? (zh ? "全部通过" : "all clear") : rest.join(zh ? "，" : ", ")
+					}
+				};
+			}).sort((a, b) => a.rank - b.rank).map((entry) => entry.tile);
+			// THE WHOLE-REPORT TILE, LAST. The three above it are sorted worst
+			// first, and dropping a total into that order would make position mean
+			// two different things in one row. `quality` carries no top-level
+			// verified count, so it is summed from the same three buckets the
+			// tiles are built from rather than from a fourth source.
+			const allVerified = ["evidenced", "interpretive", "unplaced"]
+				.reduce((sum, key) => sum + Number(quality[key]?.verified ?? 0), 0);
+			const scored = Number(quality.total ?? 0) <= 0 ? graded : [...graded, {
+				label: zh ? "全部引用" : "All citations",
+				value: `${allVerified}/${Number(quality.total)}`,
+				tone: missionRateHue(allVerified, quality.total),
+				meter: missionRate(allVerified, quality.total)
+			}];
 
 			// NOT a scroller. The report is a pane inside the mission frame now, and a
 			// scroller inside a scroller is the arrangement where the header scrolls
@@ -8246,7 +12130,7 @@ window.__ModuleLoader__.load({
 						// The version itself moves into the meta line under the title,
 						// where the rest of the facts about this artefact already are.
 						back === null && versions.length <= 1 ? null : jsxs("div", {
-							style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", margin: "0 0 12px" },
+							style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", margin: "0 0 12px" },
 							children: [
 								back,
 								jsx("span", { style: { flex: 1 } }, "spacer"),
@@ -8254,7 +12138,7 @@ window.__ModuleLoader__.load({
 									type: "button",
 									role: "tab",
 									"aria-selected": entry.version === artifact.version,
-									style: chipStyle({ hue: entry.degraded ? "217,119,6" : "100,116,139" }, entry.version === artifact.version),
+									className: "swm-chip swm-focus", style: chipStyle({ hue: entry.degraded ? TONE.warn : TONE.neutral }, entry.version === artifact.version),
 									onClick: () => { setVersion(entry.version); },
 									children: (zh ? `第 ${entry.version} 版` : `v${entry.version}`)
 										+ (entry.degraded ? (zh ? " · 降级" : " · degraded") : "")
@@ -8262,7 +12146,7 @@ window.__ModuleLoader__.load({
 							]
 						}, "versions"),
 						jsx("h2", {
-							style: { margin: "0 0 6px", fontSize: "20px", lineHeight: "28px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+							style: { font: FONT.titleStrong, margin: "0 0 6px", color: INK.primary },
 							children: artifact.title
 						}, "title"),
 						jsx("div", {
@@ -8282,32 +12166,23 @@ window.__ModuleLoader__.load({
 						// into a healthy-looking overall ratio.
 						Number(quality.total ?? 0) === 0
 							? jsx("div", {
-								style: { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "rgb(220,38,38)" },
+								style: { font: FONT.small, margin: "0 0 12px", color: `rgb(${TONE.danger})` },
 								children: zh
 									? "核验记分卡是空的：一处引用都没有核验过。这不是“没有发现问题”，这是没有检查过。"
 									: "The scorecard is empty: not one citation was checked. That is not a clean bill — nothing was verified at all."
 							}, "noScore")
-							: jsx("div", {
-								style: { display: "flex", flexWrap: "wrap", gap: "8px", margin: "0 0 14px" },
-								children: tallies.map(([key, label]) => {
-									const tally = quality[key] ?? {};
-									return jsx("span", {
-										style: {
-											padding: "2px 9px", borderRadius: "6px",
-											border: "1px solid var(--dsw-alias-border-l2)",
-											fontSize: "11px", color: "var(--dsw-alias-label-secondary)"
-										},
-										children: `${label} · ` + (zh
-											? `${tally.verified}/${tally.total} 已核验，未通过 ${tally.unverified}，未检查 ${tally.unchecked}，被反驳 ${tally.contradicted}`
-											: `${tally.verified}/${tally.total} verified, ${tally.unverified} unverified, ${tally.unchecked} unchecked, ${tally.contradicted} contradicted`)
-									}, key);
-								})
-							}, "score"),
+							: MissionStatTiles({ tiles: scored }, "score"),
 						jsx("div", {
 							style: { maxWidth: "760px", margin: "0 0 18px" },
 							children: renderMarkdown(artifact.markdown ?? "", "article", {
 								zh,
 								has: (index) => numbered.has(index),
+								// WHAT IS BEHIND THE NUMBER, for the hover card. Read off
+								// the list that is already built for the bottom of this
+								// page — a Map rather than a `find` per marker, because a
+								// long report draws two hundred of these and every one of
+								// them would walk the whole array.
+								peek: (index) => byIndex.get(index) ?? null,
 								// The browser's own anchor, not a router: the list is on this page, and
 								// a marker that navigated would lose the reader's place in the prose.
 								jump: (index) => {
@@ -8318,15 +12193,15 @@ window.__ModuleLoader__.load({
 						}, "body"),
 						references.length === 0 ? null : jsx(MissionReferenceList, { references, zh }, "references"),
 						jsxs("div", {
-							style: { display: "flex", alignItems: "center", gap: "8px", margin: "0 0 10px" },
+							style: { display: "flex", alignItems: "center", gap: SPACE.sm, margin: "0 0 10px" },
 							children: [
 								jsx("h3", {
-									style: { margin: 0, fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+									style: { font: FONT.bodyStrong, margin: 0, color: INK.primary },
 									children: zh ? "证据" : "Evidence"
 								}, "title"),
 								jsx("button", {
 									type: "button",
-									style: { ...controlStyle(), height: "27px", fontSize: "12px" },
+									className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm },
 									onClick: () => { setShowEvidence(!showEvidence); },
 									children: showEvidence
 										? (zh ? "收起" : "Hide")
@@ -8336,7 +12211,7 @@ window.__ModuleLoader__.load({
 						}, "evidenceHead"),
 						!showEvidence ? null : (evidence.length === 0
 							? jsx("div", {
-								style: { fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" },
+								style: { font: FONT.small, color: INK.secondary },
 								// An empty blob is only legal on a degraded artefact,
 								// and "we looked and found nothing verifiable" is a
 								// real answer — as long as it is said rather than
@@ -8346,7 +12221,7 @@ window.__ModuleLoader__.load({
 									: "No evidence was frozen with this version: the run produced no quote that verified."
 							}, "noEvidence")
 							: jsx("div", {
-								style: { display: "flex", flexDirection: "column", gap: "6px" },
+								style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
 								children: evidence.map((row, at) => jsx(MissionEvidenceRow, {
 									row, zh, onOpen: (entry) => { setSource(entry); }
 								}, `${String(row.findingId ?? "row")}-${at}`))
@@ -8452,25 +12327,24 @@ window.__ModuleLoader__.load({
 		*/
 		function StepHeading({ step, title, hint, accent }) {
 			return jsxs("div", {
-				style: { display: "flex", alignItems: "center", gap: "9px", margin: "0 0 10px" },
+				style: { display: "flex", alignItems: "center", gap: SPACE.sm, margin: "0 0 10px" },
 				children: [
 					step === undefined ? null : jsx("span", {
-						style: {
-							flex: "none", width: "19px", height: "19px", borderRadius: "50%",
-							display: "inline-flex", alignItems: "center", justifyContent: "center",
-							fontSize: "11px", fontWeight: 600, fontVariantNumeric: "tabular-nums",
-							background: accent === undefined ? "var(--dsw-alias-interactive-bg-hover)" : `rgba(${accent}, 0.13)`,
-							color: accent === undefined ? "var(--dsw-alias-label-secondary)" : `rgb(${accent})`
+						style: { font: FONT.microStrong,
+							flex: "none", width: "19px", height: "19px", borderRadius: RADIUS.circle,
+							display: "inline-flex", alignItems: "center", justifyContent: "center", fontVariantNumeric: "tabular-nums",
+							background: accent === undefined ? SURFACE.hover : `rgba(${accent},${TINT.soft})`,
+							color: accent === undefined ? INK.secondary : `rgb(${accent})`
 						},
 						children: String(step)
 					}),
 					jsx("h3", {
-						style: { margin: 0, fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+						style: { font: FONT.bodyStrong, margin: 0, color: INK.primary },
 						children: title
 					}),
 					jsx("span", { style: { flex: 1 } }),
 					hint === undefined || hint === "" ? null : jsx("span", {
-						style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)", fontVariantNumeric: "tabular-nums" },
+						style: { font: FONT.micro, color: INK.secondary, fontVariantNumeric: "tabular-nums" },
 						children: hint
 					})
 				]
@@ -8554,9 +12428,9 @@ window.__ModuleLoader__.load({
 
 			return jsxs("div", {
 				style: {
-					borderBottom: last ? "none" : "1px solid var(--dsw-alias-border-l1)",
-					background: open ? `rgba(${accent}, 0.035)` : "transparent",
-					transition: "background 140ms ease"
+					borderBottom: last ? "none" : `1px solid ${LINE.hair}`,
+					background: open ? `rgba(${accent},${TINT.soft})` : "transparent",
+					transition: `background ${MOTION.fast}`
 				},
 				children: [
 					jsx("audio", {
@@ -8576,7 +12450,7 @@ window.__ModuleLoader__.load({
 						onError: () => { setFailed(true); setPlaying(false); }
 					}),
 					jsxs("div", {
-						style: { display: "flex", alignItems: "center", gap: "12px", padding: open ? "13px 15px 9px" : "11px 15px" },
+						style: { display: "flex", alignItems: "center", gap: SPACE.md, padding: open ? "13px 15px 9px" : "11px 15px" },
 						children: [
 							jsx("button", {
 								type: "button",
@@ -8584,12 +12458,12 @@ window.__ModuleLoader__.load({
 								disabled: failed,
 								onClick: toggle,
 								style: {
-									flex: "none", width: "30px", height: "30px", borderRadius: "50%",
+									flex: "none", width: "30px", height: CONTROL.sm, borderRadius: RADIUS.circle,
 									border: "none", cursor: failed ? "not-allowed" : "pointer", padding: 0, lineHeight: 0,
 									display: "inline-flex", alignItems: "center", justifyContent: "center",
-									background: open ? `rgb(${accent})` : `rgba(${accent}, 0.1)`,
-									color: open ? "#fff" : `rgb(${accent})`,
-									transition: "background 140ms ease"
+									background: open ? `rgb(${accent})` : `rgba(${accent},${TINT.soft})`,
+									color: open ? "var(--dsw-alias-label-primary-inverted)" : `rgb(${accent})`,
+									transition: `background ${MOTION.fast}`
 								},
 								children: jsx("svg", {
 									width: 12, height: 12, viewBox: "0 0 24 24", fill: "currentColor", "aria-hidden": "true",
@@ -8604,8 +12478,8 @@ window.__ModuleLoader__.load({
 								style: {
 									flex: 1, minWidth: 0, textAlign: "left", appearance: "none",
 									border: "none", background: "transparent", padding: 0, cursor: "pointer",
-									font: "inherit", fontSize: "13px", fontWeight: open ? 600 : 400,
-									lineHeight: "19px", color: "var(--dsw-alias-label-primary)",
+									font: open ? FONT.bodyStrong : FONT.body,
+									lineHeight: "19px", color: INK.primary,
 									// Truncated in the list, wrapped when open: the row
 									// being listened to is worth two lines, the forty
 									// below it are not.
@@ -8614,9 +12488,9 @@ window.__ModuleLoader__.load({
 								children: episode.title
 							}),
 							jsx("span", {
-								style: {
-									flex: "none", fontSize: "11px", fontVariantNumeric: "tabular-nums",
-									color: "var(--dsw-alias-label-secondary)"
+								style: { font: FONT.micro,
+									flex: "none", fontVariantNumeric: "tabular-nums",
+									color: INK.secondary
 								},
 								children: `${clock(episode.durationSeconds)} · ${formatStamp(episode.createdAt)}`
 							}),
@@ -8627,7 +12501,7 @@ window.__ModuleLoader__.load({
 								onClick: () => { onDelete(); },
 								style: {
 									flex: "none", appearance: "none", border: "none", background: "transparent",
-									padding: "2px", cursor: "pointer", lineHeight: 0, color: "var(--dsw-alias-label-tertiary)"
+									padding: "2px", cursor: "pointer", lineHeight: 0, color: INK.quiet
 								},
 								children: jsx("svg", {
 									width: 13, height: 13, viewBox: "0 0 24 24", fill: "none",
@@ -8638,32 +12512,34 @@ window.__ModuleLoader__.load({
 						]
 					}),
 					!open ? null : jsxs("div", {
-						style: { display: "flex", alignItems: "center", gap: "11px", padding: "0 15px 14px 57px" },
+						style: { display: "flex", alignItems: "center", gap: SPACE.md, padding: "0 15px 14px 57px" },
 						children: [
 							failed ? jsx("span", {
-								style: { flex: 1, fontSize: "12px", color: "rgb(220,38,38)" },
+								style: { font: FONT.small, flex: 1, color: `rgb(${TONE.danger})` },
 								children: zh ? "音频无法加载" : "This audio would not load"
-							}) : jsx("div", {
+							}) : Meter({
+								// THE SAME BAR the cost pane draws, which is what `Meter`'s
+								// rest spread exists for: the role, the value and the click
+								// ride onto the track, and the playhead stops being the
+								// fourth geometry for one idea.
+								//
+								// `position: relative` is gone with the absolute fill it was
+								// there for. Meter's fill is in flow — a block at `width: n%`
+								// and `height: 100%` lands in exactly the same place — so
+								// there is no longer anything for it to be relative to.
+								value: progress * 100,
+								tone: accent,
 								role: "slider",
 								"aria-label": zh ? "进度" : "Seek",
 								"aria-valuenow": Math.round(progress * 100),
 								tabIndex: 0,
 								onClick: seek,
-								style: {
-									flex: 1, height: "4px", borderRadius: "2px", cursor: "pointer",
-									background: "var(--dsw-alias-border-l2)", position: "relative"
-								},
-								children: jsx("div", {
-									style: {
-										position: "absolute", inset: "0 auto 0 0", width: `${progress * 100}%`,
-										borderRadius: "2px", background: `rgb(${accent})`
-									}
-								})
-							}),
+								style: { flex: 1, cursor: "pointer" }
+							}, "seek"),
 							jsx("span", {
-								style: {
-									flex: "none", fontSize: "11px", fontVariantNumeric: "tabular-nums",
-									color: "var(--dsw-alias-label-secondary)"
+								style: { font: FONT.micro,
+									flex: "none", fontVariantNumeric: "tabular-nums",
+									color: INK.secondary
 								},
 								children: `${clock(at)} / ${clock(total)}`
 							})
@@ -8690,8 +12566,8 @@ window.__ModuleLoader__.load({
 		/** The − and + of a stepper: same weight, same box, no platform spinner. */
 		const STEPPER_BUTTON = {
 			appearance: "none", border: "none", background: "transparent",
-			width: "28px", height: "28px", cursor: "pointer", font: "inherit",
-			fontSize: "14px", lineHeight: 1, color: "var(--dsw-alias-label-secondary)"
+			width: "28px", height: CONTROL.sm, cursor: "pointer", font: "inherit",
+			font: FONT.base, lineHeight: 1, color: INK.secondary
 		};
 
 		/**
@@ -8788,22 +12664,22 @@ window.__ModuleLoader__.load({
 						// Delayed, or the blur fires before the click on a result
 						// lands and the list disappears out from under the cursor.
 						onBlur: () => { setTimeout(() => { setFocused(false); }, 160); },
-						style: { ...SEARCH_STYLE, height: "38px", fontSize: "13px" }
+						className: "swm-focus", style: { ...SEARCH_STYLE, font: FONT.body, height: CONTROL.md }
 					}),
 
 					!open ? null : jsx("div", {
 						style: {
 							position: "absolute", top: "42px", left: 0, right: 0, zIndex: 3,
-							border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "12px",
-							background: "var(--dsw-specific-menu)", boxShadow: "var(--dsw-shadow-lv3)",
+							border: `1px solid ${LINE.hair}`, borderRadius: RADIUS.lg,
+							background: SURFACE.card, boxShadow: ELEVATION.floating,
 							maxHeight: "290px", overflowY: "auto", overflowX: "hidden"
 						},
 						children: failed !== ""
-							? jsx("div", { style: { padding: "14px", fontSize: "12px", color: "rgb(220,38,38)" }, children: (zh ? "搜索失败：" : "Search failed: ") + failed })
+							? jsx("div", { style: { font: FONT.small, padding: "14px", color: `rgb(${TONE.danger})` }, children: (zh ? "搜索失败：" : "Search failed: ") + failed })
 							: busy && matches.length === 0
-							? jsx("div", { style: { padding: "14px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" }, children: zh ? "搜索中…" : "Searching…" })
+							? jsx("div", { style: { font: FONT.small, padding: "14px", color: INK.secondary }, children: zh ? "搜索中…" : "Searching…" })
 							: matches.length === 0
-							? jsx("div", { style: { padding: "14px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" }, children: zh ? "没有匹配的信源。" : "Nothing matches." })
+							? jsx("div", { style: { font: FONT.small, padding: "14px", color: INK.secondary }, children: zh ? "没有匹配的信源。" : "Nothing matches." })
 							: jsxs("div", {
 								children: matches.map((row, at) => {
 									const already = picked.has(row.id);
@@ -8811,30 +12687,30 @@ window.__ModuleLoader__.load({
 										type: "button",
 										disabled: already,
 										onClick: () => { add(row); },
-										style: {
-											display: "flex", width: "100%", alignItems: "flex-start", gap: "10px",
+										style: { font: FONT.small,
+											display: "flex", width: "100%", alignItems: "flex-start", gap: SPACE.md,
 											padding: "10px 13px", textAlign: "left", appearance: "none",
-											border: "none", borderBottom: at === matches.length - 1 ? "none" : "1px solid var(--dsw-alias-border-l1)",
-											background: "transparent", font: "inherit", fontSize: "12px",
+											border: "none", borderBottom: at === matches.length - 1 ? "none" : `1px solid ${LINE.hair}`,
+											background: "transparent", font: "inherit",
 											cursor: already ? "default" : "pointer", opacity: already ? 0.45 : 1
 										},
 										children: [
 											jsx("span", {
-												style: {
-													flex: "none", marginTop: "1px", fontSize: "11px", fontWeight: 600,
-													color: already ? "var(--dsw-alias-label-tertiary)" : `rgb(${accent})`
+												style: { font: FONT.microStrong,
+													flex: "none", marginTop: "1px",
+													color: already ? INK.quiet : `rgb(${accent})`
 												},
-												children: already ? "✓" : "＋"
+												children: jsx(Icon, { name: already ? "check" : "plus", size: ICON.sm })
 											}),
 											jsxs("span", {
 												style: { flex: 1, minWidth: 0 },
 												children: [
 													jsx("span", {
-														style: { display: "block", color: "var(--dsw-alias-label-primary)", lineHeight: "18px" },
+														style: { display: "block", color: INK.primary, lineHeight: "18px" },
 														children: row.title
 													}),
 													jsx("span", {
-														style: { display: "block", marginTop: "2px", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+														style: { font: FONT.micro, display: "block", marginTop: "2px", color: INK.secondary },
 														children: `${kindLabel(row.type, zh)} · ${sourceNameOf(row)} · ${formatDate(row.publishedAt)}`
 													})
 												]
@@ -8950,10 +12826,6 @@ window.__ModuleLoader__.load({
 				await load();
 			}, [openId, load]);
 
-			const CARD = {
-				border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "12px",
-				background: "var(--dsw-specific-menu)", boxShadow: "var(--dsw-shadow-lv1)"
-			};
 
 			return jsxs("div", {
 				children: [
@@ -8963,7 +12835,7 @@ window.__ModuleLoader__.load({
 					}),
 
 					jsxs("div", {
-						style: { ...CARD, padding: "16px", marginBottom: "22px" },
+						style: { ...PANEL_STYLE, padding: "16px", marginBottom: "22px" },
 						children: [
 							jsx(StepHeading, {
 								step: 1, accent,
@@ -8972,27 +12844,26 @@ window.__ModuleLoader__.load({
 							}),
 							jsx(SourceField, { zh, picked, onPick: togglePick, accent }),
 							chosen === 0 ? null : jsx("div", {
-								style: { ...CARD, marginTop: "12px", overflow: "hidden", boxShadow: "none" },
+								style: { ...PANEL_STYLE, marginTop: "12px", overflow: "hidden", boxShadow: ELEVATION.flat },
 								children: [...picked.values()].map((row, at) => jsxs("div", {
-									style: {
-										display: "flex", alignItems: "flex-start", gap: "10px", padding: "9px 13px",
-										borderBottom: at === picked.size - 1 ? "none" : "1px solid var(--dsw-alias-border-l1)",
-										fontSize: "12px"
+									style: { font: FONT.small,
+										display: "flex", alignItems: "flex-start", gap: SPACE.md, padding: "9px 13px",
+										borderBottom: at === picked.size - 1 ? "none" : `1px solid ${LINE.hair}`
 									},
 									children: [
 										jsx("span", {
-											style: {
-												flex: "none", marginTop: "1px", width: "15px", fontSize: "11px", fontWeight: 600,
-												fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-tertiary)"
+											style: { font: FONT.microStrong,
+												flex: "none", marginTop: "1px", width: "15px",
+												fontVariantNumeric: "tabular-nums", color: INK.quiet
 											},
 											children: String(at + 1)
 										}),
 										jsxs("span", {
 											style: { flex: 1, minWidth: 0 },
 											children: [
-												jsx("span", { style: { color: "var(--dsw-alias-label-primary)", lineHeight: "18px" }, children: row.title }),
+												jsx("span", { style: { color: INK.primary, lineHeight: "18px" }, children: row.title }),
 												jsx("span", {
-													style: { display: "block", marginTop: "2px", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+													style: { font: FONT.micro, display: "block", marginTop: "2px", color: INK.secondary },
 													children: `${sourceNameOf(row)} · ${formatDate(row.publishedAt)}`
 												})
 											]
@@ -9003,7 +12874,7 @@ window.__ModuleLoader__.load({
 											onClick: () => { togglePick(row); },
 											style: {
 												flex: "none", appearance: "none", border: "none", background: "transparent",
-												padding: "2px", cursor: "pointer", lineHeight: 0, color: "var(--dsw-alias-label-tertiary)"
+												padding: "2px", cursor: "pointer", lineHeight: 0, color: INK.quiet
 											},
 											children: jsx("svg", {
 												width: 12, height: 12, viewBox: "0 0 24 24", fill: "none",
@@ -9022,22 +12893,22 @@ window.__ModuleLoader__.load({
 								title: zh ? `生成${format.zh}` : `Write the ${format.en.toLowerCase()}`
 							}),
 							jsxs("div", {
-								style: { display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" },
+								style: { display: "flex", alignItems: "center", gap: SPACE.md, flexWrap: "wrap" },
 								children: [
 									jsx("input", {
 										type: "text",
 										value: guidance,
 										placeholder: zh ? "想让它侧重什么？（可留空）" : "Anything it should focus on? (optional)",
 										onChange: (event) => { setGuidance(event.target.value); },
-										style: { ...SEARCH_STYLE, flex: 1, minWidth: "200px", height: "32px", fontSize: "12px" }
+										className: "swm-focus", style: { ...SEARCH_STYLE, font: FONT.small, flex: 1, minWidth: "200px", height: CONTROL.md }
 									}),
 									jsx("button", {
 										type: "button",
 										disabled: busy || chosen === 0,
-										style: {
-											...controlStyle(), height: "32px",
+										className: "swm-ctl swm-focus", style: {
+											...controlStyle(busy || chosen === 0), height: CONTROL.md,
 											opacity: chosen === 0 ? 0.5 : 1,
-											color: `rgb(${accent})`, borderColor: `rgba(${accent}, 0.45)`
+											color: `rgb(${accent})`, borderColor: `rgba(${accent},${TINT.ring})`
 										},
 										onClick: () => { void write(); },
 										children: busy
@@ -9045,7 +12916,7 @@ window.__ModuleLoader__.load({
 											: (zh ? `生成${format.zh}` : `Write it`)
 									}),
 									chosen !== 0 ? null : jsx("span", {
-										style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+										style: { font: FONT.micro, color: INK.secondary },
 										children: zh ? "先加几条信源" : "Add some sources first"
 									})
 								]
@@ -9054,14 +12925,17 @@ window.__ModuleLoader__.load({
 					}),
 
 					jsxs("div", {
-						style: { display: "flex", alignItems: "center", gap: "10px", margin: "0 0 12px" },
+						style: { display: "flex", alignItems: "center", gap: SPACE.md, margin: "0 0 12px" },
 						children: [
 							jsx("h3", {
-								style: { margin: 0, fontSize: "14px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+								style: { font: FONT.baseStrong, margin: 0, color: INK.primary },
 								children: zh ? `已生成的${format.zh}` : `${format.en}s`
 							}),
+							// The same count badge the mission panes carry. It was a
+							// bare figure beside a heading, which reads as part of
+							// the heading rather than as a quantity.
 							total === 0 ? null : jsx("span", {
-								style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)", fontVariantNumeric: "tabular-nums" },
+								style: COUNT_CHIP,
 								children: String(total)
 							})
 						]
@@ -9069,23 +12943,23 @@ window.__ModuleLoader__.load({
 
 					documents.length === 0
 						? jsx("div", {
-							style: { ...CARD, padding: "20px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+							style: { ...PANEL_STYLE, font: FONT.small, padding: "20px", color: INK.secondary },
 							children: zh ? `还没有生成过${format.zh}。` : `Nothing written yet.`
 						})
 						: jsxs("div", {
 							children: [
 								jsx("div", {
-									style: { ...CARD, overflow: "hidden" },
+									style: { ...PANEL_STYLE, overflow: "hidden" },
 									children: documents.map((record, at) => {
 										const open = record.id === openId;
 										return jsxs("div", {
 											style: {
-												borderBottom: at === documents.length - 1 ? "none" : "1px solid var(--dsw-alias-border-l1)",
-												background: open ? `rgba(${accent}, 0.035)` : "transparent"
+												borderBottom: at === documents.length - 1 ? "none" : `1px solid ${LINE.hair}`,
+												background: open ? `rgba(${accent},${TINT.soft})` : "transparent"
 											},
 											children: [
 												jsxs("div", {
-													style: { display: "flex", alignItems: "center", gap: "12px", padding: "11px 15px" },
+													style: { display: "flex", alignItems: "center", gap: SPACE.md, padding: "11px 15px" },
 													children: [
 														jsx("button", {
 															type: "button",
@@ -9093,16 +12967,16 @@ window.__ModuleLoader__.load({
 															style: {
 																flex: 1, minWidth: 0, textAlign: "left", appearance: "none",
 																border: "none", background: "transparent", padding: 0, cursor: "pointer",
-																font: "inherit", fontSize: "13px", fontWeight: open ? 600 : 400,
-																lineHeight: "19px", color: "var(--dsw-alias-label-primary)",
+																font: open ? FONT.bodyStrong : FONT.body,
+																lineHeight: "19px", color: INK.primary,
 																...(open ? {} : { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" })
 															},
 															children: record.title
 														}),
 														jsx("span", {
-															style: {
-																flex: "none", fontSize: "11px", fontVariantNumeric: "tabular-nums",
-																color: "var(--dsw-alias-label-secondary)"
+															style: { font: FONT.micro,
+																flex: "none", fontVariantNumeric: "tabular-nums",
+																color: INK.secondary
 															},
 															children: `${record.sourceIds.length} ${zh ? "条" : "src"} · ${formatStamp(record.createdAt)}`
 														}),
@@ -9113,7 +12987,7 @@ window.__ModuleLoader__.load({
 															onClick: () => { void remove(record.id); },
 															style: {
 																flex: "none", appearance: "none", border: "none", background: "transparent",
-																padding: "2px", cursor: "pointer", lineHeight: 0, color: "var(--dsw-alias-label-tertiary)"
+																padding: "2px", cursor: "pointer", lineHeight: 0, color: INK.quiet
 															},
 															children: jsx("svg", {
 																width: 13, height: 13, viewBox: "0 0 24 24", fill: "none",
@@ -9127,16 +13001,16 @@ window.__ModuleLoader__.load({
 													style: { padding: "0 15px 16px" },
 													children: [
 														body === null
-															? jsx("div", { style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" }, children: zh ? "读取中…" : "Loading…" })
+															? jsx("div", { style: { font: FONT.small, color: INK.secondary }, children: zh ? "读取中…" : "Loading…" })
 															: body.missing === true
 															// The index and the files can disagree. Saying which
 															// beats rendering an empty document that looks like a
 															// model that produced nothing.
-															? jsx("div", { style: { fontSize: "12px", color: "rgb(220,38,38)" }, children: zh ? "这篇的文件不见了，只剩记录。" : "The file for this one is gone; only the record remains." })
+															? jsx("div", { style: { font: FONT.small, color: `rgb(${TONE.danger})` }, children: zh ? "这篇的文件不见了，只剩记录。" : "The file for this one is gone; only the record remains." })
 															: jsx("div", { style: { maxWidth: "760px" }, children: renderMarkdown(body.text, "article") }),
 														body === null || body.missing === true ? null : jsx("button", {
 															type: "button",
-															style: { ...controlStyle(), height: "26px", fontSize: "11px", marginTop: "10px" },
+															className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: CONTROL.sm, marginTop: "10px" },
 															onClick: () => { void navigator.clipboard?.writeText(body.text); },
 															children: zh ? "复制 Markdown" : "Copy Markdown"
 														})
@@ -9150,7 +13024,7 @@ window.__ModuleLoader__.load({
 									style: { display: "flex", justifyContent: "center", padding: "12px 0 2px" },
 									children: jsx("button", {
 										type: "button",
-										style: { ...controlStyle(), height: "28px", fontSize: "12px" },
+										className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm },
 										onClick: () => { void load(documents.length + DOCUMENT_PAGE); },
 										children: zh ? `再显示 ${Math.min(DOCUMENT_PAGE, total - documents.length)} 篇` : `Show ${Math.min(DOCUMENT_PAGE, total - documents.length)} more`
 									})
@@ -9159,7 +13033,7 @@ window.__ModuleLoader__.load({
 						}),
 
 					error === "" ? null : jsx("div", {
-						style: { ...NOTE_STYLE, minHeight: 0, padding: "11px 14px", marginTop: "14px", color: "rgb(220,38,38)" },
+						style: { ...NOTE_STYLE, minHeight: 0, padding: "11px 14px", marginTop: "14px", color: `rgb(${TONE.danger})` },
 						children: error
 					})
 				]
@@ -9427,12 +13301,8 @@ window.__ModuleLoader__.load({
 			useEffect(() => {
 				if (schedule !== null && schedule.publishAt !== "") setLastAt(schedule.publishAt);
 			}, [schedule]);
-			const CARD = {
-				border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "12px",
-				background: "var(--dsw-specific-menu)", boxShadow: "var(--dsw-shadow-lv1)"
-			};
-			const FIELD_LABEL = { fontSize: "12px", color: "var(--dsw-alias-label-secondary)", whiteSpace: "nowrap" };
-			const NUM_INPUT = { ...SEARCH_STYLE, width: "56px", height: "30px", fontSize: "12px", textAlign: "center", fontVariantNumeric: "tabular-nums" };
+			const FIELD_LABEL = { font: FONT.small, color: INK.secondary, whiteSpace: "nowrap" };
+			const NUM_INPUT = { ...SEARCH_STYLE, width: "56px", height: CONTROL.sm, font: FONT.small, textAlign: "center", fontVariantNumeric: "tabular-nums" };
 			const active = episodes.find((episode) => episode.id === activeId) ?? episodes[0];
 
 			return jsxs("div", {
@@ -9444,10 +13314,10 @@ window.__ModuleLoader__.load({
 					// the day you set them, and a form permanently open for a
 					// setting you touch twice a year is a form in the way.
 					schedule === null ? null : jsxs("div", {
-						style: { ...CARD, padding: "13px 16px", marginBottom: "24px" },
+						style: { ...PANEL_STYLE, padding: "13px 16px", marginBottom: "24px" },
 						children: [
 							jsxs("div", {
-								style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" },
+								style: { display: "flex", alignItems: "center", gap: SPACE.md, flexWrap: "wrap" },
 								children: [
 									// A switch, not a dot. The only way to turn this off used
 									// to be clearing the time field, which reads as editing a
@@ -9460,22 +13330,30 @@ window.__ModuleLoader__.load({
 										"aria-label": zh ? "自动发布" : "Publish on a schedule",
 										onClick: () => { void saveSchedule({ publishAt: armed ? "" : (lastAt || "07:00") }); },
 										style: {
-											flex: "none", width: "34px", height: "19px", borderRadius: "10px",
+											flex: "none", width: "34px", height: "19px", borderRadius: RADIUS.md,
 											border: "none", padding: 0, cursor: "pointer", position: "relative",
-											background: armed ? `rgb(${accent})` : "var(--dsw-alias-border-l2)",
-											transition: "background 160ms ease"
+											background: armed ? `rgb(${accent})` : LINE.rule,
+											transition: `background ${MOTION.base}`
 										},
 										children: jsx("span", {
 											style: {
 												position: "absolute", top: "2px", left: armed ? "17px" : "2px",
-												width: "15px", height: "15px", borderRadius: "50%",
-												background: "#fff", boxShadow: "0 1px 2px #0000002e",
-												transition: "left 160ms ease"
+												width: "15px", height: "15px", borderRadius: RADIUS.circle,
+												// A STATIC, and deliberately not an alias. The knob always
+												// sits on a filled track — the accent when armed, a border
+												// tint when not — so it must stay light in BOTH themes.
+												// `--dsw-alias-bg-layer-1` is the tempting one and it is
+												// wrong: it flips to near-black in the dark theme, which
+												// puts a dark knob on a dark track and the control reads
+												// as permanently off.
+												background: "var(--dsw-static-neutral-00,#fff)",
+												boxShadow: ELEVATION.raised,
+												transition: `left ${MOTION.base}`
 											}
 										})
 									}),
 									jsx("span", {
-										style: { fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+										style: { font: FONT.bodyStrong, color: INK.primary },
 										children: armed
 											? (zh
 												? `每天 ${schedule.publishAt} 自动生成${armedArtifacts.map((id) => artifactChoices.find((c) => c.id === id)?.label ?? id).join("、")}`
@@ -9486,21 +13364,21 @@ window.__ModuleLoader__.load({
 									jsx("button", {
 										type: "button",
 										disabled: busy || watchUntil !== 0,
-										style: { ...controlStyle(), height: "27px", fontSize: "12px" },
+										className: "swm-ctl swm-focus", style: { ...controlStyle(busy || watchUntil !== 0), font: FONT.small, height: CONTROL.sm },
 										onClick: () => { void runNow(); },
 										children: watchUntil !== 0 ? (zh ? "生成中…" : "Running…") : (zh ? "立即生成" : "Run now")
 									}),
 									!armed ? null : jsx("button", {
 										type: "button",
 										"aria-expanded": tuning,
-										style: { ...controlStyle(), height: "27px", fontSize: "12px" },
+										className: "swm-ctl swm-focus", style: { ...controlStyle(busy || watchUntil !== 0), font: FONT.small, height: CONTROL.sm },
 										onClick: () => { setTuning((previous) => !previous); },
 										children: tuning ? (zh ? "收起" : "Done") : (zh ? "设置" : "Settings")
 									})
 								]
 							}),
 							jsx("div", {
-								style: { marginTop: "8px", fontSize: "11px", lineHeight: "17px", color: "var(--dsw-alias-label-secondary)" },
+								style: { font: FONT.micro, marginTop: "8px", color: INK.secondary },
 								children: armed
 									? scheduleNote(schedule, zh)
 									: (zh
@@ -9512,22 +13390,22 @@ window.__ModuleLoader__.load({
 							// produce nothing at all — no artefact and no message,
 							// which is indistinguishable from a broken button.
 							manualNote(schedule, zh) === "" ? null : jsx("div", {
-								style: {
-									marginTop: "7px", fontSize: "11px", lineHeight: "17px",
+								style: { font: FONT.micro,
+									marginTop: "7px",
 									color: schedule.publishLastManualRun?.error === undefined
-										? "var(--dsw-alias-label-secondary)"
-										: "rgb(220,38,38)"
+										? INK.secondary
+										: `rgb(${TONE.danger})`
 								},
 								children: manualNote(schedule, zh)
 							}),
 							!tuning || !armed ? null : jsxs("div", {
 								style: {
-									display: "flex", alignItems: "flex-end", gap: "18px", flexWrap: "wrap",
-									marginTop: "13px", paddingTop: "13px", borderTop: "1px solid var(--dsw-alias-border-l1)"
+									display: "flex", alignItems: "flex-end", gap: SPACE.lg, flexWrap: "wrap",
+									marginTop: "13px", paddingTop: "13px", borderTop: `1px solid ${LINE.hair}`
 								},
 								children: [
 									jsxs("label", {
-										style: { display: "flex", flexDirection: "column", gap: "5px" },
+										style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
 										children: [
 											jsx("span", { style: FIELD_LABEL, children: zh ? "每天" : "Every day at" }),
 											jsx("input", {
@@ -9549,12 +13427,12 @@ window.__ModuleLoader__.load({
 													}
 													void saveSchedule({ publishAt: event.target.value });
 												},
-												style: { ...SEARCH_STYLE, width: "108px", height: "30px", fontSize: "12px", fontVariantNumeric: "tabular-nums" }
+												className: "swm-focus", style: { ...SEARCH_STYLE, font: FONT.small, width: "108px", height: CONTROL.sm, fontVariantNumeric: "tabular-nums" }
 											})
 										]
 									}),
 									jsxs("label", {
-										style: { display: "flex", flexDirection: "column", gap: "5px" },
+										style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
 										children: [
 											jsx("span", { style: FIELD_LABEL, children: zh ? "取最新（条）" : "Newest sources" }),
 											jsx("input", {
@@ -9566,7 +13444,7 @@ window.__ModuleLoader__.load({
 										]
 									}),
 									jsxs("label", {
-										style: { display: "flex", flexDirection: "column", gap: "5px" },
+										style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
 										children: [
 											jsx("span", { style: FIELD_LABEL, children: zh ? "时长（分钟）" : "Length (min)" }),
 											jsx("input", {
@@ -9582,11 +13460,11 @@ window.__ModuleLoader__.load({
 									// the state that matters — which are on — should be
 									// legible without reading each label's box.
 									jsxs("div", {
-										style: { display: "flex", flexDirection: "column", gap: "5px" },
+										style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
 										children: [
 											jsx("span", { style: FIELD_LABEL, children: zh ? "每天生成" : "Produce" }),
 											jsx("div", {
-												style: { display: "flex", gap: "6px", flexWrap: "wrap", height: "30px", alignItems: "center" },
+												style: { display: "flex", gap: SPACE.sm, flexWrap: "wrap", height: CONTROL.sm, alignItems: "center" },
 												children: artifactChoices.map((choice) => {
 													const on = armedArtifacts.includes(choice.id);
 													return jsx("button", {
@@ -9606,12 +13484,12 @@ window.__ModuleLoader__.load({
 														},
 														style: {
 															appearance: "none", cursor: "pointer", font: "inherit",
-															height: "26px", padding: "0 11px", borderRadius: "999px", fontSize: "12px",
-															border: `1px solid ${on ? `rgba(${accent}, 0.45)` : "var(--dsw-alias-border-l2)"}`,
-															background: on ? `rgba(${accent}, 0.09)` : "transparent",
-															color: on ? `rgb(${accent})` : "var(--dsw-alias-label-secondary)",
+															height: CONTROL.sm, padding: "0 11px", borderRadius: RADIUS.pill, font: FONT.small,
+															border: `1px solid ${on ? `rgba(${accent},${TINT.ring})` : LINE.rule}`,
+															background: on ? `rgba(${accent},${TINT.soft})` : "transparent",
+															color: on ? `rgb(${accent})` : INK.secondary,
 															fontWeight: on ? 600 : 400,
-															transition: "background 140ms ease, color 140ms ease"
+															transition: `background ${MOTION.fast}, color ${MOTION.fast}`
 														},
 														children: choice.label
 													}, choice.id);
@@ -9630,24 +13508,24 @@ window.__ModuleLoader__.load({
 					// produce, and the previous layout made them scroll past
 					// three construction steps to reach what already exists.
 					jsxs("div", {
-						style: { display: "flex", alignItems: "center", gap: "10px", margin: "0 0 12px" },
+						style: { display: "flex", alignItems: "center", gap: SPACE.md, margin: "0 0 12px" },
 						children: [
 							jsx("h3", {
-								style: { margin: 0, fontSize: "14px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+								style: { font: FONT.baseStrong, margin: 0, color: INK.primary },
 								children: zh ? "节目" : "Episodes"
 							}),
 							episodeTotal === 0 ? null : jsx("span", {
-								style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)", fontVariantNumeric: "tabular-nums" },
+								style: COUNT_CHIP,
 								children: zh ? `${episodeTotal} 集` : `${episodeTotal}`
 							}),
 							jsx("span", { style: { flex: 1 } }),
 							jsx("button", {
 								type: "button",
 								"aria-expanded": making,
-								style: {
-									...controlStyle(), height: "28px", fontSize: "12px",
-									color: making ? "var(--dsw-alias-label-secondary)" : `rgb(${accent})`,
-									borderColor: making ? undefined : `rgba(${accent}, 0.45)`
+								className: "swm-ctl swm-focus", style: {
+									...controlStyle(), font: FONT.small, height: CONTROL.sm,
+									color: making ? INK.secondary : `rgb(${accent})`,
+									borderColor: making ? undefined : `rgba(${accent},${TINT.ring})`
 								},
 								onClick: () => { setMaking((previous) => !previous); },
 								children: making ? (zh ? "取消" : "Cancel") : (zh ? "＋ 新建一集" : "＋ New episode")
@@ -9661,8 +13539,8 @@ window.__ModuleLoader__.load({
 					// want a specific episode about specific things.
 					!making ? null : jsxs("div", {
 						style: {
-							...CARD, padding: "16px", marginBottom: "20px",
-							borderColor: `rgba(${accent}, 0.35)`
+							...PANEL_STYLE, padding: "16px", marginBottom: "20px",
+							borderColor: `rgba(${accent},${TINT.ring})`
 						},
 						children: [
 							jsx(StepHeading, {
@@ -9678,47 +13556,46 @@ window.__ModuleLoader__.load({
 							// filter elsewhere, and a selection you cannot see is a
 							// selection you cannot trust.
 							chosen === 0 ? null : jsxs("div", {
-								style: { ...CARD, marginTop: "12px", overflow: "hidden", boxShadow: "none" },
+								style: { ...PANEL_STYLE, marginTop: "12px", overflow: "hidden", boxShadow: ELEVATION.flat },
 								children: [
 									jsxs("div", {
 										style: {
-											display: "flex", alignItems: "center", gap: "10px",
-											padding: "9px 13px", borderBottom: "1px solid var(--dsw-alias-border-l1)",
-											background: `rgba(${accent}, 0.05)`
+											display: "flex", alignItems: "center", gap: SPACE.md,
+											padding: "9px 13px", borderBottom: `1px solid ${LINE.hair}`,
+											background: `rgba(${accent},${TINT.soft})`
 										},
 										children: [
 											jsx("span", {
-												style: { flex: 1, fontSize: "12px", fontWeight: 600, color: `rgb(${accent})` },
+												style: { font: FONT.smallStrong, flex: 1, color: `rgb(${accent})` },
 												children: zh ? `这一集要讲的 ${chosen} 条` : `${chosen} source${chosen === 1 ? "" : "s"} in this episode`
 											}),
 											jsx("button", {
 												type: "button",
-												style: { ...controlStyle(), height: "24px", fontSize: "11px" },
+												className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: CONTROL.xs },
 												onClick: () => { setPicked(new Map()); },
 												children: zh ? "清空" : "Clear"
 											})
 										]
 									}),
 									...[...picked.values()].map((row, at) => jsxs("div", {
-										style: {
-											display: "flex", alignItems: "flex-start", gap: "10px", padding: "9px 13px",
-											borderBottom: at === picked.size - 1 ? "none" : "1px solid var(--dsw-alias-border-l1)",
-											fontSize: "12px"
+										style: { font: FONT.small,
+											display: "flex", alignItems: "flex-start", gap: SPACE.md, padding: "9px 13px",
+											borderBottom: at === picked.size - 1 ? "none" : `1px solid ${LINE.hair}`
 										},
 										children: [
 											jsx("span", {
-												style: {
-													flex: "none", marginTop: "1px", width: "15px", fontSize: "11px", fontWeight: 600,
-													fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-tertiary)"
+												style: { font: FONT.microStrong,
+													flex: "none", marginTop: "1px", width: "15px",
+													fontVariantNumeric: "tabular-nums", color: INK.quiet
 												},
 												children: String(at + 1)
 											}),
 											jsxs("span", {
 												style: { flex: 1, minWidth: 0 },
 												children: [
-													jsx("span", { style: { color: "var(--dsw-alias-label-primary)", lineHeight: "18px" }, children: row.title }),
+													jsx("span", { style: { color: INK.primary, lineHeight: "18px" }, children: row.title }),
 													jsx("span", {
-														style: { display: "block", marginTop: "2px", fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+														style: { font: FONT.micro, display: "block", marginTop: "2px", color: INK.secondary },
 														children: `${sourceNameOf(row)} · ${formatDate(row.publishedAt)}`
 													})
 												]
@@ -9729,7 +13606,7 @@ window.__ModuleLoader__.load({
 												onClick: () => { togglePick(row); },
 												style: {
 													flex: "none", appearance: "none", border: "none", background: "transparent",
-													padding: "2px", cursor: "pointer", lineHeight: 0, color: "var(--dsw-alias-label-tertiary)"
+													padding: "2px", cursor: "pointer", lineHeight: 0, color: INK.quiet
 												},
 												children: jsx("svg", {
 													width: 12, height: 12, viewBox: "0 0 24 24", fill: "none",
@@ -9759,13 +13636,13 @@ window.__ModuleLoader__.load({
 							// `number` input draws are tiny and platform-specific,
 							// and this is a dial, not a quantity you type.
 							jsxs("div", {
-								style: { display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap", marginBottom: script === null ? 0 : "14px" },
+								style: { display: "flex", alignItems: "center", gap: SPACE.md, flexWrap: "wrap", marginBottom: script === null ? 0 : "14px" },
 								children: [
 									jsx("span", { style: FIELD_LABEL, children: zh ? "目标时长" : "Target length" }),
 									jsxs("div", {
 										style: {
-											display: "inline-flex", alignItems: "center", height: "30px",
-											border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "8px", overflow: "hidden"
+											display: "inline-flex", alignItems: "center", height: CONTROL.sm,
+											border: `1px solid ${LINE.rule}`, borderRadius: RADIUS.md, overflow: "hidden"
 										},
 										children: [
 											jsx("button", {
@@ -9777,9 +13654,9 @@ window.__ModuleLoader__.load({
 												children: "−"
 											}),
 											jsx("span", {
-												style: {
-													minWidth: "58px", textAlign: "center", fontSize: "12px",
-													fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-primary)"
+												style: { font: FONT.small,
+													minWidth: "58px", textAlign: "center",
+													fontVariantNumeric: "tabular-nums", color: INK.primary
 												},
 												children: zh ? `${minutes} 分钟` : `${minutes} min`
 											}),
@@ -9796,46 +13673,46 @@ window.__ModuleLoader__.load({
 									jsx("button", {
 										type: "button",
 										disabled: busy || running || chosen === 0,
-										style: {
-											...controlStyle(), height: "30px",
+										className: "swm-ctl swm-focus", style: {
+											...controlStyle(busy || running || chosen === 0), height: CONTROL.sm,
 											opacity: chosen === 0 ? 0.5 : 1,
-											color: `rgb(${accent})`, borderColor: `rgba(${accent}, 0.45)`
+											color: `rgb(${accent})`, borderColor: `rgba(${accent},${TINT.ring})`
 										},
 										onClick: () => { void writeScript(); },
 										children: busy && script === null ? (zh ? "写稿中…" : "Writing…") : (zh ? "生成对话稿" : "Write the script")
 									}),
 									chosen !== 0 ? null : jsx("span", {
-										style: { ...FIELD_LABEL, fontSize: "11px" },
+										style: { font: FONT.micro, ...FIELD_LABEL },
 										children: zh ? "先加几条信源" : "Add some sources first"
 									})
 								]
 							}),
 
 							script === null ? null : jsxs("div", {
-								style: { ...CARD, overflow: "hidden", boxShadow: "none" },
+								style: { ...PANEL_STYLE, overflow: "hidden", boxShadow: ELEVATION.flat },
 								children: [
 									jsxs("div", {
 										style: {
-											display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap",
-											padding: "11px 13px", borderBottom: "1px solid var(--dsw-alias-border-l1)"
+											display: "flex", alignItems: "center", gap: SPACE.md, flexWrap: "wrap",
+											padding: "11px 13px", borderBottom: `1px solid ${LINE.hair}`
 										},
 										children: [
-											jsx("span", { style: { flex: 1, minWidth: "140px", fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" }, children: script.title }),
+											jsx("span", { style: { font: FONT.bodyStrong, flex: 1, minWidth: "140px", color: INK.primary }, children: script.title }),
 											voices === null || hosts === null ? null : jsxs("span", {
-												style: { display: "flex", gap: "6px" },
+												style: { display: "flex", gap: SPACE.sm },
 												children: [
 													jsx("select", {
 														value: hosts.a,
 														"aria-label": zh ? "主持人 A 的声音" : "Host A voice",
 														onChange: (event) => { setHosts((previous) => ({ ...previous, a: event.target.value })); },
-														style: { ...controlStyle(), height: "27px", fontSize: "11px", padding: "0 6px" },
+														className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: CONTROL.sm, padding: "0 6px" },
 														children: voices.map((voice) => jsx("option", { value: voice.id, children: `A · ${voice.label}` }, voice.id))
 													}),
 													jsx("select", {
 														value: hosts.b,
 														"aria-label": zh ? "主持人 B 的声音" : "Host B voice",
 														onChange: (event) => { setHosts((previous) => ({ ...previous, b: event.target.value })); },
-														style: { ...controlStyle(), height: "27px", fontSize: "11px", padding: "0 6px" },
+														className: "swm-ctl swm-focus", style: { ...controlStyle(busy || running), font: FONT.micro, height: CONTROL.sm, padding: "0 6px" },
 														children: voices.map((voice) => jsx("option", { value: voice.id, children: `B · ${voice.label}` }, voice.id))
 													})
 												]
@@ -9843,7 +13720,7 @@ window.__ModuleLoader__.load({
 											jsx("button", {
 												type: "button",
 												disabled: busy || running,
-												style: { ...controlStyle(), height: "27px", fontSize: "12px", color: `rgb(${accent})`, borderColor: `rgba(${accent}, 0.45)` },
+												className: "swm-ctl swm-focus", style: { ...controlStyle(busy || running), font: FONT.small, height: CONTROL.sm, color: `rgb(${accent})`, borderColor: `rgba(${accent},${TINT.ring})` },
 												onClick: () => { void render(); },
 												children: running
 													? (zh ? `合成中 ${job.done}/${job.total}` : `Rendering ${job.done}/${job.total}`)
@@ -9854,31 +13731,27 @@ window.__ModuleLoader__.load({
 									// Progress where the render was started. Forty
 									// synthesis round trips is long enough that a page
 									// showing nothing reads as a page that has hung.
-									!running ? null : jsx("div", {
-										style: { height: "3px", background: "var(--dsw-alias-border-l2)" },
-										children: jsx("div", {
-											style: {
-												height: "100%", width: `${job.total > 0 ? (job.done / job.total) * 100 : 0}%`,
-												background: `rgb(${accent})`, transition: "width 240ms ease"
-											}
-										})
-									}),
+									// `job.total` is the denominator and it can be 0 before the
+									// first turn is queued, which is why the guard was written
+									// here in the first place. It moves INTO the primitive — a
+									// zero ceiling is a percentage there — so this reads as
+									// what it is: done out of total.
+									!running ? null : Meter({ value: job.done, max: job.total, tone: accent }, "progress"),
 									jsx("div", {
 										style: { maxHeight: "260px", overflowY: "auto", padding: "11px 13px" },
 										children: script.turns.map((turn, at) => jsxs("div", {
-											style: { display: "flex", gap: "10px", marginBottom: "9px", fontSize: "12px", lineHeight: "19px" },
+											style: { font: FONT.small, display: "flex", gap: SPACE.md, marginBottom: "9px" },
 											children: [
 												jsx("span", {
-													style: {
-														flex: "none", width: "18px", height: "18px", borderRadius: "50%",
+													style: { font: FONT.microStrong,
+														flex: "none", width: "18px", height: "18px", borderRadius: RADIUS.circle,
 														display: "inline-flex", alignItems: "center", justifyContent: "center",
-														fontSize: "10px", fontWeight: 600,
-														background: turn.speaker === "a" ? `rgba(${accent}, 0.12)` : "var(--dsw-alias-interactive-bg-hover)",
-														color: turn.speaker === "a" ? `rgb(${accent})` : "var(--dsw-alias-label-secondary)"
+														background: turn.speaker === "a" ? `rgba(${accent},${TINT.soft})` : SURFACE.hover,
+														color: turn.speaker === "a" ? `rgb(${accent})` : INK.secondary
 													},
 													children: turn.speaker.toUpperCase()
 												}),
-												jsx("span", { style: { flex: 1, minWidth: 0, color: "var(--dsw-alias-label-primary)" }, children: turn.text })
+												jsx("span", { style: { flex: 1, minWidth: 0, color: INK.primary }, children: turn.text })
 											]
 										}, `t${at}`))
 									})
@@ -9886,7 +13759,7 @@ window.__ModuleLoader__.load({
 							}),
 
 							job !== null && job.state === "error" ? jsx("div", {
-								style: { ...NOTE_STYLE, minHeight: 0, padding: "10px 13px", marginTop: "12px", color: "rgb(220,38,38)" },
+								style: { ...NOTE_STYLE, minHeight: 0, padding: "10px 13px", marginTop: "12px", color: `rgb(${TONE.danger})` },
 								children: (zh ? "合成失败：" : "Render failed: ") + job.error
 							}) : null
 						]
@@ -9900,7 +13773,7 @@ window.__ModuleLoader__.load({
 					// second screenful. A daily schedule reaches that in a week.
 					episodes.length === 0
 						? jsx("div", {
-							style: { ...CARD, padding: "22px", fontSize: "12px", lineHeight: "19px", color: "var(--dsw-alias-label-secondary)" },
+							style: { ...PANEL_STYLE, font: FONT.small, padding: "22px", color: INK.secondary },
 							children: armed
 								? (zh ? `还没有节目。第一集会在明天 ${schedule.publishAt} 自动生成，或者现在按「新建一集」做一集。` : `No episodes yet. The first one arrives tomorrow at ${schedule.publishAt}, or make one now with “New episode”.`)
 								: (zh ? "还没有节目。按「新建一集」做一集，或者在上面设一个每天的时间。" : "No episodes yet. Make one with “New episode”, or set a daily time above.")
@@ -9908,7 +13781,7 @@ window.__ModuleLoader__.load({
 						: jsxs("div", {
 							children: [
 								jsx("div", {
-									style: { ...CARD, overflow: "hidden" },
+									style: { ...PANEL_STYLE, overflow: "hidden" },
 									children: episodes.map((episode, at) => jsx(EpisodeRow, {
 										episode,
 										open: active !== undefined && episode.id === active.id,
@@ -9923,7 +13796,7 @@ window.__ModuleLoader__.load({
 									style: { display: "flex", justifyContent: "center", padding: "12px 0 2px" },
 									children: jsx("button", {
 										type: "button",
-										style: { ...controlStyle(), height: "28px", fontSize: "12px" },
+										className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm },
 										onClick: () => { void loadEpisodes(episodes.length + EPISODE_PAGE); },
 										children: zh
 											? `再显示 ${Math.min(EPISODE_PAGE, episodeTotal - episodes.length)} 集`
@@ -9937,22 +13810,22 @@ window.__ModuleLoader__.load({
 								// on the page is the way out of it.
 								jsxs("div", {
 									style: {
-										display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap",
+										display: "flex", alignItems: "center", gap: SPACE.md, flexWrap: "wrap",
 										marginTop: "16px", padding: "11px 14px",
-										border: "1px dashed var(--dsw-alias-border-l2)", borderRadius: "12px"
+										border: `1px dashed ${LINE.rule}`, borderRadius: RADIUS.lg
 									},
 									children: [
 										jsx("span", { style: FIELD_LABEL, children: zh ? "在播客 App 里订阅：" : "Subscribe in a podcast app:" }),
 										jsx("code", {
-											style: {
-												flex: 1, minWidth: "170px", fontSize: "11px", overflow: "hidden",
-												textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--dsw-alias-label-secondary)"
+											style: { font: FONT.micro,
+												flex: 1, minWidth: "170px", overflow: "hidden",
+												textOverflow: "ellipsis", whiteSpace: "nowrap", color: INK.secondary
 											},
 											children: feedUrl
 										}),
 										jsx("button", {
 											type: "button",
-											style: { ...controlStyle(), height: "26px", fontSize: "11px" },
+											className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: CONTROL.sm },
 											onClick: () => { void navigator.clipboard?.writeText(feedUrl); },
 											children: zh ? "复制" : "Copy"
 										})
@@ -9962,7 +13835,7 @@ window.__ModuleLoader__.load({
 						}),
 
 					error === "" ? null : jsx("div", {
-						style: { ...NOTE_STYLE, minHeight: 0, padding: "11px 14px", marginTop: "14px", color: "rgb(220,38,38)" },
+						style: { ...NOTE_STYLE, minHeight: 0, padding: "11px 14px", marginTop: "14px", color: `rgb(${TONE.danger})` },
 						children: error
 					})
 				]
@@ -10004,13 +13877,11 @@ window.__ModuleLoader__.load({
 			}, []);
 
 			const entries = [
-				{ id: "podcast", label: zh ? "播客" : "Podcast", accent: KINDS.find((k) => k.id === "youtube")?.hue ?? "220,38,38" },
-				...formats.map((format, at) => ({
+				{ id: "podcast", label: zh ? "播客" : "Podcast", accent: formatTone("podcast") },
+				...formats.map((format) => ({
 					id: format.id,
 					label: zh ? format.zh : format.en,
-					// A colour per format, taken from the palette the source
-					// kinds already use, so the whole panel stays one family.
-					accent: (KINDS[(at + 1) % KINDS.length] ?? KINDS[0]).hue,
+					accent: formatTone(format.id),
 					format,
 				})),
 			];
@@ -10024,23 +13895,22 @@ window.__ModuleLoader__.load({
 					// navigation with no hierarchy between them.
 					jsx("div", {
 						role: "tablist",
-						style: {
-							display: "inline-flex", gap: "2px", padding: "3px", marginBottom: "16px",
-							background: "var(--dsw-alias-interactive-bg-hover)", borderRadius: "10px"
-						},
+						style: { ...SEGMENT_TRACK, marginBottom: SPACE.lg },
 						children: entries.map((entry) => jsx("button", {
 							type: "button",
 							role: "tab",
 							"aria-selected": entry.id === current.id,
 							onClick: () => { setActive(entry.id); },
 							style: {
-								appearance: "none", border: "none", cursor: "pointer", font: "inherit",
-								padding: "0 14px", height: "28px", borderRadius: "8px", fontSize: "12px",
-								fontWeight: entry.id === current.id ? 600 : 400,
-								background: entry.id === current.id ? "var(--dsw-specific-menu)" : "transparent",
-								color: entry.id === current.id ? `rgb(${entry.accent})` : "var(--dsw-alias-label-secondary)",
-								boxShadow: entry.id === current.id ? "var(--dsw-shadow-lv1)" : "none",
-								transition: "background 140ms ease, color 140ms ease"
+								...segmentStyle(entry.id === current.id),
+								// THE FORMAT'S OWN COLOUR, spread AFTER the state, and
+								// the split is the point: the raised surface and the
+								// weight say CHOSEN — that is state, and it is the same
+								// state in both segmented controls in this file — while
+								// the hue says WHICH, which is identity and belongs to
+								// the format. Left off the unchosen segments, or four
+								// colours compete to look selected.
+								color: entry.id === current.id ? `rgb(${entry.accent})` : INK.secondary
 							},
 							children: entry.label
 						}, entry.id))
@@ -10117,7 +13987,7 @@ window.__ModuleLoader__.load({
 			return jsx("div", {
 				style: {
 					flex: "none", display: "flex", alignItems: "center",
-					width: wide ? "100%" : "36px", height: "36px"
+					width: wide ? "100%" : "36px", height: CONTROL.md
 				},
 				children: jsxs("button", {
 					type: "button",
@@ -10127,14 +13997,14 @@ window.__ModuleLoader__.load({
 					// leaves it alone rather than closing what this is about to open.
 					"data-swarm-trigger": "true",
 					onClick: () => { setOpen(!openState); },
-					style: {
+					style: { font: FONT.body,
 						appearance: "none", border: "none",
-						background: open ? "var(--dsw-alias-interactive-bg-hover)" : "transparent",
+						background: open ? SURFACE.hover : "transparent",
 						display: "inline-flex", alignItems: "center",
 						justifyContent: wide ? "flex-start" : "center",
-						gap: wide ? "8px" : 0, width: wide ? "100%" : "36px", height: "36px",
+						gap: wide ? "8px" : 0, width: wide ? "100%" : "36px", height: CONTROL.md,
 						padding: wide ? "0 8px" : 0, borderRadius: wide ? "8px" : "50%",
-						color: "var(--dsw-alias-label-primary)", font: "inherit", fontSize: "13px",
+						color: INK.primary, font: "inherit",
 						cursor: "pointer"
 					},
 					children: [
@@ -10161,6 +14031,16 @@ window.__ModuleLoader__.load({
 			const open = useOpen();
 			const [tab, setTab] = useState(TABS[0].id);
 			const [left, setLeft] = useState(0);
+			// BEFORE the first paint, and from the page rather than from the
+			// trajectory drawer that used to be the only caller. Every chip on
+			// every tab now resolves `--swm-h-*`, so injecting on the drawer's
+			// schedule would mean the sources tab, the stage strip and the
+			// dimension cards all rendered on their var fallbacks — the light
+			// theme's triples — until somebody happened to open a mission's
+			// trajectory. In the dark theme that is not a subtle difference:
+			// the fallbacks are the light values, and they are the ones the
+			// dark block exists to correct.
+			useLayoutEffect(() => { ensureStyle(SWM_STYLE_ID, SWM_SHEET); }, []);
 			useLayoutEffect(() => {
 				if (!open) return;
 				const measure = () => { setLeft(centreColumnLeft()); };
@@ -10239,43 +14119,100 @@ window.__ModuleLoader__.load({
 				style: {
 					position: "fixed", left: left + "px", top: 0, right: 0, bottom: 0, zIndex: 40,
 					display: "flex", flexDirection: "column",
-					background: "var(--dsw-alias-bg-base)"
+					background: SURFACE.base
 				},
 				children: [
 					jsxs("header", {
 						style: HEADER_STYLE,
 						children: [
-							jsx(SwarmMark, { size: 18 }),
-							jsx("span", { style: { flex: "none" }, children: swarmLabel() }),
-							// Where you glance. The number is small and quiet until the
-							// two halves disagree, at which point it is the only thing
-							// on this row worth reading — a stale far machine otherwise
-							// presents as a feature that was written and deployed and
-							// is simply not there.
-							jsx(VersionBadge, { zh }),
-							jsx("span", { style: { flex: 1 } }),
-							jsx("button", {
-								type: "button",
-								"aria-label": zh ? "关闭" : "Close",
-								onClick: () => { setOpen(false); },
+							// THE MARK GETS A TILE. At 18px beside a 16px word it read
+							// as a bullet in front of the label rather than as the
+							// product's mark, and the page opened with nothing that
+							// looked like a page.
+							//
+							// A TINT AND A RING, not the violet-to-indigo gradient the
+							// obvious hero tile wants: SwarmMark fills two of its three
+							// nodes with `SURFACE.card` so they read as holes, and on a
+							// saturated tile those holes are white in the light theme
+							// and near-black in the dark one — the same mark saying two
+							// different things per theme. Over a 10% wash of its own
+							// hue they stay holes in both.
+							jsx("div", {
 								style: {
-									appearance: "none", border: "none", background: "transparent",
-									width: "28px", height: "28px", borderRadius: "50%",
-									color: "var(--dsw-alias-label-secondary)", font: "inherit",
-									fontSize: "16px", lineHeight: "28px", cursor: "pointer"
+									flex: "none", display: "flex", alignItems: "center", justifyContent: "center",
+									width: CONTROL.md, height: CONTROL.md, borderRadius: RADIUS.lg,
+									background: `rgba(${PALETTE.violet},${TINT.soft})`,
+									border: `1px solid rgba(${PALETTE.violet},${TINT.ring})`,
+									color: `rgb(${PALETTE.violet})`
 								},
-								children: "✕"
-							})
+								children: jsx(SwarmMark, { size: 18 })
+							}, "mark"),
+							// The name over the sentence that says what this tab is
+							// for. `minWidth: 0` is what lets the lede ellipsise: a
+							// flex child's default minimum is its content, so without
+							// it a long lede pushes the actions off the row instead of
+							// truncating.
+							jsxs("div", {
+								// ONE LINE, NOT TWO. The name over the lede is what made this
+								// band 78px tall on every screen, and the lede is the one
+								// sentence on the page that never changes — it describes the
+								// tab, so it is read once and is chrome after that. Beside
+								// the name it still answers "what is this" for a first
+								// visit, and it gives the panes back a line of the window.
+								style: { minWidth: 0, display: "flex", alignItems: "baseline", gap: SPACE.sm },
+								children: [
+									jsx("div", {
+										style: { font: FONT.largeStrong, color: INK.primary, whiteSpace: "nowrap" },
+										children: swarmLabel()
+									}, "name"),
+									jsx("p", { style: HERO_LEDE_STYLE, children: zh ? active.ledeZh : active.ledeEn }, "lede")
+								]
+							}, "title"),
+							jsx("span", { style: { flex: 1 } }, "spacer"),
+							// The actions, as a cluster rather than as loose children
+							// of the row: they are the only pressable things up here
+							// and they now sit at a different rhythm from the 12px
+							// gap that separates the tile from the title.
+							//
+							// No per-tab action slot. TABS carries no action for any
+							// of the five, and a slot with nothing to put in it is the
+							// tenth geometry waiting to happen — the same reason Chip
+							// has no `dot` and MetricStat no `mono`.
+							jsxs("div", {
+								style: { display: "flex", alignItems: "center", gap: SPACE.sm },
+								children: [
+									// Where you glance. The number is small and quiet until the
+									// two halves disagree, at which point it is the only thing
+									// on this row worth reading — a stale far machine otherwise
+									// presents as a feature that was written and deployed and
+									// is simply not there.
+									jsx(VersionBadge, { zh }, "version"),
+									jsx("button", {
+										type: "button",
+										className: "swm-iconbtn swm-focus",
+										"aria-label": zh ? "关闭" : "Close",
+										title: zh ? "关闭" : "Close",
+										onClick: () => { setOpen(false); },
+										style: {
+											width: CONTROL.sm, height: CONTROL.sm,
+											borderRadius: RADIUS.circle, color: INK.secondary
+										},
+										children: jsx(Icon, { name: "close", size: ICON.sm })
+									}, "close")
+								]
+							}, "actions")
 						]
 					}),
 					jsx("div", {
 						style: TABBAR_STYLE,
+						className: "swm-tabbar",
 						role: "tablist",
 						children: TABS.map((candidate) => jsxs("button", {
 							type: "button",
 							role: "tab",
+							className: "swm-tab",
 							"aria-selected": candidate.id === active.id,
-							style: { ...tabStyle(candidate.id === active.id), display: "inline-flex", alignItems: "center", gap: "6px" },
+							style: { ...tabStyle(candidate.id === active.id), display: "inline-flex", alignItems: "center", gap: SPACE.sm },
 							onClick: () => { setTab(candidate.id); },
 							children: [
 								jsx(TabIcon, { id: candidate.id }),
@@ -10305,12 +14242,18 @@ window.__ModuleLoader__.load({
 								? jsx(MissionsTab, { zh })
 								: active.id === "publish"
 								? jsx(PublishTab, { zh })
-								: jsxs("div", {
-									children: [
-										jsx("p", { style: LEDE_STYLE, children: zh ? active.ledeZh : active.ledeEn }),
-										jsx("div", { style: NOTE_STYLE, children: zh ? active.emptyZh : active.emptyEn })
-									]
-								})
+								// THE LEDE IS NOT HERE ANY MORE. It used to be the first
+								// line of this branch, which is the placeholder path —
+								// so the two unbuilt tabs were the only ones that ever
+								// showed the sentence describing them, while the three
+								// built ones had a written lede that nothing rendered.
+								// It is on the header row now, for all five.
+								//
+								// `emptyZh`/`emptyEn` stay exactly where they are: the
+								// comment on TABS records that those two fields are
+								// deliberately placeholder-only, and they are read
+								// here and nowhere else.
+								: jsx("div", { style: NOTE_STYLE, children: zh ? active.emptyZh : active.emptyEn })
 						})
 					})
 				]
@@ -10408,14 +14351,17 @@ window.__ModuleLoader__.load({
 		function VersionBadge({ zh }) {
 			const { host } = useHostVersion();
 			const { label, release } = versionVerdict(host);
+			// A version IS a state — released or not — so it takes the pill, in
+			// the neutral tone rather than in a hand-mixed grey on a hover
+			// surface. The margin stays on a wrapper: a chip that carries its
+			// own outer spacing is a chip that cannot sit in a flex row.
 			return jsx("span", {
-				style: {
-					marginLeft: "8px", padding: "1px 7px", borderRadius: "999px",
-					fontSize: "11px", fontVariantNumeric: "tabular-nums", cursor: "default",
-					background: "var(--dsw-alias-interactive-bg-hover)",
-					color: "var(--dsw-alias-label-tertiary)"
-				},
-				children: release || host === null ? `v${label}` : `v${label}-dev`
+				style: { marginLeft: SPACE.sm, cursor: "default" },
+				children: Chip({
+					tone: TONE.neutral,
+					pill: true,
+					label: release || host === null ? `v${label}` : `v${label}-dev`
+				})
 			});
 		}
 
@@ -10457,14 +14403,13 @@ window.__ModuleLoader__.load({
 			const { host } = useHostVersion();
 			const { label, release } = versionVerdict(host);
 			const where = libraryLine(host, zh);
-			const cell = { display: "flex", alignItems: "center", gap: "10px" };
-			const key = { flex: "none", width: "44px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" };
+			const cell = { display: "flex", alignItems: "center", gap: SPACE.md };
+			const key = { flex: "none", width: "44px", fontWeight: 500, color: INK.primary };
 			return jsxs("div", {
-				style: {
-					display: "flex", flexDirection: "column", gap: "5px",
+				style: { font: FONT.micro,
+					display: "flex", flexDirection: "column", gap: SPACE.xs,
 					padding: "8px 12px", marginBottom: "18px",
-					border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "10px",
-					fontSize: "11px", color: "var(--dsw-alias-label-secondary)",
+					border: `1px solid ${LINE.hair}`, borderRadius: RADIUS.md, color: INK.secondary,
 					fontVariantNumeric: "tabular-nums"
 				},
 				children: [
@@ -10499,7 +14444,7 @@ window.__ModuleLoader__.load({
 								children: where.detail
 							}),
 							where.trouble === "" ? null : jsx("span", {
-								style: { flex: "none", fontWeight: 600, color: hue(KINDS[0], 1) },
+								style: { flex: "none", fontWeight: 500, color: hue(KINDS[0], 1) },
 								title: where.trouble,
 								children: zh ? "连不上" : "unreachable"
 							})
@@ -10597,16 +14542,16 @@ window.__ModuleLoader__.load({
 			}, [zh]);
 
 			if (config === null) {
-				return jsx("div", { style: { padding: "20px", color: "var(--dsw-alias-label-secondary)", fontSize: "13px" },
+				return jsx("div", { style: { font: FONT.body, padding: "20px", color: INK.secondary },
 					children: error === "" ? (zh ? "加载中…" : "Loading…") : error });
 			}
 
-			const heading = { margin: "24px 0 8px", fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary)" };
-			const hint = { margin: "0 0 12px", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-secondary)" };
+			const heading = { margin: "24px 0 8px", font: FONT.bodyStrong, color: INK.primary };
+			const hint = { margin: "0 0 12px", font: FONT.small, color: INK.secondary };
 			const rowStyle = {
-				display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px",
-				border: "1px solid var(--dsw-alias-border-l1)", borderRadius: "10px", marginBottom: "8px",
-				background: "var(--dsw-specific-menu)"
+				display: "flex", alignItems: "center", gap: SPACE.md, padding: "10px 12px",
+				border: `1px solid ${LINE.hair}`, borderRadius: RADIUS.md, marginBottom: "8px",
+				background: SURFACE.card
 			};
 
 			// Three panes, because these are three jobs.
@@ -10632,7 +14577,7 @@ window.__ModuleLoader__.load({
 						role: "tablist",
 						style: {
 							display: "flex", gap: "2px", marginBottom: "18px",
-							borderBottom: "1px solid var(--dsw-alias-border-l1)"
+							borderBottom: `1px solid ${LINE.hair}`
 						},
 						children: PANES.map((candidate) => jsxs("button", {
 							type: "button",
@@ -10642,9 +14587,9 @@ window.__ModuleLoader__.load({
 							style: {
 								appearance: "none", background: "transparent", cursor: "pointer",
 								padding: "7px 12px", marginBottom: "-1px", border: "none",
-								borderBottom: "2px solid " + (pane === candidate.id ? "var(--dsw-alias-label-primary)" : "transparent"),
-								color: pane === candidate.id ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-secondary)",
-								fontSize: "12px", fontWeight: pane === candidate.id ? 600 : 500
+								borderBottom: "2px solid " + (pane === candidate.id ? INK.primary : "transparent"),
+								color: pane === candidate.id ? INK.primary : INK.secondary,
+								font: pane === candidate.id ? FONT.smallStrong : FONT.small
 							},
 							children: [
 								jsx("span", { children: zh ? candidate.zh : candidate.en }),
@@ -10652,9 +14597,9 @@ window.__ModuleLoader__.load({
 									// The count belongs on the tab. How many feeds there
 									// are is the first thing anyone wants from this pane,
 									// and putting it here saves opening it to find out.
-									style: {
-										marginLeft: "6px", fontSize: "11px", fontVariantNumeric: "tabular-nums",
-										color: "var(--dsw-alias-label-secondary)"
+									style: { font: FONT.micro,
+										marginLeft: "6px", fontVariantNumeric: "tabular-nums",
+										color: INK.secondary
 									},
 									children: candidate.count
 								})
@@ -10697,13 +14642,13 @@ window.__ModuleLoader__.load({
 									const count = all.filter((other) => (other.feed.type ?? "BLOG") === kind).length;
 									return first
 										? [jsxs("div", {
-											style: {
-												display: "flex", alignItems: "baseline", gap: "8px",
-												margin: "16px 0 6px", fontSize: "11px", letterSpacing: "0.04em",
-												color: "var(--dsw-alias-label-secondary)"
+											style: { font: FONT.micro,
+												display: "flex", alignItems: "baseline", gap: SPACE.sm,
+												margin: "16px 0 6px", letterSpacing: "0.04em",
+												color: INK.secondary
 											},
 											children: [
-												jsx("span", { style: { fontWeight: 600 }, children: kind }),
+												jsx("span", { style: { fontWeight: 500 }, children: kind }),
 												jsx("span", { style: { fontVariantNumeric: "tabular-nums" }, children: count })
 											]
 										}, "kind" + kind), entry]
@@ -10716,11 +14661,11 @@ window.__ModuleLoader__.load({
 										style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "2px" },
 										children: [
 											jsx("span", {
-												style: { fontSize: "13px", color: "var(--dsw-alias-label-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+												style: { font: FONT.body, color: INK.primary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
 												children: feed.name ?? hostOf(feed.url) ?? feed.url
 											}),
 											jsx("span", {
-												style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+												style: { font: FONT.micro, color: INK.secondary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
 												children: feed.url
 											})
 										]
@@ -10728,7 +14673,7 @@ window.__ModuleLoader__.load({
 									jsx("button", {
 										type: "button",
 										disabled: busy,
-										style: { ...controlStyle(), height: "28px", fontSize: "12px" },
+										className: "swm-ctl swm-focus", style: { ...controlStyle(busy), font: FONT.small, height: CONTROL.sm },
 										onClick: () => {
 											void save({ feeds: config.feeds.filter((_, at) => at !== index) }, zh ? "已移除。" : "Removed.");
 										},
@@ -10737,12 +14682,12 @@ window.__ModuleLoader__.load({
 								]
 							}, "feed" + index))(entry))),
 							jsxs("div", {
-								style: { display: "flex", gap: "8px", marginTop: "10px" },
+								style: { display: "flex", gap: SPACE.sm, marginTop: "10px" },
 								children: [
 									jsx("select", {
 										value: feedType,
 										onChange: (event) => { setFeedType(event.target.value); },
-										style: controlStyle(),
+										className: "swm-ctl swm-focus", style: controlStyle(),
 										children: config.resourceTypes.map((type) => jsx("option", { value: type, children: type }, type))
 									}, "type"),
 									jsx("input", {
@@ -10750,12 +14695,12 @@ window.__ModuleLoader__.load({
 										value: feedUrl,
 										placeholder: "https://example.com/feed.xml",
 										onChange: (event) => { setFeedUrl(event.target.value); },
-										style: { ...SEARCH_STYLE, height: "34px", flex: 1 }
+										className: "swm-focus", style: { ...SEARCH_STYLE, height: CONTROL.md, flex: 1 }
 									}, "url"),
 									jsx("button", {
 										type: "button",
 										disabled: busy || feedUrl.trim() === "",
-										style: controlStyle(),
+										className: "swm-ctl swm-focus", style: controlStyle(busy || feedUrl.trim() === ""),
 										onClick: () => {
 											void save(
 												{ feeds: config.feeds.concat([{ url: feedUrl.trim(), type: feedType }]) },
@@ -10782,9 +14727,9 @@ window.__ModuleLoader__.load({
 							...config.jobs.map((job, index) => jsx("div", {
 								style: rowStyle,
 								children: jsxs("span", {
-									style: { flex: 1, fontSize: "13px", color: "var(--dsw-alias-label-primary)" },
+									style: { font: FONT.body, flex: 1, color: INK.primary },
 									children: [job.collector, jsx("span", {
-										style: { marginLeft: "8px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+										style: { font: FONT.small, marginLeft: "8px", color: INK.secondary },
 										children: JSON.stringify(job.options ?? {})
 									}, "opt")]
 								})
@@ -10806,38 +14751,38 @@ window.__ModuleLoader__.load({
 											: (zh ? "自动采集已关闭（间隔为 0）。" : "Automatic collection is off (interval is 0).")
 									}),
 									status.runs.length === 0
-										? jsx("div", { style: { ...rowStyle, color: "var(--dsw-alias-label-secondary)", fontSize: "12px" }, children: zh ? "服务启动后还没有跑过。" : "No run since this process started." })
+										? jsx("div", { style: { ...rowStyle, font: FONT.small, color: INK.secondary }, children: zh ? "服务启动后还没有跑过。" : "No run since this process started." })
 										: jsxs("div", {
 											children: status.runs.slice(0, 8).map((run, at) => jsxs("div", {
 												style: {
-													...rowStyle, alignItems: "flex-start", flexDirection: "column", gap: "4px",
-													borderColor: run.failures.length === 0 ? "var(--dsw-alias-border-l1)" : hue(alert, 0.45)
+													...rowStyle, alignItems: "flex-start", flexDirection: "column", gap: SPACE.xs,
+													borderColor: run.failures.length === 0 ? LINE.hair : hue(alert, TINT.ring)
 												},
 												children: [
 													jsxs("div", {
-														style: { display: "flex", flexWrap: "wrap", gap: "10px", fontSize: "12px", width: "100%" },
+														style: { font: FONT.small, display: "flex", flexWrap: "wrap", gap: SPACE.md, width: "100%" },
 														children: [
-															jsx("span", { style: { fontWeight: 600, color: "var(--dsw-alias-label-primary)" }, children: formatStamp(run.startedAt) }),
-															jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: (zh ? "作业 " : "jobs ") + run.jobs }),
-															jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: (zh ? "抓取 " : "fetched ") + run.fetched }),
+															jsx("span", { style: { fontWeight: 500, color: INK.primary }, children: formatStamp(run.startedAt) }),
+															jsx("span", { style: { color: INK.secondary }, children: (zh ? "作业 " : "jobs ") + run.jobs }),
+															jsx("span", { style: { color: INK.secondary }, children: (zh ? "抓取 " : "fetched ") + run.fetched }),
 															jsx("span", {
-																style: { color: run.added > 0 ? hue(alert) : "var(--dsw-alias-label-secondary)", fontWeight: run.added > 0 ? 600 : 400 },
+																style: { color: run.added > 0 ? hue(alert) : INK.secondary, fontWeight: run.added > 0 ? 600 : 400 },
 																children: (zh ? "新增 " : "added ") + run.added
 															}),
 															run.thumbnails === undefined || run.thumbnails === null ? null : jsx("span", {
-																style: { color: "var(--dsw-alias-label-secondary)" },
+																style: { color: INK.secondary },
 																children: (zh ? "补图 " : "thumbnails ") + run.thumbnails.found + "/" + run.thumbnails.looked
 															}),
-															jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: run.seconds + "s" }),
+															jsx("span", { style: { color: INK.secondary }, children: run.seconds + "s" }),
 															jsx("span", { style: { flex: 1 } }, "spacer"),
 															jsx("span", {
-																style: { color: run.failures.length === 0 ? "var(--dsw-alias-label-secondary)" : hue(alert), fontWeight: run.failures.length === 0 ? 400 : 600 },
+																style: { color: run.failures.length === 0 ? INK.secondary : hue(alert), fontWeight: run.failures.length === 0 ? 400 : 600 },
 																children: run.failures.length === 0 ? (zh ? "全部成功" : "all ok") : (zh ? `${run.failures.length} 个源失败` : `${run.failures.length} failed`)
 															})
 														]
 													}),
 													...run.failures.slice(0, 4).map((failure, index) => jsx("div", {
-														style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)" },
+														style: { font: FONT.micro, color: INK.secondary },
 														children: `${failure.source} — ${failure.error}`
 													}, `f${index}`))
 												]
@@ -10852,12 +14797,12 @@ window.__ModuleLoader__.load({
 							// ── run ───────────────────────────────────────────────────
 							jsx("h3", { style: heading, children: zh ? "立即采集" : "Run now" }),
 							jsxs("div", {
-								style: { display: "flex", alignItems: "center", gap: "10px" },
+								style: { display: "flex", alignItems: "center", gap: SPACE.md },
 								children: [
 									jsx("button", {
 										type: "button",
 										disabled: busy,
-										style: controlStyle(),
+										className: "swm-ctl swm-focus", style: controlStyle(busy),
 										onClick: () => { void collect(); },
 										children: busy ? (zh ? "采集中…" : "Collecting…") : (zh ? "运行全部采集任务" : "Run every collector")
 									})
@@ -10873,7 +14818,7 @@ window.__ModuleLoader__.load({
 									: "YouTube has hardened timedtext, so a server-side fetch returns an empty body for most videos, and the official Data API authorizes captions.download only for the owning channel. A Supadata key is the fallback; the free route is always tried first, so the key is spent only where it must be."
 							}),
 							jsxs("div", {
-								style: { display: "flex", gap: "8px", alignItems: "center" },
+								style: { display: "flex", gap: SPACE.sm, alignItems: "center" },
 								children: [
 									jsx("input", {
 										type: "password",
@@ -10882,12 +14827,12 @@ window.__ModuleLoader__.load({
 											? (zh ? "已配置（留空则保持不变）" : "Configured (leave blank to keep)")
 											: (zh ? "尚未配置" : "Not configured"),
 										onChange: (event) => { setKeyDraft(event.target.value); },
-										style: { ...SEARCH_STYLE, height: "34px", flex: 1 }
+										className: "swm-focus", style: { ...SEARCH_STYLE, height: CONTROL.md, flex: 1 }
 									}, "key"),
 									jsx("button", {
 										type: "button",
 										disabled: busy || keyDraft.trim() === "",
-										style: controlStyle(),
+										className: "swm-ctl swm-focus", style: controlStyle(busy || keyDraft.trim() === ""),
 										onClick: () => {
 											void save({ supadataKey: keyDraft.trim() }, zh ? "密钥已保存。" : "Key saved.");
 											setKeyDraft("");
@@ -10898,7 +14843,7 @@ window.__ModuleLoader__.load({
 										? jsx("button", {
 											type: "button",
 											disabled: busy,
-											style: controlStyle(),
+											className: "swm-ctl swm-focus", style: controlStyle(busy),
 											onClick: () => { void save({ supadataKey: "" }, zh ? "密钥已清除。" : "Key cleared."); },
 											children: zh ? "清除" : "Clear"
 										}, "clear")
@@ -10911,11 +14856,11 @@ window.__ModuleLoader__.load({
 					// confirmed where the reader is, rather than under the Run button
 					// on a pane they are not looking at.
 					notice === "" ? null : jsx("p", {
-						style: { marginTop: "14px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						style: { font: FONT.small, marginTop: "14px", color: INK.secondary },
 						children: notice
 					}),
 					error === "" ? null : jsx("p", {
-						style: { marginTop: "14px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" },
+						style: { font: FONT.small, marginTop: "14px", color: INK.secondary },
 						children: error
 					})
 				]
@@ -10966,22 +14911,22 @@ window.__ModuleLoader__.load({
 			KINDS, SORTS, youTubeVideoId, thumbnailOf, hostOf, sourceNameOf,
 			authorLine, descriptionOf, formatDate, resourcesUrl, unwrapFeed,
 			renderMarkdown, mergeBySentence, formatTime, displayModeOf, buildExport, stampFor,
-			missionFace, missionHue, missionPillFace, missionDuration, missionMeterLine,
+			missionFace, missionHue, missionIcon, missionPillFace, missionDuration, missionMeterLine,
 			missionVerifyRows, missionEventDetail, missionNoEvidence, missionActionNote,
 			missionTierLine, MISSION_FILTERS, MISSION_STAGE_FACES, MISSION_VERIFY_FACES,
-			missionClock, missionLatency, missionOkFace, missionRowTitle, missionRowState,
+			missionClock, missionSince, missionLatency, missionOkFace, missionRowTitle, missionRowState,
 			missionTraceSignature, missionFindingsSignature,
 			MISSION_ROLE_FACES, MISSION_TRACE_KINDS, MISSION_TRACE_TABS,
 			SourcesSettings, SwarmPage, PublishTab, ExploreTab,
 			MissionsTab, MissionStarter, MissionListRow, MissionDetail, MissionPanel,
-			MissionStageStrip, MissionCostMeters, MissionDimensionCard, MissionTried,
+			MissionCostMeters, MissionTried,
 			MissionDetailTabs, MissionTaskBoard, MissionSources, MissionEmptyPane,
+			MissionAgentTable, MissionStageDetail, MissionProgressBar, MissionStatTiles,
 			MissionStageSpend, MissionToolTable, MissionDegradeNote, MissionReferenceList,
 			missionReferences, missionMarkerCount, missionCompact,
 			MissionTimeline, MissionReport, MissionEvidenceRow,
 			MissionTrace, MissionTraceRow, MissionTraceDetail,
-			MissionDimensions, MissionDimensionFindings, MissionFindingRow,
-			MissionSourceReader,
+			MissionSourceReader, MissionClamp, MissionRework, MissionGoals, MissionSignoffCard,
 			VersionLine, libraryLine
 		};
 		return module.exports;

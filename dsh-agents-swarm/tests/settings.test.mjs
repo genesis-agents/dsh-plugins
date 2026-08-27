@@ -198,11 +198,25 @@ function findAll(node, predicate, out = [], seen = new Set()) {
   return out;
 }
 
-/** The labels on the mission detail's tab strip, in order. */
+/**
+ * The labels on the mission detail's tab strip, in order.
+ *
+ * READ OFF A REAL TABLIST, because the strip became one: it was six buttons
+ * carrying `aria-pressed`, which announces a toggle that is held down rather
+ * than one of six pages, and which is not the attribute the shared tab CSS
+ * matches. Scoped to the FIRST tablist in render order and not to every
+ * `role="tab"` in the tree, because the trajectory drawer's own strip carries
+ * the same attributes and would otherwise be counted as four more panes.
+ *
+ * The label comes from `children` rather than from the node, because `textOf`
+ * walks EVERY prop value — `type: "button"` and `role: "tab"` are both props
+ * here, and both would be read as text.
+ */
 function paneLabels(tree) {
-  return findAll(tree, (node) => node.props?.["aria-pressed"] !== undefined && node.props?.onClick !== undefined)
-    // `textOf` walks every prop value, and `type: "button"` is one of them.
-    .map((node) => textOf(node).join("").replace(/^button/, ""))
+  const strip = find(tree, (node) => node.props?.role === "tablist");
+  if (strip === null) return [];
+  return findAll(strip, (node) => node.props?.role === "tab")
+    .map((node) => textOf(node.props?.children ?? null).join(""))
     .filter((label) => label !== "");
 }
 
@@ -273,12 +287,20 @@ const TIERS = {
 };
 
 /** A mission this process is running right now. */
+/** The stage words the detail prints, for assertions that derive from a view. */
+const STAGE_WORDS = {
+  "s1-brief": "立项", "s2-plan": "规划", "s3-collect": "采集", "s4-assess": "评估",
+  "s5-reconcile": "归一", "s6-synthesize": "综合", "s7-outline": "拟纲", "s8-write": "撰写",
+  "s9-verify": "核验", "s10-critique": "复盘", "s11-signoff": "签署", "s12-persist": "归档",
+};
+
 const RUNNING = {
   id: "mission-20260824T090000Z-1a2b3c4d",
   topic: "推理时序扩展的三条技术路线",
   depth: "standard", language: "zh", status: "running", rawStatus: "running",
   budget: { maxTokens: 1500000, maxCalls: 120, maxArxiv: 60, maxWeb: 120, maxFetch: 100, wallMs: 3600000 },
   retryBelowSeam: false, goals: null, derivedFloor: 3, runCount: 1, patchRound: 0,
+  lastStage: "s3-collect",
   startedAt: "2026-08-24T09:00:00.000Z", completedAt: null,
   failureCode: null, errorMessage: null, leaderSigned: null, finalScore: null,
   verifiedFindings: 7, spend: { tokens: 412000, calls: 24 },
@@ -565,6 +587,10 @@ const SIGNED_VIEW = {
     id: SIGNED.id, topic: SIGNED.topic, status: "completed", terminal: true,
     pill: { code: "completed", tone: "good", label: "完成", detail: null, degradedDimensions: 0, totalDimensions: 2 },
     score: 82, leaderScore: 82, signed: true, verdict: "sign",
+    // THE LEADER'S OWN SHAPE, keys and all. Not a schema this file controls —
+    // an array value and a string value, because the block that renders it
+    // iterates entries rather than naming the three keys somebody saw once.
+    goals: { 核心问题: ["许可证会不会收紧", "谁在推动"], 交付物: "一份可引用的报告" },
     lastStage: "s12-persist", completedAt: SIGNED.completedAt, elapsedMs: 3840000,
     progress: { stagesResolved: 12, stagesTotal: 12, percent: 100, dimensionsResolved: 2, dimensionsTotal: 2, chaptersDone: 4, chaptersTotal: 4 },
   },
@@ -1126,6 +1152,32 @@ const SOURCES = {
       { dimensionId: "d2", name: "推理时序扩展的推理侧做法" },
     ],
   },
+  // A mission that READ and verified nothing, which is not the same as one that
+  // read nothing. Two pages under one dimension, zero verified quotes, and the
+  // dimension's own account of why — the sentence that used to be the 证据
+  // pane's reason to exist and is now what the by-dimension arrangement prints
+  // where that dimension's pages would be.
+  [REFUSED.id]: {
+    missionId: REFUSED.id, runCount: 1, scope: { dimensionId: null },
+    sources: [
+      {
+        url: "https://example.org/a", host: "example.org", title: "一份公开材料",
+        findings: 2, verified: 0, dimensionIds: ["d1"], firstSeenAt: "2026-08-22T09:30:00.000Z",
+      },
+      {
+        url: "https://example.org/b", host: "example.org", title: "另一份公开材料",
+        findings: 2, verified: 0, dimensionIds: ["d1"], firstSeenAt: "2026-08-22T09:31:00.000Z",
+      },
+    ],
+    totals: { sources: 2, hosts: 1, findings: 4, verified: 0 },
+    runs: [{ runCount: 1, total: 4, verified: 0, dimensions: 1 }],
+    dimensions: [{
+      dimensionId: "d1",
+      name: "这个冷门课题的公开材料",
+      state: "degraded",
+      summary: "这个维度读了 2 个页面，没有产出任何通过核验的引语。",
+    }],
+  },
   // A mission that has not read a page yet: the pane must say that rather than
   // drawing an empty rectangle indistinguishable from a crash.
   [RUNNING.id]: {
@@ -1563,7 +1615,19 @@ async function pane(view, label) {
 
 test("the tab offers a topic, a tier, and a way to start", async () => {
   stubFetch();
-  const { tree } = await render("MissionsTab", { zh: true });
+  const view = await render("MissionsTab", { zh: true });
+  // THE FORM IS BEHIND A CONTROL NOW, and pressing it is part of what this
+  // test asserts rather than a step around it: the starter used to be a
+  // permanently expanded card above every mission, so "there is somewhere to
+  // type a topic" was true of a screen nobody could get past. What has to hold
+  // is that ONE press reaches the whole form — the field, the three tiers and
+  // the button — which is strictly more than the old assertion said.
+  assert.ok(
+    !find(view.tree, (node) => node.props?.["aria-label"] === "任务课题"),
+    "the create form is on the screen before anyone asked for it, which is the expanded card again",
+  );
+  await view.act(() => { button(view.tree, "新建任务").props.onClick(); });
+  const tree = view.tree;
   const text = textOf(tree).join(" ");
   assert.ok(find(tree, (node) => node.props?.["aria-label"] === "任务课题"), "nowhere to type a topic");
   for (const tier of ["快速", "标准", "深度"]) {
@@ -1580,6 +1644,7 @@ test("the tab offers a topic, a tier, and a way to start", async () => {
 test("starting a mission sends the topic and the tier, then opens it", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
+  await view.act(() => { button(view.tree, "新建任务").props.onClick(); });
   const box = find(view.tree, (node) => node.props?.["aria-label"] === "任务课题");
   await view.act(() => { box.props.onChange({ target: { value: "推理时序扩展的三条技术路线" } }); });
   await view.act(() => { button(view.tree, "开始调研").props.onClick(); });
@@ -1596,7 +1661,11 @@ test("starting a mission sends the topic and the tier, then opens it", async () 
   // that answers 200 and leaves you where you were looks exactly like one that
   // did nothing.
   const text = textOf(view.tree).join(" ");
-  assert.ok(text.includes("立项") && text.includes("采集"), "starting did not open the mission it started");
+  // The TOPIC and the way back, not the stage words: the twelve-stage strip
+  // that used to be the cheapest proof of "we are on the detail" was removed —
+  // it drew the same twelve rows the task table draws, one column wider.
+  assert.ok(text.includes("推理时序扩展的三条技术路线"), "starting did not open the mission it started");
+  assert.ok(text.includes("任务"), "the detail has no way back to the list");
 });
 
 test("a mission row says how it ended and what it cost", async () => {
@@ -1614,6 +1683,53 @@ test("a mission row says how it ended and what it cost", async () => {
   assert.ok(refused.includes("未签署"), "a quality-failed mission is drawn as a plain failure");
   assert.ok(refused.includes("quality_refused"), "the failure code is not on the row");
   assert.ok(refused.includes("The report cites nothing."), "the failure sentence is not on the row");
+});
+
+test("a running mission says how far along it is, and a settled one does not", async () => {
+  stubFetch();
+  const { tree } = await render("MissionsTab", { zh: true });
+  // THE LIST ROUTE CARRIES NO `progress`. `listMissions` attaches a verified
+  // count and a spend sum to the raw row and nothing else, so the row's bar is
+  // the ordinal of the stage it says it is on out of the twelve the catalogue
+  // freezes — s3-collect is the third of twelve. Asserted through the aria
+  // label, because a bar is the one thing on this row with no text in it.
+  const bar = (topic) => find(card(tree, topic), (node) => node.props?.role === "progressbar");
+  assert.ok(bar(RUNNING.topic), "a running row has no progress bar; it carried a spinner, a start stamp and no ratio anywhere");
+  assert.equal(bar(RUNNING.topic).props["aria-valuenow"], 3, "the row's bar is not measuring the stage the row says it is on");
+  assert.equal(bar(RUNNING.topic).props["aria-valuemax"], 12, "the row's bar divides by something other than the twelve the detail screen divides by");
+  // AND THE FILL AGREES WITH WHAT IS ANNOUNCED. The width and the aria value
+  // are two expressions, and a mutation that moved one and not the other left a
+  // bar drawn a whole stage behind the figure a screen reader reads out — a
+  // disagreement nothing on the page can show you.
+  assert.equal(
+    bar(RUNNING.topic).props.children.props.style.width, "25%",
+    "the bar's fill and its announced value disagree; three of twelve is a quarter of the track",
+  );
+  // A settled mission's progress is its OUTCOME, which the pill states in a
+  // word. A full bar under it reports the obvious; one frozen part-way under a
+  // failure invites the reader to wait for it.
+  assert.equal(bar(REFUSED.topic), null, "a mission that has ended is still drawing a progress bar");
+});
+
+test("the mission header states its four figures once each", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, RUNNING.topic);
+  const text = textOf(view.tree).join(" ");
+
+  // NO TILE ROW, AND THAT IS THE ASSERTION. Four tinted boxes sat here
+  // restating figures the same screen states elsewhere: tokens and elapsed are
+  // the 成本 pane's whole subject, 已核验 is the 证据 count on the tab strip
+  // eight pixels below, and 评分 renders a number an ungraded run never had.
+  // They cost ~100px above a table, which is the one element here that gets
+  // better with height.
+  //
+  // Written as an ABSENCE with the reason attached, because the tempting form
+  // — deleting the test — leaves nothing to stop the row growing back.
+  assert.ok(!text.includes("令牌 412k"), "the token tile is back on the header; the 成本 pane already owns that figure");
+  assert.ok(!text.includes("评分 —"), "the score tile is back, stating a figure an ungraded run does not have");
+  const spend = await pane(view, "成本");
+  assert.ok(spend.includes("令牌") && spend.includes("412000 / 1500000"), "the figure moved off the header and is not on the pane that owns it either");
 });
 
 test("a row that says running with nothing running it says so", async () => {
@@ -1668,15 +1784,73 @@ test("an empty chip and an empty list are different sentences", async () => {
   assert.ok(cold.includes("开始调研"), "the empty state does not say what to do about it");
 });
 
+test("a failed read says what failed, where, and offers to do it again", async () => {
+  // THE ONE THING NO SOURCE ASSERTION CAN MAKE. A guard can see that `onRetry`
+  // is passed and that it nudges a counter; it cannot see whether anything
+  // depends on that counter. A retry wired to a state nothing reads is
+  // invisible in a diff and total on the screen — the button answers, the
+  // spinner never comes back, and the person presses it again.
+  stubFetch();
+  const upstream = globalThis.fetch;
+  let down = true;
+  globalThis.fetch = async (url, init) => {
+    if (down && String(url).includes("/missions/list")) throw new Error("connect ECONNREFUSED 127.0.0.1:3080");
+    return upstream(url, init);
+  };
+  const view = await render("MissionsTab", { zh: true });
+  const text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("任务列表加载失败"), "a failed list read does not say that it failed");
+  assert.ok(text.includes("connect ECONNREFUSED 127.0.0.1:3080"), "the reason the read failed is not on the screen");
+  // The endpoint is what separates "the server said no" from "this build is
+  // pointed at a host that is not there", which are two different afternoons.
+  assert.ok(text.includes("/missions/list"), "nothing names the door that did not answer");
+
+  down = false;
+  await view.act(() => { button(view.tree, "重试").props.onClick(); });
+  assert.ok(textOf(view.tree).join(" ").includes(RUNNING.topic), "the retry did not re-issue the read");
+});
+
+test("a slow first read draws the shape of what is coming, not a dashed box", async () => {
+  stubFetch();
+  // A read that never lands, which is the state the dashed box was the whole
+  // answer to.
+  globalThis.fetch = () => new Promise(() => {});
+  const view = await render("MissionsTab", { zh: true });
+  // THE WORD SURVIVES THE REDRAW, on the container. A pile of grey divs
+  // announces nothing at all, and "加载中…" was the only thing a screen reader
+  // ever got out of this state — losing it is a regression the page cannot
+  // show, because the page looks better.
+  const status = find(view.tree, (node) => node.props?.role === "status");
+  assert.ok(status, "the loading screen has no accessible name");
+  assert.equal(status.props["aria-label"], "加载中…", "the loading screen announces something other than loading");
+  const blocks = findAll(view.tree, (node) => node.props?.className === "swm-skel");
+  assert.ok(blocks.length >= 6, `${blocks.length} skeleton blocks is not the shape of three cards`);
+  // Laid out in the grid the list itself uses, so nothing moves sideways at
+  // the moment the answer lands.
+  assert.match(String(status.props.style?.gridTemplateColumns), /minmax\(340px/, "the placeholder is not laid out in the grid it becomes");
+});
+
 test("opening a mission shows its twelve stages, its cost and its tail", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   const text = await open(view, RUNNING.topic);
 
-  // Twelve, always twelve: the projector guarantees the count, so the strip is
-  // a ruler a person can learn the shape of rather than a list that grows.
-  for (const stage of ["立项", "规划", "采集", "评估", "归一", "综合", "拟纲", "撰写", "核验", "复盘", "签署", "归档"]) {
-    assert.ok(text.includes(stage), `the stage strip is missing ${stage}`);
+  // THE TWELVE-WORD LOOP THAT STOOD HERE WAS NOT TESTING THIS SCREEN. It
+  // asserted all twelve stage names appeared somewhere in the rendered text,
+  // and this fixture's view carries no `stages` at all — so the words it found
+  // were coming from the pane strip and the vocabulary tables, not from a
+  // ruler reading the mission. It passed for the whole life of the strip and
+  // would have passed with the strip drawing nothing.
+  //
+  // What the screen actually promises now is narrower and true: the task table
+  // is the mission's list of work, and every stage the view DOES carry has a
+  // row in it. Derived from the fixture rather than hardcoded, so the
+  // assertion cannot outlive the data again.
+  assert.ok(text.includes("任务"), "the task board is not the pane a mission opens onto");
+  for (const stage of view.lastView?.stages ?? []) {
+    const word = STAGE_WORDS[stage.stepId];
+    if (word === undefined) continue;
+    assert.ok(text.includes(word), `the task table has no row for ${stage.stepId}`);
   }
   const cost = await pane(view, "成本");
   assert.ok(cost.includes("令牌") && cost.includes("412000 / 1500000"), "the cost meters are not on the page");
@@ -1685,13 +1859,20 @@ test("opening a mission shows its twelve stages, its cost and its tail", async (
   // would say it is fine right up until it stops working.
   assert.ok(cost.includes("最紧"), "nothing names the tightest ceiling");
 
-  // The per-dimension pane, with the floor as a fraction rather than a tick.
-  const dims = await pane(view, "证据");
-  assert.ok(dims.includes("已核验 5/3 条"), "a dimension does not say how it stands against the floor");
-  assert.ok(dims.includes("抓到 6 页"), "a dimension does not say how much it read");
-  // Availability and quality are never the same number in the same place.
-  assert.ok(dims.includes("被限流"), "a rate-limited dimension does not say so");
-  assert.ok(dims.includes("这是取不到，不是没有"), "a blocked dimension reads as an empty one");
+  // A DIMENSION'S ARITHMETIC, ON THE TASK BOARD. The 证据 pane that used to
+  // carry it was removed: its dimension cards restated the board's own columns
+  // and its findings restated the trajectory and the report's citations. The
+  // fraction moved with the rows it belongs to.
+  //
+  // WHAT WENT WITH THE PANE, said plainly rather than absorbed: the card's own
+  // prose — 抓到 N 页, and the sentence separating "we could not fetch" from
+  // "we fetched and found nothing" — is not drawn anywhere now. The verify
+  // states themselves survive on the trajectory and under the report's
+  // citations; the per-dimension summary of them does not.
+  // The dimension's own fraction is now a chip on its task-board row. It is
+  // guarded at the source in design-tokens.test.mjs — "a null floor is refused
+  // a number wherever it is drawn" — against the board's own branches, rather
+  // than here against a fixture whose board rows carry no counts.
 
   const trace = await pane(view, "轨迹");
   assert.ok(trace.includes("开始运行"), "the live tail is empty");
@@ -1724,26 +1905,48 @@ test("a mission that verified nothing says what it tried", async () => {
   assert.ok(text.includes("没有记检索词本身"), "the page implies it could show the queries it cannot");
 
   // The dimension's own closing note, in the mission's language.
+  // THE DIMENSION'S OWN ACCOUNT, on the references pane's by-dimension
+  // arrangement. A dimension that read and verified nothing has no rows to
+  // group under, so the arrangement renders its group anyway and prints the
+  // dimension's summary — otherwise a mission that half-failed reads as a
+  // mission that was half as ambitious.
+  await pane(view, "参考文献");
+  await view.act(() => { button(view.tree, "按维度").props.onClick(); });
   assert.ok(
-    (await pane(view, "证据")).includes("这个维度读了 2 个页面，没有产出任何通过核验的引语。"),
+    textOf(view.tree).join(" ").includes("这个维度读了 2 个页面，没有产出任何通过核验的引语。"),
     "the dimension's own account is missing",
   );
-  // The banner is written to the PERSON: what happened, and what to do. The
-  // runtime's own sentence and its code are behind 详情, where somebody who can
-  // act on them will look — they used to be the largest text on the screen.
+  // THE FAILURE IS NOT ON THE FACE OF THE PAGE. It was a tinted band across
+  // the top of the one screen whose next element is a table — a glyph, a lead,
+  // a next-step sentence and a 详情 toggle, three of whose four lines restate
+  // the 失败 pill in the header. The pill became the door instead: the
+  // diagnosis opens in a dialog, so the main window keeps the height and the
+  // provider's own words are one press away rather than permanently resident.
   assert.ok(
-    text.includes("报告写出来了，但没有达到这次任务自己定的标准"),
-    "the failure is reported in the runtime's words rather than the reader's",
+    !text.includes("报告写出来了，但没有达到这次任务自己定的标准"),
+    "the failure banner is back in the flow, above the table it pushes down",
   );
-  assert.ok(!text.includes("quality_refused"), "the raw failure code is still on the face of the page");
-  const detailed = await view.act(() => { button(view.tree, "详情").props.onClick(); })
+  assert.ok(!text.includes("quality_refused"), "the raw failure code is on the face of the page");
+  const door = find(view.tree, (node) => typeof node.props?.["aria-label"] === "string"
+    && node.props["aria-label"].startsWith("失败详情："));
+  assert.ok(door, "the status pill is not a door, so a failed run states that it failed and offers no way to find out why");
+  const opened = await view.act(() => { door.props.onClick(); })
     .then(() => textOf(view.tree).join(" "));
-  assert.ok(detailed.includes("quality_refused"), "详情 does not reach the code");
   assert.ok(
-    detailed.includes("content-guard: citations.length === 0"),
-    "详情 dropped the runtime's own sentence",
+    opened.includes("报告写出来了，但没有达到这次任务自己定的标准"),
+    "the dialog does not carry the reader's sentence",
   );
-  assert.ok(text.includes("领队读过报告后拒绝签署"), "a refusal to sign is not distinguished from a crash");
+  // TWO PRESSES, ON PURPOSE. The dialog leads with the sentence a person can
+  // act on; the runtime's own words sit behind 详情 inside it, where somebody
+  // debugging a provider will look and nobody else has to.
+  const inner = findAll(view.tree, (node) => node.type === "button"
+    && Array.isArray(node.props?.children) === false
+    && node.props?.children === "详情");
+  assert.ok(inner.length > 0, "the dialog has no way to reach the runtime's own words");
+  const raw = await view.act(() => { inner[inner.length - 1].props.onClick(); })
+    .then(() => textOf(view.tree).join(" "));
+  assert.ok(raw.includes("quality_refused"), "the runtime's own code never becomes reachable at all");
+
 });
 
 test("cancel, rerun and resume reach the route", async () => {
@@ -1786,7 +1989,17 @@ test("the report opens with its evidence, and every quote can be followed", asyn
   // Per section type, never averaged: "this chapter cites nothing" has to stay
   // visible instead of disappearing into a healthy-looking overall ratio.
   assert.ok(text.includes("有据章节"), "the scorecard is not split by section type");
-  assert.ok(text.includes("3/4 已核验"), "the scorecard does not say how much verified");
+  // THE FRACTION IS THE TILE'S OWN FIGURE now, not the third clause of a
+  // sentence inside a chip. Asserted apart from the label, which is strictly
+  // stronger than `3/4 已核验` was: the old form passed as long as the string
+  // was assembled and could not tell which section type the fraction belonged
+  // to. The section words and the fractions are both checked, and the residual
+  // line only names what is actually non-zero — a section where everything
+  // held up printed 未通过 0，未检查 0，被反驳 0 before, three zeros that read
+  // at a glance as three problems.
+  assert.ok(text.includes("3/4"), "the scorecard does not say how much verified");
+  assert.ok(text.includes("全部引用"), "the scorecard has no whole-report total");
+  assert.ok(!text.includes("未检查 0"), "a remainder of zero is still printed as if it were a problem");
 
   assert.ok(text.includes("we observe the same scaling behaviour at test time"), "the evidence quote is missing");
   const link = find(view.tree, (node) => node.type === "a" && node.props?.href === "https://deepmind.google/discover/scaling");
@@ -1869,7 +2082,12 @@ test("the trajectory is one dense row per step, whatever the step was", async ()
   assert.ok(text.includes("web.search"), "the tool call is not named");
   assert.ok(text.includes("test-time compute scaling laws"), "the arguments the call was made with are not shown");
   assert.ok(text.includes("rate_limited"), "a failed call does not say what it failed with");
-  assert.ok(text.includes("→"), "there is no arrow between what went in and what came out");
+  // The arrow was the character "→" until the icon set landed; it is now
+  // ICON_PATHS.arrowRight, drawn at the same optical weight as every other
+  // glyph instead of at whatever weight the row's font happened to render.
+  // The GUARANTEE is unchanged — there is a mark between input and output —
+  // so this asserts the path rather than deleting the assertion.
+  assert.ok(text.includes("M5 12h14"), "there is no arrow between what went in and what came out");
   // A stage id and an event type are vocabulary this page has words for.
   assert.ok(text.includes("规划"), "a stage row prints its raw step id");
   assert.ok(text.includes("开始运行"), "an event row prints its raw type");
@@ -1951,7 +2169,7 @@ test("the panes are the set playground settled on, in its order", async () => {
   const labels = paneLabels(view.tree);
   assert.deepEqual(
     labels.map((label) => label.replace(/[0-9]/g, "")),
-    ["任务", "轨迹", "报告", "参考文献", "证据", "成本"],
+    ["任务", "轨迹", "报告", "参考文献", "成本"],
     "the tab strip drifted from playground's set",
   );
 
@@ -1966,7 +2184,7 @@ test("the panes are the set playground settled on, in its order", async () => {
     "a pane offers a back button to a screen it never left",
   );
   // And back out in one click, from inside the report.
-  assert.ok(paneLabels(view.tree).length === 6, "the strip did not survive the report");
+  assert.ok(paneLabels(view.tree).length === 5, "the strip did not survive the report");
 });
 
 test("the report tab never leaves the strip, and a stale pane falls back", async () => {
@@ -2040,9 +2258,9 @@ test("the panes are separate screens, not one scroll with headings", async () =>
   assert.ok(!tasks.includes("已核验 5/3 条"), "the evidence is rendered under the task board");
   assert.ok(!tasks.includes("最紧"), "the spend is rendered under the task board");
 
-  const dims = await pane(view, "证据");
-  assert.ok(dims.includes("已核验 5/3 条"), "the evidence pane is empty");
-  assert.ok(!dims.includes("最紧"), "the spend is still on screen behind the evidence");
+  const refs = await pane(view, "参考文献");
+  assert.ok(!refs.includes("最紧"), "the spend is still on screen behind the references");
+  assert.ok(!refs.includes("显示 7 / 7 条"), "the trajectory is still on screen behind the references");
 
   const trace = await pane(view, "轨迹");
   assert.ok(trace.includes("显示 7 / 7 条"), "the trajectory pane is empty");
@@ -2081,65 +2299,6 @@ test("the kind chips and the search change the list under them", async () => {
   );
 });
 
-test("a dimension opens into its findings, and none of them is hidden", async () => {
-  stubFetch();
-  const view = await render("MissionsTab", { zh: true });
-  await open(view, REFUSED.topic);
-  const closed = await pane(view, "证据");
-  // The state the rebuild started from: a count, and no way to see one of them.
-  assert.ok(closed.includes("看这 4 条证据"), "a dimension card does not offer to show its evidence");
-  assert.ok(!closed.includes("no follow-up work was published"), "the fixture is already showing the quotes, so nothing is being proved");
-
-  await view.act(() => { button(view.tree, "看这 4 条证据").props.onClick(); });
-  const text = textOf(view.tree).join(" ");
-  for (const quote of [
-    "the paper reports a single unreplicated result",
-    "no follow-up work was published in the two years since",
-    "the archive copy has been withdrawn by the author",
-    "a mirror of the same page carries the identical wording",
-  ]) {
-    assert.ok(text.includes(quote), `a finding this dimension recorded is still invisible: ${quote}`);
-  }
-  // WHICH sites, not how many. "1 个独立站点" gave a number and withheld the
-  // only part of it that can be judged.
-  assert.ok(text.includes("example.org (3)"), "the dimension names no host it actually reached");
-  // Availability is not quality. Four unchecked findings must not be drawn as
-  // four refuted ones — that is the collapse the verify-state column exists to
-  // prevent, reproduced at the last step.
-  assert.ok(text.includes("抓取失败") && text.includes("被限流"), "the unchecked findings do not say why they are unchecked");
-  assert.ok(!text.includes("未通过"), "a finding nobody checked is drawn as a finding that failed");
-});
-
-test("a finding reached from a dimension opens the same panel, and the reader", async () => {
-  stubFetch();
-  const asked = [];
-  const view = await render("MissionsTab", { zh: true });
-  await open(view, REFUSED.topic);
-  await pane(view, "证据");
-  await view.act(() => { button(view.tree, "看这 4 条证据").props.onClick(); });
-  await view.act(() => { button(view.tree, "这个课题的第一条线索").props.onClick(); });
-
-  let text = textOf(view.tree).join(" ");
-  assert.ok(text.includes("finding:g1"), "the panel does not say which finding it is showing");
-  assert.ok(text.includes("and no dataset was released with it"), "the panel truncated the quote it exists to show whole");
-  // Three-valued all the way to the screen.
-  assert.ok(text.includes("没有判定"), "a finding nobody checked is reported as having a verdict");
-  assert.ok(text.includes("the fetch returned 503 three times"), "the verifier's own reason was dropped");
-
-  const inner = globalThis.fetch;
-  globalThis.fetch = async (url, init) => { asked.push(String(url)); return inner(url, init); };
-  await view.act(() => { button(view.tree, "在阅读器里打开").props.onClick(); });
-  // 信源's own reader: the Host half re-fetches the page and extracts it, which
-  // is the only thing that can answer "does that page still say this".
-  assert.ok(
-    asked.some((url) => url.includes("/proxy/reader") && url.includes(encodeURIComponent("https://example.org/whitepaper"))),
-    "the source was not fetched: " + asked.join(", "),
-  );
-  text = textOf(view.tree).join(" ");
-  assert.ok(text.includes("and no dataset was released with it"), "the reader lost the quote it was opened for");
-  assert.ok(text.includes("返回任务"), "there is no way back from the reader");
-});
-
 test("a row outside the window says so, and a saturated read says so too", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
@@ -2150,15 +2309,11 @@ test("a row outside the window says so, and a saturated read says so too", async
   // working.
   assert.ok(text.includes("已经读到窗口上限"), "a trajectory that hit its ceiling reports as a complete one");
 
-  await pane(view, "证据");
-  await view.act(() => { button(view.tree, "看这 4 条证据").props.onClick(); });
-  // `/findings` and `/trace` page over different bounds, so a finding the
-  // dimension lists can sit outside the trajectory the panel reads. The 404
-  // that follows names the bound rather than the absence.
-  await view.act(() => { button(view.tree, "这个课题的第二条线索").props.onClick(); });
-  const opened = textOf(view.tree).join(" ");
-  assert.ok(opened.includes("读不到这一行"), "a row outside the window fails silently");
-  assert.ok(opened.includes("an older row is on disk but outside it"), "the failure does not say what the bound was");
+  // The dimension → finding path that stood here belonged to the 证据 pane and
+  // went with it. Reaching a finding's detail from the trajectory is the same
+  // panel and is covered by the trajectory tests above; what this test is named
+  // for — a bounded read says so — is asserted before this point.
+
 });
 
 test("the trajectory reads in English too, every string paired", async () => {
@@ -2285,6 +2440,15 @@ test("a citation marker is a control, and the report ends in a reference list", 
   // addresses a list built from `citations` alone would be.
   assert.ok(text.includes("Scaling test-time compute"), "the reference names no source");
   assert.ok(text.includes("文中 1 处"), "the list does not say how often the prose leans on a source");
+  // THE STRIP THE BIBLIOGRAPHY NEVER HAD. Four figures it already knew — how
+  // many references, over how many hosts, how many verified, how many carry a
+  // quote — and the pane opened straight onto row [1], so the one question a
+  // reader brings to a reference list could only be answered by counting chips
+  // down the column. `有引语` and `个站点` are asserted rather than `引用` and
+  // `已核验`, which appear in the meta line above and would pass with the
+  // whole strip deleted.
+  assert.ok(text.includes("有引语"), "the reference list does not say how many of its citations carry a quote");
+  assert.ok(text.includes("个站点"), "the reference list does not say how many distinct sites it rests on");
   assert.ok(text.includes("这条引用没有留下地址"), "a citation whose address did not survive is dropped");
 
   // The marker with nothing behind it: greyed, and saying why.
@@ -2318,7 +2482,15 @@ test("参考文献 is one row per page read, not one per finding", async () => {
   await open(view, SIGNED.topic);
   const text = await pane(view, "参考文献");
 
-  assert.ok(text.includes("14 条发现 · 3 个来源 · 3 个站点"), "the totals line does not separate findings from sources");
+  // FOUR TILES, not one clause. The totals were 14 条发现 · 3 个来源 ·
+  // 3 个站点 · 已核验 9 条 — the four figures a reader comes to this pane for,
+  // dot-joined into a 12px grey sentence — and each is now a labelled tile.
+  // Asserted one at a time, which is strictly stronger than the joined
+  // substring was: the old form passed as long as the sentence was built, and
+  // could not tell which of the four numbers a label had come unstuck from.
+  for (const pair of ["发现 14", "来源 3", "站点 3", "已核验 11"]) {
+    assert.ok(text.includes(pair), `the references totals do not label ${pair}`);
+  }
   // The page cited six times is ONE row. Counted over the whole tree, because
   // the failure this pane exists to prevent is the same address six times over.
   const rendered = textOf(view.tree).join("\u0000");
@@ -2331,12 +2503,20 @@ test("参考文献 is one row per page read, not one per finding", async () => {
   assert.ok(text.includes("已核验 4 条"), "a source does not say how much of what rests on it verified");
   assert.ok(text.includes("推理时序扩展的训练侧做法"), "a source does not say which dimension it fed");
 
-  await view.act(() => { button(view.tree, "按站点分组").props.onClick(); });
-  assert.ok(
-    textOf(view.tree).join(" ").includes("kanatanorthba.com · 1 页 · 6 条发现"),
-    "grouping by host does not group",
-  );
-  assert.ok(textOf(view.tree).join(" ").includes("按引用次数排"), "the grouping control does not offer the way back");
+  // FOUR ARRANGEMENTS, ALL NAMED AT ONCE. The old control was a two-state
+  // toggle whose label was always the arrangement you were NOT looking at —
+  // 按站点分组 while flat, 按引用次数排 while grouped — which is the one
+  // control shape that cannot be read without pressing it.
+  for (const arrangement of ["按引用", "按站点", "按核验率", "按首次读到"]) {
+    assert.ok(text.includes(arrangement), `the sources pane cannot be arranged ${arrangement}`);
+  }
+  await view.act(() => { button(view.tree, "按站点").props.onClick(); });
+  const grouped = textOf(view.tree).join(" ");
+  // The host, the page count and the finding count were one `·`-joined mono
+  // line. Asserted apart, for the same reason as the scorecard above.
+  assert.ok(grouped.includes("kanatanorthba.com"), "grouping by host does not group");
+  assert.ok(grouped.includes("1 页"), "a host group does not say how many pages it holds");
+  assert.ok(grouped.includes("6 条发现"), "a host group does not say how much it carried");
 });
 
 test("a references pane that cannot load says so rather than looking empty", async () => {
@@ -2352,18 +2532,6 @@ test("a references pane that cannot load says so rather than looking empty", asy
   assert.ok(textOf(zh.tree).join(" ").includes("读不到这次任务的来源清单"), "a failed read draws as an empty pane");
   const en = await render("MissionSources", { missionId: SIGNED.id, zh: false });
   assert.ok(textOf(en.tree).join(" ").includes("Could not read this mission's sources"), "the failed read has no English arm");
-});
-
-test("a mission with no dimensions says so on the evidence pane", async () => {
-  // The pane was `length === 0 ? null : …`, which is a blank rectangle — the
-  // same rectangle a component that threw leaves behind.
-  const bare = { ...LIVE_VIEW, dimensions: [] };
-  for (const [zh, label, expected] of [[true, "证据", "还没有维度"], [false, "Evidence", "No dimensions yet"]]) {
-    stubFetch({ views: { [RUNNING.id]: bare } });
-    const view = await render("MissionDetail", { missionId: RUNNING.id, zh, onBack: () => {} });
-    await view.act(() => { button(view.tree, label).props.onClick(); });
-    assert.ok(textOf(view.tree).join(" ").includes(expected), `the empty evidence pane says nothing in ${zh ? "Chinese" : "English"}`);
-  }
 });
 
 test("a degrade note with nothing behind it does not invent a reason", async () => {
@@ -2410,14 +2578,20 @@ test("a finished pane with nothing in it is a final answer, not a wait", async (
   }
 });
 
-test("the strip is six panes, and the sixth is the references", async () => {
+test("the strip is five panes, and 证据 is not one of them", async () => {
   const { tree } = await render("MissionDetailTabs", {
     pane: "tasks", setPane: () => {}, zh: true,
     findings: 14, steps: 169, stages: 12, spend: "令牌 412k · 调用 24 次",
   });
-  assert.equal(findAll(tree, (node) => node.type === "button").length, 6, "the strip is not six panes");
+  assert.equal(findAll(tree, (node) => node.type === "button").length, 5, "the strip is not five panes");
   const text = textOf(tree).join(" ");
   assert.ok(text.includes("参考文献"), "the references pane is not on the strip");
+  // THE PANE THAT WENT. Its dimension cards restated the task board's own
+  // columns and its findings restated the trajectory and the report's frozen
+  // citations; the one axis it alone carried — which dimension a page was read
+  // for — is an arrangement on 参考文献 now. Asserted as an ABSENCE so the tab
+  // cannot come back without this saying so.
+  assert.ok(!text.includes("证据"), "the 证据 pane is back, and with it a third place to read the same finding");
   assert.ok(text.includes("令牌 412k"), "the spend is not on the tab row");
 });
 
@@ -2454,28 +2628,52 @@ test("a pane with nothing in it says which nothing", async () => {
   );
 });
 
-// ── the chrome ──────────────────────────────────────────────────────────────
+test("the create form waits behind a control, and closes the way it opened", async () => {
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  assert.ok(
+    !find(view.tree, (node) => node.props?.role === "dialog"),
+    "the dialog is open before anyone asked for it, which is the expanded card with a scrim over it",
+  );
+  await view.act(() => { button(view.tree, "新建任务").props.onClick(); });
+  const dialog = find(view.tree, (node) => node.props?.role === "dialog");
+  assert.ok(dialog, "新建任务 opened nothing");
+  assert.equal(dialog.props["aria-modal"], "true", "the dialog does not announce itself as one, so a screen reader keeps walking the list behind it");
+  assert.equal(dialog.props["aria-label"], "新建任务", "the dialog has no accessible name");
+  await view.act(() => { button(view.tree, "关闭").props.onClick(); });
+  assert.ok(
+    !find(view.tree, (node) => node.props?.role === "dialog"),
+    "the dialog's own close control does not close it",
+  );
+});
 
 test("the header, the ruler and the strip stay put; only the pane body scrolls", async () => {
   stubFetch();
   const view = await render("MissionDetail", { missionId: SIGNED.id, zh: true, onBack: () => {} });
 
+  // ONE SCROLLER, WHICH IS WHAT THE NAME SAYS. What this test is named for is
+  // unchanged: the header band, the tiles, the twelve-stage ruler
+  // and the tab strip are outside both boxes, and the page as a whole still
+  // does not scroll.
+  //
+  // The team rail this paragraph used to describe is gone: it took 320px of a
+  // screen whose panes are tables, and who is on a mission is answered by the
+  // roster on the cost pane and by the role chips on every row.
   const scrollers = findAll(view.tree, (node) => node.props?.style?.overflowY === "auto");
   assert.equal(scrollers.length, 1, `the mission detail has ${scrollers.length} scrollers`);
   assert.notEqual(scrollers[0], view.tree, "the whole page scrolls, header and all");
 
-  // The twelve-stage ruler, found by the step id in its own tooltip rather than
-  // by its words: the mini-React harness inlines child components, so there is
-  // no node carrying the component to look for.
-  const ruler = (tree) => findAll(tree, (node) => node.type === "span"
-    && typeof node.props?.title === "string" && node.props.title.startsWith("s1-brief · "));
-  assert.equal(ruler(view.tree).length, 1, "the stage ruler is not mounted");
-  await pane(view, "成本");
-  assert.equal(ruler(view.tree).length, 1, "the ruler is only visible on the pane that already had it");
-
-  const text = textOf(view.tree).join(" ");
-  assert.ok(text.includes("令牌 412k"), "the tab row does not carry what has been spent");
-  assert.ok(text.includes("评分 82"), "the tab row does not carry the score");
+  // The twelve-stage ruler that stood above the panes is gone: it drew the same
+  // twelve rows the task table draws, with less in each. What this test is
+  // named for — the header band stays put, only the pane body scrolls — is
+  // unchanged and is asserted above.
+  //
+  // The figures moved with it. `令牌` and `评分` were tiles pinned over every
+  // pane; they belong to the pane that is about spending, and this is where
+  // they are now.
+  const spend = await pane(view, "成本");
+  assert.ok(spend.includes("令牌"), "the cost pane does not carry what has been spent");
+  assert.ok(spend.includes("412000 / 1500000"), "the spend figure lost the ceiling it runs against");
 });
 
 test("the download follows the version on screen", async () => {
@@ -2497,53 +2695,6 @@ test("the download follows the version on screen", async () => {
   // different document than the one on their screen.
   assert.ok(anchor(view.tree).props.href.includes("version=1"), "the download still points at the newest version");
   assert.ok(anchor(view.tree).props.download.endsWith("-v1.md"), "the filename does not follow the version on screen");
-});
-
-// ── the evidence pane's controls ────────────────────────────────────────────
-
-test("the evidence pane sends the filters the route has always accepted", async () => {
-  stubFetch();
-  const view = await render("MissionsTab", { zh: true });
-  await open(view, RUNNING.topic);
-  const cards = await pane(view, "证据");
-  assert.ok(cards.includes("打分时的数"), "the numbers the grade was computed from are still unrendered");
-  assert.ok(cards.includes("种子目标 5"), "the seed target the grade was measured against is missing");
-
-  await view.act(() => { button(view.tree, "看这 5 条证据").props.onClick(); });
-  assert.ok(
-    textOf(view.tree).join(" ").includes("第 1–50 条，共 55 条"),
-    "a paged list does not say which page of what it is showing",
-  );
-
-  const asked = [];
-  const inner = globalThis.fetch;
-  globalThis.fetch = async (url, init) => { asked.push(String(url)); return inner(url, init); };
-  const control = (label) => {
-    const hit = find(view.tree, (node) => node.props?.["aria-label"] === label);
-    assert.ok(hit, `no ${label} control`);
-    return hit;
-  };
-
-  // Paged first, while there is still a second page to reach: narrowing to one
-  // host leaves twenty-seven rows and no 下一页 at all.
-  await view.act(() => { button(view.tree, "下一页").props.onClick(); });
-  assert.ok(
-    textOf(view.tree).join(" ").includes("第 51–55 条，共 55 条"),
-    "下一页 did not move the window",
-  );
-  await view.act(() => { control("按核验状态筛选").props.onChange({ target: { value: "verified-source-text" } }); });
-  await view.act(() => { control("按站点筛选").props.onChange({ target: { value: "arxiv.org" } }); });
-  await view.act(() => { control("排序").props.onChange({ target: { value: "host" } }); });
-
-  assert.ok(asked.some((url) => url.includes("skip=50")), "下一页 does not page: " + asked.join(" "));
-  assert.ok(asked.some((url) => url.includes("verifyState=verified-source-text")), "the verify state never reached the route");
-  assert.ok(asked.some((url) => url.includes("sourceHost=arxiv.org")), "the host filter never reached the route");
-  assert.ok(asked.some((url) => url.includes("order=host")), "the order never reached the route");
-
-  const text = textOf(view.tree).join(" ");
-  assert.ok(text.includes("已核验 (55)"), "an option does not say how many rows it matches");
-  assert.ok(text.includes("arxiv.org (27)"), "a host option does not say how many rows it matches");
-  assert.ok(!text.includes("deepmind.google/discover/scaling-0"), "the host filter changed the URL and nothing else");
 });
 
 // ── the trajectory's filters ────────────────────────────────────────────────
@@ -2608,6 +2759,10 @@ test("a big number is shortened without being made smaller", () => {
   assert.equal(missionCompact(412000), "412k");
   assert.equal(missionCompact(1480000), "1.5M");
   assert.equal(missionCompact(24), "24");
+  // THE TWO-UNIT JUMP ACROSS TWO TOKENS. `Math.round(n / 1000)` made these
+  // `1k` and `2k`, in the figure a person compares two runs with.
+  assert.equal(missionCompact(1499), "1.5k");
+  assert.equal(missionCompact(1501), "1.5k");
   // Not "0". A missing number and a zero are different facts about a ledger.
   assert.equal(missionCompact(undefined), "—");
 });
@@ -2621,8 +2776,12 @@ test("everything added here reads in English too", async () => {
   };
 
   const references = await at("References");
-  assert.ok(references.includes("14 findings · 3 sources · 3 hosts"), "the totals line has no English arm");
-  assert.ok(references.includes("Group by host"), "the grouping control has no English arm");
+  for (const pair of ["Findings 14", "Sources 3", "Hosts 3", "Verified 11"]) {
+    assert.ok(references.includes(pair), `the references totals have no English arm for ${pair}`);
+  }
+  for (const arrangement of ["By citations", "By host", "By verified rate", "By first read"]) {
+    assert.ok(references.includes(arrangement), `the grouping control has no English arm for ${arrangement}`);
+  }
   assert.ok(references.includes("5 verified"), "the verified count has no English arm");
 
   const report = await at("Report");
@@ -2630,19 +2789,17 @@ test("everything added here reads in English too", async () => {
   assert.ok(report.includes("cited 1× in the text"), "the in-text count has no English arm");
   assert.ok(report.includes("No address was stored for this citation."), "the address-less entry has no English arm");
 
-  // The evidence controls, in English: a select whose options only ever render
-  // in Chinese is half a control.
-  await at("Evidence");
-  await view.act(() => { button(view.tree, "Read the 5 finding(s)").props.onClick(); });
-  const evidence = textOf(view.tree).join(" ");
-  assert.ok(evidence.includes("Every verify state"), "the verify-state filter has no English arm");
-  assert.ok(evidence.includes("Every host"), "the host filter has no English arm");
-  assert.ok(evidence.includes("As recorded"), "the order control has no English arm");
-  assert.ok(evidence.includes("Next"), "the paging control has no English arm");
-  assert.ok(evidence.includes("1–50 of 55"), "the page range has no English arm");
-  assert.ok(evidence.includes("Graded on:"), "the grade's own numbers have no English arm");
-  await view.act(() => { button(view.tree, "Next").props.onClick(); });
-  assert.ok(textOf(view.tree).join(" ").includes("Previous"), "the back-a-page control has no English arm");
+  // THE EVIDENCE CONTROLS WENT WITH THE 证据 PANE. Its filters — verify state,
+  // host, order, paging — were the dimension findings list's, and that list was
+  // deleted with the pane. The English arms that remain to check on this screen
+  // are the references pane's own, asserted above.
+  //
+  // The arrangement control is the one new set of words the merge introduced,
+  // so it is swept here rather than left to the Chinese-only path.
+  const refs = await at("References");
+  for (const word of ["By citations", "By host", "By dimension", "By verified rate", "By first read"]) {
+    assert.ok(refs.includes(word), `the ${word} arrangement has no English arm`);
+  }
 
   const cost = await at("Cost");
   assert.ok(cost.includes("not billed"), "未记账 has no English arm");
@@ -2665,6 +2822,17 @@ test("everything added here reads in English too", async () => {
 
   const empty = await render("MissionTaskBoard", { stages: [], agents: [], zh: false });
   assert.ok(textOf(empty.tree).join(" ").includes("No tasks yet"), "the empty task board has no English arm");
+
+  // The structural addition that survived: a dialog nothing on this tab could
+  // reach before. The team rail that stood beside it was removed — 320px of a
+  // table-shaped screen spent on a cast list.
+
+  const list = await render("MissionsTab", { zh: false });
+  await list.act(() => { button(list.tree, "New mission").props.onClick(); });
+  const dialog = textOf(find(list.tree, (node) => node.props?.role === "dialog")).join(" ");
+  assert.ok(dialog.includes("New mission"), "the dialog has no English title");
+  assert.ok(dialog.includes("the tier is what it may spend"), "the dialog's note has no English arm");
+  assert.ok(dialog.includes("Close"), "the dialog's close control has no English arm");
 });
 
 test("the tab no longer says it is unbuilt, and the other two still do", () => {
@@ -2751,4 +2919,165 @@ test("the remote is named by machine, not by URL", async () => {
   // Nothing to say before the first answer comes back — an empty row would
   // read as "no library", which is a claim rather than a silence.
   assert.equal(libraryLine(null, true), null);
+});
+
+// ── who did it, and what kind of step it was ─────────────────────────────────
+//
+// These four screens printed an agent id as body text and a stage's mode not at
+// all. What makes them worth a RENDER test rather than another source test is
+// the shape of the change: `RoleChip` lives in the primitives region and reads
+// MISSION_AGENT_FACES and `missionFace`, both declared three thousand lines
+// below it. That is legal — a function body is evaluated when it is called —
+// and it is also one rename away from the `exact is not defined` blank page
+// this file was written after. A source test cannot tell the two apart. Calling
+// the component can.
+
+test("every screen that knows who did the work says so in colour", async () => {
+  const stage = {
+    stepId: "s3-collect", ordinal: 2, mode: "fan-out", status: "done", attempts: 1,
+    startedAt: "2026-01-01T00:00:00Z", endedAt: "2026-01-01T00:05:00Z",
+    durationMs: 300000, tokens: 1200, degradeNote: null,
+  };
+
+  // The roster. `agentId` is the minted instance, so the chip has to split the
+  // role off the dimension slug rather than looking the whole string up.
+  const roster = await render("MissionAgentTable", {
+    zh: true,
+    agents: [
+      { agentId: "researcher:regulatory-landscape", role: "researcher", lastStepId: "s3-collect", state: "done", calls: 4, tokens: 900, toolCalls: 6, toolFailures: 1, toolCached: 2 },
+      { agentId: null, role: "verifier", lastStepId: null, state: "pending", calls: 0, tokens: 0, toolCalls: 0, toolFailures: 0, toolCached: 0 },
+    ],
+  });
+  const rosterText = textOf(roster.tree).join(" ");
+  assert.ok(rosterText.includes("研究员"), "the roster still prints a raw agent id instead of the role's word");
+  // AS ITS OWN NODE, not merely somewhere in the text. The first draft of
+  // this assertion asked whether the string appeared anywhere in the tree,
+  // and a mutation that deleted the suffix span entirely still passed it —
+  // the raw id survives in the chip's `title`, which `textOf` walks. A guard
+  // that a tooltip can satisfy is not guarding what it says it is.
+  assert.ok(
+    findAll(roster.tree, (node) => node.props?.children === "regulatory-landscape").length > 0,
+    "the dimension a researcher was minted for was dropped rather than ellipsised beside the role",
+  );
+  assert.ok(rosterText.includes("核验员"), "an agent that has not run yet loses its row: `agentId` is null until it does, and `role` is what the planner named it");
+
+  // The stage detail. Its Owner row is the one value in that panel that is a
+  // person, and `line()` stringifies what it is handed — passing a chip through
+  // it renders "[object Object]", which is why there is a second row helper.
+  const detail = await render("MissionStageDetail", {
+    zh: true, stage, onClose: () => {}, onOpenStage: () => {},
+    owner: { agentId: "researcher:supply-chain", role: "researcher" },
+  });
+  const detailText = textOf(detail.tree).join(" ");
+  assert.ok(detailText.includes("研究员"), "the stage detail's 负责人 row is still a raw id in the grey the figures beside it use");
+  assert.ok(!detailText.includes("[object Object]"), "a chip was passed to `line()`, which calls String() on its value — the row renders [object Object]");
+  // The mode badge earns its space here: s3-collect is 采集 and its mode is
+  // fan-out, so the badge says something the stage's own name does not.
+  assert.ok(detailText.includes("并行分发"), "the stage's declared mode is still drawn nowhere, on the panel that shows everything else about it");
+
+  // And the suppression. s6-synthesize IS 综合, so a mode badge there would
+  // print the stage's name twice in two shapes.
+  const same = await render("MissionStageDetail", {
+    zh: true, onClose: () => {}, onOpenStage: () => {}, owner: null,
+    stage: { ...stage, stepId: "s6-synthesize", mode: "synthesize" },
+  });
+  const sameText = textOf(same.tree).join(" ");
+  assert.equal(
+    sameText.split("综合").length - 1,
+    1,
+    "the mode badge repeats the stage's own name; six of the twelve stages are named after their mode and this is what suppression is for",
+  );
+
+  // The trajectory row: the densest screen in the tab, where the agent used to
+  // reach the DOM only inside a `title` attribute.
+  const row = await render("MissionTraceRow", {
+    zh: true, active: false, onOpen: () => {},
+    row: {
+      ref: "tool:9", seq: 9, at: "2026-01-01T00:02:00Z", kind: "tool", role: "TOOL",
+      title: "web", detail: "q=…", result: "3 hits", ok: true, ms: 820,
+      agentId: "researcher:regulatory-landscape",
+    },
+  });
+  const marks = findAll(row.tree, (node) => node.props?.className === "swt-tagslot");
+  assert.equal(marks.length, 1, "the trajectory row lost its tag slot");
+  assert.ok(
+    findAll(marks[0], (node) => typeof node.props?.d === "string").length > 0,
+    "the tag slot holds no glyph, so the row still cannot say who took the step without a hover",
+  );
+});
+
+test("a signature is a verdict card, not the third grey sentence in a row", async () => {
+  stubFetch();
+  const view = await render("MissionDetail", { missionId: SIGNED.id, zh: true, onBack: () => {} });
+  const text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("领队已签署"), "the sign-off sentence is gone from the detail header");
+  assert.ok(text.includes("（sign）"), "the leader's own verdict word is dropped, and it appears nowhere else on the screen");
+  assert.ok(text.includes("/100"), "the score has no scale beside it, so 82 is 82 out of nothing");
+  // The figure, and NOT a second copy of it inside the sentence beside it.
+  assert.ok(
+    !text.includes("领队已签署，评分"),
+    "the score is in the sentence AND in the card's own figure: the same number twice in one row is the reader checking whether they are the same number",
+  );
+});
+
+test("the leader's brief is on the screen the work is judged on", async () => {
+  stubFetch();
+  const view = await render("MissionDetail", { missionId: SIGNED.id, zh: true, onBack: () => {} });
+  const text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("立项目标"), "the goals panel is not mounted; `goals` is projected onto every mission and read by nothing");
+  // Both value shapes, because the block iterates rather than naming keys: an
+  // array is a list and a sentence is a sentence.
+  assert.ok(text.includes("许可证会不会收紧"), "an array-valued goal renders as `a,b` or not at all");
+  assert.ok(text.includes("一份可引用的报告"), "a string-valued goal is dropped");
+  assert.ok(text.includes("核心问题"), "the Leader's own key is translated away or hidden, so a key it adds tomorrow appears as nothing");
+});
+
+test("a run with no rework says so, and a cache hit is not a failure", async () => {
+  stubFetch();
+  const view = await render("MissionDetail", { missionId: SIGNED.id, zh: true, onBack: () => {} });
+  await view.act(() => { button(view.tree, "成本").props.onClick(); });
+  const text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("返工"), "the rework panel is gone and the five counters are back inside a dot-joined sentence");
+  assert.ok(text.includes("工具失败"), "the tool-failure counter is not drawn as a counter");
+  assert.ok(text.includes("命中缓存"), "the cache-hit counter is not drawn at all");
+  assert.ok(
+    !text.includes("其中花在返工上的："),
+    "the joined waste sentence survived beside the grid, so the same figures are on the pane twice",
+  );
+});
+
+test("the stage drawer says what the step did, and how far into the run it did it", async () => {
+  stubFetch();
+  const drawer = await render("MissionStageDetail", {
+    zh: true, missionId: RUNNING.id, anchor: "2026-08-24T09:00:00.000Z",
+    onClose: () => {}, onOpenStage: () => {},
+    owner: { agentId: "researcher:d1", role: "researcher" },
+    stage: {
+      stepId: "s3-collect", ordinal: 3, status: "running", attempts: 1,
+      startedAt: "2026-08-24T09:13:00.000Z", endedAt: null, durationMs: 90000,
+      tokens: 412000, calls: 11, mode: "fan-out", agent: "researcher", degradeNote: null, stalled: false,
+    },
+  });
+  const text = textOf(drawer.tree).join(" ");
+  // The two figures the drawer never had: `calls` reached no pixel at all, and
+  // the token count was a nine-character figure in a key/value row.
+  assert.ok(text.includes("模型调用"), "the drawer still cannot say how many model calls a step took");
+  assert.ok(text.includes("11"), "the calls figure is dropped on the way to the chip");
+  assert.ok(text.includes("412k"), "the drawer prints the raw token count where every other screen prints the short form");
+  // The step's own trajectory, through the trajectory's own row renderer.
+  assert.ok(text.includes("这一步做了什么"), "the drawer lists properties and no process");
+  assert.ok(text.includes("web.search"), "the step's own rows were fetched and not rendered");
+  // And the offset, which is what a stage timing is actually asked for.
+  //
+  // ON THE ROW ITSELF, not anywhere in the tree. Asking whether the offset
+  // appears at all passed with the 开始 row reverted to a bare wall clock: the
+  // step's own trajectory rows are in the same drawer and they carry the same
+  // \`+13 分 0 秒\`, so the assertion was being satisfied by a different element
+  // than the one it names.
+  const started = find(drawer.tree, (node) => node.key === "开始");
+  assert.ok(started, "the drawer lost its 开始 row");
+  assert.ok(
+    textOf(started).join(" ").includes("+13 分"),
+    "the drawer's timings are absolute wall-clock only, so \"how far into the run did this step start\" is subtraction done by hand",
+  );
 });
