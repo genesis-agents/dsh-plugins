@@ -74,6 +74,7 @@ import {
   computeWallFloorMs,
   claimRuntimeOwner,
   createRunRegistry,
+  describeFailure,
   finalize,
   runMission,
   stagesForTier,
@@ -2116,4 +2117,39 @@ test("the stage that stores the report runs even when the money is gone", async 
   const overrun = checkDeadlines({ mission: late, now, budget: spent, stage: persist });
   assert.equal(overrun.expired, true, "the wall clock stopped applying to spend-free stages");
   assert.equal(overrun.reason, "wall_time_exceeded", "an overrun is reported as a spent budget");
+});
+
+test("a guard's finding survives the abort that carries it", () => {
+  // THE SEAM THAT DROPPED IT. `detectNoProgress` computes which of its two
+  // conditions fired, how long the stall was, and for a loop the agent, the
+  // tool and the repeat count. `describeFailure` selects between two sentences
+  // by reading `detail.condition`. Between them sat `abort(missionId, reason,
+  // {runCount})`, which had no `detail` parameter at all — so the field never
+  // arrived and EVERY no_progress kill printed the timeout branch's wording
+  // with `stalledMs ?? 0`: "No progress for 0s", on a mission that had not
+  // stalled for zero seconds and, when the loop branch fired, had not stalled
+  // at all.
+  //
+  // Both sentences were written. Both were correct. Neither could be reached
+  // from the other. Asserted at the REGISTRY, because that is the seam — a
+  // test of either end alone passes while the middle throws the field away.
+  const registry = createRunRegistry();
+  registry.register({ missionId: "m1", runCount: 1, now: new Date("2026-08-27T14:00:00.000Z") });
+
+  assert.deepEqual(registry.detailOf("m1"), {}, "an unaborted run reports a detail it never received");
+
+  registry.abort("m1", "no_progress", {
+    runCount: 1,
+    detail: { condition: "loop-shape", agentId: "researcher", tool: "fetch_page", repeats: 3, stalledMs: 12 },
+  });
+
+  const carried = registry.detailOf("m1");
+  assert.equal(carried.condition, "loop-shape", "the condition that selects the sentence did not survive the abort");
+  assert.equal(carried.repeats, 3, "the repeat count the sentence quotes did not survive the abort");
+  assert.equal(carried.tool, "fetch_page", "the tool the sentence names did not survive the abort");
+
+  // And the sentence it selects is the loop one, not the clock one.
+  const said = describeFailure("no_progress", carried);
+  assert.ok(!said.includes("0s"), `a loop-shape kill still reports a stall in seconds: ${said}`);
+  assert.ok(said.includes("fetch_page"), "the loop sentence does not name the tool that looped");
 });

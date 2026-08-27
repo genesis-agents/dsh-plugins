@@ -1276,7 +1276,22 @@ export function createRunRegistry() {
      * @param options - `{runCount}` to target one generation.
      * @returns `{aborted, already, why}` — never silently nothing.
      */
-    abort(missionId, reason, { runCount = null } = {}) {
+    /**
+     * Abort a live run, and CARRY WHAT THE GUARD LEARNED.
+     *
+     * `detail` was not a parameter, so every guard that computed one threw it
+     * away at this door. `detectNoProgress` returns which of its two conditions
+     * fired, how long the stall was, and — for a loop — the agent, the tool and
+     * the repeat count; `describeFailure` selects between two sentences by
+     * reading `detail.condition`. Between them sat this signature, and the
+     * field never arrived. So every `no_progress` kill reported the timeout
+     * branch's wording with `stalledMs ?? 0`: "No progress for 0s", on a
+     * mission that had not stalled for 0s and possibly had not stalled at all.
+     *
+     * The two sentences and the field that chooses between them were both
+     * written, both correct, and unreachable from each other.
+     */
+    abort(missionId, reason, { runCount = null, detail = null } = {}) {
       if (!ABORT_REASONS.includes(reason)) {
         throw new Error(`mission runtime: abort reason "${reason}" is not in the frozen vocabulary. Add it to ABORT_REASONS and to ABORT_REASON_TO_FAILURE, or the failure write will classify it as a provider error.`);
       }
@@ -1290,8 +1305,21 @@ export function createRunRegistry() {
       if (entry.controller.signal.aborted) {
         return { aborted: true, already: true, why: `already aborted with reason "${entry.controller.signal.reason}"` };
       }
+      // Recorded on the ENTRY rather than passed through the AbortSignal:
+      // `signal.reason` is a string this vocabulary is frozen on, and widening
+      // it to an object would change what every reader of it receives.
+      if (detail !== null && typeof detail === "object") entry.abortDetail = detail;
       entry.controller.abort(reason);
       return { aborted: true, already: false, why: `aborted with reason "${reason}"` };
+    },
+
+    /**
+     * What the guard that aborted this run recorded, or `{}`.
+     * @param missionId - a mission id.
+     * @returns the detail object an `abort` carried, never null.
+     */
+    detailOf(missionId) {
+      return byMission.get(missionId)?.abortDetail ?? {};
     },
 
     /** @param missionId - a mission id. @returns true when a run exists and is not aborted. */
@@ -2417,7 +2445,9 @@ export async function runMission({
 
       if (signal.aborted) {
         stopped = { kind: "abort", reason: `aborted before ${stage.id} with reason "${signal.reason}"` };
-        terminal = endMission({ fromSignal: true, detail: { stepId: stage.id } });
+        // The guard's own detail first, this stage's id after it: the stage is
+        // where the guard says it tripped when it says nothing else.
+        terminal = endMission({ fromSignal: true, detail: { stepId: stage.id, ...(registry.detailOf?.(missionId) ?? {}) } });
         break;
       }
 

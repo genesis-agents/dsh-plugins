@@ -382,9 +382,16 @@ export function createMissionRuntime({ store, missionStore, ctx, config = {}, sp
       const previous = spendMarks.get(entry.missionId);
       spendMarks.set(entry.missionId, tokens);
       const since = new Date(entry.lastProgressAtMs).toISOString();
+      // SCOPED TO THE STAGE THAT IS STUCK, and it was not. `recentToolCalls`
+      // reads the whole mission, so a wedge at s4 was judged on rows s3 wrote —
+      // measured this afternoon: a mission stalled at s4-assess was killed for
+      // a "loop" assembled from s3-collect's fan-out fetches, minutes after s3
+      // had finished. Work a finished stage did cannot be evidence that the
+      // current one is repeating itself.
       const shapes = missionStore
         .recentToolCalls(entry.missionId, 50)
-        .filter((call) => String(call.at) >= since);
+        .filter((call) => String(call.at) >= since)
+        .filter((call) => String(call.stepId ?? "") === String(entry.stepId ?? ""));
 
       const wedged = detectNoProgress({
         entry,
@@ -395,7 +402,7 @@ export function createMissionRuntime({ store, missionStore, ctx, config = {}, sp
       });
       if (wedged.tripped) {
         logger?.warn?.(`swarm: mission ${entry.missionId} aborted: ${wedged.why}`);
-        registry.abort(entry.missionId, wedged.reason, { runCount: entry.runCount });
+        registry.abort(entry.missionId, wedged.reason, { runCount: entry.runCount, detail: wedged.detail });
       }
     }
   };
