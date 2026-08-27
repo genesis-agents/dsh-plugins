@@ -563,7 +563,7 @@ export function createS1Brief(deps) {
     // G3 — the context window is read, never defaulted. A guessed window makes
     // every shrink decision downstream wrong in the same direction, which is
     // worse than having no plan at all.
-    const plan = readContextPlan(ctx, logger, config.missionContextWindow);
+    const plan = await readContextPlan(ctx, logger, config.missionContextWindow);
     const degraded = plan.contextWindow === null;
     const degradeNote = degraded
       ? (zh
@@ -657,7 +657,7 @@ function costHistory(store, { depth, excludeId }) {
  * @param logger - optional.
  * @returns `{contextWindow, defaultMaxTokens, source, why}`.
  */
-export function readContextPlan(ctx, logger, configured = 0) {
+export async function readContextPlan(ctx, logger, configured = 0) {
   const unknown = (why) => {
     // The setting is the LAST resort, after every accessor has been tried, so a
     // harness that grows the metadata is preferred to a number somebody typed
@@ -679,16 +679,31 @@ export function readContextPlan(ctx, logger, configured = 0) {
   }
   if (route === undefined || route === null) return unknown("agentDefaultModel.currentSelection() answered nothing");
 
+  // THE SERVICE METHOD, which is `resolveModelInfo` and is ASYNC.
+  //
+  // This asked for `llm.modelInfo(provider, model)` and `llm.models()`. Neither
+  // exists: the harness exposes `async resolveModelInfo(provider, model,
+  // signal?)` and `discoverModels(settingsNs, request)`, and the list read
+  // `entry.model` where a discovered model is keyed `id`. The third accessor,
+  // `route`, is `currentSelection()` — documented as returning a provider, a
+  // model and an optional reasoning selection, and nothing else.
+  //
+  // So all three were incapable of answering, and this resolver had never
+  // succeeded on any deployment. s1 degraded on every run of every mission and
+  // every stage after it ran at its smallest viable input, for as long as the
+  // function has existed. It was written against an API that was imagined.
   const candidates = [
+    { source: "llm.resolveModelInfo", read: () => ctx.llm?.resolveModelInfo?.(route.provider, route.model) },
+    // Kept, and second: a selection that someday carries its own metadata is
+    // cheaper to read than a service call, but it is not what answers today.
     { source: "route", read: () => route },
-    { source: "llm.modelInfo", read: () => ctx.llm?.modelInfo?.(route.provider, route.model) },
-    { source: "llm.models", read: () => ctx.llm?.models?.()?.find?.((entry) => entry?.model === route.model) },
   ];
   for (const candidate of candidates) {
     let info;
     try {
-      info = candidate.read();
-    } catch {
+      info = await candidate.read();
+    } catch (cause) {
+      logger?.warn?.(`mission: ${candidate.source} threw: ${String(cause?.message ?? cause)}`);
       continue;
     }
     // FLAT OR NESTED. §9 of the design names the shape as
@@ -708,7 +723,7 @@ export function readContextPlan(ctx, logger, configured = 0) {
       };
     }
   }
-  return unknown(`neither ${candidates.map((entry) => entry.source).join(", ")} reported a context window for ${route.provider}/${route.model}`);
+  return unknown(`neither ${candidates.map((entry) => entry.source).join(" nor ")} reported a context window for ${route.provider}/${route.model}`);
 }
 
 /**
