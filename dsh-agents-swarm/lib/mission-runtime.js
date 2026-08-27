@@ -2484,7 +2484,7 @@ export async function runMission({
 
       const deadlines = checkDeadlines({ mission: current, now: clock(), budget, stage });
       if (deadlines.expired) {
-        registry.abort(missionId, deadlines.reason, { runCount: current.runCount });
+        registry.abort(missionId, deadlines.reason, { runCount: current.runCount, detail: deadlines.detail });
         stopped = { kind: "deadline", reason: deadlines.reason };
         terminal = endMission({ fromSignal: true, detail: { stepId: stage.id, ...deadlines.detail, resumable: true } });
         break;

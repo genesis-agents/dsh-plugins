@@ -370,7 +370,12 @@ export function createMissionRuntime({ store, missionStore, ctx, config = {}, sp
       const deadline = checkDeadlines({ mission, now: at });
       if (deadline.expired) {
         logger?.warn?.(`swarm: mission ${entry.missionId} aborted: ${deadline.reason} (${JSON.stringify(deadline.detail)})`);
-        registry.abort(entry.missionId, deadline.reason, { runCount: entry.runCount });
+        // THE SAME SEAM, THE OTHER GUARD. `checkDeadlines` returns which
+        // ceiling was hit and by how much, and `describeFailure` reads exactly
+        // those fields for `wall_time_exceeded` and `budget_exhausted` — so
+        // dropping the detail here reports a mission killed by its wall clock
+        // as one killed by nothing in particular.
+        registry.abort(entry.missionId, deadline.reason, { runCount: entry.runCount, detail: deadline.detail });
         continue;
       }
 
@@ -424,7 +429,11 @@ export function createMissionRuntime({ store, missionStore, ctx, config = {}, sp
    * @param reason - an ABORT_REASONS member.
    * @returns the registry's own `{aborted, already, why}`.
    */
-  const abort = (missionId, reason) => registry.abort(missionId, reason);
+  // FORWARDS THE DETAIL, rather than being the one door that cannot carry one.
+  // Every guard in this file computes a verdict and this helper is how a caller
+  // outside it reaches the registry; a passthrough that drops the argument is a
+  // dead end that only shows up as a sentence with no facts in it.
+  const abort = (missionId, reason, detail = null) => registry.abort(missionId, reason, { detail });
 
   /**
    * The boot sweep. Always moves rows out of `running`; auto-resume is a

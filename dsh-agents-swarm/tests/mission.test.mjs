@@ -33,6 +33,7 @@
  * Run with `npm test` from the package root.
  */
 
+import { readFileSync } from "node:fs";
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -2335,4 +2336,44 @@ test("a stage doing paced work is not a wedge", () => {
     describeFailure("no_progress", wedged.detail).includes("311"),
     "the sentence no longer reports the stall it measured",
   );
+});
+
+test("every guard that computes a detail hands it to the abort", () => {
+  // THE SHAPE THIS SESSION KEPT FINDING. A guard computes a rich verdict, a
+  // sentence is written to read it, and the seam between them takes only the
+  // reason string — so the sentence renders its own defaults and reports a
+  // mission killed by a wall clock, or by a loop, as one killed by nothing in
+  // particular. It happened twice in the same module: `detectNoProgress` first,
+  // then `checkDeadlines`, which was still dropping its ceiling and its elapsed
+  // time after the first was fixed.
+  //
+  // Read from the SOURCE rather than by running a mission, because both guards
+  // fire on a watchdog tick that a unit test would have to fake — and faking it
+  // is how the first one passed review.
+  const handlers = readFileSync(new URL("../lib/mission-handlers.js", import.meta.url), "utf8");
+  const runtime = readFileSync(new URL("../lib/mission-runtime.js", import.meta.url), "utf8");
+
+  // WHOLE LINES, not a paren-matched slice. The first draft used
+  // `/registry\.abort\([^)]*\)/`, which stops at the first `)` — and one call
+  // site's first `)` closes a nested `ABORT_REASONS.includes(reason)`, so the
+  // exemption keyword three characters later was never seen and the test
+  // failed on a line that was already correct. A regex that truncates its own
+  // subject is a test reading something other than the code.
+  const aborts = [...handlers.split(String.fromCharCode(10)), ...runtime.split(String.fromCharCode(10))]
+    .filter((line) => line.includes("registry.abort("))
+    .filter((line) => !/^\s*(\*|\/\/)/.test(line))
+    // A user cancel and a supersede have no verdict to carry: one is a person
+    // pressing a button, the other is a newer generation taking the row.
+    .filter((call) => !/user_cancelled|superseded/.test(call));
+
+  assert.ok(aborts.length >= 3, `only ${aborts.length} diagnostic abort sites found; this test has lost its subject`);
+  for (const call of aborts) {
+    assert.match(
+      call,
+      // `detail:` or the shorthand `{ detail }` — the defect is a call that
+      // carries NO verdict at all, not one spelling of carrying it.
+      /detail/,
+      `an abort carries no detail, so whatever its guard measured cannot reach the sentence: ${call.slice(0, 90)}`,
+    );
+  }
 });
