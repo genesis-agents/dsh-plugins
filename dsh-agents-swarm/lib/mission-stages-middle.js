@@ -2359,13 +2359,40 @@ function clampScore(value) {
  * @param options - `{verifiedById, sectionType, zh}`.
  * @returns `(output) => string[]`.
  */
-function checkChapter({ resolve, sectionType, zh }) {
+export function checkChapter({ resolve, sectionType, minDelivery = 0, zh }) {
   return function check(output) {
     const issues = [];
     const body = asText(output?.body);
     if (body === "") {
       issues.push(zh ? "你提交了空的正文。" : "you submitted an empty body.");
       return issues;
+    }
+    // THE FLOOR, ENFORCED WHERE IT CAN STILL BE ACTED ON. `minDelivery` was
+    // passed into the prompt, recorded afterwards as `underDelivered`, and used
+    // by the content guard to refuse the whole report — and nothing ever sent a
+    // short chapter back. So it was advice with no gate behind it, and the
+    // writer landed on its own natural size every time: measured at 1246, 1111,
+    // 1097, 1065 and 1182 words in one run, against a floor of 1750, and at 811
+    // in another against a floor of 3571. A spread of 17% across a target that
+    // moved by 2x is a number nobody is reading.
+    //
+    // The instruction is to USE the material, not to write longer. The whole
+    // point of scaling the floor to the evidence is that padding is worse than
+    // brevity, so a gate that asked for words rather than for the facts already
+    // allocated to this chapter would defeat what it is enforcing.
+    // No `minDelivery > 0` guard: the comparison already declines every way a
+    // floor can be absent — `n < undefined`, `n < NaN` and `n < null` are all
+    // false — and a mutation test proved the clause could not change an outcome
+    // for any input. A condition nothing can exercise reads as protection that
+    // is not there.
+    const words = countWords(body);
+    if (words < minDelivery) {
+      issues.push(zh
+        ? `本章 ${words} 字，低于下限 ${minDelivery} 字。请把分配给本章的事实和可引用发现用足——`
+          + "逐条展开证据、给出机制与反例、说明数字的口径和局限，而不是把已有的话写长。"
+        : `this chapter is ${words} words against a floor of ${minDelivery}. Use the facts and citable findings `
+          + "allocated to it: take each piece of evidence further, give the mechanism and the counter-case, and state "
+          + "what each number does and does not cover. Do not pad what is already written.");
     }
     const citations = asArray(output?.citations);
     const unknown = citations.filter((c) => resolve(asText(c?.findingId)) === null);
@@ -2603,7 +2630,7 @@ export function createS8Write(deps) {
           input: plan.text,
           bindings: { ...bindings, attempt: attempts, shrinkRung: plan.rungName },
           schema: CHAPTER_SCHEMA,
-          check: checkChapter({ resolve: cite.resolve, sectionType: row.sectionType, zh }),
+          check: checkChapter({ resolve: cite.resolve, sectionType: row.sectionType, minDelivery: row.minDelivery, zh }),
           description: zh ? "提交本章正文与引用。" : "Submit the chapter body and its citations.",
           messageKey: `chapter-${row.dimensionId}-${row.chapterIndex}-${attempts}`,
         });
