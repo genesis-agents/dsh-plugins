@@ -206,8 +206,15 @@ export function createMissionRuntime({ store, missionStore, ctx, config = {}, sp
    * @returns a MissionBudgetPool.
    */
   const budgetFor = (mission) => {
-    const totals = missionStore.spendTotals(mission.id);
-    const tools = missionStore.toolCallTotals(mission.id);
+    // THIS GENERATION'S SPEND, not the mission's lifetime. Seeding from the
+    // whole mission is right for a RESUME — that is what the comment above
+    // says and it stays true, because a resume keeps its run_count. It is
+    // wrong for a FRESH RERUN, which is a new attempt at the same question and
+    // must get the ceiling somebody chose for one attempt. Run 9 opened nine
+    // runs over its cap: every dimension failed `budget_exhausted` five
+    // milliseconds in, and the mission reported it as missing evidence.
+    const totals = missionStore.spendTotals(mission.id, mission.runCount);
+    const tools = missionStore.toolCallTotals(mission.id, mission.runCount);
     return createBudgetPool({
       caps: mission.budget,
       used: {

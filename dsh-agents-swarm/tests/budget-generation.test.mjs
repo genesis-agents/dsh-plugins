@@ -13,6 +13,7 @@
 // accumulates, new generation starts clean.
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
 import { SourceStore } from "../lib/store.js";
 import { openMissionStore } from "../lib/mission-store.js";
 import { STAGES } from "../lib/mission-runtime.js";
@@ -66,5 +67,28 @@ test("tool allowances are per generation too", (t) => {
     missions.toolCallTotals(id, 2).web?.charged ?? 0,
     0,
     "a fresh rerun opens with the previous generation's web allowance already spent",
+  );
+});
+
+test("the pool is seeded from the generation, not the lifetime", () => {
+  // THE HALF THAT DID NOT LAND. The migration, both writers and both readers
+  // went in; the one line that USES them did not, because the script that
+  // applied them failed partway and wrote what it had. The column existed, the
+  // scoped reads worked, their unit tests passed — and the pool went on asking
+  // for the mission's lifetime spend, so run 10 died exactly as run 9 had.
+  //
+  // Read from the source, because the seeding happens inside a closure built at
+  // boot and there is no seam to call.
+  const handlers = readFileSync(new URL("../lib/mission-handlers.js", import.meta.url), "utf8");
+  const seeding = handlers.slice(handlers.indexOf("const budgetFor ="), handlers.indexOf("createBudgetPool({"));
+  assert.match(
+    seeding,
+    /spendTotals\(mission\.id,\s*mission\.runCount\)/,
+    "the pool is seeded with the mission's whole spend again, so every rerun after the first opens over its ceiling",
+  );
+  assert.match(
+    seeding,
+    /toolCallTotals\(mission\.id,\s*mission\.runCount\)/,
+    "the per-tool allowances are seeded from every generation, so a rerun opens with arXiv and fetch already spent",
   );
 });
