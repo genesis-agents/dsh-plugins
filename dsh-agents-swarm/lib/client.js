@@ -12091,7 +12091,10 @@ window.__ModuleLoader__.load({
 			const quoted = references.filter((entry) => entry.quote !== "").length;
 			const missing = references.filter((entry) => !entry.joined).length;
 			return jsxs("div", {
-				style: { maxWidth: "760px", margin: "0 0 18px" },
+				// Same frame as the article above it: the reference list is part of the
+				// report, and half of one pane capped while the other half is not is
+				// what makes a page look broken rather than typeset.
+				style: { margin: "0 0 18px" },
 				children: [
 					jsx("h3", {
 						style: { font: FONT.baseStrong,
@@ -12446,7 +12449,16 @@ window.__ModuleLoader__.load({
 							}, "noScore")
 							: MissionStatTiles({ tiles: scored }, "score"),
 						jsx("div", {
-							style: { maxWidth: "760px", margin: "0 0 18px" },
+							// NO MEASURE CAP. `WIDE_STYLE` exists two thousand lines up
+							// because "the detail view is a two-pane reader and must use the
+							// whole frame — capping it left a band of dead space down the
+							// right of the page". This pane then put a 760px cap back
+							// inside that frame and produced exactly the dead space the
+							// outer decision had removed: on a wide window the report sat
+							// in the left half with an empty band beside it, while the stat
+							// tiles directly above it spanned the full width. Two
+							// containers, one page, opposite answers.
+							style: { margin: "0 0 18px" },
 							children: renderMarkdown(artifact.markdown ?? "", "article", {
 								zh,
 								has: (index) => numbered.has(index),

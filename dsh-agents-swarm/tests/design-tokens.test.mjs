@@ -2742,3 +2742,23 @@ test("every hook runs on every render", () => {
     "a hook is declared after an early return. React counts hooks by call order, so the first render that takes the other path throws and the tab does not open",
   );
 });
+
+test("the report takes the frame the page already gave it", () => {
+  // `WIDE_STYLE` exists two thousand lines above these panes because "the
+  // detail view is a two-pane reader and must use the whole frame — capping it
+  // left a band of dead space down the right of the page". `MissionReport` then
+  // put a 760px cap back INSIDE that frame, and `MissionReferenceList` did the
+  // same: on a wide window the report sat in the left half with an empty band
+  // beside it, while the stat tiles directly above it spanned the full width.
+  // Two containers, one page, opposite answers — which is what makes a screen
+  // read as broken rather than as typeset.
+  for (const pane of ["function MissionReport(", "function MissionReferenceList("]) {
+    const source = code(body(pane));
+    const capped = [...source.matchAll(/maxWidth:\s*"(\d+)px"/g)].map(([, px]) => px);
+    assert.deepEqual(
+      capped,
+      [],
+      `${pane.slice(9, -1)} caps its own measure at ${capped.join(", ")}px, which reinstates the dead band beside the report`,
+    );
+  }
+});
