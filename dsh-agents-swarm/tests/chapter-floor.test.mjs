@@ -88,3 +88,27 @@ test("the counter agrees with the one the guard judges by", () => {
   assert.equal(countWords("word ".repeat(5).trim()), 5);
   assert.equal(countWords("渥太华科技园"), 6, "CJK is counted by character, and the floors are set against that");
 });
+
+test("a chapter is a hole below half its target, not below the target", async () => {
+  // Two numbers per chapter, the same pair the whole report has: aim at the
+  // floor, refuse below half of it. Conflating them is what made the report the
+  // writer was aimed at exactly the report the sign-off penalised.
+  const { CONTENT_GUARD_WORD_FRACTION } = await import("../lib/mission-stages-middle.js");
+  assert.equal(CONTENT_GUARD_WORD_FRACTION, 0.5, "the fraction moved; the two levels no longer share one relationship");
+});
+
+test("the writer records a hole against half the target, where the guard counts it", () => {
+  // The computation is inside the s8 closure with no seam, and the word-floor
+  // fixtures build their own rows — so reverting this line changed nothing any
+  // behavioural test could see. It is the line `contentGuard`'s under-delivered
+  // count reads: against the whole target, eight chapters aimed at 3,125 and
+  // delivering 2,000 would all be holes and the report would be refused for
+  // being written to the standard it was just given.
+  const source = readFileSync(new URL("../lib/mission-stages-middle.js", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /underDelivered = wordCount < Math\.floor\(row\.minDelivery \* CONTENT_GUARD_WORD_FRACTION\);/,
+    "s8 records a chapter as under-delivered for missing its TARGET rather than for falling under half of it, "
+    + "so aiming the writer higher now refuses the reports it aims at",
+  );
+});

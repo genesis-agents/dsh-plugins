@@ -658,15 +658,27 @@ function deliveryFloor(wordFloor, chapterCount, verifiedCount) {
   // under 3,571, a target adding up to a report 4.4x longer than the one it had
   // just accepted. Both numbers now come from one expression, so a report whose
   // chapters all hit their target is exactly a report at the total minimum.
-  // `minimum` is character-for-character the guard's own expression, so the
-  // share below is a share of the number the report is actually held to.
+  // A SHARE OF THE FLOOR, NOT OF THE REFUSAL LINE.
+  //
+  // It was a share of `operative * CONTENT_GUARD_WORD_FRACTION` — the number
+  // the content guard REFUSES below — so a writer that hit every chapter target
+  // landed the report exactly on the refusal line, and the sign-off, which
+  // judges the total against the whole operative floor, then forced its verdict
+  // down a band for falling short. Every report that merely satisfied its
+  // chapter targets was guaranteed that penalty: the number the writer was
+  // aimed at could not reach the standard it was judged by.
+  //
+  // Measured: 8 chapters at a target of 1,562 delivered 15,972 words against an
+  // operative floor of 25,000, the guard passed it, and the Leader refused to
+  // sign it for being short.
+  //
+  // The whole-report side has always had two numbers — aim at the floor, refuse
+  // at half of it — and the chapter now has the same pair from the same
+  // fraction. `underDelivered` is the half; this is the aim.
+  //
+  // Rounded DOWN, so the targets cannot sum past the floor they are a share of.
   const operative = operativeWordFloor(wordFloor, verifiedCount).floor;
-  const minimum = Math.floor(operative * CONTENT_GUARD_WORD_FRACTION);
-  // Rounded DOWN: rounding to nearest lets the targets sum past the total they
-  // are a share of — at 9,000 across 7 chapters that is 4,501 demanded against
-  // a 4,500 minimum, and the report that meets every chapter fails as a whole
-  // by one word.
-  return Math.max(MIN_CHAPTER_WORDS, Math.floor(minimum / Math.max(1, chapterCount)));
+  return Math.max(MIN_CHAPTER_WORDS, Math.floor(operative / Math.max(1, chapterCount)));
 }
 
 /** The floor below which a report is too short whatever its evidence. */
@@ -2658,7 +2670,12 @@ export function createS8Write(deps) {
         // only while retries remain — the reference marked short-but-good
         // chapters as failed and the UI then said "writing failed" for chapters
         // that scored 82.
-        underDelivered = wordCount < row.minDelivery;
+        // HALF the target, which is the same relationship the whole report has
+        // to its floor. `minDelivery` is what the chapter aims at; this is the
+        // line below which it is a hole rather than a short chapter, and it is
+        // what `contentGuard` counts when it asks whether every escape hatch
+        // fired.
+        underDelivered = wordCount < Math.floor(row.minDelivery * CONTENT_GUARD_WORD_FRACTION);
 
         if (previous !== null && textSimilarity(previous, body) > STUCK_JACCARD) stuckHits += 1;
         previous = body;

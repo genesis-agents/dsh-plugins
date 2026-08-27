@@ -25,9 +25,12 @@ import { planChapters, operativeWordFloor, CONTENT_GUARD_WORD_FRACTION } from ".
 import { TIER_POLICY, WORDS_PER_VERIFIED_FINDING } from "../lib/mission-stages-front.js";
 import { contentGuard } from "../lib/mission-stages-back.js";
 
-/** The shortest report the whole-report check accepts. */
+/** What the report AIMS at: the floor scaled to the evidence it holds. */
+const reportFloor = (tierFloor, verifiedCount) => operativeWordFloor(tierFloor, verifiedCount).floor;
+
+/** The shortest report the whole-report check accepts — half the floor. */
 const wholeReportMinimum = (tierFloor, verifiedCount) =>
-  Math.floor(operativeWordFloor(tierFloor, verifiedCount).floor * CONTENT_GUARD_WORD_FRACTION);
+  Math.floor(reportFloor(tierFloor, verifiedCount) * CONTENT_GUARD_WORD_FRACTION);
 
 /** `n` dimensions with evidence behind them, so the planner opens `n` chapters. */
 const dimensionsOf = (n) => Array.from({ length: n }, (_, i) => ({
@@ -38,7 +41,7 @@ const factsOf = (n) => Array.from({ length: n }, (_, i) => ({
   factId: `f${i}`, dimensionIds: [`d${i % 4}`], entity: "e", attribute: "a", value: "v",
 }));
 
-test("the chapter targets add up to the whole-report floor, never past it", () => {
+test("the chapter targets add up to the report's floor, never past it", () => {
   // Swept, because the defect was invisible at any single point: both numbers
   // looked defensible on their own and only their RATIO was wrong.
   for (const tierFloor of [3_000, 9_000, 25_000]) {
@@ -61,16 +64,27 @@ test("the chapter targets add up to the whole-report floor, never past it", () =
         }
 
         const demanded = target * chapterCount;
+        const floor = reportFloor(tierFloor, verified);
         const minimum = wholeReportMinimum(tierFloor, verified);
         // The one exception is the 250-word clamp under a chapter nobody should
         // write: it can only push the sum UP on a very short report, and it is
         // a floor under the chapter, not a second opinion about the report.
         if (target > 250) {
           assert.ok(
-            demanded <= minimum,
+            demanded <= floor,
             `tier ${tierFloor}, ${verified} verified, ${chapterCount} chapters: the chapters are asked for `
-            + `${demanded} words while the report as a whole needs ${minimum}. A report that satisfies every `
-            + `chapter is refused as a whole, or one the guard accepts is refused chapter by chapter.`,
+            + `${demanded} words while the report's own floor is ${floor}. Targets that sum past the floor ask `
+            + "for a report longer than the tier promised.",
+          );
+          // AND the aim sits ABOVE the refusal line, with room between them. A
+          // target that only reached the line the guard refuses below put every
+          // satisfied report exactly on it — which the sign-off, judging the
+          // total against the whole floor, then forced a band down for.
+          assert.ok(
+            demanded > minimum,
+            `tier ${tierFloor}, ${verified} verified, ${chapterCount} chapters: the chapters aim at ${demanded}, `
+            + `the very ${minimum}-word line the guard REFUSES below. A writer that hits every target lands on the `
+            + "refusal line and is penalised for it.",
           );
         }
       }
@@ -108,7 +122,9 @@ test("the run that was refused for missing a number nothing required", () => {
     heading: `Chapter ${chapterIndex}`,
     body: "x ".repeat(wordCount),
     minDelivery: target,
-    underDelivered: wordCount < target,
+    // HALF the target, the way s8 records it: minDelivery is what the chapter
+    // aims at, and a hole is one that did not reach half of it.
+    underDelivered: wordCount < Math.floor(target * CONTENT_GUARD_WORD_FRACTION),
   }));
 
   const guard = contentGuard(
@@ -149,8 +165,8 @@ test("thin evidence still shortens both floors together", () => {
   });
   assert.equal(operativeWordFloor(9_000, 11).source, "evidence", "the operative floor stopped following the evidence");
   assert.ok(
-    chapters[0].minDelivery <= wholeReportMinimum(9_000, 11) / 3 + 1,
-    `each of 3 chapters is asked for ${chapters[0].minDelivery} against a report minimum of ${wholeReportMinimum(9_000, 11)}`,
+    chapters[0].minDelivery <= reportFloor(9_000, 11) / 3 + 1,
+    `each of 3 chapters is asked for ${chapters[0].minDelivery} against a report floor of ${reportFloor(9_000, 11)}`,
   );
 });
 
