@@ -874,7 +874,14 @@ const RECONCILE_SCHEMA = Object.freeze({
           entity: { type: "string" },
           attribute: { type: "string" },
           value: { type: "string" },
-          findingIds: { type: "array", items: { type: "string" }, description: "the finding ids this value is read from" },
+          findingIds: {
+            type: "array",
+            items: { type: "string" },
+            // The HANDLES, copied from the evidence block. Asking for the
+            // underlying 24-character ids is what made a model drop a
+            // character and lose a whole run's fact table.
+            description: "the finding handles (F1, F2, …) this value is read from, copied exactly from the evidence block",
+          },
         },
       },
     },
@@ -975,7 +982,7 @@ function overlapPairs(facts) {
  * @param options - `{verifiedIds, dimensionIds, zh}`.
  * @returns `(output) => string[]`.
  */
-function checkReconcile({ verifiedIds, dimensionIds, zh }) {
+function checkReconcile({ resolve, dimensionIds, zh }) {
   return function check(output) {
     const issues = [];
     const facts = readFacts(output);
@@ -993,14 +1000,14 @@ function checkReconcile({ verifiedIds, dimensionIds, zh }) {
           ? `事实 ${fact.localId}：entity、attribute、value 三项都必须非空。`
           : `fact ${fact.localId}: entity, attribute and value must all be non-empty.`);
       }
-      const bad = fact.findingIds.filter((id) => !verifiedIds.has(id));
+      const bad = fact.findingIds.filter((id) => resolve(id) === null);
       if (fact.findingIds.length === 0 || bad.length === fact.findingIds.length) {
         // G3, and the reason it is a critique first: an id typed slightly wrong
         // is a bookkeeping mistake, and the model can fix it if it is told
         // which id and that the finding list is the only source of them.
         issues.push(zh
-          ? `事实 ${fact.localId} 的 findingIds ${bad.length === 0 ? "为空" : `（${bad.slice(0, 4).join("、")}）`}不在已核验发现里。只能引用输入中列出的 finding id。`
-          : `fact ${fact.localId} cites ${bad.length === 0 ? "no findings" : `finding ids (${bad.slice(0, 4).join(", ")})`} that are not in the verified set. Only the finding ids listed in the input may be cited.`);
+          ? `事实 ${fact.localId} 的 findingIds ${bad.length === 0 ? "为空" : `（${bad.slice(0, 4).join("、")}）`}不是证据块里的句柄。只能填 F1、F2 这样的句柄，逐字从证据块每行开头抄下来。`
+          : `fact ${fact.localId} cites ${bad.length === 0 ? "no findings" : `handles (${bad.slice(0, 4).join(", ")})`} that are not in the evidence block. Use only the F1, F2 … handles, copied exactly from the start of each evidence line.`);
       }
       const key = `${normalisePart(fact.entity)}\u0000${normalisePart(fact.attribute)}`;
       if (seen.has(key)) {
@@ -1088,7 +1095,49 @@ function checkReconcile({ verifiedIds, dimensionIds, zh }) {
  * @param zh - the language.
  * @returns the rendered evidence block.
  */
-function renderFindings(findings, rung, zh) {
+/**
+ * Short, copyable handles for the findings the Reconciler may cite.
+ *
+ * The evidence block used to print `finding-<24 hex chars>` and the Analyst had
+ * to transcribe them into every fact's `findingIds`. At 43 findings it mostly
+ * worked. At 92 it did not: the model returned ids like
+ * `finding-af6eb1e69fc966174f52c25` — 23 characters where the real one has 24,
+ * one character dropped while copying — and the business gate rejected the
+ * whole output over it, three times. Being told which id is wrong does not help
+ * when the id is wrong because it was mistyped; there is nothing to look it up
+ * by. So the model shrank its answer instead, and the run that finally got
+ * through the gate carried ONE fact for 92 findings. s5 then failed for
+ * producing no usable facts, and the mission died there.
+ *
+ * The same lesson this file already applies to the sign-off's arithmetic:
+ * precompute what code can, and never make a model do bookkeeping to earn its
+ * own verdict. `F1`..`F92` is a handle a model can copy.
+ *
+ * @param findings - the verified findings, in the order they are rendered.
+ * @returns `{labelOf, resolve}` — id to label, and label-or-id back to id.
+ */
+export function findingHandles(findings) {
+  const labelOf = new Map();
+  const byLabel = new Map();
+  findings.forEach((finding, index) => {
+    const label = `F${index + 1}`;
+    labelOf.set(finding.id, label);
+    byLabel.set(label, finding.id);
+  });
+  const real = new Set(findings.map((f) => f.id));
+  return {
+    labelOf,
+    /** The real id behind a cited handle, or null. Accepts the id itself too. */
+    resolve(cited) {
+      const text = String(cited ?? "").trim();
+      if (text === "") return null;
+      if (real.has(text)) return text;
+      return byLabel.get(text.toUpperCase()) ?? null;
+    },
+  };
+}
+
+function renderFindings(findings, rung, zh, labelOf = null) {
   const byDimension = new Map();
   for (const finding of findings) {
     const list = byDimension.get(finding.dimensionId) ?? [];
@@ -1106,7 +1155,8 @@ function renderFindings(findings, rung, zh) {
         : `(this dimension has ${list.length} verified findings; the input budget allowed the first ${kept.length}.)`);
     }
     for (const finding of kept) {
-      const head = `- ${finding.id} | ${finding.sourceHost} | ${asText(finding.claim)}`;
+      const handle = labelOf?.get(finding.id) ?? finding.id;
+      const head = `- ${handle} | ${finding.sourceHost} | ${asText(finding.claim)}`;
       if (rung >= 2) lines.push(head);
       else lines.push(`${head}\n  "${compact(finding.evidence, rung === 1 ? 200 : QUOTE_CHARS)}"\n  ${finding.sourceUrl}`);
     }
@@ -1149,6 +1199,7 @@ export function createS5Reconcile(deps) {
       // the same dimensions and reading them beats refusing to run.
       : store.listDimensions(missionId, { runCount }).map((d) => ({ dimensionId: d.dimensionId, name: d.name, rationale: d.rationale, facet: d.facet }));
     const dimensionIds = new Set(dimensions.map((d) => d.dimensionId));
+    const handles = findingHandles(findings);
     const verifiedIds = new Set(findings.map((f) => f.id));
     const dimensionOf = new Map(findings.map((f) => [f.id, f.dimensionId]));
 
@@ -1163,7 +1214,7 @@ export function createS5Reconcile(deps) {
     const plan = fitInput(deps, stage, (rung) => [
       block(zh ? "任务" : "Mission", `${mission.topic}`),
       block(zh ? "维度" : "Dimensions", dimensions.map((d) => `- ${d.dimensionId}: ${asText(d.name)} — ${compact(d.rationale, 200)}`).join("\n")),
-      block(zh ? "已核验的发现（只有这些可以成为事实）" : "Verified findings (the only material that may become a fact)", renderFindings(findings, rung, zh)),
+      block(zh ? "已核验的发现（只有这些可以成为事实）" : "Verified findings (the only material that may become a fact)", renderFindings(findings, rung, zh, handles.labelOf)),
     ].join("\n"));
 
     const run = await callAgent(deps, context, {
@@ -1172,7 +1223,7 @@ export function createS5Reconcile(deps) {
       input: plan.text,
       bindings: { ...bindings, shrinkRung: plan.rungName },
       schema: RECONCILE_SCHEMA,
-      check: checkReconcile({ verifiedIds, dimensionIds, zh }),
+      check: checkReconcile({ resolve: handles.resolve, dimensionIds, zh }),
       description: zh
         ? "提交本次归并的结果：事实表、冲突、重叠判定、缺口、备择假设。"
         : "Submit the reconciliation: the fact table, the conflicts, the overlap adjudications, the gaps and the alternative hypotheses.",
@@ -1194,7 +1245,9 @@ export function createS5Reconcile(deps) {
       // G3: provenance is not negotiable. A fact whose every finding id is
       // unresolvable is dropped and COUNTED — never absorbed, because an
       // absorbed drop is a fact table that silently shrank.
-      const findingIds = candidate.findingIds.filter((id) => verifiedIds.has(id));
+      // Resolved, not filtered: the model cites handles and the fact table
+      // stores real ids, so this is where the two meet.
+      const findingIds = [...new Set(candidate.findingIds.map((id) => handles.resolve(id)).filter((id) => id !== null))];
       if (findingIds.length === 0 || candidate.entity === "" || candidate.attribute === "" || candidate.value === "") {
         droppedProvenance += 1;
         continue;
