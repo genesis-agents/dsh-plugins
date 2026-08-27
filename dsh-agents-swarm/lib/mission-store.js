@@ -510,8 +510,22 @@ CREATE TABLE IF NOT EXISTS mission_dimensions (
   grade_axes      TEXT,                -- JSON
   summary         TEXT,
   failure_code    TEXT,
+  run_count       INTEGER NOT NULL DEFAULT 0,
   updated_at      TEXT NOT NULL,
-  PRIMARY KEY (mission_id, dimension_id)
+  -- THE GENERATION IS PART OF THE KEY. It was (mission_id, dimension_id), on
+  -- the stated assumption that a mission has one set of dimensions for its
+  -- whole life. A fresh rerun replans, and the leader names the new dimensions
+  -- itself, so instead of updating eight rows a rerun ADDED eight: one mission
+  -- reached run 11 holding 37 dimensions for a plan of 8. Every reader passed
+  -- runCount and none of them could scope by it.
+  --
+  -- weakestDimensions is where that stopped being cosmetic. It ranks by
+  -- verified findings IN THIS RUN, so the 29 dimensions belonging to dead
+  -- generations all scored zero and were permanently the weakest — and the
+  -- s4 back edge exists to re-collect the weakest two. Every rerun since the
+  -- first spent its back edge re-collecting dimensions that were not in its
+  -- plan.
+  PRIMARY KEY (mission_id, run_count, dimension_id)
 ) STRICT;
 -- There is deliberately NO verified_count column here. A denormalised counter
 -- with four writers (initial collect, recollect, salvage, the layer-3 retry) and
@@ -747,6 +761,58 @@ export const MISSION_MIGRATIONS = Object.freeze([
   // accumulating, a fresh rerun bumps it and starts clean. Rows written before
   // this migration get 0, which belongs to no generation — they are history,
   // and no run's ceiling counts them.
+  // The dimension plan belongs to the generation that planned it, the way
+  // findings, chapters and artefacts already do. SQLite cannot alter a primary
+  // key, so the table is rebuilt; the whole migration list runs in one
+  // transaction, so a half-rebuilt table is not reachable.
+  //
+  // Existing rows are backfilled to the LAST generation whose findings cite
+  // them, because the row's state, grade and summary are from its last write
+  // and that is the generation that wrote them. A dimension no finding ever
+  // cited takes the mission's current generation: it is part of the plan on
+  // screen, and retiring it to a generation nobody queries would empty a
+  // running mission's pane.
+  Object.freeze({
+    id: "007-dimension-generation",
+    up: (db) => {
+      const has = db.prepare("PRAGMA table_info(mission_dimensions)").all().some((c) => c.name === "run_count");
+      if (has) return;
+      db.exec(`
+        CREATE TABLE mission_dimensions_rebuilt (
+          mission_id      TEXT NOT NULL,
+          dimension_id    TEXT NOT NULL,
+          name            TEXT NOT NULL,
+          rationale       TEXT,
+          facet           TEXT NOT NULL,
+          state           TEXT NOT NULL,
+          attempt         INTEGER NOT NULL DEFAULT 0,
+          grade           REAL,
+          grade_axes      TEXT,
+          summary         TEXT,
+          failure_code    TEXT,
+          run_count       INTEGER NOT NULL DEFAULT 0,
+          updated_at      TEXT NOT NULL,
+          PRIMARY KEY (mission_id, run_count, dimension_id)
+        ) STRICT;
+        INSERT INTO mission_dimensions_rebuilt (
+          mission_id, dimension_id, name, rationale, facet, state, attempt,
+          grade, grade_axes, summary, failure_code, run_count, updated_at
+        )
+        SELECT d.mission_id, d.dimension_id, d.name, d.rationale, d.facet, d.state, d.attempt,
+               d.grade, d.grade_axes, d.summary, d.failure_code,
+               COALESCE(
+                 (SELECT MAX(f.run_count) FROM mission_findings f
+                   WHERE f.mission_id = d.mission_id AND f.dimension_id = d.dimension_id),
+                 (SELECT m.run_count FROM missions m WHERE m.id = d.mission_id),
+                 0
+               ),
+               d.updated_at
+        FROM mission_dimensions d;
+        DROP TABLE mission_dimensions;
+        ALTER TABLE mission_dimensions_rebuilt RENAME TO mission_dimensions;
+      `);
+    },
+  }),
   Object.freeze({
     id: "006-spend-generation",
     up: (db) => {
@@ -2405,10 +2471,15 @@ export class MissionStore {
     const at = record?.at ?? new Date().toISOString();
     assertIso(at, "at");
 
+    // The generation doing the planning, resolved here so no caller has to
+    // remember — the same shape `insertSpend` uses. A dimension is written by
+    // the run that planned it and belongs to that run.
+    const runCount = Number(record?.runCount ?? this.getMission(missionId)?.runCount ?? 0) || 0;
+
     this.db.prepare(`
-      INSERT INTO mission_dimensions (mission_id, dimension_id, name, rationale, facet, state, updated_at)
-      VALUES (?,?,?,?,?,?,?)
-      ON CONFLICT(mission_id, dimension_id) DO UPDATE SET
+      INSERT INTO mission_dimensions (mission_id, dimension_id, name, rationale, facet, state, run_count, updated_at)
+      VALUES (?,?,?,?,?,?,?,?)
+      ON CONFLICT(mission_id, run_count, dimension_id) DO UPDATE SET
         name = excluded.name,
         rationale = excluded.rationale,
         facet = excluded.facet,
@@ -2420,7 +2491,7 @@ export class MissionStore {
     `).run(
       missionId, dimensionId, name,
       typeof record?.rationale === "string" ? record.rationale : null,
-      record.facet, state, at,
+      record.facet, state, runCount, at,
     );
     return dimensionId;
   }
@@ -2444,13 +2515,18 @@ export class MissionStore {
         failure_code = COALESCE(?, failure_code),
         summary = COALESCE(?, summary),
         updated_at = ?
-      WHERE mission_id = ? AND dimension_id = ?
+      WHERE mission_id = ? AND run_count = ? AND dimension_id = ?
     `).run(
       state,
       options?.countAttempt ? 1 : 0,
       typeof options?.failureCode === "string" ? options.failureCode : null,
       typeof options?.summary === "string" ? options.summary : null,
-      at, String(missionId), String(dimensionId),
+      at, String(missionId),
+      // This run's row. Without the generation the update lands on whichever
+      // row of that dimension_id SQLite reaches first, which after a replan is
+      // a dead generation's.
+      Number(options?.runCount ?? this.getMission(missionId)?.runCount ?? 0) || 0,
+      String(dimensionId),
     ).changes > 0;
   }
 
@@ -2466,10 +2542,12 @@ export class MissionStore {
     assertIso(at, "at");
     return this.db.prepare(`
       UPDATE mission_dimensions SET grade = ?, grade_axes = ?, updated_at = ?
-      WHERE mission_id = ? AND dimension_id = ?
+      WHERE mission_id = ? AND run_count = ? AND dimension_id = ?
     `).run(
       numberOrNull(grade?.score), jsonOrNull(grade?.axes), at,
-      String(missionId), String(dimensionId),
+      String(missionId),
+      Number(grade?.runCount ?? this.getMission(missionId)?.runCount ?? 0) || 0,
+      String(dimensionId),
     ).changes > 0;
   }
 
@@ -2494,8 +2572,8 @@ export class MissionStore {
     const run = runCount ?? this.db.prepare("SELECT run_count FROM missions WHERE id = ?").get(id)?.run_count ?? 1;
     const rows = this.db.prepare(`
       SELECT dimension_id, name, rationale, facet, state, attempt, grade, grade_axes, summary, failure_code, updated_at
-      FROM mission_dimensions WHERE mission_id = ? ORDER BY dimension_id
-    `).all(id).map(shapeDimension);
+      FROM mission_dimensions WHERE mission_id = ? AND run_count = ? ORDER BY dimension_id
+    `).all(id, run).map(shapeDimension);
 
     const tallies = new Map();
     for (const row of this.db.prepare(`
@@ -2554,9 +2632,9 @@ export class MissionStore {
                WHERE f.mission_id = d.mission_id AND f.dimension_id = d.dimension_id
                  AND f.run_count = ? AND f.verify_state = ?) AS verified
       FROM mission_dimensions d
-      WHERE d.mission_id = ?
+      WHERE d.mission_id = ? AND d.run_count = ?
       ORDER BY verified ASC, d.dimension_id
-    `).all(run, COUNTING_VERIFY_STATE, id);
+    `).all(run, COUNTING_VERIFY_STATE, id, run);
     const floor = Number.isFinite(Number(below)) ? Number(below) : Infinity;
     return rows
       .filter((row) => row.verified < floor)
@@ -2935,14 +3013,14 @@ export class MissionStore {
     const id = assertText(missionId, "missionId");
     const floor = this.db.prepare("SELECT derived_floor FROM missions WHERE id = ?").get(id)?.derived_floor;
     if (floor === null || floor === undefined) return 0;
+    // The generation key arrived, so this is the parameter that has to start
+    // being used — the comment here said exactly that. Counting every
+    // generation's dimensions made the floor a multiple of how many times the
+    // mission had been rerun.
+    const run = runCount ?? this.getMission(id)?.runCount ?? 0;
     const dimensions = this.db
-      .prepare("SELECT COUNT(*) AS n FROM mission_dimensions WHERE mission_id = ?")
-      .get(id).n;
-    // Unused today, and named rather than dropped: `mission_dimensions` is keyed
-    // by (mission_id, dimension_id) and holds one row per dimension for the
-    // whole mission, not one per generation. If it ever gains a generation key
-    // this is the parameter that has to start being used.
-    void runCount;
+      .prepare("SELECT COUNT(*) AS n FROM mission_dimensions WHERE mission_id = ? AND run_count = ?")
+      .get(id, run).n;
     return floor * dimensions;
   }
 
