@@ -92,3 +92,39 @@ test("the pool is seeded from the generation, not the lifetime", () => {
     "the per-tool allowances are seeded from every generation, so a rerun opens with arXiv and fetch already spent",
   );
 });
+
+test("the meters describe the run they are on", (t) => {
+  // The pane's ceilings ARE the ones the run is held to, and the pool is seeded
+  // per generation — so an unscoped read here says "289 of 300 calls" about a
+  // run that has made nine. A meter reporting a cap as nearly spent while the
+  // run has barely started is worse than no meter: it invites exactly the
+  // wrong action, which on this screen is abandoning a healthy run.
+  const { missions, id } = seeded(t);
+  missions.insertSpend({
+    missionId: id, stepId: "s3-collect", role: "researcher",
+    promptTok: 4000, completionTok: 1000, calls: 40, at: "2026-08-27T09:00:01.000Z",
+  });
+
+  const before = missions.readModelInputs(id);
+  assert.equal(before.spend.calls, 40, "the run cannot see its own spend on the pane it is judged by");
+
+  // A fresh rerun bumps the generation. The pane must follow the pool.
+  missions.resetStagesForFreshRerun(id, "2026-08-27T09:10:00.000Z");
+  // The claim is what bumps the generation, and it refuses a mission that is
+  // still `running` — so the fixture has to end the previous run the way a
+  // real one does before asking for a new generation.
+  missions.finalizeMissionRow({
+    missionId: id, runCount: 1, status: "failed", failureCode: "no_evidence",
+    errorMessage: "fixture", at: "2026-08-27T09:09:59.000Z", origin: "lifecycle", reason: null, detail: null,
+  });
+  const claimed = missions.claimForRun(id, { bootId: "boot-1", pid: 1, newGeneration: true, at: "2026-08-27T09:10:01.000Z" });
+  assert.ok(claimed.claimed, `the fixture could not open a new generation: ${claimed.reason}`);
+  assert.equal(missions.getMission(id).runCount, 2, "the claim did not bump the generation");
+
+  const after = missions.readModelInputs(id);
+  assert.equal(
+    after.spend.calls,
+    0,
+    "the new generation's meters still carry the last one's spend, so the pane and the pool disagree about the same ceiling",
+  );
+});

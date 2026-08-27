@@ -4214,6 +4214,10 @@ export class MissionStore {
    */
   readModelInputs(missionId, { tail = 200, since, now = new Date().toISOString() } = {}) {
     const id = assertText(missionId, "missionId");
+    // The generation the ceilings on this page belong to. Read once here rather
+    // than by each caller, so the meters and the pool cannot disagree about
+    // which run they are describing.
+    const run = this.getMission(id)?.runCount ?? null;
     const row = this.getMission(id);
     if (row === undefined) return undefined;
 
@@ -4228,10 +4232,19 @@ export class MissionStore {
       chapters: this.listChapters(id, row.runCount),
       artifact: this.latestArtifact(id),
       artifactVersions: this.listArtifactVersions(id),
-      spend: this.spendTotals(id),
+      // THIS GENERATION, matching the pool. The ceilings on this pane are the
+      // ones the run is actually held to, and they are seeded per generation —
+      // so an unscoped read here tells the reader "289 of 300 calls" about a
+      // run that has made nine. A meter that reports a cap as nearly spent
+      // while the run has barely started is worse than no meter: it invites
+      // exactly the wrong action.
+      //
+      // `run` is the mission's current generation, so a resume — which keeps
+      // its generation — still sees everything it has spent.
+      spend: this.spendTotals(id, run),
       spendByStage: this.spendByStage(id),
       spendByAgent: this.spendByAgent(id),
-      tools: this.toolCallTotals(id),
+      tools: this.toolCallTotals(id, run),
       recentTools: this.recentToolCalls(id, 20),
       findings: this.verifyStateCounts(id, row.runCount),
       events,
