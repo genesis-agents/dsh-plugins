@@ -9208,7 +9208,7 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @param onOpenStage - called with a stepId; opens the trajectory on it.
 		*/
-		function MissionTaskBoard({ stages, agents, zh, onOpenStage, selected, onSelect, mission, work }) {
+		function MissionTaskBoard({ stages, agents, zh, onOpenStage, selected, onSelect, mission, work, onOpenSource }) {
 			// WHAT A TASK IS HERE, and it took a rebuild to get right. playground's
 			// board deliberately does NOT show system-stage rows: a todo there is a
 			// piece of work somebody decided on — a dimension to research, a gap the
@@ -9330,6 +9330,16 @@ window.__ModuleLoader__.load({
 			].filter((id) => (tally.get(id) ?? 0) > 0);
 
 			const chosen = rows.find((row) => row.stepId === selected) ?? null;
+			// A DIMENSION ROW IS SELECTABLE TOO, AND WAS RESOLVING TO NOTHING.
+			// Every row on this board calls `onSelect` with its key, but the
+			// lookup above only searches STAGE rows — a child's key is its node
+			// id (`dimension:ai-capabilities`), which is not a `stepId`. So
+			// clicking a dimension set the selection, found no stage, and opened
+			// nothing: a row that answers the pointer by doing exactly nothing,
+			// which reads as a dead table rather than as a missing feature.
+			const chosenDim = typeof selected === "string" && selected.startsWith("dimension:")
+				? (nodes.find((node) => node.id === selected) ?? null)
+				: null;
 			const table = jsx("div", {
 				style: {
 					border: `1px solid ${LINE.rule}`, borderRadius: RADIUS.md,
@@ -9586,6 +9596,22 @@ window.__ModuleLoader__.load({
 				action: key,
 				children: [
 					table,
+					// The dimension drawer, over the same board and through the same
+					// component the references pane opens. One drawer for one thing:
+					// a stage and a dimension are different rows and different
+					// answers, but they must not be two different drawers.
+					jsx(MissionDrawer, {
+						open: chosenDim !== null,
+						onClose: () => { onSelect?.(null); },
+						children: chosenDim === null ? null : jsx(MissionDimensionDrawer, {
+							missionId: mission?.id ?? null,
+							dimension: { id: String(chosenDim.id).slice("dimension:".length), name: chosenDim.title },
+							runCount: mission?.runCount ?? null,
+							zh,
+							onClose: () => { onSelect?.(null); },
+							onOpenSource
+						})
+					}, "dimDrawer"),
 					jsx(MissionDrawer, {
 						open: chosen !== null,
 						onClose: () => { onSelect?.(null); },
@@ -11574,7 +11600,8 @@ window.__ModuleLoader__.load({
 											zh,
 											selected: task,
 											onSelect: (stepId) => { setTask(stepId); },
-											onOpenStage: (stepId) => { setFocusStep(stepId); setPane("trace"); }
+											onOpenStage: (stepId) => { setFocusStep(stepId); setPane("trace"); },
+											onOpenSource: (entry) => { setSource(entry); }
 										}, "board"),
 										// THE BRIEF, ABOVE THE JUDGING. Every row on the board is being
 										// measured against this and it was on the wire and on no screen.

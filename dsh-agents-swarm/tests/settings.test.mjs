@@ -3119,3 +3119,41 @@ test("a dimension opens into a drawer, and the drawer carries what the pane cann
     "the drawer will not close",
   );
 });
+
+test("a dimension row on the task board opens, the way a stage row does", async () => {
+  // THE ROW ANSWERED THE POINTER BY DOING NOTHING. Every row on this board
+  // calls `onSelect` with its own key, but the drawer resolved that key against
+  // STAGE rows only — a dimension's key is its node id, `dimension:d1`, which
+  // is not a `stepId`. So a click set the selection, found no stage and opened
+  // nothing. A row that is pressable and answers with nothing reads as a dead
+  // table, not as a feature nobody built.
+  //
+  // Asserted through the ROW rather than through a handler, because the defect
+  // was entirely in the resolution between the two.
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, RUNNING.topic);
+  const before = textOf(view.tree).join(" ");
+
+  const rows = findAll(view.tree, (node) => node.type === "tr" && typeof node.props?.onClick === "function");
+  const target = rows.find((node) => textOf(node).join(" ").includes("推理时序扩展的复现情况"));
+  assert.ok(target, "the dimension row is not on the board at all");
+
+  await view.act(() => { target.props.onClick(); });
+  const opened = textOf(view.tree).join(" ");
+  assert.ok(opened.length > before.length, "clicking a dimension row opened nothing");
+  assert.ok(opened.includes("三家实验室同期收敛"), "the drawer does not carry the dimension's findings");
+
+  // THE SAME DRAWER THE REFERENCES PANE OPENS. A stage and a dimension are
+  // different rows and different answers, but two drawers for one board is how
+  // the two come to disagree about what a finding looks like.
+  assert.ok(opened.includes("we observe the same scaling behaviour"), "the quote a claim is checked against is missing");
+
+  const close = findAll(view.tree, (node) => node.props?.["aria-label"] === "关闭");
+  assert.ok(close.length > 0, "the drawer has no way out");
+  await view.act(() => { close[close.length - 1].props.onClick(); });
+  assert.ok(
+    !textOf(view.tree).join(" ").includes("we observe the same scaling behaviour"),
+    "the drawer will not close",
+  );
+});
