@@ -10032,6 +10032,20 @@ window.__ModuleLoader__.load({
 							}, "note"),
 							missionId === null || missionId === undefined || missionId === ""
 								? null : jsx("p", { className: "swt-secthead", children: zh ? "这一步做了什么" : "What this step did" }, "didHead"),
+								// THE STEP'S OWN REASONING, for the four steps that produce any. s4
+								// writes a verdict per dimension, s5 a reconciliation, s10 the
+								// blindspots and biases, s11 the corrections it forced before signing —
+								// all four projected by `projectStageInsights`, served by
+								// `/missions/:id/insights`, and asked for by nobody: `grep /insights`
+								// over this file returned zero. The tool calls below say what the step
+								// DID; this is what it concluded, and the drawer had one half of that.
+								//
+								// Here rather than in a tab of its own: the pane strip is pinned to the
+								// set the reference settled on, and the reference reaches this content
+								// the same way — through a row's own detail.
+								!["s4-assess", "s5-reconcile", "s10-critique", "s11-signoff"].includes(stage.stepId)
+									? null
+									: jsx(MissionJudgement, { missionId, zh, only: stage.stepId }, "judgement"),
 							missionId === null || missionId === undefined || missionId === "" ? null : jsx("div", {
 								style: { display: "flex", flexDirection: "column", gap: SPACE.xs, padding: "0 14px" },
 								// THE SAME RENDERER THE TRAJECTORY PANE USES, filtered to
@@ -10747,6 +10761,102 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @param mission - `view.mission`, for the empty state's sentence.
 		*/
+		/**
+		* THE REASONING, which was computed, served and never asked for.
+		*
+		* `GET /missions/:id/insights` has returned all of this since the route was
+		* written — the Analyst's reconciliation, the critic's blindspots and biases,
+		* the Leader's per-dimension verdicts and the sign-off's forced corrections —
+		* and `grep /insights lib/client.js` returned nothing. Four stages of
+		* judgement, on the wire and off the screen.
+		*
+		* It reads the route rather than the view because the view does not carry it:
+		* `projectMissionView` returns eleven keys and none of them is this.
+		*/
+		function MissionJudgement({ missionId, zh, only = null }) {
+			const [held, setHeld] = useState(null);
+			const [error, setError] = useState("");
+			useEffect(() => {
+				let alive = true;
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/insights`)
+					.then(missionData)
+					.then((data) => { if (alive) { setHeld(data); setError(""); } })
+					.catch((cause) => { if (alive) setError(String(cause?.message ?? cause)); });
+				return () => { alive = false; };
+			}, [missionId]);
+			
+			if (error !== "") return jsx(ErrorBox, { message: error, zh }, "err");
+			if (held === null) return jsx(Skeleton, { rows: 4 }, "load");
+			
+			// EACH BLOCK SAYS WHY IT IS EMPTY. `sources` carries, per stage, which of
+			// 'no row', 'ran and wrote nothing' and 'unreadable output' produced the
+			// null — and those are three different failures with three different next
+			// actions, which one empty state cannot say.
+			const why = (key) => {
+				const source = held.sources?.[key] ?? null;
+				if (source === null || source === undefined) return zh ? "这一步还没有运行。" : "this step has not run.";
+				if (source.reason === "no-row") return zh ? "这一步还没有运行。" : "this step has not run.";
+				if (source.reason === "unreadable") return zh ? "这一步的产出无法读取。" : "this step's output could not be read.";
+				return zh ? "这一步运行了，但什么也没写。" : "this step ran and wrote nothing.";
+			};
+			
+			const block = (title, count, body, key) => jsx(MissionPanel, {
+				title, count, note: "",
+				children: body === null ? jsx(EmptyBox, { title: why(key), zh }, "empty") : body
+			}, key);
+			
+			const list = (rows, line) => rows.length === 0 ? null : jsx("div", {
+				style: { display: "flex", flexDirection: "column" },
+				children: rows.map((row, at) => jsx("div", {
+					style: { padding: `${SPACE.sm} 0`, borderTop: at === 0 ? "none" : `1px solid ${LINE.hair}` },
+					children: line(row)
+				}, `r${at}`))
+			});
+			
+			const text = (value) => jsx("span", { style: { font: FONT.body, color: INK.primary }, children: String(value ?? "") });
+			
+			const reconcile = held.reconcile;
+			const critique = held.critique;
+			const assess = held.assess;
+			const signoff = held.signoff;
+			
+			// ONE STEP'S BLOCKS when the drawer asks for one. The same projection
+			// serves both; filtering here keeps a second copy of the shapes from
+			// existing, which is how two readers of one payload start disagreeing.
+			const mine = (key) => only === null || only === key;
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: SPACE.lg },
+				children: [
+					// THE CONFLICTS FIRST. A reconciliation that found two sources saying
+					// different things is the most decision-relevant thing on this screen,
+					// and it was the least reachable.
+					!mine("s5-reconcile") ? null : block(zh ? "口径冲突" : "Conflicts", reconcile?.counts?.returnedConflicts ?? null,
+						list(reconcile?.conflicts ?? [], (row) => [
+							jsx("div", { style: { font: FONT.bodyStrong, color: INK.primary }, children: String(row.resolution ?? "") }, "v"),
+							jsx("div", { style: { font: FONT.small, color: INK.secondary, marginTop: "2px" }, children: String(row.rationale ?? "") }, "r")
+						]), "reconcile"),
+					!mine("s5-reconcile") ? null : block(zh ? "证据缺口" : "Gaps", reconcile?.counts?.returnedGaps ?? null,
+						list(reconcile?.gaps ?? [], (row) => text(`${row.dimensionId ?? ""} · ${(row.aspects ?? []).join("；")}`)), "reconcile"),
+					!mine("s10-critique") ? null : block(zh ? "盲区" : "Blindspots", critique?.counts?.blindspots ?? null,
+						list(critique?.blindspots ?? [], (row) => text(typeof row === "string" ? row : row.statement ?? JSON.stringify(row))), "critique"),
+					!mine("s10-critique") ? null : block(zh ? "偏差" : "Biases", critique?.counts?.biases ?? null,
+						list(critique?.biases ?? [], (row) => text(typeof row === "string" ? row : row.statement ?? JSON.stringify(row))), "critique"),
+					!mine("s4-assess") ? null : block(zh ? "逐维度判定" : "Per-dimension verdicts", (assess?.perDimension ?? []).length || null,
+						list(assess?.perDimension ?? [], (row) => [
+							jsx("div", { style: { font: FONT.bodyStrong, color: INK.primary }, children: `${row.dimensionId ?? ""} · ${row.action ?? ""}` }, "h"),
+							jsx("div", { style: { font: FONT.small, color: INK.secondary, marginTop: "2px" }, children: String(row.rationale ?? "") }, "r")
+						]), "assess"),
+					!mine("s11-signoff") ? null : block(zh ? "签署前的强制修正" : "Corrections before signing", (signoff?.corrections ?? []).length || null,
+						list(signoff?.corrections ?? [], (row) => [
+							jsx("div", { style: { font: FONT.bodyStrong, color: INK.primary }, children: String(row.label ?? row.id ?? "") }, "h"),
+							jsx("div", { style: { font: FONT.small, color: INK.secondary, marginTop: "2px" }, children: String(row.detail ?? "") }, "d")
+						]), "signoff"),
+					!mine("s11-signoff") || (signoff?.foreword ?? "") === "" ? null : block(zh ? "领队的话" : "The leader's foreword", null,
+						jsx("div", { style: { ...ARTICLE_BLOCK, marginBottom: 0, color: INK.primary }, children: signoff.foreword }, "fw"), "signoff")
+				]
+			});
+		}
+		
 		function MissionSources({ missionId, zh, mission, onOpenSource }) {
 			const [held, setHeld] = useState(null);
 			// Which dimension the drawer is showing. ABOVE the early return, with

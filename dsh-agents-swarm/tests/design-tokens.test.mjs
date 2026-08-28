@@ -3110,3 +3110,43 @@ test("a report exports as more than prose", () => {
     "an export downloads the latest version while the reader is looking at an older one",
   );
 });
+
+test("the reasoning four stages produced is on the screen", () => {
+  // `GET /missions/:id/insights` has returned the Analyst's reconciliation, the
+  // critic's blindspots and biases, the Leader's per-dimension verdicts and the
+  // sign-off's forced corrections since the route was written — and
+  // `grep /insights lib/client.js` returned ZERO. Four stages of judgement, on
+  // the wire and off the screen, for as long as the route has existed.
+  // COMMENT-STRIPPED. The first version read `SOURCE`, and the comments in
+  // this very component name the route it fetches — so a mutation that pointed
+  // the fetch somewhere else walked straight through a guard that was reading
+  // prose about the route rather than the call to it.
+  const pane = code(body("function MissionJudgement("));
+  assert.match(
+    pane,
+    /fetch\(`\$\{apiBase\(\)\}\/missions\/\$\{encodeURIComponent\(missionId\)\}\/insights`\)/,
+    "nothing in the browser asks for the insights route again",
+  );
+  assert.ok(pane.length > 0, "MissionJudgement is gone");
+
+  // EACH EMPTY BLOCK SAYS WHICH EMPTY IT IS. The projection distinguishes 'no
+  // row', 'ran and wrote nothing' and 'unreadable output', which are three
+  // different failures with three different next actions.
+  for (const reason of ["no-row", "unreadable"]) {
+    assert.ok(pane.includes(reason), `the pane collapses ${reason} into one empty state`);
+  }
+
+  // IN THE STAGE DRAWER, not a sixth tab. The strip is pinned to the set the
+  // reference settled on, and the reference reaches this same content through a
+  // row's own detail rather than through a tab of its own.
+  const drawer = code(body("function MissionStageDetail("));
+  assert.match(
+    drawer,
+    /\["s4-assess", "s5-reconcile", "s10-critique", "s11-signoff"\]\.includes\(stage\.stepId\)/,
+    "the judgement is mounted for every step, or for none",
+  );
+  assert.ok(drawer.includes("MissionJudgement"), "the stage drawer no longer shows what the step concluded");
+  // And the strip stays five.
+  const panes = SOURCE.match(/const MISSION_PANES = \[[^\]]*\]/)?.[0] ?? "";
+  assert.equal((panes.match(/"/g) ?? []).length / 2, 5, `the pane strip is ${(panes.match(/"/g) ?? []).length / 2} panes: ${panes}`);
+});
