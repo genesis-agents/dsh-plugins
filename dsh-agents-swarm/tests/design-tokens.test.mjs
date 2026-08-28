@@ -1951,7 +1951,11 @@ test("the source card's hover is a rule, because a style object cannot hold one"
   // concatenated and injected together, so the effect is what was asked; the
   // guard names the half that can actually hold a selector.
   assert.ok(
-    SOURCE.includes("const SWM_SHEET = SWM_CSS + SWM_RULES"),
+  // THREE PARTS NOW. `SWM_THEME` sits between them: the variables the
+  // reference's own values are written into, scoped to `.swm-page`. A rule
+  // in SWM_RULES still needs SWM_CSS's variables, and now also needs the
+  // theme's overrides, or the page paints in the harness palette.
+    SOURCE.includes("const SWM_SHEET = SWM_CSS + SWM_THEME + SWM_RULES"),
     "the two halves of the sheet are no longer injected together, so a rule appended to SWM_RULES reaches no element",
   );
   // MATCHED ON THE DECLARATION, not on the selector. `.swm-source:hover` also
@@ -2308,7 +2312,11 @@ test("the tab bar scrolls rather than clipping its last tab", () => {
   // entries sit INSIDE `body{ … }`, so a selector written there is nested in a
   // declaration block and dropped. Both halves ship together, which is what
   // makes that placement equivalent to the one the gap asked for.
-  assert.ok(SOURCE.includes("const SWM_SHEET = SWM_CSS + SWM_RULES"), "the two halves of the sheet stopped shipping together, so the rules above are written and never injected");
+  // THREE PARTS NOW. `SWM_THEME` sits between them: the variables the
+  // reference's own values are written into, scoped to `.swm-page`. A rule
+  // in SWM_RULES still needs SWM_CSS's variables, and now also needs the
+  // theme's overrides, or the page paints in the harness palette.
+  assert.ok(SOURCE.includes("const SWM_SHEET = SWM_CSS + SWM_THEME + SWM_RULES"), "the two halves of the sheet stopped shipping together, so the rules above are written and never injected");
   assert.equal(
     code(SOURCE).split('className: "swm-tabbar"').length - 1,
     3,
@@ -3149,4 +3157,44 @@ test("the reasoning four stages produced is on the screen", () => {
   // And the strip stays five.
   const panes = SOURCE.match(/const MISSION_PANES = \[[^\]]*\]/)?.[0] ?? "";
   assert.equal((panes.match(/"/g) ?? []).length / 2, 5, `the pane strip is ${(panes.match(/"/g) ?? []).length / 2} panes: ${panes}`);
+});
+
+test("the surface paints in the reference's values, not the harness's", () => {
+  // 100% of the way, not most of it. Every component here styles itself from
+  // FONT / INK / LINE / SURFACE / RADIUS / ELEVATION, so the whole surface
+  // moves onto the reference's palette by redefining what those resolve to —
+  // no component changes, and no second set of numbers to keep in step.
+  //
+  // The values are COUNTED off the reference, not approximated: every className
+  // in its agent-playground was tallied. text-gray-500 (112 uses), 700 (92),
+  // 600 (92), 400 (82), 900 (67); border-gray-200 outside and 100 inside;
+  // bg-gray-50; violet for the accent where ours was the harness blue.
+  assert.match(SOURCE, /const SWM_THEME = \[/, "the reference's own values are gone from the sheet");
+  const theme = SOURCE.slice(SOURCE.indexOf("const SWM_THEME = ["));
+  const block = theme.slice(0, theme.indexOf("\n"));
+
+  for (const [name, value] of [
+    ["--dsw-alias-label-primary", "#111827"],   // gray-900
+    ["--dsw-alias-label-secondary", "#4b5563"], // gray-600
+    ["--dsw-alias-label-tertiary", "#9ca3af"],  // gray-400
+    ["--dsw-alias-border-l1", "#f3f4f6"],       // gray-100, inside
+    ["--dsw-alias-border-l2", "#e5e7eb"],       // gray-200, outside
+    ["--dsw-alias-bg-layer-2", "#f9fafb"],      // gray-50
+  ]) {
+    assert.ok(block.includes(`${name}:${value};`), `${name} drifted off the reference's ${value}`);
+  }
+
+  // SCOPED. The harness's other tabs are not this product and must not be
+  // repainted by it — `body{…}` here would take the whole app.
+  assert.ok(block.includes(".swm-page{"), "the theme is unscoped and repaints the rest of the harness");
+  assert.match(
+    code(body("function SwarmPage(")),
+    /className: "swm-page"/,
+    "nothing carries the class the theme selects, so every token falls back to the harness palette",
+  );
+
+  // The hues stay in their ONE home, with a light value and a dark correction.
+  // Declaring them again in the theme block made the second declaration read as
+  // the dark one, and the light/dark guard caught it.
+  assert.ok(!block.includes("--swm-h-"), "a hue is declared a second time in the theme block, where it reads as the dark value");
 });

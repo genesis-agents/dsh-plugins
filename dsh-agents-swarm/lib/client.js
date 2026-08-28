@@ -134,12 +134,12 @@ window.__ModuleLoader__.load({
 		const SWM_STYLE_ID = "dsw-swarm-tokens";
 		const SWM_CSS = [
 			"body{",
-			"--swm-h-green:34,197,94;",       // = --dsw-static-green-500
-			"--swm-h-amber:221,134,41;",      // = --dsw-static-amber-600
-			"--swm-h-red:236,19,19;",         // = --dsw-static-red-600
-			"--swm-h-blue:65,118,230;",       // = --dsw-static-deepseek-500
-			"--swm-h-slate:97,102,107;",      // = --dsw-static-neutral-bluish-700
-			"--swm-h-slate-dim:129,133,140;", // = --dsw-static-neutral-bluish-600
+			"--swm-h-green:4,120,87;",       // = --dsw-static-green-500
+			"--swm-h-amber:180,83,9;",      // = --dsw-static-amber-600
+			"--swm-h-red:185,28,28;",         // = --dsw-static-red-600
+			"--swm-h-blue:37,99,235;",       // = --dsw-static-deepseek-500
+			"--swm-h-slate:107,114,128;",      // = --dsw-static-neutral-bluish-700
+			"--swm-h-slate-dim:156,163,175;", // = --dsw-static-neutral-bluish-600
 			"--swm-h-violet:124,58,237;",
 			"--swm-h-indigo:79,70,229;",
 			"--swm-h-cyan:8,145,178;",
@@ -149,12 +149,12 @@ window.__ModuleLoader__.load({
 			"--swm-a-fill:0.90;",
 			"}",
 			"body[data-ds-dark-theme]{",
-			"--swm-h-green:78,209,126;",      // = --dsw-static-green-400
-			"--swm-h-amber:247,173,49;",      // = --dsw-static-amber-400
-			"--swm-h-red:242,90,90;",         // = --dsw-static-red-400
-			"--swm-h-blue:103,158,254;",      // = --dsw-static-deepseek-400
-			"--swm-h-slate:207,211,214;",     // = --dsw-static-neutral-bluish-300
-			"--swm-h-slate-dim:173,178,184;", // = --dsw-static-neutral-bluish-400
+			"--swm-h-green:52,211,153;",      // = --dsw-static-green-400
+			"--swm-h-amber:251,191,36;",      // = --dsw-static-amber-400
+			"--swm-h-red:248,113,113;",         // = --dsw-static-red-400
+			"--swm-h-blue:96,165,250;",      // = --dsw-static-deepseek-400
+			"--swm-h-slate:156,163,175;",     // = --dsw-static-neutral-bluish-300
+			"--swm-h-slate-dim:107,114,128;", // = --dsw-static-neutral-bluish-400
 			"--swm-h-violet:167,139,250;",
 			"--swm-h-indigo:129,140,248;",
 			"--swm-h-cyan:34,211,238;",
@@ -208,12 +208,12 @@ window.__ModuleLoader__.load({
 		* argument — which is a chip with no text on a background of nothing.
 		*/
 		const PALETTE = {
-			green: "var(--swm-h-green,34,197,94)",
-			amber: "var(--swm-h-amber,221,134,41)",
-			red: "var(--swm-h-red,236,19,19)",
-			blue: "var(--swm-h-blue,65,118,230)",
-			slate: "var(--swm-h-slate,97,102,107)",
-			slateDim: "var(--swm-h-slate-dim,129,133,140)",
+			green: "var(--swm-h-green,4,120,87)",
+			amber: "var(--swm-h-amber,180,83,9)",
+			red: "var(--swm-h-red,185,28,28)",
+			blue: "var(--swm-h-blue,37,99,235)",
+			slate: "var(--swm-h-slate,107,114,128)",
+			slateDim: "var(--swm-h-slate-dim,156,163,175)",
 			violet: "var(--swm-h-violet,124,58,237)",
 			indigo: "var(--swm-h-indigo,79,70,229)",
 			cyan: "var(--swm-h-cyan,8,145,178)",
@@ -895,7 +895,30 @@ window.__ModuleLoader__.load({
 		const CONTROL = { xs: "24px", sm: "28px", md: "34px" };
 
 		/** Variables and rules, in the order the cascade needs them. */
-		const SWM_SHEET = SWM_CSS + SWM_RULES;
+		/**
+		* THE REFERENCE'S OWN VALUES, measured off it rather than approximated.
+		*
+		* Every component in this file styles itself from FONT / INK / LINE /
+		* SURFACE / RADIUS / ELEVATION, and those resolve to the harness's aliases.
+		* So the whole surface can be moved onto the reference's palette by
+		* redefining the aliases under one class — no component changes, and no
+		* second set of values to keep in step with the first.
+		*
+		* The numbers are counted, not guessed: every className in the reference's
+		* agent-playground was tallied, and these are what it actually reaches for.
+		* text-gray-500 (112 uses), 700 (92), 600 (92), 400 (82), 900 (67);
+		* border-gray-200 (50) outside and 100 (38) inside — which is the
+		* hair-outside / rule-inside rule this file already states; bg-gray-50 (50);
+		* violet-700/600/500 for the accent, where ours was the harness blue;
+		* rounded-md 6 / lg 8 / xl 12; a type ladder that starts at 10 and 11px,
+		* which is two steps below where ours started; and shadow-sm almost alone.
+		*
+		* SCOPED TO THIS PAGE, not to `body`. The harness's other tabs are not
+		* this product and must not be repainted by it.
+		*/
+		const SWM_THEME = [".swm-page{", "--dsw-alias-label-primary:#111827;", "--dsw-alias-label-secondary:#4b5563;", "--dsw-alias-label-tertiary:#9ca3af;", "--dsw-alias-bg-layer-0:#ffffff;", "--dsw-alias-bg-layer-1:#ffffff;", "--dsw-alias-bg-layer-2:#f9fafb;", "--dsw-alias-bg-layer-3:#f3f4f6;", "--dsw-alias-interactive-bg-hover:#f9fafb;", "--dsw-alias-border-l1:#f3f4f6;", "--dsw-alias-border-l2:#e5e7eb;", "--dsw-radius-sm:6px;--dsw-radius-md:8px;--dsw-radius-lg:12px;", "--dsw-font-xxxs-11:11px/16px var(--dsw-font-family);", "--dsw-font-xxxs-strong-11:600 11px/16px var(--dsw-font-family);", "--dsw-font-xxs-12:12px/16px var(--dsw-font-family);", "--dsw-font-xxs-strong-12:600 12px/16px var(--dsw-font-family);", "--dsw-font-xs-13:13px/18px var(--dsw-font-family);", "--dsw-font-xs-strong-13:600 13px/18px var(--dsw-font-family);", "--dsw-font-s-14:14px/20px var(--dsw-font-family);", "--dsw-font-s-strong-14:600 14px/20px var(--dsw-font-family);", "--dsw-font-base-16:16px/28px var(--dsw-font-family);", "--dsw-font-base-strong-16:600 16px/28px var(--dsw-font-family);", "--dsw-font-l-20:600 20px/28px var(--dsw-font-family);", "--dsw-font-xl-24:700 24px/32px var(--dsw-font-family);", "--dsw-shadow-lv1:0 1px 2px 0 rgba(0,0,0,0.05);", "--dsw-shadow-lv3:0 4px 6px -1px rgba(0,0,0,0.1),0 2px 4px -2px rgba(0,0,0,0.1);", "}"].join("");
+
+		const SWM_SHEET = SWM_CSS + SWM_THEME + SWM_RULES;
 		//#endregion
 
 		//#region ui primitives
@@ -14923,6 +14946,10 @@ window.__ModuleLoader__.load({
 			const reads = active.id === "sources" || active.id === "insights";
 
 			return jsxs("section", {
+				// The hook the theme override hangs on. Without it every token on
+				// this page resolves to the harness palette and the whole alignment
+				// is a stylesheet nothing selects.
+				className: "swm-page",
 				"aria-label": swarmLabel(),
 				// Inspectable in devtools: if the page ever goes missing again, this
 				// attribute says whether the geometry or the mount is at fault.
