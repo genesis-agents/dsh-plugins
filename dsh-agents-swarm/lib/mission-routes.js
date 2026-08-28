@@ -1036,6 +1036,85 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
     }
 
     // ── the report, as a file ───────────────────────────────────────────
+// THE OTHER THREE EXPORTS. The reference offers markdown, a facts CSV, a
+// citations CSV and JSON from one endpoint; this had markdown alone. All
+// three are joins over rows already on the artefact and in
+// `mission_findings` — nothing is derived, nothing is recomputed, and a
+// report written months ago exports correctly because the work happens
+// HERE rather than at write time.
+//
+// CSV is quoted the one way that survives a spreadsheet: every field in
+// double quotes with internal quotes doubled, and a BOM so Excel reads it
+// as UTF-8 rather than as the local codepage — which is what turns a
+// Chinese report's every heading into mojibake on the machine it is
+// opened on.
+if (req.method === "GET" && (action === "facts.csv" || action === "citations.csv" || action === "report.json")) {
+  const mission = missionOr404(id);
+  if (mission === null) return true;
+  const params = paramsOf(req);
+  const version = boundedInteger(params, "version", 1, 1_000_000, 0);
+  if (version.error !== undefined) return bad(version.error);
+  const artifact = version.value === 0 ? missionStore.latestArtifact(id) : missionStore.getArtifact(id, version.value);
+  if (artifact === undefined || artifact?.kind === "empty-artifact") {
+    sendJson(res, 404, {
+      success: false,
+      error: `mission ${id} has no report to export`,
+      data: { reason: artifact?.reason ?? "no-such-version" },
+    });
+    return true;
+  }
+
+  const stamp = artifact.version ? `-v${artifact.version}` : "";
+  const send = (body, type, name) => {
+    res.writeHead(200, {
+      "content-type": type,
+      "content-length": Buffer.byteLength(body),
+      "content-disposition": `attachment; filename="${id}${stamp}.${name}"`,
+      "cache-control": "no-store",
+    });
+    res.end(body);
+    return true;
+  };
+
+  if (action === "report.json") {
+    return send(JSON.stringify({
+      mission: { id, topic: mission.topic, depth: mission.depth, language: mission.language, runCount: artifact.runCount },
+      artifact: {
+        version: artifact.version, createdAt: artifact.createdAt, trigger: artifact.trigger,
+        title: artifact.title, wordCount: artifact.wordCount, degraded: artifact.degraded,
+        sections: artifact.sections, citations: artifact.citations, quality: artifact.quality,
+      },
+      markdown: artifact.markdown ?? "",
+    }, null, 2), "application/json; charset=utf-8", "json");
+  }
+
+  // A BOM, and every field quoted. Excel reads a bare UTF-8 CSV as the
+  // local codepage, and a Chinese report exports as mojibake without it.
+  const cell = (value) => `"${String(value ?? "").split('"').join('""')}"`;
+  const BOM = String.fromCharCode(0xFEFF);
+  const csv = (head, rows) => BOM + [head, ...rows].map((row) => row.map(cell).join(",")).join("\r\n");
+
+  if (action === "citations.csv") {
+    const rows = (artifact.citations ?? []).map((entry) => [
+      entry.index, entry.url, entry.findingId, entry.dimensionId ?? "", entry.chapterIndex ?? "", entry.inlineQuote ?? "",
+    ]);
+    return send(csv(["index", "url", "finding_id", "dimension_id", "chapter_index", "quote"], rows),
+      "text/csv; charset=utf-8", "citations.csv");
+  }
+
+  // ONE OBJECT, and an explicit ceiling: `take` defaults to 200, so a run with
+  // more findings than that would export a silently truncated file — which is
+  // the worst possible failure for a thing whose whole purpose is to be the
+  // complete record.
+  const findings = missionStore.listFindings({ missionId: id, runCount: artifact.runCount, take: 100_000 });
+  const rows = findings.map((finding) => [
+    finding.id, finding.dimensionId, finding.verifyState, finding.claim,
+    finding.evidence, finding.sourceUrl, finding.sourceHost, finding.createdAt,
+  ]);
+  return send(csv(["finding_id", "dimension_id", "verify_state", "claim", "quote", "url", "host", "collected_at"], rows),
+    "text/csv; charset=utf-8", "facts.csv");
+}
+
     if (req.method === "GET" && action === "report.md") {
       const mission = missionOr404(id);
       if (mission === null) return true;

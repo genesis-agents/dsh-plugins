@@ -2377,3 +2377,71 @@ test("every guard that computes a detail hands it to the abort", () => {
     );
   }
 });
+
+test("a report exports as evidence, as citations and as JSON, not only as prose", async (t) => {
+  // The reference offers markdown, a facts CSV, a citations CSV and JSON from
+  // one endpoint. This had markdown alone, so the evidence a reader might
+  // actually want in a spreadsheet — every verified finding with its quote,
+  // host and stamp — could be read one row at a time on a screen and nowhere
+  // else.
+  const { missions } = library(t);
+  const id = reasonedMission(missions);
+
+  const facts = await callRoute(missions, `/missions/${id}/facts.csv`);
+  assert.equal(facts.status, 200, `facts.csv answered ${facts.status}`);
+  assert.match(facts.headers["content-type"], /text\/csv/u);
+  assert.match(facts.headers["content-disposition"], /attachment; filename=/u, "the CSV opens in the tab instead of saving");
+  // A BOM, or Excel reads a UTF-8 export as the local codepage and a Chinese
+  // report becomes mojibake on the machine it is opened on.
+  assert.equal(facts.text.charCodeAt(0), 0xFEFF, "the CSV has no byte-order mark, so a Chinese export opens as mojibake");
+  assert.match(facts.text, /"finding_id","dimension_id","verify_state"/u, "the facts CSV has no header row");
+
+  const citations = await callRoute(missions, `/missions/${id}/citations.csv`);
+  assert.equal(citations.status, 200, `citations.csv answered ${citations.status}`);
+  assert.match(citations.text, /"index","url","finding_id"/u, "the citations CSV has no header row");
+
+  const json = await callRoute(missions, `/missions/${id}/report.json`);
+  assert.equal(json.status, 200, `report.json answered ${json.status}`);
+  assert.match(json.headers["content-type"], /application\/json/u);
+  const parsed = JSON.parse(json.text);
+  assert.equal(parsed.mission.id, id);
+  assert.ok(typeof parsed.markdown === "string" && parsed.markdown.length > 0, "the JSON export carries no prose");
+  assert.ok(Array.isArray(parsed.artifact.sections), "the JSON export carries no section offsets, which is what a chapter reader needs");
+
+  // EVERY FIELD QUOTED, internal quotes doubled: a claim containing a comma
+  // splits a row otherwise, and a claim containing a quote ends the field.
+  const quoted = facts.text.split("\r\n")[1] ?? "";
+  assert.ok(quoted.startsWith('"'), `a CSV row is unquoted and will split on the first comma in a claim: ${quoted.slice(0, 60)}`);
+});
+
+test("a mission with no report refuses every export the same way", async (t) => {
+  const { missions } = library(t);
+  const id = missions.createMission({
+    topic: "t", depth: "quick", bootId: "b", pid: 1, at: "2026-08-28T09:00:00.000Z",
+    config: {}, budget: { maxTokens: 1000, maxCalls: 10, maxArxiv: 1, maxWeb: 1, maxFetch: 1, wallMs: 1000 },
+  }, STAGES.map((stage, index) => ({ stepId: stage.id, ordinal: index + 1, status: "pending" }))).id;
+
+  for (const format of ["facts.csv", "citations.csv", "report.json"]) {
+    const answer = await callRoute(missions, `/missions/${id}/${format}`);
+    assert.equal(answer.status, 404, `${format} answered ${answer.status} for a mission with no artefact`);
+  }
+});
+
+test("the evidence export carries every finding, not the first page of them", async (t) => {
+  // `listFindings` defaults to `take: 200`. An export that quietly stopped at
+  // the default would be the worst possible failure for a file whose whole
+  // purpose is to be the complete record — and it would look correct.
+  const { missions } = library(t);
+  const id = reasonedMission(missions);
+  const held = missions.listFindings({ missionId: id, take: 100_000 });
+  assert.ok(held.length > 0, "the fixture has no findings, so this proves nothing");
+
+  const facts = await callRoute(missions, `/missions/${id}/facts.csv`);
+  // One header row plus one row per finding, and CRLF between them.
+  const rows = facts.text.split("\r\n").filter((row) => row !== "");
+  assert.equal(
+    rows.length,
+    held.length + 1,
+    `the export carries ${rows.length - 1} of ${held.length} findings`,
+  );
+});

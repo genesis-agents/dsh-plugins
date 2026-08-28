@@ -3056,3 +3056,57 @@ test("a signature that holds up costs no band at all", () => {
     "the mission list's rows carry the sign-off score, which belongs to the detail header",
   );
 });
+
+test("a long report can be read one chapter at a time", () => {
+  // A thirty-thousand-word report is not something anybody reads top to bottom
+  // in a pane, and this screen had never had a table of contents. The reference
+  // offers three readings — continuous, chapter and quick — and the first two
+  // are a pure slice: every section already carries `start` and `end` offsets
+  // into the markdown, written by s12 and checked by contentGuard's
+  // section-offset test.
+  const report = code(body("function MissionReport("));
+  assert.match(report, /const \[reading, setReading\] = useState\("continuous"\)/, "the report has one reading again");
+  assert.match(
+    report,
+    /String\(artifact\?\.markdown \?\? ""\)\.slice\(/,
+    "the chapter view no longer slices the markdown it already has, so it either re-fetches or shows the whole document",
+  );
+  // AND THE MODE IS WHAT DECIDES. Asserting the slice exists is not enough:
+  // `false && …` leaves the expression in place and shows the whole document
+  // in a view whose only job is to show one chapter.
+  assert.match(
+    report,
+    /const readSlice = reading === "chapter" && readSections\[readAt\] !== undefined/,
+    "the chapter view no longer keys off the reading mode, so it shows the whole report",
+  );
+  // CLAMPED. A version switch can land on an artefact with fewer chapters than
+  // the one that was open, and `sections[7]` of a five-chapter report is
+  // undefined — a blank pane with no way back to the prose.
+  assert.match(
+    report,
+    /Math\.min\(Math\.max\(0, chapter\), Math\.max\(0, readSections\.length - 1\)\)/,
+    "the chapter index is trusted, so switching to a shorter version blanks the pane",
+  );
+  // The list is the table of contents: numbered, and carrying what each chapter
+  // costs to read.
+  assert.ok(report.includes("section.citationCount"), "the chapter list drops the citation count, which is why a reader picks one");
+  assert.ok(report.includes('"aria-current"'), "the chapter list does not say which chapter is open");
+});
+
+test("a report exports as more than prose", () => {
+  // Markdown alone meant the evidence could be read one row at a time on a
+  // screen and nowhere else. Four formats now, each a plain anchor against a
+  // GET the browser already knows how to save — no menu, no state, and a link
+  // that can be copied or opened in a tab.
+  const header = code(body("function MissionDetail("));
+  for (const format of ["report.md", "facts.csv", "citations.csv", "report.json"]) {
+    assert.ok(header.includes(format), `the header offers no ${format} export`);
+  }
+  // The version on screen rides in the query AND the filename, the way the
+  // markdown export already did: the query makes the file the one being read,
+  // and the filename stops three versions overwriting each other.
+  assert.ok(
+    header.includes("reportVersion > 0 ? `?version=${reportVersion}`"),
+    "an export downloads the latest version while the reader is looking at an older one",
+  );
+});

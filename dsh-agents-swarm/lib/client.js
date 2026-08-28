@@ -11640,6 +11640,28 @@ window.__ModuleLoader__.load({
 					className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm, padding: "0 10px", flex: "none", display: "inline-flex", alignItems: "center", textDecoration: "none" },
 					children: zh ? "下载 .md" : "Download .md"
 				}, "download")
+				,
+				// THE OTHER THREE. The reference exports markdown, a facts CSV, a
+				// citations CSV and JSON; this offered markdown alone, so the evidence a
+				// reader might actually want in a spreadsheet — 104 verified findings with
+				// their quotes, hosts and stamps — could only be read one row at a time on
+				// a screen.
+				//
+				// Four plain anchors rather than a menu: each is a GET a browser already
+				// knows how to save, they need no state, and a link the user can copy or
+				// open in a tab is worth more than a dropdown that only works from here.
+				...(!hasReport ? [] : [
+					{ id: "facts.csv", zh: "证据 .csv", en: "Evidence .csv" },
+					{ id: "citations.csv", zh: "引用 .csv", en: "Citations .csv" },
+					{ id: "report.json", zh: ".json", en: ".json" }
+				].map((format) => jsx("a", {
+					href: `${apiBase()}/missions/${encodeURIComponent(missionId)}/${format.id}`
+						+ (reportVersion > 0 ? `?version=${reportVersion}` : ""),
+					download: `${missionId}${shownVersion > 0 ? `-v${shownVersion}` : ""}.${format.id.split(".").pop()}`,
+					className: "swm-ctl swm-focus",
+					style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm, padding: "0 10px", flex: "none", display: "inline-flex", alignItems: "center" },
+					children: zh ? format.zh : format.en
+				}, format.id)))
 			].filter((entry) => entry !== null);
 
 			return jsx("div", {
@@ -12480,6 +12502,11 @@ window.__ModuleLoader__.load({
 			const [versions, setVersions] = useState([]);
 			const [state, setState] = useState("loading");
 			const [error, setError] = useState("");
+			// WHICH READING, and which chapter when it is the second one. Above every
+			// early return with the rest of the hooks, which is where this file's own
+			// note beside them says hooks go.
+			const [reading, setReading] = useState("continuous");
+			const [chapter, setChapter] = useState(0);
 			const [showEvidence, setShowEvidence] = useState(true);
 			// The retry counter behind the failed-read screen. The pane had no
 			// way at all to re-issue its own GET: the only route back to this
@@ -12650,6 +12677,22 @@ window.__ModuleLoader__.load({
 			// tiles are built from rather than from a fourth source.
 			const allVerified = ["evidenced", "interpretive", "unplaced"]
 				.reduce((sum, key) => sum + Number(quality[key]?.verified ?? 0), 0);
+			// WHICH CHAPTER THE READER IS ON, clamped rather than trusted: a version
+			// switch can land on an artefact with fewer chapters than the one that was
+			// open, and `sections[7]` of a five-chapter report is undefined — a blank
+			// pane with no way back to the prose.
+			const readSections = artifact === null ? [] : (artifact.sections ?? []);
+			const readAt = Math.min(Math.max(0, chapter), Math.max(0, readSections.length - 1));
+			// The slice is one substring of the string already in hand. `start` and
+			// `end` are offsets into it, written by s12 and checked by contentGuard's
+			// section-offset test, so nothing is re-parsed, re-fetched or stored twice.
+			const readSlice = reading === "chapter" && readSections[readAt] !== undefined
+				? String(artifact?.markdown ?? "").slice(
+					Number(readSections[readAt].start ?? 0),
+					Number(readSections[readAt].end ?? 0)
+				)
+				: String(artifact?.markdown ?? "");
+
 			const headline = Number(quality.total ?? 0) <= 0 ? null : {
 				label: zh ? "已核验引用" : "Citations verified",
 				value: `${allVerified}/${Number(quality.total)}`,
@@ -12745,6 +12788,79 @@ window.__ModuleLoader__.load({
 							// lifted out of it and set beside the title, which is where the
 							// reference puts its one headline number; the rest stay as text.
 							: MissionScoreLine({ tiles: scored.filter((tile) => tile !== headline) }, "score"),
+						// TWO READINGS OF ONE DOCUMENT. The reference offers three — continuous,
+						// chapter and quick — and the first two are a pure slice here: every
+						// section already carries `start` and `end` offsets into the markdown,
+						// written by s12 and checked by `contentGuard`'s section-offset test. So
+						// a chapter is `markdown.slice(section.start, section.end)` and nothing
+						// has to be re-parsed, re-fetched or stored twice.
+						//
+						// A thirty-thousand-word report is not something anybody reads top to
+						// bottom in a pane, and the chapter list is also the only table of
+						// contents this screen has ever had.
+						readSections.length < 2 ? null : jsxs("div", {
+							style: { display: "flex", alignItems: "center", gap: SPACE.md, flexWrap: "wrap", margin: `0 0 ${SPACE.md}` },
+							children: [
+								jsx("div", {
+									style: SEGMENT_TRACK,
+									role: "group",
+									"aria-label": zh ? "阅读方式" : "How to read this",
+									children: [
+										{ id: "continuous", zh: "通读", en: "Continuous" },
+										{ id: "chapter", zh: "分章", en: "By chapter" }
+									].map((mode) => jsx("button", {
+										type: "button",
+										"aria-pressed": reading === mode.id,
+										className: "swm-focus",
+										style: segmentStyle(reading === mode.id),
+										onClick: () => { setReading(mode.id); },
+										children: zh ? mode.zh : mode.en
+									}, mode.id))
+								}, "modes")
+							]
+						}, "reading"),
+						reading !== "chapter" ? null : jsx("nav", {
+							// A LIST, not a sidebar: the pane is already inside a two-pane frame
+							// and a third column would be a scroller inside a scroller inside a
+							// scroller. Numbered, because a chapter a reader can refer to by number
+							// is the thing a table of contents is for.
+							style: {
+								display: "flex", flexDirection: "column",
+								margin: `0 0 ${SPACE.lg}`,
+								borderTop: `1px solid ${LINE.rule}`
+							},
+							children: readSections.map((section, at) => jsx("button", {
+								type: "button",
+								"aria-current": at === readAt ? "true" : undefined,
+								className: "swm-ctl swm-focus",
+								style: {
+									...controlStyle(),
+									display: "flex", alignItems: "baseline", gap: SPACE.sm,
+									width: "100%", textAlign: "left", height: "auto",
+									padding: `${SPACE.sm} 0`,
+									border: "none", borderRadius: 0,
+									borderBottom: `1px solid ${LINE.hair}`,
+									background: at === readAt ? SURFACE.hover : "transparent"
+								},
+								onClick: () => { setChapter(at); },
+								children: [
+									jsx("span", {
+										style: { font: FONT.small, fontVariantNumeric: "tabular-nums", color: INK.secondary, flex: "none" },
+										children: String(at + 1)
+									}, "n"),
+									jsx("span", {
+										style: { font: at === readAt ? FONT.baseStrong : FONT.base, color: INK.primary, flex: 1, minWidth: 0 },
+										children: section.heading
+									}, "h"),
+									jsx("span", {
+										style: { font: FONT.micro, color: INK.secondary, flex: "none" },
+										children: zh
+											? `${section.wordCount} 字 · ${section.citationCount} 处引用`
+											: `${section.wordCount} words · ${section.citationCount} citations`
+									}, "n2")
+								]
+							}, `ch-${at}`))
+						}, "toc"),
 						jsx("div", {
 							// NO MEASURE CAP. `WIDE_STYLE` exists two thousand lines up
 							// because "the detail view is a two-pane reader and must use the
@@ -12756,7 +12872,10 @@ window.__ModuleLoader__.load({
 							// tiles directly above it spanned the full width. Two
 							// containers, one page, opposite answers.
 							style: { margin: "0 0 18px" },
-							children: renderMarkdown(artifact.markdown ?? "", "article", {
+							// THE SLICE. `start`/`end` are offsets into this same string, so the
+							// chapter view costs one substring and re-uses every citation seam the
+							// continuous view already passes.
+							children: renderMarkdown(readSlice, "article", {
 								zh,
 								has: (index) => numbered.has(index),
 								// WHAT IS BEHIND THE NUMBER, for the hover card. Read off
