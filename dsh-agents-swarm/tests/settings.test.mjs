@@ -1998,7 +1998,7 @@ test("the report opens with its evidence, and every quote can be followed", asyn
   // held up printed 未通过 0，未检查 0，被反驳 0 before, three zeros that read
   // at a glance as three problems.
   assert.ok(text.includes("3/4"), "the scorecard does not say how much verified");
-  assert.ok(text.includes("全部引用"), "the scorecard has no whole-report total");
+  assert.ok(text.includes("已核验引用"), "the scorecard has no whole-report total");
   assert.ok(!text.includes("未检查 0"), "a remainder of zero is still printed as if it were a problem");
 
   assert.ok(text.includes("we observe the same scaling behaviour at test time"), "the evidence quote is missing");

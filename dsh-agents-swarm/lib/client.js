@@ -1431,6 +1431,59 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		* The scorecard as a LINE, for a document rather than a dashboard.
+		*
+		* `MissionStatTiles` draws each figure in its own bordered, tinted box with
+		* a meter under it. Three of those across the top of a report open the page
+		* as an instrument panel, and the reference opens it as a paper: a title, a
+		* single headline figure beside it, and the rest as one quiet line of text.
+		*
+		* The same numbers, in the same order, worst first. What goes is the
+		* border, the fill and the meter — chrome that says "measurement" three
+		* times before the reader reaches a sentence. A figure is tinted only when
+		* it is BELOW par, so colour marks the exception instead of decorating
+		* every number on the page.
+		*
+		* @param tiles - the same array `MissionStatTiles` takes.
+		* @param key - React key.
+		*/
+		function MissionScoreLine({ tiles }, key) {
+			const shown = (Array.isArray(tiles) ? tiles : []).filter((tile) => tile !== null && tile !== undefined);
+			if (shown.length === 0) return null;
+			return jsx("div", {
+				style: {
+					display: "flex", flexWrap: "wrap", alignItems: "baseline",
+					gap: `${SPACE.xs} ${SPACE.md}`,
+					margin: `0 0 ${SPACE.lg}`, padding: `${SPACE.sm} 0 0`,
+					borderTop: `1px solid ${LINE.hair}`
+				},
+				children: shown.map((tile, at) => jsxs("span", {
+					style: { display: "inline-flex", alignItems: "baseline", gap: SPACE.xs, minWidth: 0 },
+					children: [
+						jsx("span", { style: { font: FONT.micro, color: INK.secondary }, children: tile.label }, "label"),
+						jsx("span", {
+							style: {
+								font: FONT.smallStrong, fontVariantNumeric: "tabular-nums",
+								// Par is par: an all-clear figure is ink, not green. Only a
+								// shortfall earns a colour, and it earns it alone.
+								color: tile.tone === null || tile.tone === undefined || tile.tone === TONE.success
+									? INK.primary
+									: `rgb(${tile.tone})`
+							},
+							children: tile.value
+						}, "value"),
+						tile.hint === undefined || tile.hint === null || tile.hint === ""
+							? null
+							// `secondary`, not `quiet`: the hint is "未通过 2" — which citations
+							// failed — and this file's own note on `quiet` says it is 3.71:1 and
+							// belongs to decoration, "never for a value the reader has to read".
+							: jsx("span", { style: { font: FONT.micro, color: INK.secondary }, children: tile.hint }, "hint")
+					]
+				}, tile.label ?? `stat-${at}`))
+			}, key);
+		}
+
+		/**
 		* A bare URL, in a sentence nobody wrote as markdown.
 		*
 		* It travels with `linkify` rather than staying with the description
@@ -3359,6 +3412,14 @@ window.__ModuleLoader__.load({
 					blocks.push(jsx(`h${level}`, {
 						style: {
 							margin: blocks.length === 0 ? "0 0 8px" : article ? "32px 0 12px" : "14px 0 8px",
+							// A HAIRLINE ABOVE EACH CHAPTER, which is the reference's
+							// `divide-y`: sections separated by a rule rather than boxed, and
+							// rather than run together into one column of text. Level 2 only —
+							// h2 is the chapter in this document — and never above the first,
+							// which would draw a line under the header it follows.
+							...(article && level === 2 && blocks.length > 0
+								? { borderTop: `1px solid ${LINE.hair}`, paddingTop: "28px" }
+								: {}),
 							fontSize: (headingSizes[level] ?? (article ? "17px" : "13px")),
 							fontWeight: article ? 700 : 650,
 							lineHeight: article ? "1.3" : "22px",
@@ -12384,12 +12445,13 @@ window.__ModuleLoader__.load({
 			// tiles are built from rather than from a fourth source.
 			const allVerified = ["evidenced", "interpretive", "unplaced"]
 				.reduce((sum, key) => sum + Number(quality[key]?.verified ?? 0), 0);
-			const scored = Number(quality.total ?? 0) <= 0 ? graded : [...graded, {
-				label: zh ? "全部引用" : "All citations",
+			const headline = Number(quality.total ?? 0) <= 0 ? null : {
+				label: zh ? "已核验引用" : "Citations verified",
 				value: `${allVerified}/${Number(quality.total)}`,
 				tone: missionRateHue(allVerified, quality.total),
 				meter: missionRate(allVerified, quality.total)
-			}];
+			};
+			const scored = headline === null ? graded : [...graded, headline];
 
 			// NOT a scroller. The report is a pane inside the mission frame now, and a
 			// scroller inside a scroller is the arrangement where the header scrolls
@@ -12421,9 +12483,36 @@ window.__ModuleLoader__.load({
 								}, String(entry.version)))
 							]
 						}, "versions"),
-						jsx("h2", {
-							style: { font: FONT.titleStrong, margin: "0 0 6px", color: INK.primary },
-							children: artifact.title
+						// Title left, ONE figure right — the reference's header. Three
+						// equal boxes give three numbers equal weight and none of them a
+						// headline; a reader opening a report wants to know whether it
+						// stands up, and that is one number.
+						jsxs("div", {
+							style: { display: "flex", alignItems: "baseline", gap: SPACE.lg, margin: "0 0 6px" },
+							children: [
+								jsx("h2", {
+									style: { font: FONT.titleStrong, margin: 0, color: INK.primary, flex: 1, minWidth: 0 },
+									children: artifact.title
+								}, "text"),
+								headline === null ? null : jsxs("div", {
+									style: { flex: "none", textAlign: "right", display: "flex", flexDirection: "column", gap: "2px" },
+									children: [
+										jsx("div", {
+											style: { font: FONT.micro, letterSpacing: "0.04em", textTransform: "uppercase", color: INK.secondary },
+											children: headline.label
+										}, "label"),
+										jsx("div", {
+											style: {
+												font: FONT.title, fontVariantNumeric: "tabular-nums",
+												color: headline.tone === null || headline.tone === undefined
+													? INK.primary
+													: `rgb(${headline.tone})`
+											},
+											children: headline.value
+										}, "value")
+									]
+								}, "headline")
+							]
 						}, "title"),
 						jsx("div", {
 							style: { ...META_STYLE, margin: "0 0 6px" },
@@ -12447,7 +12536,10 @@ window.__ModuleLoader__.load({
 									? "核验记分卡是空的：一处引用都没有核验过。这不是“没有发现问题”，这是没有检查过。"
 									: "The scorecard is empty: not one citation was checked. That is not a clean bill — nothing was verified at all."
 							}, "noScore")
-							: MissionStatTiles({ tiles: scored }, "score"),
+							// THE LINE, not the panel of boxes. The whole-report figure is
+							// lifted out of it and set beside the title, which is where the
+							// reference puts its one headline number; the rest stay as text.
+							: MissionScoreLine({ tiles: scored.filter((tile) => tile !== headline) }, "score"),
 						jsx("div", {
 							// NO MEASURE CAP. `WIDE_STYLE` exists two thousand lines up
 							// because "the detail view is a two-pane reader and must use the

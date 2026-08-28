@@ -2005,9 +2005,25 @@ test("one verification ladder, named once and read three times", () => {
 
 test("the scorecard is graded, ordered, and quiet about its zeros", () => {
   const report = code(body("function MissionReport("));
+  // GRADED, wherever it is drawn. This pinned the component name, which is a
+  // mechanism rather than the promise. The promise is that a ratio on this page
+  // is coloured by what the ratio SAYS rather than drawn in the same grey either
+  // way. The report draws it as a line now, not as three bordered, tinted,
+  // metered boxes, because three equal boxes open a document as an instrument
+  // panel. The grading has to survive that, so the grading is what is asserted.
+  assert.match(
+    report,
+    /tone: missionRateHue\(verified, total\)/,
+    "the per-section figures are no longer graded by their own ratio, so a section that verified 3 of 40 looks like one that verified 40 of 40",
+  );
+  assert.match(
+    report,
+    /tone: missionRateHue\(allVerified, quality\.total\)/,
+    "the whole-report figure is no longer graded by its own ratio",
+  );
   assert.ok(
-    report.includes("MissionStatTiles({ tiles: scored }"),
-    "the scorecard is three neutral outlined chips again — the one place on the report where a ratio is the whole point, drawn in the same grey whatever the ratio says",
+    report.includes("MissionScoreLine({ tiles: scored"),
+    "the report draws its scorecard with nothing at all: scored is built and read by no one",
   );
   // IN VALUE POSITION. `report.includes("rank")` passed with the sort deleted,
   // because the field survives on the object either way.
@@ -2022,8 +2038,15 @@ test("the scorecard is graded, ordered, and quiet about its zeros", () => {
     "a section where everything held up prints 未通过 0，未检查 0，被反驳 0 again — three zeros that read, at a glance, as three problems",
   );
   assert.ok(
-    report.includes('label: zh ? "全部引用" : "All citations"'),
+    report.includes('label: zh ? "已核验引用" : "Citations verified"'),
     "the whole-report total is gone; `quality.total` is projected and read by nothing",
+  );
+  // It is the HEADLINE now, beside the title where the reference puts its one
+  // number, and lifted out of the line below so the same figure is not printed
+  // twice in one header.
+  assert.ok(
+    report.includes("scored.filter((tile) => tile !== headline)"),
+    "the headline figure is printed twice in one header: once beside the title and again in the line under it",
   );
 });
 
@@ -2761,4 +2784,33 @@ test("the report takes the frame the page already gave it", () => {
       `${pane.slice(9, -1)} caps its own measure at ${capped.join(", ")}px, which reinstates the dead band beside the report`,
     );
   }
+});
+
+test("the report reads as a document, not as an instrument panel", () => {
+  // Aligning to the reference's report surface: it opens with a title and ONE
+  // headline figure, carries the rest of the scorecard as a line of text, and
+  // separates its sections with a hairline (`divide-y`) rather than with
+  // borders and fills. Ours opened with three equal bordered, tinted, metered
+  // boxes — three numbers given equal weight and none of them a headline — and
+  // then ran every chapter together into one column.
+  const line = code(body("function MissionScoreLine("));
+  assert.ok(line.length > 0, "MissionScoreLine is gone; the scorecard is boxes again");
+  for (const boxy of ["border:", "borderRadius", "meter"]) {
+    assert.ok(!line.includes(boxy), `the scorecard line grew a ${boxy} and is a panel of boxes again`);
+  }
+  // Colour marks the EXCEPTION. An all-clear figure drawn green is three green
+  // numbers at the top of every healthy report, which is decoration.
+  assert.ok(
+    line.includes("tile.tone === TONE.success"),
+    "a passing figure is coloured again, so colour no longer marks the one number that is short",
+  );
+
+  // The chapter rule, in the article variant only: a chat answer in a 400px
+  // panel has no chapters to divide.
+  const markdown = code(body("function renderMarkdown("));
+  assert.match(
+    markdown,
+    /article && level === 2 && blocks\.length > 0/,
+    "chapters run together again, or a rule is drawn above the first heading where it reads as a line under the header",
+  );
 });
