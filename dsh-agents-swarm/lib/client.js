@@ -1363,7 +1363,12 @@ window.__ModuleLoader__.load({
 					padding: `${SPACE.sm} ${SPACE.md}`,
 					borderRadius: RADIUS.lg,
 					border: `1px solid ${LINE.hair}`,
-					background: hue === null ? SURFACE.subtle : `rgba(${hue},${TINT.soft})`
+					// THE GROUND IS ALWAYS NEUTRAL; the hue survives on the figure.
+					// A tinted ground means a run with rework draws amber, amber, amber,
+					// red and green boxes in one row, and colour that appears on every
+					// tile stops marking the exception and becomes decoration — in the
+					// row a reader scans precisely to find the exception.
+					background: SURFACE.subtle
 				},
 				children: [
 					jsx("div", {
@@ -1455,7 +1460,12 @@ window.__ModuleLoader__.load({
 					display: "flex", flexWrap: "wrap", alignItems: "baseline",
 					gap: `${SPACE.xs} ${SPACE.md}`,
 					margin: `0 0 ${SPACE.lg}`, padding: `${SPACE.sm} 0 0`,
-					borderTop: `1px solid ${LINE.hair}`
+					// `rule`, not `hair`. LINE's docblock is the guard here and it is
+					// explicit: hair is a container's OUTER edge, helped by a shadow;
+					// rule is an INNER divider between siblings, which nothing helps.
+					// This line separates the scorecard from the meta above it inside
+					// one pane, so it is the second kind.
+					borderTop: `1px solid ${LINE.rule}`
 				},
 				children: shown.map((tile, at) => jsxs("span", {
 					style: { display: "inline-flex", alignItems: "baseline", gap: SPACE.xs, minWidth: 0 },
@@ -2905,7 +2915,7 @@ window.__ModuleLoader__.load({
 								onClick: () => { onOpen(row); },
 								style: { font: FONT.baseStrong,
 									appearance: "none", border: "none", background: "transparent",
-									padding: 0, textAlign: "left", font: "inherit", cursor: "pointer",
+									padding: 0, textAlign: "left", cursor: "pointer",
 									color: hue(kind),
 									overflow: "hidden", display: "-webkit-box",
 									WebkitLineClamp: 2, WebkitBoxOrient: "vertical"
@@ -3179,7 +3189,7 @@ window.__ModuleLoader__.load({
 				onBlur: release,
 				style: { font: FONT.micro,
 					appearance: "none", border: "none", background: "transparent",
-					padding: "0 1px", margin: 0, cursor: "pointer", font: "inherit", lineHeight: 1, verticalAlign: "super",
+					padding: "0 1px", margin: 0, cursor: "pointer", lineHeight: 1, verticalAlign: "super",
 					color: "var(--dsw-alias-state-business-primary)"
 				},
 				children: token
@@ -3323,12 +3333,21 @@ window.__ModuleLoader__.load({
 		* One renderer serves both, and they want opposite things: an answer in a
 		* 400px panel wants to be compact, an article wants to be comfortable.
 		* The article numbers match the reference measured directly from its
-		* reader — 18px on 1.75, paragraphs 20px apart, headings in Georgia.
+		* reader — 16px on 1.75, paragraphs 20px apart, headings in Georgia.
 		* Its serif is a system stack, not a downloaded face, so this costs
 		* nothing and cannot fail to load.
 		*/
 		const ARTICLE_SERIF = 'Georgia, "Times New Roman", "Songti SC", "SimSun", serif';
-		const ARTICLE_BLOCK = { margin: "0 0 20px", lineHeight: "1.75" };
+		// `font` FIRST, `lineHeight` after: the shorthand resets leading, so the
+		// order is the same one the rest of this file is guarded on.
+		//
+		// THE SIZE WAS NEVER DECLARED. The docblock above says the reading column
+		// is 18px on 1.75, and only the 1.75 was ever written — so an article
+		// paragraph inherited the 13px UI step and sat under a 24/20/18px heading
+		// tower. `FONT.large` is 16px, the step this scale actually has and the
+		// one the reference reads at; there is no 18 in the ladder and inventing a
+		// raw one would be the first size in this file spelled outside it.
+		const ARTICLE_BLOCK = { font: FONT.large, lineHeight: "1.75", margin: "0 0 20px" };
 		const ARTICLE_HEADING_SIZES = { 1: "24px", 2: "20px", 3: "18px", 4: "17px" };
 
 		/**
@@ -3418,7 +3437,9 @@ window.__ModuleLoader__.load({
 							// h2 is the chapter in this document — and never above the first,
 							// which would draw a line under the header it follows.
 							...(article && level === 2 && blocks.length > 0
-								? { borderTop: `1px solid ${LINE.hair}`, paddingTop: "28px" }
+								// `rule` for the same reason: chapters are siblings inside the
+								// report, and an inner divider has no shadow helping it read.
+								? { borderTop: `1px solid ${LINE.rule}`, paddingTop: "28px" }
 								: {}),
 							fontSize: (headingSizes[level] ?? (article ? "17px" : "13px")),
 							fontWeight: article ? 700 : 650,
@@ -4490,7 +4511,7 @@ window.__ModuleLoader__.load({
 													style: { font: FONT.small,
 														appearance: "none", display: "flex", gap: SPACE.md, width: "100%",
 														padding: "3px 6px", border: "none", borderRadius: RADIUS.sm,
-														background: "transparent", font: "inherit",
+														background: "transparent",
 														textAlign: "left", cursor: onSeek === undefined ? "default" : "pointer",
 														color: INK.secondary
 													},
@@ -4521,7 +4542,7 @@ window.__ModuleLoader__.load({
 									onClick: () => { setExpanded((value) => !value); },
 									style: { font: FONT.small,
 										appearance: "none", border: "none", background: "transparent", padding: "8px 0 0",
-										font: "inherit", color: hue(kind), cursor: "pointer"
+ color: hue(kind), cursor: "pointer"
 									},
 									children: expanded ? (zh ? "收起" : "Show less") : (zh ? "展开全部" : "Show more")
 								}) : null
@@ -4608,7 +4629,7 @@ window.__ModuleLoader__.load({
 									width: "100%", boxSizing: "border-box", resize: "vertical",
 									padding: "8px 10px", borderRadius: RADIUS.md,
 									border: `1px solid ${LINE.rule}`, background: "transparent",
-									color: INK.primary, font: "inherit"
+									color: INK.primary
 								}
 							}),
 							jsxs("div", {
@@ -5057,7 +5078,7 @@ window.__ModuleLoader__.load({
 							style: { font: FONT.small,
 								appearance: "none", border: "none", borderRadius: RADIUS.md,
 								background: hue(kind, TINT.soft), color: hue(kind),
-								padding: "10px 4px", font: "inherit", cursor: "pointer",
+								padding: "10px 4px", cursor: "pointer",
 								writingMode: "vertical-rl", letterSpacing: "0.08em"
 							},
 							children: `⟨⟨ ${activeTabs.map((entry) => (zh ? entry.zh : entry.en)).join(" · ")}`
@@ -6419,7 +6440,7 @@ window.__ModuleLoader__.load({
 									onClick: () => { onOpen(mission.id); },
 									style: { font: FONT.baseStrong,
 										appearance: "none", border: "none", background: "transparent", padding: 0,
-										flex: 1, minWidth: 0, textAlign: "left", font: "inherit", cursor: "pointer",
+										flex: 1, minWidth: 0, textAlign: "left", cursor: "pointer",
 										color: INK.primary
 									},
 									children: mission.topic
@@ -6860,9 +6881,13 @@ window.__ModuleLoader__.load({
 						children: [
 							jsx("h3", {
 								style: {
-									font: FONT.smallStrong, margin: 0,
-									letterSpacing: "0.04em", textTransform: "uppercase",
-									color: INK.secondary,
+									// A CARD TITLE, NOT A FORM LABEL. 12px uppercase tracked grey is what
+									// a field caption looks like, and these name panels — the reference
+									// sets its equivalents in sentence case at 14px in primary ink.
+									// Thirteen panels change weight together, which is the point: they
+									// were all whispering in the same voice.
+									font: FONT.baseStrong, margin: 0,
+									color: INK.primary,
 									whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
 								},
 								children: title
@@ -7447,11 +7472,24 @@ window.__ModuleLoader__.load({
 			// the Leader itself graded badly, and drawing that green would be this
 			// screen endorsing something nobody endorsed.
 			const hue = mission.signed === false ? TONE.danger : scored && score >= 80 ? TONE.success : TONE.warn;
+			// AND A SIGNATURE THAT HOLDS UP IS A LINE, NOT A BANNER.
+			//
+			// The docblock above records why this became a card: a refusal used to be
+			// the same grey sentence as "no report yet". That lesson is about the
+			// REFUSAL, and it is kept — below par this stays exactly as loud as it
+			// was. What changed is the other side. A signed report clearing 80 drew a
+			// full-width green banner above every one of the five panes, and the
+			// header already carries a green 完成 chip six inches above it: the same
+			// fact, twice, in the loudest treatment on the screen.
+			const quiet = mission.signed === true && hue === TONE.success;
 			return jsxs("div", {
 				style: {
 					display: "flex", alignItems: "center", gap: SPACE.md,
-					padding: "10px 12px", borderRadius: RADIUS.lg,
-					border: `1px solid rgba(${hue},${TINT.ring})`, background: `rgba(${hue},${TINT.soft})`,
+					padding: quiet ? `${SPACE.sm} 0 0` : "10px 12px",
+					borderRadius: quiet ? 0 : RADIUS.lg,
+					border: quiet ? "none" : `1px solid rgba(${hue},${TINT.ring})`,
+					borderTop: quiet ? `1px solid ${LINE.rule}` : "none",
+					background: quiet ? "transparent" : `rgba(${hue},${TINT.soft})`,
 					margin: `0 0 ${SPACE.md}`
 				},
 				children: [
@@ -8427,7 +8465,7 @@ window.__ModuleLoader__.load({
 								onClick: () => { onOpenSource?.(finding); },
 								style: { font: FONT.micro,
 									appearance: "none", border: "none", background: "transparent", padding: 0,
-									color: `rgb(${verdict.hue})`, font: "inherit", cursor: "pointer"
+									color: `rgb(${verdict.hue})`, cursor: "pointer"
 								},
 								// 信源's own reader: the Host half re-fetches the page
 								// and extracts it, which is the only thing that can
@@ -8874,7 +8912,7 @@ window.__ModuleLoader__.load({
 							flex: "1 1 180px", minWidth: "140px", boxSizing: "border-box",
 							height: CONTROL.sm, padding: "0 10px", borderRadius: RADIUS.md,
 							border: `1px solid ${LINE.rule}`, background: "transparent",
-							color: INK.primary, font: "inherit"
+							color: INK.primary
 						},
 						onChange: (event) => { setSearch(event.target.value); }
 					}, "search"),
@@ -9585,7 +9623,7 @@ window.__ModuleLoader__.load({
 												type: "button",
 												style: { font: FONT.micro,
 													appearance: "none", border: "none", background: "transparent",
-													padding: 0, cursor: "pointer", font: "inherit",
+													padding: 0, cursor: "pointer",
 													color: "var(--dsw-alias-state-business-primary)"
 												},
 												onClick: (event) => { event.stopPropagation(); onOpenStage?.(stage.stepId); },
@@ -11954,7 +11992,7 @@ window.__ModuleLoader__.load({
 										onClick: () => { onOpen(row); },
 										style: { font: FONT.micro,
 											appearance: "none", border: "none", background: "transparent", padding: 0,
-											color: `rgb(${accent})`, font: "inherit", cursor: "pointer"
+											color: `rgb(${accent})`, cursor: "pointer"
 										},
 										children: (zh ? "在阅读器里打开 · " : "Open in the reader · ") + hostOf(row.sourceUrl)
 									}, "open"),
@@ -13068,7 +13106,7 @@ window.__ModuleLoader__.load({
 											display: "flex", width: "100%", alignItems: "flex-start", gap: SPACE.md,
 											padding: "10px 13px", textAlign: "left", appearance: "none",
 											border: "none", borderBottom: at === matches.length - 1 ? "none" : `1px solid ${LINE.hair}`,
-											background: "transparent", font: "inherit",
+											background: "transparent",
 											cursor: already ? "default" : "pointer", opacity: already ? 0.45 : 1
 										},
 										children: [
@@ -14381,7 +14419,7 @@ window.__ModuleLoader__.load({
 						justifyContent: wide ? "flex-start" : "center",
 						gap: wide ? "8px" : 0, width: wide ? "100%" : "36px", height: CONTROL.md,
 						padding: wide ? "0 8px" : 0, borderRadius: wide ? "8px" : "50%",
-						color: INK.primary, font: "inherit",
+						color: INK.primary,
 						cursor: "pointer"
 					},
 					children: [

@@ -520,6 +520,37 @@ test("the shorthand comes before what it would reset", () => {
     offenders.push(match[0].slice(0, 60));
   }
   assert.deepEqual(offenders, [], "a font shorthand follows a fontVariantNumeric in the same object and silently resets it");
+
+  // THE SAME RULE, ONE KEY ALONG. `font: FONT.micro` followed by
+  // `font: "inherit"` in the SAME object is the shorthand resetting itself:
+  // insertion order decides, so the step written first is thrown away and the
+  // element renders at whatever its parent is. Thirteen objects were doing
+  // this, including the citation marker — so two hundred `[12]` markers in a
+  // long report were drawn at body size instead of micro, and three small
+  // controls were drawn as prose.
+  //
+  // A bare `font: "inherit"` with no FONT step above it is fine and stays: a
+  // button that means to take its parent's type is saying so.
+  const discarded = [];
+  const body = SOURCE.split(/\r?\n/);
+  body.forEach((line, index) => {
+    if (!line.includes('font: "inherit"')) return;
+    let depth = 0;
+    for (let back = index; back >= 0 && index - back < 40; back -= 1) {
+      const text = body[back];
+      depth += (text.match(/\}/g) ?? []).length - (text.match(/\{/g) ?? []).length;
+      if (back < index && /font: FONT\./.test(text) && depth <= 0) {
+        discarded.push(`${index + 1} discards the FONT step at ${back + 1}`);
+        return;
+      }
+      if (depth < 0 && back < index) return;
+    }
+  });
+  assert.deepEqual(
+    discarded,
+    [],
+    "a `font: \"inherit\"` follows a FONT step in the same object and silently discards it",
+  );
 });
 
 test("the rhythm holds", () => {
@@ -2812,5 +2843,69 @@ test("the report reads as a document, not as an instrument panel", () => {
     markdown,
     /article && level === 2 && blocks\.length > 0/,
     "chapters run together again, or a rule is drawn above the first heading where it reads as a line under the header",
+  );
+});
+
+test("a signature that holds up is a line; a refusal is still a banner", () => {
+  // The docblock records why this became a card: a refusal used to be the same
+  // grey sentence as "no report yet", so "the Leader read this and declined to
+  // sign" carried the weight of "not finished". That lesson is about the
+  // REFUSAL and it is kept.
+  //
+  // The other side had the opposite problem. A signed report clearing 80 drew a
+  // full-width green banner above every one of the five panes — and the header
+  // already carries a green 完成 chip six inches above it. The same fact twice,
+  // in the loudest treatment on the screen, on the runs where there is nothing
+  // to look at.
+  const card = code(body("function MissionSignoffCard("));
+  assert.match(
+    card,
+    /const quiet = mission\.signed === true && hue === TONE\.success;/,
+    "the sign-off is loud again on every passing run, or the condition stopped being both signed AND above par",
+  );
+  for (const chrome of ["background: quiet ?", "border: quiet ?", "borderRadius: quiet ?"]) {
+    assert.ok(card.includes(chrome), `the sign-off keeps its ${chrome.split(":")[0]} on a passing run`);
+  }
+  // The hue ternary itself is untouched: a refusal is danger whatever it
+  // scored, and a signature at 44 is amber, not green. Only where the hue is
+  // SPENT changed.
+  assert.match(
+    card,
+    /mission\.signed === false \? TONE\.danger/,
+    "a refusal is no longer red on sight, which is the incident this component exists for",
+  );
+  // The shorthand before the longhand, or `border: none` erases the rule that
+  // replaces it — the same discarded-property bug this batch removed thirteen of.
+  const border = card.indexOf("border: quiet ?");
+  const borderTop = card.indexOf("borderTop: quiet ?");
+  assert.ok(border >= 0 && borderTop > border, "borderTop is written above border, so the quiet rule is erased by the shorthand");
+});
+
+test("a figure's ground is neutral and its reading size is declared", () => {
+  // THE GROUND. `MetricStat` tinted its whole box by the tone, so a run with
+  // rework drew amber, amber, amber, red and green boxes in one row — colour on
+  // every tile in the row a reader scans precisely to find the one that is
+  // short. The hue survives, on the figure, where it means something.
+  const stat = code(body("function MetricStat("));
+  assert.match(
+    stat,
+    /background: SURFACE\.subtle\s*$/m,
+    "the tile ground is tinted by its tone again, so colour marks every figure instead of the exception",
+  );
+  assert.ok(
+    stat.includes("color: hue === null ? INK.primary : `rgb(${hue})`"),
+    "the hue stopped reaching the figure, so a short tile no longer reads as short at all",
+  );
+
+  // THE SIZE. The article block declared `lineHeight` and no `font`, so every
+  // report paragraph inherited the 13px UI step under a 24/20/18px heading
+  // tower — and the docblock two lines above claimed a reading column that was
+  // never applied. `font` first, because the shorthand resets leading.
+  const declaration = SOURCE.slice(SOURCE.indexOf("const ARTICLE_BLOCK ="));
+  const article = declaration.slice(0, declaration.indexOf("\n"));
+  assert.match(
+    article,
+    /font: FONT\.large, lineHeight:/,
+    "the article paragraph has no size again, or the shorthand was written after the leading it resets",
   );
 });
