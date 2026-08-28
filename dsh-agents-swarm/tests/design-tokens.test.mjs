@@ -2960,3 +2960,66 @@ test("a pane is named once, by the tab that selected it", () => {
     );
   }
 });
+
+test("the article is one family, and its ladder is the reference's", () => {
+  // "The fonts are inconsistent" had a precise cause: the serif was applied at
+  // levels 1 and 2 ONLY, so a report set its chapter titles in Georgia and its
+  // sub-headings in the UI sans, over a sans body — three treatments in one
+  // document. The docblock claimed the serif came from the reference; the
+  // reference's article is `prose prose-gray prose-headings:font-semibold` with
+  // no font-family override at all, so its headings and its body are the same
+  // face and only size and weight separate them.
+  assert.ok(!SOURCE.includes("ARTICLE_SERIF"), "the article declares a second font family again");
+  // BY SHAPE, not by the constant's name. Deleting `ARTICLE_SERIF` and writing
+  // `fontFamily: "Georgia, serif"` inline at the same site is the same
+  // regression, and the first version of this guard could not see it. The code
+  // face is the one family this renderer is allowed to name.
+  const families = [...code(body("function renderMarkdown(")).matchAll(/fontFamily: ([^,\n]+)/g)]
+    .map(([, value]) => value.trim());
+  // Twice: the fenced block and the inline code span, which are the same face
+  // and the only one this renderer may name.
+  assert.deepEqual(
+    [...new Set(families)],
+    ['"var(--ds-font-family-code)"'],
+    `renderMarkdown names a font family besides the code face, so the article has two typefaces again: ${families.join(", ")}`,
+  );
+  assert.match(
+    SOURCE,
+    /ARTICLE_HEADING_SIZES = \{ 1: "24px", 2: "20px", 3: "18px", 4: "16px" \}/,
+    "the heading ladder no longer matches the reference's 2xl / xl / lg / base",
+  );
+  const markdown = code(body("function renderMarkdown("));
+  assert.ok(
+    markdown.includes("fontWeight: article ? 600 : 650"),
+    "article headings are back at 700, where the reference sets font-semibold",
+  );
+});
+
+test("a quote and a table survive being rendered", () => {
+  // Neither had a branch. A pull-quote printed its own "> " at the head of a
+  // paragraph and a table printed |---|---| as prose in the middle of a
+  // chapter — the reader lost the content, not just its shape.
+  const markdown = code(body("function renderMarkdown("));
+  assert.match(markdown, /jsx\("blockquote", \{/, "a quote is prose with a stray marker again");
+  assert.match(markdown, /jsxs\("table", \{/, "a table is prose with stray pipes again");
+
+  // A LONE PIPE IS NOT A TABLE. The run of pipe lines is gathered and only
+  // becomes a table when the second row is a delimiter; anything else goes back
+  // out as the prose it was, or a sentence containing one pipe is eaten.
+  assert.match(
+    markdown,
+    /for \(const row of raw\) paragraph\.push\(row\);/,
+    "a run of pipe lines that is not a table is dropped instead of being put back as prose",
+  );
+
+  // AND EVERY PATH CLOSES IT. The fence, blank-line and heading branches all
+  // `continue`, so a table followed by a heading would render after it — or
+  // never, at the end of a document.
+  assert.match(
+    markdown,
+    /if \(fence === null && !\/\^\s\*\\|\/\.test\(line\)\) flushTable\(\);/,
+    "an open table is no longer closed by the lines that follow it",
+  );
+  const tail = markdown.slice(markdown.lastIndexOf("flushParagraph();"));
+  assert.ok(tail.includes("flushTable();"), "a document ending in a table loses it");
+});

@@ -3337,7 +3337,14 @@ window.__ModuleLoader__.load({
 		* Its serif is a system stack, not a downloaded face, so this costs
 		* nothing and cannot fail to load.
 		*/
-		const ARTICLE_SERIF = 'Georgia, "Times New Roman", "Songti SC", "SimSun", serif';
+		// ONE FAMILY FOR THE WHOLE READ. This declared a Georgia stack and applied
+		// it to levels 1 and 2 ONLY, so a report set its chapter titles in a serif
+		// and its sub-headings in the UI sans, over a sans body — three treatments
+		// in one document, which is what "the fonts are inconsistent" is looking
+		// at. The docblock above claimed the serif came from the reference; the
+		// reference's article is `prose prose-gray prose-headings:font-semibold`
+		// with no font-family override at all, so its headings and its body are
+		// the same face and only size and weight separate them. So are ours now.
 		// `font` FIRST, `lineHeight` after: the shorthand resets leading, so the
 		// order is the same one the rest of this file is guarded on.
 		//
@@ -3348,7 +3355,7 @@ window.__ModuleLoader__.load({
 		// one the reference reads at; there is no 18 in the ladder and inventing a
 		// raw one would be the first size in this file spelled outside it.
 		const ARTICLE_BLOCK = { font: FONT.large, lineHeight: "1.75", margin: "0 0 20px" };
-		const ARTICLE_HEADING_SIZES = { 1: "24px", 2: "20px", 3: "18px", 4: "17px" };
+		const ARTICLE_HEADING_SIZES = { 1: "24px", 2: "20px", 3: "18px", 4: "16px" };
 
 		/**
 		* Render a Markdown document as React nodes.
@@ -3365,6 +3372,7 @@ window.__ModuleLoader__.load({
 			const blocks = [];
 			let paragraph = [];
 			let list = null;
+			let table = null;
 			let fence = null;
 			let key = 0;
 
@@ -3377,6 +3385,61 @@ window.__ModuleLoader__.load({
 				}, `p${key++}`));
 				paragraph = [];
 			};
+			// GFM TABLES, collected the way fences and lists are and decided at the
+			// FLUSH. A lookahead is impossible here — the loop is a for-of with no
+			// index — and a lone pipe in a sentence must not be eaten, so the run of
+			// pipe lines is gathered first and only becomes a table when the second
+			// row is a delimiter. Anything else goes back out as the prose it was.
+			const splitRow = (row) => row.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((part) => part.trim());
+			const flushTable = () => {
+				if (table === null) return;
+				const raw = table;
+				table = null;
+				if (raw.length < 2 || !/^\s*\|?[-:| ]+\|?\s*$/.test(raw[1])) {
+					for (const row of raw) paragraph.push(row);
+					flushParagraph();
+					return;
+				}
+				const head = splitRow(raw[0]);
+				const body = raw.slice(2).map(splitRow);
+				blocks.push(jsx("div", {
+					// The scroller IS the container: no outer border, no fill, no zebra.
+					// The rules between rows carry the structure the way the reference's
+					// do, and a wide table scrolls inside its own box instead of pushing
+					// the page sideways.
+					style: { ...block, overflowX: "auto" },
+					children: jsxs("table", {
+						style: { width: "100%", borderCollapse: "collapse" },
+						children: [
+							jsx("thead", {
+								children: jsx("tr", {
+									children: head.map((text, column) => jsx("th", {
+										style: {
+											font: FONT.bodyStrong, textAlign: "left", color: INK.primary,
+											padding: `${SPACE.xs} ${SPACE.sm}`,
+											borderBottom: `1px solid ${LINE.rule}`
+										},
+										children: renderInline(text, `th${key}-${column}`, refs)
+									}, `th${column}`))
+								}, "hr")
+							}, "head"),
+							jsx("tbody", {
+								children: body.map((row, at) => jsx("tr", {
+									children: row.map((text, column) => jsx("td", {
+										style: {
+											padding: `${SPACE.xs} ${SPACE.sm}`,
+											borderTop: `1px solid ${LINE.hair}`,
+											verticalAlign: "top", color: INK.primary
+										},
+										children: renderInline(text, `td${key}-${at}-${column}`, refs)
+									}, `td${column}`))
+								}, `tr${at}`))
+							}, "body")
+						]
+					})
+				}, `table${key++}`));
+			};
+
 			const flushList = () => {
 				if (list === null) return;
 				const items = list.items.map((item, at) => jsx("li", {
@@ -3392,6 +3455,10 @@ window.__ModuleLoader__.load({
 
 			for (const raw of lines) {
 				const line = raw.replace(/\s+$/, "");
+				// EVERY path out of this loop has to close an open table, and the fence,
+				// blank-line and heading branches below all `continue` — so the close
+				// happens here, once, for any line that is not itself a table row.
+				if (fence === null && !/^\s*\|/.test(line)) flushTable();
 
 				if (fence !== null) {
 					if (/^```/.test(line.trim())) {
@@ -3413,6 +3480,7 @@ window.__ModuleLoader__.load({
 				if (/^```/.test(line.trim())) {
 					flushParagraph();
 					flushList();
+					flushTable();
 					fence = [];
 					continue;
 				}
@@ -3441,14 +3509,44 @@ window.__ModuleLoader__.load({
 								// report, and an inner divider has no shadow helping it read.
 								? { borderTop: `1px solid ${LINE.rule}`, paddingTop: "28px" }
 								: {}),
-							fontSize: (headingSizes[level] ?? (article ? "17px" : "13px")),
-							fontWeight: article ? 700 : 650,
+							fontSize: (headingSizes[level] ?? (article ? "16px" : "13px")),
+							fontWeight: article ? 600 : 650,
 							lineHeight: article ? "1.3" : "22px",
-							...(article && level <= 2 ? { fontFamily: ARTICLE_SERIF } : {}),
 							color: INK.primary
 						},
 						children: renderInline(heading[2], `h${key}`, refs)
 					}, `h${key++}`));
+					continue;
+				}
+
+				// A QUOTE AND A TABLE, which this renderer had no branch for at all. A
+				// pull-quote printed its own "> " at the head of a paragraph, and a table
+				// printed |---|---| as prose in the middle of a chapter: the reader lost
+				// the content, not just its shape. No report has used either yet. The next
+				// topic will.
+				if (/^\s*\|/.test(line)) {
+					flushParagraph();
+					flushList();
+					if (table === null) table = [];
+					table.push(line.trim());
+					continue;
+				}
+
+				const quoted = /^\s*(?:&gt;|>)\s?(.*)$/.exec(line);
+				if (quoted !== null) {
+					flushParagraph();
+					flushList();
+					blocks.push(jsx("blockquote", {
+						// A rule and an indent, with no fill and no corner: the reference
+						// draws a quote as a left border on the page's own ground.
+						style: {
+							...block,
+							borderLeft: `2px solid ${LINE.rule}`,
+							paddingLeft: SPACE.md,
+							color: INK.secondary
+						},
+						children: renderInline(quoted[1], `q${key}`, refs)
+					}, `quote${key++}`));
 					continue;
 				}
 
@@ -3486,6 +3584,7 @@ window.__ModuleLoader__.load({
 			}
 			flushParagraph();
 			flushList();
+			flushTable();
 			return blocks;
 		}
 		//#endregion
@@ -4833,7 +4932,7 @@ window.__ModuleLoader__.load({
 												children: [
 													jsx("h1", {
 														style: { font: FONT.displayStrong,
-															margin: "0 0 12px", fontFamily: ARTICLE_SERIF,
+															margin: "0 0 12px",
 															letterSpacing: "-0.025em", color: INK.primary
 														},
 														children: typeof reader.title === "string" && reader.title !== "" ? reader.title : row.title
@@ -7136,8 +7235,11 @@ window.__ModuleLoader__.load({
 				// makes the two requirements the same property, and the corner
 				// wins silently.
 				style: {
-					border: `1px solid ${LINE.rule}`, borderRadius: RADIUS.md,
-					overflow: "hidden", background: "var(--dsw-alias-bg-layer-1)"
+					// ONE FRAME PER THING. The panel around this already carries a border,
+					// a radius and a ground — a second set inside it is the box-in-a-box
+					// that makes a list of rows read as a grid. The scroller is what this
+					// element is actually for.
+					overflow: "hidden"
 				},
 				children: jsx("div", {
 					style: { overflowX: "auto" },
@@ -9455,8 +9557,11 @@ window.__ModuleLoader__.load({
 				: null;
 			const table = jsx("div", {
 				style: {
-					border: `1px solid ${LINE.rule}`, borderRadius: RADIUS.md,
-					overflow: "hidden", background: "var(--dsw-alias-bg-layer-1)"
+					// ONE FRAME PER THING. The panel around this already carries a border,
+					// a radius and a ground — a second set inside it is the box-in-a-box
+					// that makes a list of rows read as a grid. The scroller is what this
+					// element is actually for.
+					overflow: "hidden"
 				},
 				children: jsxs("table", {
 					style: { width: "100%", borderCollapse: "collapse", tableLayout: "fixed" },
@@ -10034,8 +10139,11 @@ window.__ModuleLoader__.load({
 			// reads as an unfinished panel rather than as a third table.
 			return jsx("div", {
 				style: {
-					border: `1px solid ${LINE.rule}`, borderRadius: RADIUS.md,
-					overflow: "hidden", background: "var(--dsw-alias-bg-layer-1)"
+					// ONE FRAME PER THING. The panel around this already carries a border,
+					// a radius and a ground — a second set inside it is the box-in-a-box
+					// that makes a list of rows read as a grid. The scroller is what this
+					// element is actually for.
+					overflow: "hidden"
 				},
 				children: jsx("div", {
 					style: { overflowX: "auto" },
@@ -12234,7 +12342,7 @@ window.__ModuleLoader__.load({
 					jsx("h3", {
 						style: { font: FONT.baseStrong,
 							margin: "0 0 10px",
-							fontFamily: ARTICLE_SERIF, color: INK.primary
+ color: INK.primary
 						},
 						children: zh ? "参考文献" : "References"
 					}, "head"),
