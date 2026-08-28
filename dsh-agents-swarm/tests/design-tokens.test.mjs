@@ -1473,12 +1473,22 @@ test("a headline figure is a tile, not a clause", () => {
   // 证据 count on the tab strip directly below, and a score is a figure a
   // failed run does not have — it rendered 0, which reads as "graded zero"
   // rather than "never graded".
-  for (const site of ["function MissionSources("]) {
-    assert.ok(
-      body(site).includes("MissionStatTiles({"),
-      `${site} still states its figures as a dot-joined sentence — the shape this component replaced, and one survivor beside two adopters is the copy that gets edited next`,
-    );
-  }
+  // TILES OR THE LINE, but never a dot-joined clause. This required the tile
+  // row by name, which was the mechanism that replaced the clause. The report
+  // and the sources pane read their figures as a LINE now — labelled, graded
+  // by the same ladder, and over a rule rather than in four boxes — because
+  // four boxes of fixed chrome above every list is what a reader meets before
+  // the first row. What must not come back is the figure buried in a grey
+  // sentence, so that is what is asserted.
+  const sources = body("function MissionSources(");
+  assert.ok(
+    sources.includes("MissionStatTiles({") || sources.includes("MissionScoreLine({"),
+    "MissionSources states its figures as a dot-joined sentence again — the shape both of these components replaced",
+  );
+  assert.ok(
+    sources.includes("tone: missionRateHue(totals.verified, totals.findings)"),
+    "the verified figure is no longer graded, so a pane that verified 3 of 40 reads like one that verified 40 of 40",
+  );
   // FONT.title AND NOTHING BIGGER. The batch spec asked for a 24px numeral;
   // 20px is the largest step this file declares anywhere, and the raw-value
   // ratchet's `fontSize` ceiling is zero, so a 24px tile would have to be
@@ -2908,4 +2918,45 @@ test("a figure's ground is neutral and its reading size is declared", () => {
     /font: FONT\.large, lineHeight:/,
     "the article paragraph has no size again, or the shorthand was written after the leading it resets",
   );
+});
+
+test("the fixed chrome above a pane does not grow with the mission's history", () => {
+  // The run picker drew one pill per run, so a mission on its twenty-second
+  // attempt opened every pane under three wrapped rows of them — ninety pixels
+  // of fixed chrome for a control used to look BACK, and mostly not used at
+  // all. It got taller with every rerun.
+  const sources = code(body("function MissionSources("));
+  assert.match(sources, /const RECENT_RUNS = 5;/, "the picker draws every run again, so it grows with the history");
+  assert.match(
+    sources,
+    /\.\.\.shownRuns\.map\(\(entry\) => jsx\("button"/,
+    "the picker maps the full list rather than the folded one",
+  );
+  // The current run is always drawn, wherever it sits: a picker that cannot
+  // show what is selected is worse than a long one.
+  assert.ok(
+    sources.includes("runs.filter((entry) => entry.runCount === current)"),
+    "a folded picker can hide the run it is showing, so the selected pill is not on screen",
+  );
+  // And the fold has a way out, which is the same rule MissionClamp follows.
+  assert.ok(sources.includes("setAllRuns(true)"), "the folded runs cannot be reached at all");
+});
+
+test("a pane is named once, by the tab that selected it", () => {
+  // All four `bare` panels printed their own tab's word a second time twelve
+  // pixels below it, with the tab's count beside it twice as well. `bare`'s own
+  // comment said it drops the card and keeps the heading — that was the bug,
+  // not the contract.
+  const panel = code(body("function MissionPanel("));
+  assert.match(
+    panel,
+    /title === undefined \|\| title === null \|\| title === ""/,
+    "a panel with no title draws an empty header row again: a rule and its padding under nothing",
+  );
+  for (const repeated of ['title: zh ? "参考文献" : "References"', 'title: zh ? "轨迹" : "Trajectory"']) {
+    assert.ok(
+      !SOURCE.includes(repeated),
+      `a pane still names itself a second time under its own tab: ${repeated}`,
+    );
+  }
 });

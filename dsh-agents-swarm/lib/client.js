@@ -6869,6 +6869,20 @@ window.__ModuleLoader__.load({
 					? { display: "flex", flexDirection: "column", gap: SPACE.sm }
 					: { ...CARD_STYLE, display: "flex", flexDirection: "column", gap: SPACE.sm, padding: SPACE.md },
 				children: [
+					// A HEADER ROW WITH NOTHING IN IT IS A RULE DRAWN UNDER NOTHING.
+					//
+					// `bare` drops the card for a panel that IS the pane, and its own comment
+					// says it keeps the heading. But the pane already has a heading — the tab
+					// that selected it — so all four bare panels printed their tab's word a
+					// second time twelve pixels below it, with the tab's count beside it
+					// twice as well. Passing no title now costs no row rather than an empty
+					// one, and the tab stays the only place the pane is named.
+					title === undefined || title === null || title === ""
+						? (action === undefined || action === null ? null : jsxs("div", {
+							style: { display: "flex", alignItems: "center", gap: SPACE.sm, justifyContent: "flex-end" },
+							children: [action]
+						}, "head"))
+						:
 					jsxs("div", {
 						// NO `flexWrap`, and `center` rather than `baseline`. Wrapping
 						// is what made this three lines tall, and baseline-aligning a
@@ -9333,7 +9347,7 @@ window.__ModuleLoader__.load({
 				// over — once by `bare`, once by returning the notice bare — so a run
 				// with no tasks yet showed a paragraph floating on an unlabelled pane.
 				return jsx(MissionPanel, {
-					bare: true, title: zh ? "任务" : "Tasks", count: 0,
+					bare: true, count: 0,
 					children: jsx(MissionEmptyPane, {
 					mission, zh,
 					waiting: zh
@@ -9690,7 +9704,6 @@ window.__ModuleLoader__.load({
 			// most worth reading.
 			return jsxs(MissionPanel, {
 				bare: true,
-				title: zh ? "任务" : "Tasks",
 				count: display.length,
 				action: key,
 				children: [
@@ -10629,6 +10642,7 @@ window.__ModuleLoader__.load({
 			// has been read, and a hook below that point runs on some renders and
 			// not others.
 			const [openDim, setOpenDim] = useState(null);
+			const [allRuns, setAllRuns] = useState(false);
 			const [error, setError] = useState("");
 			const [run, setRun] = useState(null);
 			const [order, setOrder] = useState("cites");
@@ -10680,6 +10694,18 @@ window.__ModuleLoader__.load({
 			const names = new Map((Array.isArray(held.dimensions) ? held.dimensions : []).map((row) => [row.dimensionId, row.name]));
 			const current = held.runCount ?? null;
 
+			// FIXED CHROME THAT GREW WITH HISTORY. Every run got a pill, so a mission
+			// on its twenty-second attempt opened with twenty-two of them wrapped over
+			// three rows — ninety pixels of picker above every pane, for a control
+			// that is used to look BACK and mostly is not used at all. The current run
+			// and the four before it fit one row; the rest are behind a count.
+			const RECENT_RUNS = 5;
+			const folded = runs.length > RECENT_RUNS && !allRuns;
+			const shownRuns = folded
+				// The current run is always among them, wherever it sits in the list:
+				// a picker that cannot show what is selected is worse than a long one.
+				? [...new Set([...runs.filter((entry) => entry.runCount === current), ...runs].slice(0, RECENT_RUNS))]
+				: runs;
 			const picker = runs.length <= 1 ? null : jsxs("div", {
 				style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", margin: "0 0 10px" },
 				children: [
@@ -10687,7 +10713,7 @@ window.__ModuleLoader__.load({
 						style: { font: FONT.small, color: INK.secondary },
 						children: zh ? "运行：" : "Run:"
 					}, "label"),
-					...runs.map((entry) => jsx("button", {
+					...shownRuns.map((entry) => jsx("button", {
 						type: "button",
 						"aria-pressed": entry.runCount === current,
 						className: "swm-ctl swm-focus", style: {
@@ -10701,6 +10727,14 @@ window.__ModuleLoader__.load({
 							? `第 ${entry.runCount} 次 · ${entry.verified}/${entry.total}`
 							: `run ${entry.runCount} · ${entry.verified}/${entry.total}`
 					}, `run-${entry.runCount}`))
+					,
+					!folded ? null : jsx("button", {
+						type: "button",
+						className: "swm-ctl swm-focus",
+						style: { ...controlStyle(), height: CONTROL.xs, padding: "0 9px", font: FONT.micro },
+						onClick: () => { setAllRuns(true); },
+						children: zh ? `+${runs.length - shownRuns.length} 次` : `+${runs.length - shownRuns.length}`
+					}, "more")
 				]
 			}, "runs");
 
@@ -10912,7 +10946,11 @@ window.__ModuleLoader__.load({
 					// were one 12px grey clause, and the one a reader is actually
 					// here for is the last of the four: how much of what was read
 					// held up. It is a tile with a rate under it now.
-					MissionStatTiles({ tiles: [
+					// A LINE, not four boxes. Four figures — findings, verified,
+					// sources, hosts — took a hundred and ten pixels of fixed chrome
+					// above every list, and three of the four are context for the
+					// fourth. The report surface already reads its scorecard this way.
+					MissionScoreLine({ tiles: [
 						{ label: zh ? "发现" : "Findings", value: String(totals.findings) },
 						{
 							label: zh ? "已核验" : "Verified",
@@ -11809,7 +11847,6 @@ window.__ModuleLoader__.load({
 										...(activePane !== "sources" ? [] : [
 										jsx(MissionPanel, {
 											bare: true,
-											title: zh ? "参考文献" : "References",
 											note: "",
 											// The same reader every other pane opens a page in. A
 											// finding in the dimension drawer reaches the page it
@@ -11831,7 +11868,6 @@ window.__ModuleLoader__.load({
 										// two happened under.
 										jsx(MissionPanel, {
 											bare: true,
-											title: zh ? "轨迹" : "Trajectory",
 											// The sentence explaining what a trajectory is belongs on
 											// the tab that opens it, not on a line above it that is
 											// re-read every single visit.
