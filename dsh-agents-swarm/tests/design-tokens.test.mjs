@@ -3023,3 +3023,36 @@ test("a quote and a table survive being rendered", () => {
   const tail = markdown.slice(markdown.lastIndexOf("flushParagraph();"));
   assert.ok(tail.includes("flushTable();"), "a document ending in a table loses it");
 });
+
+test("a signature that holds up costs no band at all", () => {
+  // Making it a hairline row was still a row — the same vertical band above
+  // every pane, carrying a sentence the 完成 chip had already said and one
+  // figure. The figure and the Leader's own verdict word moved into the
+  // header's meta line, beside every other fact about the run, and the row is
+  // not drawn.
+  const card = code(body("function MissionSignoffCard("));
+  assert.match(card, /if \(quiet\) return null;/, "a passing run still draws a band above every pane");
+
+  const detail = code(body("function MissionDetail("));
+  assert.match(
+    detail,
+    /mission\.signed === true && Number\(mission\.score\) >= 80/,
+    "the header does not carry the score, so removing the band loses it",
+  );
+  // The verdict word rides with it: the card was the only place it appeared
+  // anywhere on the screen, and a deletion without it loses the Leader's own
+  // term for what it signed.
+  assert.ok(
+    detail.includes("mission.verdict"),
+    "the header carries the score without the verdict word, which then appears nowhere at all",
+  );
+  // And it is the SECOND meta array. The first belongs to MissionListRow, and
+  // an earlier attempt at this edit landed there instead — a score on every
+  // row of the mission list, and none on the screen it was written for.
+  const metas = [...SOURCE.matchAll(/const meta = \[/g)].length;
+  assert.equal(metas, 2, `there are now ${metas} meta arrays; the guard below can no longer tell which one was edited`);
+  assert.ok(
+    !code(body("function MissionListRow(")).includes("Number(mission.score) >= 80"),
+    "the mission list's rows carry the sign-off score, which belongs to the detail header",
+  );
+});

@@ -7598,6 +7598,10 @@ window.__ModuleLoader__.load({
 			// header already carries a green 完成 chip six inches above it: the same
 			// fact, twice, in the loudest treatment on the screen.
 			const quiet = mission.signed === true && hue === TONE.success;
+			// AND A QUIET ONE IS NOT DRAWN AT ALL. A hairline row is still a row: the
+			// same band above every pane, for a sentence the header had said and a
+			// figure the header now carries.
+			if (quiet) return null;
 			return jsxs("div", {
 				style: {
 					display: "flex", alignItems: "center", gap: SPACE.md,
@@ -11510,6 +11514,25 @@ window.__ModuleLoader__.load({
 					: "",
 				progress.chaptersTotal > 0
 					? (zh ? `章节 ${progress.chaptersDone}/${progress.chaptersTotal}` : `chapters ${progress.chaptersDone}/${progress.chaptersTotal}`)
+					: "",
+				// THE SCORE, and the Leader's own word for it. The sign-off drew a
+				// full-width row above every pane to carry one sentence and one figure —
+				// and the 完成 chip four inches up had already said the run was signed, so
+				// the row existed for the figure. It fits here, in the line that already
+				// holds every other fact about this run.
+				//
+				// The verdict word rides with it because the card was the only place it
+				// appeared anywhere on the screen; dropping the card without it would lose
+				// the Leader's own term for what it signed.
+				//
+				// ONLY WHEN IT HOLDS UP. A refusal, or a signature the Leader itself
+				// graded under 80, still gets the card — that is the incident
+				// MissionSignoffCard's docblock records, and a verdict folded into a
+				// dot-joined grey line is the exact shape it was rescued from.
+				mission.signed === true && Number(mission.score) >= 80
+					? (zh
+						? `领队已签署${(mission.verdict ?? "") === "" ? "" : `（${mission.verdict}）`} ${mission.score}/100`
+						: `signed by the leader${(mission.verdict ?? "") === "" ? "" : ` (${mission.verdict})`} ${mission.score}/100`)
 					: "",
 				formatStamp(mission.startedAt)
 			].filter((piece) => piece !== "").join(" · ");
