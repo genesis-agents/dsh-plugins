@@ -3721,3 +3721,22 @@ test("a chapter with no decision says which empty it is, and an empty body is ma
     "the section type carries a colour, so a chapter that interprets is drawn as a chapter that went wrong",
   );
 });
+
+test("every onOpenSource call passes the keys the reader reads", () => {
+  // MissionSourceReader's docblock names its contract in a sentence:
+  // "anything carrying `sourceUrl`, `sourceTitle`, `quote`, `documentId`".
+  // The one call site passed `url` and `title`. It had a documentId, so the
+  // stored page loaded and the pane looked right — and the header above it,
+  // the live link beside it and the quote it was opened to check were all
+  // undefined. A contract written in prose and read by nothing.
+  const READS = ["sourceUrl", "sourceTitle", "quote", "documentId"];
+  const calls = [...SOURCE.matchAll(/onOpenSource\(\{([^}]*)\}\)/g)];
+  assert.ok(calls.length > 0, "no onOpenSource call site found; this guard is watching nothing");
+  for (const call of calls) {
+    const keys = [...call[1].matchAll(/(\w+)\s*:/g)].map((m) => m[1]);
+    for (const key of keys) {
+      assert.ok(READS.includes(key), `onOpenSource is passed \`${key}\`, which MissionSourceReader never reads: ${call[0]}`);
+    }
+    assert.ok(keys.includes("sourceUrl"), `onOpenSource call omits sourceUrl, so the reader's header and live link are undefined: ${call[0]}`);
+  }
+});

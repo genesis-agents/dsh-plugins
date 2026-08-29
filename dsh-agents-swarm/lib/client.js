@@ -11417,7 +11417,7 @@ window.__ModuleLoader__.load({
 								type: "button",
 								className: "swm-ctl swm-focus",
 								style: { ...controlStyle(), height: CONTROL.xs, padding: `0 ${SPACE.sm}`, font: FONT.micro },
-								onClick: () => { onOpenSource({ documentId: row.documentId, url: row.sourceUrl, title: row.sourceTitle }); },
+								onClick: () => { onOpenSource({ documentId: row.documentId, sourceUrl: row.sourceUrl, sourceTitle: row.sourceTitle, quote: row.quote ?? "" }); },
 								children: zh ? "读这一页" : "Read the page"
 							}, "read")
 						]
