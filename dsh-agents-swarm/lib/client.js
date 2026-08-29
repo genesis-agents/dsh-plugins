@@ -3902,6 +3902,92 @@ window.__ModuleLoader__.load({
 		const ARTICLE_HEADING_SIZES = { 1: "24px", 2: "20px", 3: "18px", 4: "16px" };
 
 		/**
+		* A figure reference in a chapter's markdown: `:::figure <id>` alone on a line.
+		*
+		* DECLARED ONCE, because three places have to agree about it — the writer
+		* that mints it, the renderer that draws it, and the sanitiser that strips it
+		* from the exported markdown. Two copies of this pattern is how an export
+		* ships a token no other reader understands.
+		*/
+		const FIGURE_TOKEN = /^:::figure\s+([A-Za-z0-9_-]{1,128})\s*$/;
+
+		/**
+		* The publisher's own figure, with the page it came off named under it.
+		*
+		* THE CAPTION IS ABOVE AND THE CREDIT IS BELOW. The reference puts its
+		* caption above too, but ours carries a second line the reference does not
+		* need: it is reproducing somebody else's picture. The caption states what
+		* the figure shows — the publisher's own figcaption, where there was one —
+		* and the credit says whose it is and links to the page. An image with no
+		* attribution is a fabricated figure.
+		*
+		* THE src IS OUR OWN ROUTE, never the publisher's URL. The bytes were fetched
+		* once, paced, into our own store; pointing an img at the publisher would put
+		* the reader's IP at every source in the bibliography and would break the
+		* moment the page moves — which is the case the stored copy exists for.
+		*
+		* AND IT DEGRADES TO EVIDENCE. With no bytes — refused for its type or its
+		* size, or the publisher gone since — the caption and the link are still the
+		* two things that make this a citation, so they are what is drawn. What is
+		* never drawn is an empty bordered box: a frame around nothing tells a reader
+		* that something failed without telling them what.
+		* @param figure - one row from `/missions/:id/figures`.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionFigure({ figure, zh }, key) {
+			if (figure === null || figure === undefined) return null;
+			const caption = String(figure.caption ?? figure.alt ?? "").trim();
+			const page = figure.page ?? {};
+			const credit = String(page.title ?? page.url ?? "").trim();
+			const held = typeof figure.path === "string" && figure.path !== "";
+			return jsxs("figure", {
+				style: {
+					margin: `0 0 ${SPACE.lg}`, padding: SPACE.md,
+					border: `1px solid ${LINE.hair}`, borderRadius: RADIUS.md,
+					background: SURFACE.card
+				},
+				children: [
+					caption === "" ? null : jsx("figcaption", {
+						style: { font: FONT.smallStrong, color: INK.primary, margin: `0 0 ${SPACE.sm}` },
+						children: caption
+					}, "caption"),
+					caption === "" ? null : jsx("div", {
+						style: { borderTop: `1px solid ${LINE.rule}`, margin: `0 0 ${SPACE.sm}` }
+					}, "rule"),
+					!held ? null : jsx("img", {
+						src: `${apiBase()}${figure.path}`,
+						alt: String(figure.alt ?? caption ?? ""),
+						loading: "lazy",
+						// THE INTRINSIC SIZE, WHERE THE PUBLISHER DECLARED ONE. It is what
+						// reserves the box before the bytes arrive; without it every figure in
+						// a chapter shoves the paragraph under it down as it loads. A 0 means
+						// the markup declared nothing, and never that the image is small.
+						width: Number(figure.width) > 0 ? figure.width : undefined,
+						height: Number(figure.height) > 0 ? figure.height : undefined,
+						style: { display: "block", maxWidth: "100%", height: "auto", borderRadius: RADIUS.sm }
+					}, "img"),
+					jsxs("div", {
+						style: { font: FONT.micro, color: INK.secondary, margin: `${SPACE.sm} 0 0` },
+						children: [
+							jsx("span", {
+								children: held
+									? (zh ? "图片来自 " : "Figure from ")
+									: (zh ? "图片未能保存，来源 " : "Figure not kept; source ")
+							}, "lead"),
+							page.url === undefined || page.url === null || page.url === ""
+								? jsx("span", { children: credit }, "plain")
+								: jsx("a", {
+									href: page.url, target: "_blank", rel: "noreferrer noopener",
+									style: { color: "var(--dsw-alias-label-link)" },
+									children: credit === "" ? page.url : credit
+								}, "link")
+						]
+					}, "credit")
+				]
+			}, key);
+		}
+
+		/**
 		* Render a Markdown document as React nodes.
 		* @param source - the raw answer text.
 		* @param variant - `"chat"` for a panel answer, `"article"` for a read.
@@ -4029,6 +4115,27 @@ window.__ModuleLoader__.load({
 				// blank-line and heading branches below all `continue` — so the close
 				// happens here, once, for any line that is not itself a table row.
 				if (fence === null && !/^\s*\|/.test(line)) flushTable();
+
+				// A FIGURE, BY ID, AND NEVER BY URL. `:::figure <id>` on its own line.
+				// The writer references a figure the pipeline already stored; it cannot
+				// name an address, and that is the whole difference between a citation and
+				// an invented one — a model that can write a URL into a report can write a
+				// URL that was never fetched.
+				//
+				// AN ID THAT DOES NOT RESOLVE RENDERS AS NOTHING. Not a broken image, not
+				// an empty frame, and not the token itself. A hole in a research report
+				// reads as a figure that was meant to be evidence and is missing, which is
+				// worse than a paragraph with no picture in it.
+				const figureToken = FIGURE_TOKEN.exec(line.trim());
+				if (fence === null && figureToken !== null) {
+					flushParagraph();
+					flushList();
+					const found = typeof refs?.figure === "function" ? refs.figure(figureToken[1]) : null;
+					if (found !== null && found !== undefined) {
+						blocks.push(MissionFigure({ figure: found, zh: refs?.zh === true }, `fig${key++}`));
+					}
+					continue;
+				}
 
 				if (fence !== null) {
 					if (/^```/.test(line.trim())) {
@@ -15420,8 +15527,39 @@ window.__ModuleLoader__.load({
 			const setVersion = typeof onVersion === "function" ? onVersion : setOwnVersion;
 			const [artifact, setArtifact] = useState(null);
 			const [versions, setVersions] = useState([]);
+			// THIS RUN'S FIGURES, INDEXED BY ID, FETCHED ONCE.
+			//
+			// A Map rather than a scan, for the same reason the citation peek is one:
+			// a chapter can carry a dozen of these and a `find` per token walks the
+			// whole array every time.
+			//
+			// THE ROUTE DECIDES WHAT IS IN IT, not this component. Every row it
+			// returns is a figure whose page one of this run's own verified findings
+			// cites, and each carries the `path` — with its chapter in it — that the
+			// img is pointed at. A token naming a figure this run never held resolves
+			// to nothing here, and nothing is what the renderer draws for it.
+			const [figures, setFigures] = useState(null);
 			const [state, setState] = useState("loading");
 			const [error, setError] = useState("");
+
+			// NOT PART OF THE ARTEFACT LOAD, deliberately. A report whose figures
+			// cannot be listed is still a report, and failing the whole pane because
+			// a picture index answered 500 would be the tail wagging the dog. An
+			// empty index draws prose with no pictures — which is exactly what every
+			// mission finished before this feature existed will draw, for ever.
+			useEffect(() => {
+				if ((missionId ?? "") === "") return undefined;
+				let alive = true;
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/figures`)
+					.then((response) => response.json())
+					.then((payload) => {
+						if (!alive) return;
+						const list = Array.isArray(payload?.data?.figures) ? payload.data.figures : [];
+						setFigures(new Map(list.map((row) => [String(row.figureId ?? row.id ?? ""), row])));
+					})
+					.catch(() => { if (alive) setFigures(new Map()); });
+				return () => { alive = false; };
+			}, [missionId]);
 			// WHICH READING, and which chapter when it is the second one. Above every
 			// early return with the rest of the hooks, which is where this file's own
 			// note beside them says hooks go.
@@ -15926,6 +16064,11 @@ window.__ModuleLoader__.load({
 								// long report draws two hundred of these and every one of
 								// them would walk the whole array.
 								peek: (index) => byIndex.get(index) ?? null,
+								// THE FIGURE A `:::figure` TOKEN NAMES, or null. Null is a complete
+								// answer here and the renderer treats it as one: a token whose figure
+								// this run does not hold draws nothing at all, rather than a broken
+								// image or an empty frame.
+								figure: (id) => figures?.get(String(id)) ?? null,
 								// The browser's own anchor, not a router: the list is on this page, and
 								// a marker that navigated would lose the reader's place in the prose.
 								jump: (index) => {

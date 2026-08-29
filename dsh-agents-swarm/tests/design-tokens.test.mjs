@@ -5601,3 +5601,33 @@ test("the ratchet counts the property air is made of", () => {
     );
   }
 });
+
+test("a figure token resolves to a stored figure, or to nothing at all", () => {
+  // THE RENDERER HALF OF THE SOURCE-FIGURE FEATURE, and the rules it carries
+  // are the ones that make a picture evidence rather than decoration.
+  //
+  // BY ID, NEVER BY URL. The token names a figure the pipeline already stored;
+  // it cannot name an address. That is the whole difference between a citation
+  // and an invented one — a model that can write a URL into a report can write
+  // a URL that was never fetched.
+  assert.match(SOURCE, /const FIGURE_TOKEN = /, "the token's shape is no longer declared once, so the writer, the renderer and the sanitiser can drift apart");
+  const render = code(body("function renderMarkdown("));
+  assert.match(render, /FIGURE_TOKEN\.exec\(line\.trim\(\)\)/, "renderMarkdown no longer recognises a figure token, so a chapter that placed one prints it as a paragraph");
+  assert.match(render, /refs\?\.figure === "function" \? refs\.figure\(/, "the renderer resolves a figure by some route other than the seam the report hands it");
+
+  // AN ID THAT DOES NOT RESOLVE DRAWS NOTHING. Not a broken image, not an
+  // empty frame, and not the token. Every mission finished before this feature
+  // existed holds no figures at all, and their reports must read exactly as
+  // they did.
+  assert.match(render, /if \(found !== null && found !== undefined\) \{/, "an unresolved figure id reaches the card, which draws a frame around a hole");
+
+  // THE src IS OUR OWN ROUTE, and the credit is not optional.
+  const card = code(body("function MissionFigure("));
+  assert.match(card, /src: `\$\{apiBase\(\)\}\$\{figure\.path\}`/, "the img points somewhere other than our own route; a publisher's URL here puts the reader's IP at every source in the bibliography");
+  assert.ok(!/src: (figure\.url|figure\.sourceUrl)/.test(card), "the img points at the publisher's own address");
+  assert.match(card, /rel: "noreferrer noopener"/, "the credit link leaks the reader's page to the publisher");
+  // WITH NO BYTES, THE CITATION SURVIVES. The caption and the link are what
+  // make this evidence; the picture is the part that can be missing.
+  assert.match(card, /const held = typeof figure\.path === "string"/, "the card no longer distinguishes a figure we hold from one we do not");
+  assert.match(card, /!held \? null : jsx\("img"/, "a figure with no stored bytes still mounts an img, which draws a broken-image mark inside a bordered box");
+});
