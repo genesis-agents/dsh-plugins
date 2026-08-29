@@ -5746,6 +5746,71 @@ window.__ModuleLoader__.load({
 		};
 
 		/**
+		* The two kinds of chapter, from `mission_chapters.section_type`.
+		*
+		* A COPY of `SECTION_TYPES` in lib/mission-store.js, and named as one: the
+		* column owns the list, this side only says what each value means. The
+		* words are the report's own — its scorecard has printed 有据章节 and
+		* 解读章节 since it was written — and they are repeated here rather than
+		* shared with it because THAT list carries a third bucket, `unplaced`,
+		* which is a citation that landed in no chapter and is not a section type
+		* at all. Folding the two together would put a value the column may never
+		* hold into the vocabulary of the column.
+		*
+		* NO HUE, DELIBERATELY. A chapter that interprets is not a worse chapter
+		* than one that cites; the kind is a category, and the one colour on this
+		* row belongs to how the chapter landed.
+		*/
+		const MISSION_SECTION_FACES = {
+			evidenced: { zh: "有据章节", en: "Evidenced" },
+			interpretive: { zh: "解读章节", en: "Interpretive" }
+		};
+
+		/**
+		* The three ways a chapter can land, from `mission_chapters.decision`.
+		*
+		* A COPY of `CHAPTER_DECISIONS` in lib/mission-store.js, on the same terms
+		* as the table above. The split between the two fallbacks is the whole
+		* reason that column has three values instead of a boolean:
+		* `fallback-length` is a fact about the DELIVERY — s8's own note says the
+		* prose beside it may well have scored 82 — while `fallback-exhausted` is
+		* the writer running out of rounds on a chapter nobody could fix. Drawing
+		* the two alike would undo that split at the last step, which is what the
+		* verify states one table down were split to prevent.
+		*/
+		const MISSION_CHAPTER_DECISION_FACES = {
+			passed: { zh: "通过", en: "Passed", hue: TONE.success, icon: "check" },
+			"fallback-length": { zh: "字数兜底", en: "Short of the floor", hue: TONE.warn, icon: "alert" },
+			"fallback-exhausted": { zh: "轮次用尽", en: "Out of rounds", hue: TONE.danger, icon: "close" }
+		};
+
+		/**
+		* And what a chapter with NO decision is, which is not a fourth decision.
+		*
+		* `mission_chapters` has no status column, so the projector derives a state
+		* from the attempts, the body and the decision — and that derived word is
+		* the only thing that can say WHICH empty a blank decision is. Three of
+		* them are three different facts: nothing has been written, something is
+		* being written now, and — through the terminal sweep — a run that ended
+		* over a chapter the write loop never decided.
+		*
+		* Keyed to overlap MISSION_DIMENSION_FACES's marks where the meanings
+		* coincide, for the reason that table's own note gives: a 采集中 row and a
+		* chapter being written are the same shape of fact.
+		*/
+		const MISSION_CHAPTER_STATE_FACES = {
+			pending: { zh: "还没开写", en: "Not started", hue: TONE.muted, icon: "circle" },
+			writing: { zh: "正在写", en: "Being written", hue: TONE.info, icon: "spinner" },
+			// REACHABLE ONLY THROUGH THE SWEEP, and amber because of what it means
+			// when it is: the mission completed while this chapter had no decision
+			// recorded, so the row is a hole in the write loop rather than a
+			// chapter that is still coming. Drawing it as 完成 would report the
+			// hole as the work.
+			done: { zh: "结束时没有判定", en: "Ended with no decision", hue: TONE.warn, icon: "alert" },
+			failed: { zh: "没写完就结束了", en: "Left unwritten", hue: TONE.danger, icon: "close" }
+		};
+
+		/**
 		* The verify states, split the way the store splits them.
 		*
 		* The whole reason `verify_state` has nine values is that "4 fetches
@@ -7514,6 +7579,186 @@ window.__ModuleLoader__.load({
 					]
 				}, row.id))
 			}, key);
+		}
+
+		/**
+		* THE MANUFACTURING RECORD, ONE ROW PER CHAPTER.
+		*
+		* `mission_chapters` holds a reviewer's score, a decision from the
+		* three-member `CHAPTER_DECISIONS` vocabulary, the rounds it took, the
+		* words delivered against the floor the writer was handed, and — by the
+		* absence of a body — whether the chapter came back empty. `projectChapters`
+		* has computed every one of those per row since it was written, and
+		* `projectMissionView` returned no `chapters` key at all: the whole array
+		* was folded and dropped one line before the route sent it. The score in
+		* particular is a real reviewer verdict that appeared nowhere in this
+		* product, on any screen, in any response.
+		*
+		* WHY IT IS ON THE 任务 PANE AND NOT UNDER THE REPORT. A run whose chapters
+		* came back empty, short, or out of rounds is precisely the run with no
+		* report to sit under — the report pane on that run is the empty screen —
+		* so the record lives beside the rest of the work, where it can be read
+		* when there is nothing else to read.
+		*
+		* THE SCORE IS NOT GRADED HERE. The pass bar is `SCORE_THRESHOLDS` in
+		* lib/mission-stages-middle.js and it MOVES with the attempt: 78 is a pass
+		* on the last round and a revise on the first. A threshold typed on this
+		* side of the wire would be a second copy of a ladder that is not even
+		* constant — the drift `missionLadderHue` exists to prevent — and the
+		* decision chip beside the figure already says which side of the bar this
+		* chapter landed on.
+		* @param chapters - `view.chapters`, this generation's rows, in report order.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionChapterTable({ chapters, zh }) {
+			const rows = Array.isArray(chapters) ? chapters : [];
+			// EVERY COLUMN DECLARES A WIDTH, for the reason MissionToolTable's own
+			// note gives: without `tableLayout: "fixed"` a long heading resolves the
+			// table to its content and pushes the delivery column off the card.
+			const columns = [
+				{ id: "heading", label: zh ? "章节" : "Chapter", width: "32%", align: "left" },
+				{ id: "section", label: zh ? "类型" : "Kind", width: "13%", align: "left" },
+				{ id: "decision", label: zh ? "判定" : "Decision", width: "19%", align: "left" },
+				{ id: "score", label: zh ? "评分" : "Score", width: "10%", align: "right" },
+				{ id: "attempts", label: zh ? "轮次" : "Rounds", width: "10%", align: "right" },
+				{ id: "words", label: zh ? "字数 / 下限" : "Words / floor", width: "16%", align: "right" }
+			];
+			return jsx("div", {
+				// TWO BOXES, the same pair the other tables on this screen carry: the
+				// frame owns the rounded corner so it must clip, and an element that
+				// clips cannot scroll.
+				style: { overflow: "hidden" },
+				children: jsx("div", {
+					style: { overflowX: "auto" },
+					children: jsxs("table", {
+						style: { width: "100%", minWidth: "620px", borderCollapse: "collapse", tableLayout: "fixed" },
+						children: [
+							jsx("thead", {
+								children: jsx("tr", {
+									style: { borderBottom: `1px solid ${LINE.rule}` },
+									children: columns.map((column) => jsx("th", {
+										style: { ...TH, width: column.width, textAlign: column.align },
+										children: column.label
+									}, column.id))
+								})
+							}, "head"),
+							jsx("tbody", {
+								children: rows.map((row) => {
+									const key = `${row.dimensionId}#${row.chapterIndex}`;
+									const attempts = Number(row.attempts) || 0;
+									const words = Number(row.wordCount) || 0;
+									const floor = Number(row.minDelivery) || 0;
+									// A DECISION, OR THE REASON THERE IS NOT ONE — never a blank
+									// cell. `decision === null` is three different facts and the
+									// projector's derived state is the only thing that separates
+									// them; see MISSION_CHAPTER_STATE_FACES.
+									const decided = (row.decision ?? null) !== null;
+									const faces = decided ? MISSION_CHAPTER_DECISION_FACES : MISSION_CHAPTER_STATE_FACES;
+									const landing = decided ? row.decision : row.state;
+									return jsxs("tr", {
+										className: "swm-tr",
+										children: [
+											jsx("td", {
+												style: TD,
+												// THE KEY STAYS REACHABLE, on hover. Two dimensions can
+												// plan chapters under the same heading, and a column this
+												// wide cannot print `d2#1` beside every one of them — the
+												// same trade ToolChip makes with the raw tool id.
+												title: (row.heading ?? "") === "" ? key : `${key} · ${row.heading}`,
+												children: jsxs("div", {
+													style: { display: "flex", alignItems: "center", gap: SPACE.xs, minWidth: 0 },
+													children: [
+														jsx("span", {
+															style: {
+																flex: "1 1 auto", minWidth: 0,
+																overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+																// NOT A HEADING'S OWN WEIGHT when there is no
+																// heading. The words are this screen saying the
+																// column is empty, not the outline's title for the
+																// chapter, and drawing the two alike in a column of
+																// them is how a placeholder becomes a name.
+																color: (row.heading ?? "") === "" ? INK.quiet : INK.primary
+															},
+															children: (row.heading ?? "") === ""
+																? (zh ? "没有标题" : "no heading recorded")
+																: row.heading
+														}, "text"),
+														// THE HOLE s12 CONTENT-GUARDS FOR, and ONLY when it is
+														// one. A chapter nobody has written yet has no body
+														// either; marking that would paint the ordinary case as
+														// the failure. A decision recorded over an empty body is
+														// the other thing entirely: the assembly succeeded over
+														// nothing.
+														row.bodyMissing !== true || !decided ? null : Chip({
+															tone: TONE.danger,
+															icon: "alert",
+															label: zh ? "正文是空的" : "no body",
+															title: zh
+																? "这一章有判定，却没有正文落库。"
+																: "this chapter recorded a decision and stored no body"
+														}, "empty")
+													]
+												})
+											}, "heading"),
+											jsx("td", {
+												// A CATEGORY, IN INK. See MISSION_SECTION_FACES: the kind
+												// of chapter is not a grade, so it takes no tint and leaves
+												// the row's one colour to the decision.
+												style: { ...TD, color: INK.secondary },
+												children: missionFace(MISSION_SECTION_FACES, row.sectionType, zh)
+											}, "section"),
+											jsx("td", {
+												style: TD,
+												children: Chip({
+													tone: missionHue(faces, landing),
+													icon: missionIcon(faces, landing),
+													label: missionFace(faces, landing, zh)
+												}, "landing")
+											}, "decision"),
+											jsx("td", {
+												// INK, WHATEVER IT SAYS; the docblock has the reason.
+												style: { ...TD, textAlign: "right" },
+												// An em dash, never a nought: a chapter the reviewer never
+												// scored has not scored zero.
+												children: row.score === null || row.score === undefined ? "—" : String(row.score)
+											}, "score"),
+											jsx("td", {
+												style: {
+													...TD, textAlign: "right",
+													// ONE ROUND IS PAR. Every round past the first is a
+													// chapter written twice, which is the same fact the
+													// rework panel counts as `chapterRewrites` and paints in
+													// the same amber.
+													color: attempts > 1 ? `rgb(${TONE.warn})` : INK.primary
+												},
+												children: String(attempts)
+											}, "attempts"),
+											jsx("td", {
+												style: {
+													...TD, textAlign: "right",
+													// THE STORED FLAG, not a comparison made here. The write
+													// loop measured the delivery against a fraction of the
+													// floor and wrote down what it found; recomputing
+													// `words < floor` on this side would be a second opinion
+													// on a decision that was already taken and acted on —
+													// and where the two disagree, both figures are printed
+													// right beside it.
+													color: row.underDelivered === true ? `rgb(${TONE.warn})` : INK.primary
+												},
+												// NO DENOMINATOR FOR A FLOOR OF NOUGHT, the same refusal
+												// the dimension floor gets on the board: `312/0` reads as a
+												// bar this chapter cleared, and a chapter recorded before a
+												// floor was set has no bar at all.
+												children: floor > 0 ? `${words}/${floor}` : String(words)
+											}, "words")
+										]
+									}, key);
+								})
+							}, "body")
+						]
+					})
+				})
+			});
 		}
 
 		/**
@@ -12809,6 +13054,20 @@ window.__ModuleLoader__.load({
 												: "written by the leader when the mission was opened, verbatim",
 											children: jsx(MissionGoals, { goals: mission.goals, zh })
 										}, "goals"),
+										// THE WRITER'S OWN LEDGER, under the brief it was written
+										// against. Every column of it — the decision, the reviewer's
+										// score, the rounds, the delivered words against the floor —
+										// has been projected per row since projectChapters was
+										// written, and the view dropped the whole array one line
+										// before the route sent it.
+										(view.chapters ?? []).length === 0 ? null : jsx(MissionPanel, {
+											title: zh ? "成章记录" : "Chapter delivery",
+											count: view.chapters.length,
+											note: zh
+												? "本次生成的每一章：怎么判的、评了多少分、写了几轮、交付字数对下限"
+												: "one row per chapter of this generation: how it landed, what it scored, how many rounds it took, and what it delivered against its floor",
+											children: jsx(MissionChapterTable, { chapters: view.chapters, zh })
+										}, "chapters"),
 										preflight === null || (preflight.messages ?? []).length === 0 ? null : jsx(MissionPanel, {
 											title: zh ? "核验风险" : "Verification risk",
 											count: preflight.messages.length,

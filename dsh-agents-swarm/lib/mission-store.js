@@ -954,8 +954,21 @@ function clampInt(value, low, high, fallback) {
   return Math.max(low, Math.min(high, Math.trunc(parsed)));
 }
 
-/** A finite number or null, for scores that are legitimately absent. */
+/**
+ * A finite number or null, for scores that are legitimately absent.
+ *
+ * THE EXPLICIT NULL IS THE CASE THIS EXISTS FOR, and it was the one case it
+ * got wrong. `Number(null)` is 0, not NaN, so every `score: null` handed to
+ * it landed in the column as a nought: s7 and s8 write exactly that for a
+ * chapter they have planned and not yet reviewed. A REAL column that stores
+ * `never scored` as zero cannot be read back afterwards, because 0 is also a
+ * score a reviewer can give, and the two readings are opposite ones. It
+ * survived this long because `undefined` DOES come back null, so only the
+ * callers explicit enough to pass the null were hit.
+ */
 function numberOrNull(value) {
+  // Empty string as well: `Number("")` is 0 by the same rule.
+  if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }

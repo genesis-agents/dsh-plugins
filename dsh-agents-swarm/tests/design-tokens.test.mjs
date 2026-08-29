@@ -1115,6 +1115,7 @@ test("slow means one thing on both screens that say it", () => {
 /** The three data tables, which are the whole subject of half these tests. */
 const TABLES = [
   "function MissionToolTable(",
+  "function MissionChapterTable(",
   "function MissionTaskBoard(",
   "function MissionAgentTable(",
 ];
@@ -3607,5 +3608,116 @@ test("the drawer's account of a grade is the stage's arithmetic, not a second op
     weights.evidence + weights.independence,
     1,
     "the two shares the drawer prints do not add up to the whole grade, which leaves a reader to conclude the rest of it came from somewhere nobody named",
+  );
+});
+
+
+test("the per-chapter record is on a screen, with the reviewer's score on it", () => {
+  // Recording a number, projecting it and drawing it nowhere is the shape this
+  // file keeps finding. `mission_chapters.score` was the purest case of it: a
+  // reviewer's verdict on every chapter of every run, in the database since the
+  // report tables landed, and not one pixel anywhere.
+  assert.ok(
+    SOURCE.includes("function MissionChapterTable("),
+    "the per-chapter record has no component, so the decision, the score, the rounds and the delivered words are computed on the wire and read by nobody",
+  );
+  const table = code(body("function MissionChapterTable("));
+  for (const [field, loss] of [
+    ["row.heading", "which chapter the row is about"],
+    ["row.sectionType", "whether the chapter cites or interprets"],
+    ["row.score", "the reviewer's score, which nothing else in this product reports"],
+    ["row.attempts", "how many rounds the chapter took"],
+    ["row.wordCount", "what the chapter actually delivered"],
+    ["row.minDelivery", "the floor it was delivering against"],
+    ["row.bodyMissing", "whether the chapter came back empty"],
+  ]) {
+    assert.ok(table.includes(field), `the chapter row no longer says ${loss}`);
+  }
+  // MOUNTED, and on the pane that holds the rest of the work: a run whose
+  // chapters came back empty is a run with no report pane to read.
+  assert.match(
+    code(DETAIL),
+    /jsx\(MissionChapterTable, \{ chapters: view\.chapters, zh \}\)/,
+    "the table exists and nothing mounts it, which is the state the projector's own `chapters` key was in",
+  );
+});
+
+test("a chapter's delivery is read from the column that recorded it, and never over a floor of nought", () => {
+  const table = code(body("function MissionChapterTable("));
+  // NO DENOMINATOR FOR A FLOOR OF NOUGHT — the same refusal the dimension floor
+  // gets on the board. `312/0` reads as a bar this chapter cleared.
+  assert.match(
+    table,
+    /floor > 0 \? `\$\{words\}\/\$\{floor\}` : String\(words\)/,
+    "a chapter recorded before a floor was set prints `/0`, which reads as a bar it cleared rather than a bar nobody has drawn",
+  );
+  // THE STORED FLAG, not a comparison invented here. The write loop measures
+  // against a fraction of the floor, so `words < floor` on this side would
+  // disagree with the column on every chapter between the two lines — and the
+  // column is the one the content guard reads.
+  assert.match(
+    table,
+    /color: row\.underDelivered === true \? `rgb\(\$\{TONE\.warn\}\)` : INK\.primary/,
+    "the shortfall is recomputed on this side of the wire instead of read from the column the writer wrote, which is a second opinion on a decision already taken",
+  );
+  // AND THE SCORE IS NOT BANDED. The pass bar is SCORE_THRESHOLDS one file
+  // away and it MOVES with the attempt, so a threshold typed here is a second
+  // copy of a ladder that is not even constant.
+  assert.ok(
+    !/row\.score\s*[<>]=?/.test(table),
+    "the score is graded against a number typed on this side of the wire; the bar it is graded against moves with the attempt, so the two can only agree by accident",
+  );
+  // A FIGURE AT PAR IS INK. One round is the ordinary case and every round past
+  // it is a chapter written twice — the same fact the rework panel paints.
+  assert.match(
+    table,
+    /color: attempts > 1 \? `rgb\(\$\{TONE\.warn\}\)` : INK\.primary/,
+    "every chapter's round count is drawn in the same colour, so a chapter written four times is as quiet as one written once",
+  );
+});
+
+test("a chapter with no decision says which empty it is, and an empty body is marked only when it is a hole", () => {
+  const table = code(body("function MissionChapterTable("));
+  // THREE DIFFERENT FACTS, NOT ONE BLANK CELL: never started, being written,
+  // and a run that ended over a chapter the write loop never decided.
+  assert.match(
+    table,
+    /decided \? MISSION_CHAPTER_DECISION_FACES : MISSION_CHAPTER_STATE_FACES/,
+    "a chapter with no decision draws the same nothing whether it has not been started, is being written now, or was left behind by a run that ended",
+  );
+  // THE MARK IS FOR THE HOLE. A chapter nobody has written yet has no body
+  // either, and marking that paints the ordinary case as the failure.
+  assert.match(
+    table,
+    /row\.bodyMissing !== true \|\| !decided \? null : Chip\(/,
+    "an unwritten chapter is marked as an empty one, which puts a red mark on every chapter of every mission that is still running",
+  );
+
+  // THE DECISION VOCABULARY IS THE STORE'S, and this side only says what each
+  // value means. A value the column may write and this table has never heard of
+  // falls through `missionFace` to its raw slug.
+  const store = readFileSync(new URL("../lib/mission-store.js", import.meta.url), "utf8");
+  const declared = /export const CHAPTER_DECISIONS = Object\.freeze\(\[([^\]]+)\]\)/.exec(store);
+  assert.ok(declared, "CHAPTER_DECISIONS is gone from the store, so the faces table here is a copy of nothing");
+  const words = keysOf("const MISSION_CHAPTER_DECISION_FACES = {");
+  for (const value of declared[1].match(/"[a-z-]+"/g).map((quoted) => quoted.slice(1, -1))) {
+    assert.ok(words.includes(value), `the store may write the decision "${value}" and this side has no word for it, so a reader is shown the raw column value`);
+  }
+  // AND THE TWO FALLBACKS ARE NOT DRAWN ALIKE. `fallback-length` is a fact
+  // about the delivery — the prose may well have scored 82 — and
+  // `fallback-exhausted` is a chapter nobody could fix.
+  const faces = declaration("const MISSION_CHAPTER_DECISION_FACES = {");
+  const hueOf = (value) => (new RegExp(`"${value}":[^\\n]*hue: (TONE\\.\\w+)`).exec(faces) ?? [])[1];
+  assert.ok(hueOf("fallback-length") !== undefined && hueOf("fallback-exhausted") !== undefined, "a fallback lost its hue, so it draws in the neutral every unknown value gets");
+  assert.notEqual(
+    hueOf("fallback-length"),
+    hueOf("fallback-exhausted"),
+    "a chapter that came in short and a chapter nobody could fix are painted the same colour, which is the split the column has three values for",
+  );
+  // THE KIND OF CHAPTER TAKES NONE OF IT. Colour on this row means how the
+  // chapter landed, and an interpretive chapter has not landed badly.
+  assert.ok(
+    !declaration("const MISSION_SECTION_FACES = {").includes("hue:"),
+    "the section type carries a colour, so a chapter that interprets is drawn as a chapter that went wrong",
   );
 });

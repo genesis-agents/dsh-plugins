@@ -199,7 +199,7 @@ const DIMENSION_RESOLVED = Object.freeze(["collected", "degraded", "failed"]);
  * @param {object[]} input.artefacts - `mission_artifacts` rows WITHOUT `markdown` or `evidence`.
  * @param {object[]} input.eventTail - a bounded tail of `mission_events`, any order.
  * @param {object} input.policy - stage catalogue, LADDER, `now`, and resolved policy answers.
- * @returns {object} `{mission, stages, dimensions, agents, todo, work, cost, artifact, timeline, resume, swept}`.
+ * @returns {object} `{mission, stages, dimensions, chapters, agents, todo, work, cost, artifact, timeline, resume, swept}`.
  */
 export function projectMissionView(input) {
   const { row, policy } = input ?? {};
@@ -246,7 +246,14 @@ export function projectMissionView(input) {
   // route has been returning is a field something outside this repository may
   // have started reading, and removing it in the same change that adds its
   // replacement leaves such a reader with no working version to move between.
-  return { mission, stages, dimensions, agents, todo, work, cost, artifact, timeline, resume, swept };
+  // `chapters` IS RETURNED, and this is the line where it was not. Every
+  // field of the per-chapter record — the decision, the reviewer's score, the
+  // attempts, the delivered words against the floor, and whether the body came
+  // back empty — was computed by `projectChapters` above, consumed by the
+  // dimension roll-up, and then dropped here: the four-number summary on a
+  // dimension card cannot say WHICH chapter came in short, and
+  // `mission_chapters.score` reached no reader at all.
+  return { mission, stages, dimensions, chapters, agents, todo, work, cost, artifact, timeline, resume, swept };
 }
 
 /**

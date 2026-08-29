@@ -3000,3 +3000,134 @@ test("the stored-page route names what it holds instead of answering emptily", a
     "a run that stored nothing reads as a page that vanished, and those two send the reader looking in different places",
   );
 });
+
+
+test("every chapter reports what it cost to make, and the score the reviewer gave it", (t) => {
+  // THE LOSS: `projectChapters` has derived a state, a decision, a score, the
+  // attempts, the delivered words against the floor and whether the body came
+  // back empty for every row since it was written — and `projectMissionView`
+  // returned no `chapters` key, so the entire array was folded and dropped one
+  // line before the route sent it. `mission_chapters.score` is a real reviewer
+  // verdict, and there was no screen and no response in the product that could
+  // show one.
+  const { store, missions } = library(t);
+  const id = mission(missions);
+  const at = "2026-08-24T00:05:00.000Z";
+  missions.upsertChapter({
+    missionId: id, runCount: 1, dimensionId: "d1", chapterIndex: 0,
+    sectionType: "evidenced", heading: "制造良率", body: "写满的一章。".repeat(40),
+    wordCount: 940, minDelivery: 800, underDelivered: false,
+    decision: "passed", score: 86, attempts: 1, inputHash: "hash-1", at,
+  });
+  // SHORT, AND SAYING SO TWICE: the flag is what the write loop acted on, the
+  // two figures are what it acted on it with.
+  missions.upsertChapter({
+    missionId: id, runCount: 1, dimensionId: "d2", chapterIndex: 1,
+    sectionType: "interpretive", heading: "监管口径", body: "短了。",
+    wordCount: 210, minDelivery: 800, underDelivered: true,
+    decision: "fallback-length", score: 82, attempts: 3, inputHash: "hash-2", at,
+  });
+  // THE HOLE s12's CONTENT GUARD EXISTS TO CATCH: a decision recorded over
+  // nothing at all.
+  missions.upsertChapter({
+    missionId: id, runCount: 1, dimensionId: "d3", chapterIndex: 2,
+    sectionType: "evidenced", heading: "成本曲线", body: null,
+    wordCount: 0, minDelivery: 800, underDelivered: true,
+    decision: "fallback-exhausted", score: null, attempts: 4, inputHash: "hash-3", at,
+  });
+
+  const view = projectMissionView({
+    ...readMissionViewInput(store.db, id, {}),
+    policy: VIEW_POLICY("2026-08-24T00:06:00.000Z"),
+  });
+
+  assert.ok(
+    Array.isArray(view.chapters),
+    "the view carries no chapters at all, so every per-chapter figure the projector computes is dropped before the route sends it",
+  );
+  assert.equal(view.chapters.length, 3);
+
+  const [first, short, hollow] = view.chapters;
+  assert.equal(first.heading, "制造良率", "a chapter arrives without the heading it was written under, so no row can be told from another");
+  assert.equal(first.sectionType, "evidenced", "the kind of chapter is gone, so one that cites and one that interprets read alike");
+  assert.equal(first.decision, "passed", "how the chapter landed is dropped, which is the column the writer's whole retry ladder ends in");
+  assert.equal(first.score, 86, "the reviewer's score is dropped — it is the one number about a chapter that nothing else in this product reports");
+  assert.equal(first.attempts, 1);
+  assert.equal(first.wordCount, 940);
+  assert.equal(first.minDelivery, 800, "the floor is gone, so the word count beside it is a figure with nothing to read it against");
+  assert.equal(first.underDelivered, false);
+  assert.equal(
+    first.bodyMissing, false,
+    "a chapter with a stored body reads as empty: the reader deliberately does not SELECT body, so presence travels as length(body) and nothing else can carry it",
+  );
+  assert.equal(first.state, "done");
+
+  assert.equal(short.decision, "fallback-length", "a chapter that landed short of its floor is reported as one that ran out of rounds, which is the opposite result");
+  assert.equal(short.underDelivered, true, "the shortfall the write loop recorded does not survive the projection, so a short chapter looks delivered");
+  assert.equal(short.attempts, 3, "the rounds are gone, so a chapter written three times is indistinguishable from one written once");
+
+  assert.equal(hollow.bodyMissing, true, "a chapter that recorded a decision over an empty body reads as a written one, which is the assembly succeeding over nothing");
+  assert.equal(hollow.score, null, "a chapter the reviewer never scored is handed a number it was never given");
+
+  // SCOPED TO THIS GENERATION, like every other count on this view. A rerun
+  // writes a new generation and deletes nothing (§6.1).
+  missions.upsertChapter({
+    missionId: id, runCount: 2, dimensionId: "d1", chapterIndex: 0,
+    sectionType: "evidenced", heading: "制造良率（重跑）", body: "第二代。",
+    wordCount: 900, minDelivery: 800, underDelivered: false,
+    decision: "passed", score: 91, attempts: 1, inputHash: "hash-4", at,
+  });
+  const again = projectMissionView({
+    ...readMissionViewInput(store.db, id, {}),
+    policy: VIEW_POLICY("2026-08-24T00:06:00.000Z"),
+  });
+  assert.deepEqual(
+    again.chapters.map((chapter) => chapter.heading),
+    ["制造良率", "监管口径", "成本曲线"],
+    "the projection lists every generation at once, so one rerun doubles every chapter on the screen and the report's own count stops matching it",
+  );
+});
+
+test("a chapter left unwritten by a run that ended says so, and is never reported as delivered", (t) => {
+  // The budget runs out mid-way through s8 and the remaining rows keep their
+  // planned shape: no decision, no score, no body. On a mission that then ends,
+  // reading those as anything but outstanding is the fabrication the whole
+  // sweep exists to refuse — and the panel that draws them is the only place a
+  // reader can see how far the writer actually got.
+  const { store, missions } = library(t);
+  const id = mission(missions);
+  missions.upsertChapter({
+    missionId: id, runCount: 1, dimensionId: "d1", chapterIndex: 0,
+    sectionType: "evidenced", heading: "写到一半", body: "开了个头。",
+    wordCount: 120, minDelivery: 800, underDelivered: true,
+    decision: null, score: null, attempts: 1, inputHash: "hash-5", at: "2026-08-24T00:05:00.000Z",
+  });
+  missions.upsertChapter({
+    missionId: id, runCount: 1, dimensionId: "d2", chapterIndex: 1,
+    sectionType: "evidenced", heading: "没轮到", body: null,
+    wordCount: 0, minDelivery: 800, underDelivered: false,
+    decision: null, score: null, attempts: 0, inputHash: "hash-6", at: "2026-08-24T00:05:00.000Z",
+  });
+
+  const live = projectMissionView({
+    ...readMissionViewInput(store.db, id, {}),
+    policy: VIEW_POLICY("2026-08-24T00:06:00.000Z"),
+  });
+  assert.deepEqual(
+    live.chapters.map((chapter) => chapter.state),
+    ["writing", "pending"],
+    "a chapter with a body and no decision reads the same as one nothing has touched, so the screen cannot say where the writer is",
+  );
+
+  missions.finalizeMissionRow({ missionId: id, status: "failed", failureCode: "budget_exhausted", at: "2026-08-24T00:10:00.000Z" });
+  const ended = projectMissionView({
+    ...readMissionViewInput(store.db, id, {}),
+    policy: VIEW_POLICY("2026-08-24T00:11:00.000Z"),
+  });
+  assert.equal(ended.chapters[0].state, "failed", "a chapter still being written when the run died is reported as done, which is a chapter this mission never delivered");
+  assert.equal(ended.chapters[0].decision, null, "the sweep invented a decision for a chapter nobody decided");
+  assert.ok(
+    ended.swept.some((entry) => entry.kind === "chapter"),
+    "the chapter the projector had to sweep is repaired silently, so nothing on the screen says the write loop left without recording a decision",
+  );
+});
