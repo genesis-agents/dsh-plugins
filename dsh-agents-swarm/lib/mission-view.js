@@ -337,6 +337,15 @@ function projectStages({ stageRows, policy, now, sweepTo, swept }) {
       // that a counter with several writers and one critical reader drifts.
       tokens: 0,
       calls: 0,
+      // FROM THE CATALOGUE, never from the row. Whether a stage may be re-run on
+      // its own is a property of the pipeline — the gate froze the caps this
+      // mission is graded against, the persist stage arbitrates one write
+      // exactly once — and `dag.rerunable` has carried that answer, with its own
+      // sentence beside it, since the DAG was declared. It had no reader
+      // anywhere, which is this codebase's signature failure: the data was one
+      // field away and the screen showed the scaffolding instead.
+      rerunable: decl.dag?.rerunable === true,
+      rerunReason: decl.dag?.rerunReason ?? null,
     });
   }
 
@@ -361,6 +370,11 @@ function projectStages({ stageRows, policy, now, sweepTo, swept }) {
       durationMs: r.duration_ms == null ? null : numberOr(r.duration_ms, 0),
       degradeNote: r.degrade_note ?? null, stalled: false, tokens: 0, calls: 0,
       unknownToCatalogue: true,
+      // No declaration, so no cascade, so no rerun — and the reason says WHICH
+      // gap this is. A bare `false` here would read as "the pipeline forbids it"
+      // when the truth is that nothing knows what this stage is.
+      rerunable: false,
+      rerunReason: `"${id}" is not in the stage catalogue, so nothing here knows what re-running it would invalidate.`,
     });
     swept.push({
       kind: "stage-row-unknown",
@@ -398,6 +412,9 @@ function blankStage(decl, index) {
     stepId: String(decl.id), ordinal: index, agent: decl.agent ?? null, mode: decl.mode ?? null,
     status: "pending", attempts: 0, startedAt: null, endedAt: null, durationMs: null,
     degradeNote: null, stalled: false, tokens: 0, calls: 0, rowMissing: true,
+    // The declaration is here even when the row is not, so this is the one thing
+    // a blank stage can still answer honestly rather than leave undefined.
+    rerunable: decl.dag?.rerunable === true, rerunReason: decl.dag?.rerunReason ?? null,
   };
 }
 

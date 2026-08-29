@@ -3363,3 +3363,40 @@ test("the library's facts are drawn once, and the absence of them is not a colou
     "the references rows stopped reading the join, so every page on the pane is typeless and unscored again",
   );
 });
+
+
+test("the stage panel offers a rerun only where the pipeline allows one", () => {
+  // A CONTROL OFFERED FOR WORK THE ROUTE WILL REFUSE is worse than no control:
+  // the person presses it, gets a 409 in the error line, and learns that this
+  // screen's buttons are a guess. `rerunable` and its sentence come up from the
+  // pipeline's own declaration through the view, so the panel never decides
+  // this for itself — and the third state is not "assume yes": a payload that
+  // does not carry the field is a payload that says nothing about this step.
+  const panel = code(body("function MissionStageDetail({"));
+
+  assert.match(panel, /onRerunStage\?\.\(stage\.stepId\)/u, "the stage panel has no way to re-run the stage it is describing, so the only rerun on this screen is still the whole mission");
+  assert.match(panel, /stage\.rerunable === true/u, "the rerun control is offered without asking whether the pipeline allows it, so pressing it on the budget gate is a 409 the reader cannot predict");
+  assert.match(panel, /stage\.rerunReason/u, "a stage that cannot be re-run shows no reason, which is the dead end validateStageDag refuses to let a stage declare");
+  assert.ok(
+    !/onRerunStage\?\.\(stage\.stepId\)[\s\S]{0,400}rerunable/u.test(panel),
+    "the rerunable check sits after the click handler rather than around it",
+  );
+
+  // The label has to say the cascade. "Re-run this step" is the half that
+  // sounds safe; the successors are reset with it.
+  assert.match(panel, /Re-run this step and everything after it/u, "the rerun label promises one stage and resets its successors too, which is the surprise this wording exists to remove");
+
+  // And the control has to be reachable: a prop nobody threads down is a button
+  // that renders and does nothing.
+  const board = code(body("function MissionTaskBoard({"));
+  assert.match(board, /onRerunStage/u, "the task board does not pass the rerun down to the drawer it opens, so the control is inert");
+  assert.match(code(SOURCE), /onRerunStage: \(stepId\) =>/u, "nothing on the mission screen supplies the rerun, so the panel's control is wired to undefined");
+
+  // Tokens, like every other control on this panel. A rerun is a figure at par
+  // — it deletes nothing — so it is drawn in ink, and the colour this panel has
+  // stays spent on the stage that actually degraded.
+  assert.ok(
+    !/onClick: \(\) => \{ onRerunStage[\s\S]{0,200}rgb\(\$\{TONE\./u.test(panel),
+    "the rerun control is coloured; colour on this panel marks the exception, and re-running a step is not one",
+  );
+});

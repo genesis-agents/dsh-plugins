@@ -2684,3 +2684,226 @@ test("the library is asked under the mission's spelling and its own", async (t) 
     "the library holds this page under its clean address and the lookup only asked for the tracking one, so a collected page is reported as never read",
   );
 });
+
+
+/* ── re-running one stage ──────────────────────────────────────────────── */
+
+test("re-running one stage takes its successors with it and leaves its predecessors alone", (t) => {
+  // THE HALF THAT LOOKS SAFE. Reset only the stage somebody pointed at and
+  // `s8-write`'s chapters keep standing against an outline that no longer
+  // exists. `runMission` starts at the first UNSETTLED stage, so it would
+  // re-run `s7-outline`, walk straight past the five stages after it that still
+  // say `done`, and deliver a report assembled from two different plans with
+  // every row on the board green. Nothing throws; the mission reports success.
+  const { missions: store } = library(t);
+  const id = mission(store, { depth: "standard" });
+
+  const settled = store.listStages(id).filter((row) => row.status !== "skipped-by-tier");
+  assert.ok(settled.length >= 8, "the fixture settled nothing, so this test would pass on an empty mission");
+  for (const row of settled) {
+    store.startStage(id, row.stepId, "2026-08-27T09:00:01.000Z");
+    store.finishStage(id, row.stepId, { status: "done", at: "2026-08-27T09:00:02.000Z", output: { ran: row.stepId }, tokens: 7 });
+  }
+  store.saveCheckpoint(id, {
+    completedKeys: settled.map((row) => row.stepId),
+    crossState: { caps: { maxTokens: 100_000 }, plan: { dimensions: 5 } },
+    pipelineHash: computePipelineHash(STAGES, "standard"),
+    at: "2026-08-27T09:00:03.000Z",
+  });
+
+  const outline = STAGES.find((stage) => stage.id === "s7-outline");
+  const answer = store.resetStageForRerun(id, "s7-outline", "2026-08-27T09:10:00.000Z");
+  assert.equal(answer.ok, true, `re-running one stage was refused (${answer.reason}: ${answer.detail}), so the only way to redo an outline is to re-buy the whole mission`);
+  assert.deepEqual(
+    answer.reset,
+    ["s7-outline", ...outline.dag.successors],
+    "the cascade no longer matches the successor closure the pipeline declares, so what a stage rerun throws away can no longer be read off the DAG",
+  );
+
+  const after = new Map(store.listStages(id).map((row) => [row.stepId, row]));
+  for (const stage of STAGES) {
+    const row = after.get(stage.id);
+    if (answer.reset.includes(stage.id)) {
+      assert.equal(row.status, "pending", `${stage.id} is downstream of s7-outline and still says ${row.status}; the runner will skip it and the delivered report mixes two plans`);
+      assert.equal(row.attempts, 0, `${stage.id} kept its attempt count, so last run's retries are charged against this one's cap`);
+      assert.equal(row.output ?? null, null, `${stage.id} kept last run's output under a row that says pending`);
+    } else if (row.status !== "skipped-by-tier") {
+      assert.equal(row.status, "done", `${stage.id} runs BEFORE s7-outline and was reset anyway; a stage rerun that re-collects is a full rerun wearing a cheaper name`);
+      assert.notEqual(row.output ?? null, null, `${stage.id} lost work that was finished and paid for`);
+    }
+  }
+
+  // The back edge is not a successor, and following it would turn "judge the
+  // evidence again" into "buy the evidence again".
+  assert.equal(STAGES.find((stage) => stage.id === "s4-assess").dag.backEdge, "s3-collect", "s4-assess no longer holds the back edge; this guard is now checking nothing");
+  const assess = store.resetStageForRerun(id, "s4-assess", "2026-08-27T09:11:00.000Z");
+  assert.ok(!assess.reset.includes("s3-collect"), "re-running s4-assess reset s3-collect, so asking for a second opinion silently re-runs the collection it is an opinion about");
+
+  // The checkpoint SURVIVES this, where a fresh rerun deletes it. It is the only
+  // place the cross-state of the stages before this one lives, and a re-run
+  // stage handed an empty bag fails a downstream gate for a structural reason
+  // that has nothing to do with the work.
+  const checkpoint = store.getCheckpoint(id);
+  assert.notEqual(checkpoint, undefined, "the checkpoint was deleted, so the re-run stage opens with no upstream state and dies on a gate that is not about the work");
+  assert.deepEqual(checkpoint.crossState.plan, { dimensions: 5 }, "the cross-state the earlier stages wrote did not survive the reset, so their output is gone from the only place it lived");
+  assert.equal(checkpoint.savedAt, "2026-08-27T09:00:03.000Z", "the reset re-stamped saved_at, which silently extends the seven-day resume window on a snapshot nobody re-took");
+  // And it agrees with the rows, or the runner raises a divergence alarm on an
+  // operation somebody deliberately asked for.
+  assert.ok(!checkpoint.completedKeys.includes("s7-outline"), "the checkpoint still lists a stage the rows say is pending, so every deliberate stage rerun trips the divergence alarm");
+  assert.ok(checkpoint.completedKeys.includes("s1-brief"), "the checkpoint forgot the stages that really did finish, so a resume would pay for them again");
+});
+
+test("a stage the pipeline will not re-run refuses in the pipeline's own words", (t) => {
+  // "It did not re-run" is the answer that sends somebody to read the source.
+  // Both un-rerunable stages wrote their own reason into the DAG precisely so
+  // that no caller has to invent one, and `validateStageDag` refuses to load a
+  // stage that declares `rerunable: false` without it.
+  const { missions: store } = library(t);
+  const quick = mission(store, { depth: "quick" });
+
+  for (const stepId of ["s1-brief", "s12-persist"]) {
+    const decl = STAGES.find((stage) => stage.id === stepId);
+    assert.equal(decl.dag.rerunable, false, `${stepId} is now rerunable, so this guard is checking nothing`);
+    const refused = store.resetStageForRerun(quick, stepId, "2026-08-27T09:10:00.000Z");
+    assert.equal(refused.ok, false, `${stepId} was reset anyway — ${decl.dag.rerunReason}`);
+    assert.equal(refused.reason, "not-rerunable", `${stepId} was refused for "${refused.reason}", which is not the reason the pipeline gives`);
+    assert.equal(refused.detail, decl.dag.rerunReason, "the refusal invented a sentence of its own instead of the pipeline's, so the reader is told no and never told why");
+    assert.deepEqual(refused.reset, [], `a refused rerun still named ${refused.reset.join(", ")} as reset, so the caller believes work was discarded that was not`);
+  }
+
+  const unknown = store.resetStageForRerun(quick, "s7-outlines", "2026-08-27T09:10:00.000Z");
+  assert.equal(unknown.ok, false, "a step id that is not in the pipeline was accepted, so a typo resets nothing and reports success");
+  assert.equal(unknown.reason, "unknown-stage");
+  assert.match(unknown.detail, /s7-outline\b/u, "the refusal does not name the stages that do exist, which leaves a typo with nowhere to go");
+
+  const skippedRow = store.listStages(quick).find((row) => row.status === "skipped-by-tier");
+  assert.notEqual(skippedRow, undefined, "the quick tier skips nothing any more, so this guard is checking nothing");
+  const tier = store.resetStageForRerun(quick, skippedRow.stepId, "2026-08-27T09:10:00.000Z");
+  assert.equal(tier.ok, false, `${skippedRow.stepId} is not run at this depth and was reset anyway, so the mission goes back to running for a stage nothing will ever dispatch`);
+  assert.equal(tier.reason, "skipped-by-tier");
+
+  // A rerun that IS allowed leaves the tier's skips exactly where it found them.
+  // The fresh reset rewrites those rows because a rerun may change tier; this
+  // one cannot, because it runs against the caps s1 already froze.
+  const before = store.listStages(quick).filter((row) => row.status === "skipped-by-tier").map((row) => row.stepId);
+  const allowed = store.resetStageForRerun(quick, "s3-collect", "2026-08-27T09:11:00.000Z");
+  assert.equal(allowed.ok, true, `re-running s3-collect was refused: ${allowed.reason}: ${allowed.detail}`);
+  assert.deepEqual(
+    store.listStages(quick).filter((row) => row.status === "skipped-by-tier").map((row) => row.stepId),
+    before,
+    "a stage rerun handed this mission back the stages its tier skips, so it would now run work its frozen caps were never sized for",
+  );
+  assert.ok(
+    !allowed.reset.some((stepId) => before.includes(stepId)),
+    `the cascade reported ${allowed.reset.join(", ")} as reset, including stages this tier never runs — so the count of discarded work is wrong on every quick mission`,
+  );
+});
+
+test("re-running one stage stays inside the generation it is re-running", async (t) => {
+  // THE DIFFERENCE FROM `rerun`, and it is the whole reason this is a separate
+  // route. Findings, chapters and artefacts are keyed by `run_count`; a stage
+  // rerun bumping it would orphan the very rows the re-run stage reads as its
+  // input, so `s9-verify` would open on an empty corpus and verify nothing
+  // while every earlier row still said the work was done.
+  const { missions: store } = library(t);
+  const id = mission(store, { depth: "standard" });
+  seedEvidence(store, id, { runCount: 1 });
+  store.putConfig(id, "fresh", { resolved: true, maxTokens: 100_000 }, "2026-08-24T00:00:00.000Z");
+  const frozenAt = store.latestConfig(id).revision;
+  for (const row of store.listStages(id).filter((stage) => stage.status !== "skipped-by-tier")) {
+    store.startStage(id, row.stepId, "2026-08-27T09:00:01.000Z");
+    store.finishStage(id, row.stepId, { status: "done", at: "2026-08-27T09:00:02.000Z", output: { ran: row.stepId }, tokens: 7 });
+  }
+  store.finalizeMissionRow({ missionId: id, runCount: 1, status: "completed", at: "2026-08-27T09:05:00.000Z" });
+
+  const dispatched = [];
+  const handler = createMissionRoutes({
+    missionStore: store,
+    runtime: {
+      bootId: "boot-1",
+      clock: () => "2026-08-27T09:10:00.000Z",
+      running: () => [],
+      start: () => ({ started: true, reason: null }),
+      startOrPark: (missionId) => { dispatched.push(missionId); return { started: true, reason: null, parked: false }; },
+    },
+    sendJson: (target, status, body) => { target.status = status; target.body = body; },
+    readJson: async () => ({}),
+  });
+  /** POST one path through the router, and hand back what it wrote. */
+  const post = async (path) => {
+    const res = { writeHead() {}, write() {}, end() {}, on() {} };
+    const handled = await handler({ method: "POST", url: path }, res, path);
+    return { handled, status: res.status, body: res.body };
+  };
+
+  const answer = await post(`/missions/${id}/stages/s9-verify/rerun`);
+  assert.equal(answer.handled, true, "the router did not recognise its own stage-rerun path, so the request 404s and the capability is unreachable");
+  assert.equal(answer.status, 200, `the stage rerun was refused: ${JSON.stringify(answer.body)}`);
+  assert.deepEqual(
+    answer.body.data.reset,
+    ["s9-verify", "s10-critique", "s11-signoff", "s12-persist"],
+    "the route did not report what it discarded, so the reader is told one stage was re-run and three finished stages were quietly thrown away with it",
+  );
+  assert.deepEqual(dispatched, [id], "the row was claimed and never dispatched, which leaves a mission that says running with nothing driving it until the next boot sweep");
+
+  const row = store.getMission(id);
+  assert.equal(row.runCount, 1, `the stage rerun opened generation ${row.runCount}; every finding, chapter and artefact of generation 1 is now orphaned from the stage that was meant to read them`);
+  assert.equal(row.status, "running", "the mission was not claimed, so the runner will refuse it and nothing re-runs");
+  assert.equal(
+    store.listFindings({ missionId: id, runCount: row.runCount }).length,
+    1,
+    "the evidence the re-run stage exists to verify is not in this generation any more",
+  );
+
+  // A NEW revision, under the reason the schema has carried since it was written
+  // and no route ever wrote. `s12` reads it back to stamp the artefact version
+  // `recovered`, so a version produced by re-running one stage is not filed as
+  // though a full rerun had produced it.
+  const config = store.latestConfig(id);
+  assert.equal(config.mutationReason, "stage-rerun", `the revision was filed as "${config.mutationReason}", so the artefact this run writes is stamped with the wrong trigger and the version list stops distinguishing a stage rerun from a full one`);
+  assert.equal(config.revision, frozenAt + 1, "no new revision was frozen, so this run spends against the residual of a pool the first run already drained and dies instantly at budget_exhausted");
+  assert.equal(config.config.maxTokens, 100_000, "the resolved config was not carried forward, which is playground's rerun bug: it could not read its own ceiling and fell back to a default worth about two dollars");
+  assert.equal(config.config.stageRerunOf, "s9-verify", "the revision does not record which stage it was derived for");
+
+  // The refusal comes back as the pipeline wrote it, through the route.
+  const refused = await post(`/missions/${id}/stages/s12-persist/rerun`);
+  assert.equal(refused.status, 409, "the persist stage was re-run on its own, and its terminal write loses its own conditional-write race");
+  assert.match(refused.body.error, /arbitrated exactly once/u, "the 409 does not carry the pipeline's own reason, so the user reads it as a button that is broken");
+
+  // The extra path segment still belongs to exactly two routes and no others.
+  const stray = await post(`/missions/${id}/stages/s9-verify/oops`);
+  assert.equal(stray.handled, false, "an unknown verb under /stages/ was handled, which is a route ignoring part of its own path and doing something anyway");
+  const cancelStray = await post(`/missions/${id}/cancel/oops`);
+  assert.equal(cancelStray.handled, false, "widening the splitter re-opened /missions/<id>/cancel/oops, which cancels a mission from a path nobody wrote");
+});
+
+test("the view says which stages may be re-run, and why not when they may not", (t) => {
+  // `dag.rerunable` and its sentence have been declared since the DAG was
+  // written and had NO READER anywhere, which is this codebase's signature
+  // failure: the answer was one field away and the screen offered the action
+  // for every stage, so the only place a refusal existed was the route.
+  const { store, missions } = library(t);
+  const id = mission(missions, { depth: "standard" });
+  const view = projectMissionView({ ...readMissionViewInput(store.db, id, {}), policy: VIEW_POLICY("2026-08-24T00:01:00.000Z") });
+
+  const byId = new Map(view.stages.map((stage) => [stage.stepId, stage]));
+  for (const decl of STAGES) {
+    const projected = byId.get(decl.id);
+    assert.notEqual(projected, undefined, `${decl.id} is missing from the projection entirely`);
+    assert.equal(
+      projected.rerunable,
+      decl.dag.rerunable,
+      `${decl.id} projects rerunable=${projected.rerunable} against a pipeline that says ${decl.dag.rerunable}; the screen would offer an action the route refuses, or hide one it allows`,
+    );
+    assert.equal(
+      projected.rerunReason,
+      decl.dag.rerunReason,
+      `${decl.id} lost the pipeline's own sentence, so a stage that cannot be re-run is a dead end with no reason on it`,
+    );
+  }
+  assert.equal(byId.get("s1-brief").rerunable, false, "the budget gate is offered for rerun; re-running it re-resolves the caps this mission is already being graded against");
+  assert.ok(
+    typeof byId.get("s12-persist").rerunReason === "string" && byId.get("s12-persist").rerunReason !== "",
+    "the persist stage refuses with nothing to show the reader",
+  );
+});

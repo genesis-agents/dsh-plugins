@@ -235,30 +235,37 @@ function strayParams(params, known) {
 }
 
 /**
- * The mission id, the action, and the one optional tail segment beneath it.
+ * The mission id, the action, and the two optional segments beneath it.
  *
- * `/missions/<id>/<action>` and `/missions/<id>/trace/<ref>`. The tail is
- * returned rather than folded into the action so the handler can REFUSE it
- * everywhere except the trajectory: without that check
- * `/missions/<id>/cancel/oops` would match `action === "cancel"` and cancel the
- * mission, which is a route ignoring part of its own path and doing the thing
- * anyway.
+ * `/missions/<id>/<action>`, `/missions/<id>/trace/<ref>` and
+ * `/missions/<id>/stages/<stepId>/rerun`. The tail segments are returned rather
+ * than folded into the action so the handler can REFUSE them everywhere they do
+ * not belong: without that check `/missions/<id>/cancel/oops` would match
+ * `action === "cancel"` and cancel the mission, which is a route ignoring part
+ * of its own path and doing the thing anyway.
+ *
+ * The fifth segment is a SEGMENT, not a suffix parsed off the fourth. The stage
+ * rerun addresses a step id and step ids are `s3-collect`, so reading a trailing
+ * verb out of `rest` would make a step id that happens to end in one mean
+ * something else entirely.
  *
  * @param path - the already-stripped path.
- * @returns `{ id, action, rest }` — `rest` is null when there is no tail — or null when the shape does not match.
+ * @returns `{ id, action, rest, leaf }` — each tail is null when absent — or null when the shape does not match.
  */
 function splitMissionPath(path) {
   const parts = path.split("/").filter((part) => part !== "");
-  if (parts.length < 3 || parts.length > 4 || parts[0] !== "missions") return null;
+  if (parts.length < 3 || parts.length > 5 || parts[0] !== "missions") return null;
   let id;
   let rest = null;
+  let leaf = null;
   try {
     id = decodeURIComponent(parts[1]);
-    if (parts.length === 4) rest = decodeURIComponent(parts[3]);
+    if (parts.length >= 4) rest = decodeURIComponent(parts[3]);
+    if (parts.length === 5) leaf = decodeURIComponent(parts[4]);
   } catch {
     return null;
   }
-  return { id, action: parts[2], rest };
+  return { id, action: parts[2], rest, leaf };
 }
 
 /**
@@ -492,12 +499,14 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
 
     const target = splitMissionPath(path);
     if (target === null) return false;
-    const { id, action, rest } = target;
-    // Only the trajectory takes a fourth segment. Every other action is matched
-    // on `action` alone, so a tail let through here would make
-    // `/missions/<id>/cancel/oops` a cancel. Reported as unhandled rather than
-    // 400 so the outer router 404s it in the one place that does that.
-    if (rest !== null && action !== "trace") return false;
+    const { id, action, rest, leaf } = target;
+    // Only the trajectory and the stage rerun take a fourth segment, and only
+    // the stage rerun takes a fifth. Every other action is matched on `action`
+    // alone, so a tail let through here would make `/missions/<id>/cancel/oops`
+    // a cancel. Reported as unhandled rather than 400 so the outer router 404s
+    // it in the one place that does that.
+    if (rest !== null && action !== "trace" && action !== "stages") return false;
+    if (leaf !== null && !(action === "stages" && leaf === "rerun")) return false;
 
     // ── the read model ──────────────────────────────────────────────────
     if (req.method === "GET" && action === "view") {
@@ -1319,6 +1328,94 @@ if (req.method === "GET" && (action === "facts.csv" || action === "citations.csv
         success: started.started,
         error: started.started ? undefined : started.reason,
         data: { id, runCount: claimed.runCount, mode, started: started.started, parked: started.parked === true },
+      });
+      return true;
+    }
+
+    // -- run ONE stage again ---------------------------------------------
+    // A SEPARATE ROUTE, not a third `mode` on `rerun`, because the two do
+    // opposite things to the generation: `rerun` opens a new one, this one stays
+    // inside the current one. Folding them together would put `newGeneration`
+    // behind a field in a request body, and that is the field that decides
+    // whether the previous run's findings survive.
+    if (req.method === "POST" && action === "stages" && leaf === "rerun") {
+      const mission = missionOr404(id);
+      if (mission === null) return true;
+      const stepId = rest ?? "";
+
+      const running = runtime.running();
+      const cap = concurrencyCap(config());
+      if (running.includes(id)) {
+        // The same refusal the whole-mission rerun gives, for the same reason:
+        // claiming a live row out from under the run that is driving it makes
+        // that run lose its own terminal write and discards its entire spend.
+        sendJson(res, 409, {
+          success: false,
+          error: `mission ${id} is still running in this process. Cancel it first — re-running a stage of a live mission would claim the row out from under the run that is driving it and discard everything that run has spent.`,
+          data: { running },
+        });
+        return true;
+      }
+      if (running.length >= cap) {
+        sendJson(res, 409, { success: false, error: `${running.length} mission(s) are already running and missionMaxConcurrent is ${cap}: ${running.join(", ")}`, data: { running, cap } });
+        return true;
+      }
+
+      // RESET BEFORE THE CLAIM. The claim is what makes the row dispatchable,
+      // and a run that becomes dispatchable while the stage it was asked to
+      // re-run still says `done` starts at the first unsettled stage, walks past
+      // the one the user pointed at, and reports success.
+      const reset = missionStore.resetStageForRerun(id, stepId, runtime.clock());
+      if (!reset.ok) {
+        // 409 carrying the reason AND the sentence to act on. `s1-brief` and
+        // `s12-persist` each wrote their own `rerunReason` into the pipeline
+        // declaration; showing it is the difference between a refusal somebody
+        // can do something about and a control that silently does nothing.
+        sendJson(res, 409, {
+          success: false,
+          error: `${reset.reason}: ${reset.detail}`,
+          data: { id, stepId, reason: reset.reason, detail: reset.detail },
+        });
+        return true;
+      }
+
+      // NOT A NEW GENERATION, and that is the whole difference from `rerun`.
+      // Findings, chapters and artefacts are keyed by `run_count` and the stages
+      // BEFORE this one keep theirs; bumping would orphan the very rows the
+      // re-run stage reads as its input, so it would open on an empty corpus
+      // while every earlier row still said the work was done.
+      const claimed = missionStore.claimForRun(id, { bootId: runtime.bootId, pid: process.pid, newGeneration: false, at: runtime.clock() });
+      if (!claimed.claimed) {
+        sendJson(res, 409, { success: false, error: claimed.reason, data: { id, stepId } });
+        return true;
+      }
+      const previous = missionStore.latestConfig(id);
+      missionStore.putConfig(
+        id,
+        // The reason the vocabulary has carried since the schema was written and
+        // no route ever wrote. `s12` reads it back to stamp the artefact version
+        // `recovered`, so a version produced by re-running one stage is not
+        // filed as though a full rerun had produced it.
+        "stage-rerun",
+        // The PREVIOUS resolved config, carried forward — re-resolving here is
+        // playground's rerun bug, which could not read its own ceiling and fell
+        // back to a default worth about two dollars. The revision is still NEW,
+        // because a revision is what grants this run a fresh allowance while the
+        // mission row's frozen caps stay what it is graded against: run against
+        // the residual of a pool the original drained, a stage re-run a month
+        // later dies instantly at `budget_exhausted`.
+        { ...(previous?.config ?? {}), stageRerunOf: stepId, stageRerunResets: reset.reset },
+        runtime.clock(),
+      );
+      // `startOrPark`, never a bare `start`, for the reason the rerun above
+      // gives: the claim has already moved the row to `running`.
+      const started = runtime.startOrPark(id);
+      sendJson(res, started.started ? 200 : 409, {
+        success: started.started,
+        error: started.started ? undefined : started.reason,
+        // `reset` is the answer to "what did this throw away", reported rather
+        // than left for the caller to recompute from the DAG.
+        data: { id, stepId, runCount: claimed.runCount, reset: reset.reset, started: started.started, parked: started.parked === true },
       });
       return true;
     }

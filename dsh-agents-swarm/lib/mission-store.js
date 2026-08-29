@@ -2252,6 +2252,98 @@ export class MissionStore {
   }
 
   /**
+   * Put ONE stage and its declared successors back to `pending`, for a rerun
+   * INSIDE the current generation.
+   *
+   * The narrow sibling of `resetStagesForFreshRerun`, and it differs from it in
+   * the three places that matter.
+   *
+   * IT CASCADES, because a stage's output is its successors' input. Re-running
+   * `s7-outline` alone would leave `s8-write`'s chapters standing against the
+   * outline that had just been replaced, and the runner — which starts at the
+   * first unsettled stage — would walk straight past them to `s12` and deliver a
+   * report assembled from two different plans, with every stage row saying
+   * `done`. The cascade set is `dag.successors`, the forward transitive closure
+   * written out literally in `mission-runtime.js`, so what a rerun of `s7` will
+   * discard is auditable by reading that declaration rather than by trusting
+   * this function to compute it. `dag.backEdge` is deliberately NOT followed:
+   * re-running `s4-assess` must not re-run `s3-collect`, and keeping the two
+   * edges in separate fields is the whole reason that is expressible.
+   *
+   * IT KEEPS THE CHECKPOINT, where the fresh reset deletes it. No generation is
+   * being abandoned here — every stage BEFORE this one keeps its work, and the
+   * cross-state bag inside the checkpoint is the only place their in-memory
+   * output lives. Deleting it would hand the re-run stage an empty bag, and a
+   * stage whose upstream state is gone fails a downstream gate for a structural
+   * reason unrelated to the work, which is exactly the state `runMission`
+   * refuses to resume into. What is corrected instead is `completed_keys`:
+   * leaving the reset ids listed there makes the runner emit a
+   * `checkpoint:divergence` on every single stage rerun, which spends a real
+   * alarm on an operation somebody deliberately asked for. `saved_at` is left
+   * exactly as it was — refreshing it would silently extend the seven-day resume
+   * window on a snapshot nobody re-took.
+   *
+   * `skipped-by-tier` rows are PRESERVED, the opposite of the fresh reset. There
+   * the tier may change between generations, so the rows are rewritten; here the
+   * mission stays in its own generation and is graded against the caps `s1`
+   * already froze, so a tier change is not on the table and rewriting those rows
+   * would schedule work this mission never agreed to do.
+   *
+   * @param missionId - the mission.
+   * @param stepId - the stage to re-run.
+   * @param at - ISO stamp for the reset.
+   * @returns `{ ok, reason, detail, reset }`; `reset` names every step id put back to pending, in pipeline order.
+   */
+  resetStageForRerun(missionId, stepId, at = new Date().toISOString()) {
+    assertIso(at, "at");
+    const id = String(missionId);
+    const step = String(stepId);
+    const decl = STAGES.find((stage) => stage.id === step);
+    // Every refusal is NAMED and carries the sentence to act on. "It did not
+    // re-run" is the answer that sends somebody to read this file, and the two
+    // un-rerunable stages already wrote their own reason into the pipeline
+    // declaration precisely so that nobody has to.
+    if (decl === undefined) {
+      return { ok: false, reason: "unknown-stage", detail: `"${step}" is not a stage in this pipeline. The twelve are ${STAGES.map((stage) => stage.id).join(", ")}.`, reset: [] };
+    }
+    if (decl.dag.rerunable === false) {
+      return { ok: false, reason: "not-rerunable", detail: decl.dag.rerunReason, reset: [] };
+    }
+    return withTx(this.db, () => {
+      const status = new Map(this.db
+        .prepare("SELECT step_id, status FROM mission_stages WHERE mission_id = ?")
+        .all(id)
+        .map((row) => [row.step_id, row.status]));
+      if (!status.has(step)) {
+        return { ok: false, reason: "no-stage-row", detail: `mission ${id} has no mission_stages row for ${step}, so a reset would settle nothing and the run would report success having done nothing.`, reset: [] };
+      }
+      if (status.get(step) === "skipped-by-tier") {
+        return { ok: false, reason: "skipped-by-tier", detail: `${step} is not run at this mission's depth, so there is no work of its to re-run. Re-run the whole mission at a deeper tier instead.`, reset: [] };
+      }
+      // PIPELINE ORDER, not the order the closure happens to be written in. This
+      // list is shown to a person as "what this will discard", and a list whose
+      // order comes from somewhere else reads as a different answer on a re-read.
+      const cascade = new Set([step, ...decl.dag.successors]);
+      const reset = STAGES
+        .map((stage) => stage.id)
+        .filter((candidate) => cascade.has(candidate) && status.has(candidate) && status.get(candidate) !== "skipped-by-tier");
+      const clear = this.db.prepare(`
+        UPDATE mission_stages
+        SET status = 'pending', attempts = 0, started_at = NULL, ended_at = NULL,
+            duration_ms = NULL, tokens = 0, output = NULL, degrade_note = NULL
+        WHERE mission_id = ? AND step_id = ?
+      `);
+      for (const candidate of reset) clear.run(id, candidate);
+      const checkpoint = this.getCheckpoint(id);
+      if (checkpoint !== undefined) {
+        this.db.prepare("UPDATE mission_checkpoints SET completed_keys = ?, saved_at = saved_at WHERE mission_id = ?")
+          .run(JSON.stringify(checkpoint.completedKeys.filter((key) => !cascade.has(key))), id);
+      }
+      return { ok: true, reason: null, detail: null, reset };
+    });
+  }
+
+  /**
    * Mark stages this tier does not run.
    *
    * NOT the primary path any more, and it must not become a second one. The

@@ -9280,7 +9280,7 @@ window.__ModuleLoader__.load({
 		* rerun that parks has claimed the row without dispatching it. Collapsing
 		* either pair into "done" is how a button that did half of what it said
 		* looks exactly like one that worked.
-		* @param action - `cancel` | `resume` | `rerun`.
+		* @param action - `cancel` | `resume` | `rerun` | `stages/<stepId>/rerun`.
 		* @param data - the route's `data` object.
 		* @param zh - whether to write Chinese.
 		* @returns the sentence to show.
@@ -9304,6 +9304,21 @@ window.__ModuleLoader__.load({
 				}
 				return data.parked === true
 					? (zh ? "任务已认领但没有派发出去，已经挂回可继续状态 —— 不会留下一个没人跑的“运行中”。" : "The mission was claimed but not dispatched, so it was parked back as resumable rather than left running with nothing driving it.")
+					: (zh ? "没有重跑起来。" : "It did not start.");
+			}
+			if (action.startsWith("stages/")) {
+				// WHAT IT THREW AWAY, counted, because that is the half of a stage
+				// rerun nobody can see. The route resets the stage AND its declared
+				// successors, so "re-ran s7-outline" is true and leaves the reader
+				// believing the four finished stages after it are still finished.
+				const reset = Array.isArray(data.reset) ? data.reset : [];
+				if (data.started === true) {
+					return zh
+						? `已重跑 ${data.stepId}，连同它下游的 ${Math.max(0, reset.length - 1)} 个阶段；还是这一代，一条也没删。`
+						: `Re-running ${data.stepId} and the ${Math.max(0, reset.length - 1)} stage(s) after it, inside this same generation; nothing was deleted.`;
+				}
+				return data.parked === true
+					? (zh ? "阶段已重置，任务也认领了，但没有派发出去 —— 已挂回可继续状态，等另一个任务跑完了再继续。" : "The stage was reset and the mission claimed, but not dispatched, so it was parked back as resumable rather than left running with nothing driving it. Resume it when the other run has finished.")
 					: (zh ? "没有重跑起来。" : "It did not start.");
 			}
 			return "";
@@ -9494,8 +9509,9 @@ window.__ModuleLoader__.load({
 		* @param agents - `agents` from the view route, for the owner column.
 		* @param zh - whether to write Chinese.
 		* @param onOpenStage - called with a stepId; opens the trajectory on it.
+		* @param onRerunStage - called with a stepId; re-runs it and its successors.
 		*/
-		function MissionTaskBoard({ stages, agents, zh, onOpenStage, selected, onSelect, mission, work, onOpenSource }) {
+		function MissionTaskBoard({ stages, agents, zh, onOpenStage, onRerunStage, selected, onSelect, mission, work, onOpenSource }) {
 			// WHAT A TASK IS HERE, and it took a rebuild to get right. playground's
 			// board deliberately does NOT show system-stage rows: a todo there is a
 			// piece of work somebody decided on — a dimension to research, a gap the
@@ -9914,7 +9930,8 @@ window.__ModuleLoader__.load({
 							// the outage, not about the step.
 							anchor: mission?.effectiveStartAt ?? mission?.startedAt ?? null,
 							onClose: () => { onSelect?.(null); },
-							onOpenStage
+							onOpenStage,
+							onRerunStage
 						})
 					}, "drawer")
 				]
@@ -9934,10 +9951,11 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @param onClose - close the panel.
 		* @param onOpenStage - open the trajectory filtered to this stage.
+		* @param onRerunStage - called with a stepId; re-runs it and its successors.
 		* @param missionId - the mission, for the step's own trajectory.
 		* @param anchor - the run's zero, so the timings read as offsets too.
 		*/
-		function MissionStageDetail({ stage, owner, zh, onClose, onOpenStage, missionId, anchor }) {
+		function MissionStageDetail({ stage, owner, zh, onClose, onOpenStage, onRerunStage, missionId, anchor }) {
 			ensureTraceStyle();
 			// WHAT THIS STEP DID, which the drawer could not say. It listed seven
 			// properties OF the stage — status, attempts, took, owner, tokens,
@@ -10150,18 +10168,54 @@ window.__ModuleLoader__.load({
 										onOpen: () => { onOpenStage?.(stage.stepId); }
 									}, row.ref))
 							}, "did"),
-							jsx("div", {
-								style: { padding: "10px 14px 0" },
-								children: jsx("button", {
-									type: "button",
-									className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm, padding: "0 10px" },
-									onClick: () => { onOpenStage?.(stage.stepId); },
-									children: steps !== null && steps.length >= MISSION_STAGE_TRACE_TAKE
-										// The list above is capped, and a capped list that
-										// does not say so reads as the whole of it.
-										? (zh ? `在轨迹里看全部（这里只显示前 ${MISSION_STAGE_TRACE_TAKE} 条）→` : `See all of it in the trajectory (the first ${MISSION_STAGE_TRACE_TAKE} are shown) →`)
-										: (zh ? "在轨迹里看这一步 →" : "See this step in the trajectory →")
-								})
+							jsxs("div", {
+								// ONE ACTION ROW, not two stacked blocks. Go and look at this
+								// step, or make it happen again, are the two things a reader
+								// does after reading this panel, and stacking them put a
+								// gutter between two controls that belong to one decision.
+								style: { padding: "10px 14px 0", display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" },
+								children: [
+									jsx("button", {
+										type: "button",
+										className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm, padding: `0 ${SPACE.sm}` },
+										onClick: () => { onOpenStage?.(stage.stepId); },
+										children: steps !== null && steps.length >= MISSION_STAGE_TRACE_TAKE
+											// The list above is capped, and a capped list that
+											// does not say so reads as the whole of it.
+											? (zh ? `在轨迹里看全部（这里只显示前 ${MISSION_STAGE_TRACE_TAKE} 条）→` : `See all of it in the trajectory (the first ${MISSION_STAGE_TRACE_TAKE} are shown) →`)
+											: (zh ? "在轨迹里看这一步 →" : "See this step in the trajectory →")
+									}, "trace"),
+									// THREE STATES, and the third is not "assume yes". `rerunable`
+									// comes from the pipeline's own declaration by way of the view;
+									// a payload written before it carried the field says nothing
+									// about this step, and answering that silence with a button is
+									// how a control gets offered for work the route will refuse.
+									stage.rerunable === true
+										? jsx("button", {
+											type: "button",
+											// NEUTRAL, deliberately. Re-running a step deletes nothing
+											// and is an ordinary thing to ask for; the colour on this
+											// panel is spent on the stage that actually degraded.
+											className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm, padding: `0 ${SPACE.sm}` },
+											onClick: () => { onRerunStage?.(stage.stepId); },
+											// IT SAYS THE CASCADE. "Re-run this step" is the half that
+											// sounds safe; the successors are reset with it, and a
+											// label hiding that is a label that ambushes somebody.
+											children: zh ? "重跑这一步及其下游 →" : "Re-run this step and everything after it →"
+										}, "rerun")
+										: jsx("span", {
+											style: { font: FONT.small, color: INK.secondary, flex: "1 1 220px", minWidth: 0 },
+											children: typeof stage.rerunReason === "string" && stage.rerunReason !== ""
+												// The pipeline's own sentence, verbatim. A stage that
+												// declares itself un-rerunable must carry a reason —
+												// `validateStageDag` refuses to load one that does not —
+												// so there is never a bare "you cannot" to print here.
+												? stage.rerunReason
+												: (zh
+													? "这份视图没有说这一步能不能单独重跑，所以这里不猜。"
+													: "This view did not say whether this step can be re-run on its own, so nothing is offered rather than a control that might be refused.")
+										}, "norerun")
+								]
 							}, "jump")
 						]
 					}, "body")
@@ -12277,6 +12331,10 @@ window.__ModuleLoader__.load({
 											selected: task,
 											onSelect: (stepId) => { setTask(stepId); },
 											onOpenStage: (stepId) => { setFocusStep(stepId); setPane("trace"); },
+							// THROUGH `act`, like every other write on this screen, so the 409
+							// that names the refusal lands where the rerun's does and the poll
+							// picks the reset stages up on the next tick.
+							onRerunStage: (stepId) => { void act(`stages/${encodeURIComponent(stepId)}/rerun`); },
 											onOpenSource: (entry) => { setSource(entry); }
 										}, "board"),
 										// THE BRIEF, ABOVE THE JUDGING. Every row on the board is being
