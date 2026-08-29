@@ -3156,3 +3156,37 @@ test("the frozen evidence keeps the host every later reader groups by", () => {
     assert.ok(rows.includes(field), `freezeEvidence no longer carries ${loss}`);
   }
 });
+
+test("a page fetched for quoting gets the ceiling its own tool declares", async () => {
+  // MEASURED, NOT ARGUED. `readHit`'s slice used a constant written for the
+  // CORROBORATION path — "characters of fetched article text handed to the
+  // model per candidate source", three pages into one prompt, 4,000 of each.
+  // `fetch_page` calls the same `readHit` and inherited it.
+  //
+  // That string is not just what the model read. It is `quotableAgainst`, it
+  // is what `quote_verify` checks literal substrings of, and it is what
+  // `putDocument` keeps as the page we read. So every verified quote in every
+  // report could only ever have come from the first ~700 words of its source,
+  // and a mission of 31,450 words with 101 citations was written from 101
+  // first screens. Nothing anywhere said so.
+  //
+  // The tool declares `maxResultChars: MAX_RESULT_CHARS` — 32,000 — eleven
+  // lines above the call that was handed an eighth of it.
+  const tools = readFileSync(new URL("../lib/mission-tools.js", import.meta.url), "utf8");
+  assert.match(
+    tools,
+    /readHit\(\{ url: admitted\.href, title: args\.title \?\? "" \}, \{ budgetChars: MAX_RESULT_CHARS \}\)/,
+    "fetch_page takes readHit's default again, which is the corroboration path's per-source budget and cuts every quotable page to its first screen",
+  );
+
+  const corroborate = readFileSync(new URL("../lib/insight-corroborate.js", import.meta.url), "utf8");
+  assert.match(
+    corroborate,
+    /const budget = Number\.isInteger\(options\.budgetChars\) && options\.budgetChars > 0/,
+    "readHit has no per-caller budget again, so one caller's ceiling is imposed on every caller",
+  );
+  // AND THE DEFAULT IS STILL THE CORROBORATION PATH'S. Raising it for everyone
+  // would put three full articles in one prompt, which is the thing the 4,000
+  // was right about.
+  assert.match(corroborate, /const READ_BUDGET_CHARS = 4000;/, "the corroboration budget moved, and it was never the thing that was wrong");
+});

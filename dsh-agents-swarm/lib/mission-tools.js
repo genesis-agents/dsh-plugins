@@ -817,7 +817,15 @@ export const TOOLS = Object.freeze({
       // unpaced fetch loop aimed at the publishers this library is built from is
       // a worse outcome than a cancel that takes one in-flight request to land.
       // The abort is enforced at the door instead. See the header note.
-      const doc = await readHit({ url: admitted.href, title: args.title ?? "" });
+      // THE TOOL'S OWN CEILING, ASKED FOR EXPLICITLY. `readHit`'s default is
+      // the corroboration path's per-source budget — three pages into one
+      // prompt, 4,000 characters each — and this tool silently inherited it
+      // for years. It declares `maxResultChars: MAX_RESULT_CHARS` eleven lines
+      // above and was handed an eighth of it, so every page fetched for
+      // quoting was cut to its first seven hundred words: the substrate
+      // `quotableAgainst` names, the substrate `quote_verify` checks against,
+      // and the substrate `putDocument` keeps as the copy we read.
+      const doc = await readHit({ url: admitted.href, title: args.title ?? "" }, { budgetChars: MAX_RESULT_CHARS });
       if (doc === undefined) {
         return empty("fetch_page", "nothing readable came back — a paywall, a login wall, a PDF, or a page with no article body. Try a different source for this claim.", { url: admitted.href });
       }

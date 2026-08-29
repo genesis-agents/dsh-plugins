@@ -44,7 +44,24 @@ const HITS_PER_CLAIM = 6;
 /** How many pages to actually fetch and read for one claim. Fetching is the slow part. */
 const READS_PER_CLAIM = 3;
 
-/** Characters of fetched article text handed to the model per candidate source. */
+/**
+ * Characters of fetched article text handed to the model PER CANDIDATE SOURCE,
+ * on the corroboration path — three pages per claim, all three in one prompt.
+ *
+ * IT IS THIS PATH'S BUDGET AND NOT A PROPERTY OF READING A PAGE, which is what
+ * it had silently become. `fetch_page` calls the same `readHit` and inherited
+ * it, so every page a researcher fetched arrived cut to 4,000 characters —
+ * about seven hundred words, the first screen of an article — and that string
+ * is not just what the model read. It is `quotableAgainst`, it is what
+ * `quote_verify` checks literal substrings of, and it is what `putDocument`
+ * stores as the page we kept. A verified quote could only ever come from the
+ * opening of a source, a report of 31,450 words was written from 101 first
+ * screens, and nothing anywhere said so.
+ *
+ * The tool layer's own ceiling for a `fetch_page` result is MAX_RESULT_CHARS,
+ * 32,000, and the tool declares it. An eight-fold gap between the ceiling a
+ * tool declares and what its reader hands back.
+ */
 const READ_BUDGET_CHARS = 4000;
 
 /** arXiv's public API. No key, no account, and it is the right index for a finding. */
@@ -345,7 +362,11 @@ export async function searchWeb(web, query, options = {}) {
  * — the same mistake as verifying against a sampled transcript, one layer out.
  *
  * @param hit - a search hit.
- * @param options - `{ fetchImpl }`.
+ * @param options - `{ fetchImpl, budgetChars }`. `budgetChars` is the CALLER'S
+ * budget: the corroboration path reads three pages into one prompt and wants
+ * 4,000 of each; `fetch_page` reads one page for quoting and wants the tool
+ * layer's own ceiling. A reader that imposes one caller's budget on every
+ * caller is the defect this parameter exists to end.
  * @returns `{ url, title, text }`, or undefined when nothing readable came back.
  */
 export async function readHit(hit, options = {}) {
@@ -384,7 +405,10 @@ export async function readHit(hit, options = {}) {
     // Below this a page is a paywall notice, a cookie wall or a stub, and
     // nothing quotable came back however cleanly it parsed.
     if (normalizeForQuote(text).length < 200) return undefined;
-    return { url, title: String(hit.title ?? article?.title ?? ""), text: text.slice(0, READ_BUDGET_CHARS) };
+    const budget = Number.isInteger(options.budgetChars) && options.budgetChars > 0
+      ? options.budgetChars
+      : READ_BUDGET_CHARS;
+    return { url, title: String(hit.title ?? article?.title ?? ""), text: text.slice(0, budget) };
   } catch {
     return undefined;
   }
