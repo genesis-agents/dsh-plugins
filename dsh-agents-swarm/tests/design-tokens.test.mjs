@@ -5699,7 +5699,12 @@ test("the writer's token and the renderer's parser are the same token", () => {
   // So the two are asserted against each other rather than each against its own
   // idea of the shape.
   const mint = readFileSync(new URL("../lib/mission-stages-middle.js", import.meta.url), "utf8");
-  const minted = /figureBlocks\.push\(`(:::figure [^`]*)`\)/.exec(mint);
+  // THE TOKEN, WHEREVER IT IS BUILT. It was pushed as a bare string; it is
+  // pushed inside an object now, because a figure has to be placed beside the
+  // paragraph carrying its own citation marker rather than stacked at the end
+  // of the chapter. The container is not what this test is about — the token
+  // is — so it reads the literal and not the call around it.
+  const minted = /`(:::figure [^`]*)`/.exec(mint);
   assert.ok(minted !== null, "the assembler no longer mints a figure block, or mints it somewhere this cannot see");
 
   // What the writer actually produces, with its index filled in.

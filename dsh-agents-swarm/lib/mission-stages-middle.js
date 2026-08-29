@@ -588,6 +588,91 @@ function attachManifest(prose, citations) {
  * @returns `{markdown, sections, citations, wordCount, unresolvedMarkers, figures}`.
  * @throws `input_invalid` on a headingless chapter, an unreadable manifest, or an offset that does not resolve.
  */
+/**
+ * Whether a citation marker STANDS in this text, as a citation.
+ *
+ * `[3](https://…)` is a Markdown link whose text happens to be a number, not a
+ * marker, and hanging a figure off one would put a chart under a sentence that
+ * never cited the page. `missionMarkerCount` in lib/client.js makes exactly this
+ * exclusion over exactly this string, which is why it is written the same way
+ * here rather than as a regex that would have to be kept in step with it.
+ * @param text - one paragraph of assembled prose.
+ * @param index - the report-global citation number.
+ * @returns whether that marker stands in this paragraph.
+ */
+function marks(text, index) {
+  const needle = `[${index}]`;
+  let at = text.indexOf(needle);
+  while (at >= 0) {
+    if (text[at + needle.length] !== "(") return true;
+    at = text.indexOf(needle, at + needle.length);
+  }
+  return false;
+}
+
+/**
+ * The chapter's prose with each figure set beside the paragraph it supports.
+ *
+ * WHAT RECORDS THE RELATIONSHIP, since the comment this function replaces said
+ * nothing did. A figure is reached through ONE citation manifest entry — the
+ * loop in `assemble` keys `figures` by that entry's `findingId` and by nothing
+ * else — and the same pass rewrites that entry's marker into the prose as
+ * `[citationIndex]`, the number it then stores on the figure row. So the
+ * paragraph a figure supports is the paragraph carrying its own citation's
+ * marker, and BOTH halves were already in `mission_chapters.body`: the manifest
+ * written by code at s8, and the `[N]` the writer typed. No new column is read,
+ * no relationship is guessed, and nothing here chooses by position.
+ *
+ * THE FIRST PARAGRAPH THAT CITES IT, not the last. A source is introduced once
+ * and leaned on afterwards; the chart belongs where the claim is made. It is
+ * also the only choice that cannot leave a figure below every sentence it is
+ * evidence for, which is the defect the end-of-chapter rule had by definition.
+ *
+ * NEVER INSIDE A FENCE AND NEVER AFTER A BARE HEADING. A `[7]` inside a code
+ * block is a string, and a `:::figure` opened inside one renders as three colons
+ * and a number in monospace; a marker in an `###` line would put the picture
+ * between the sub-heading and its own first sentence. The walk carries the fence
+ * state and skips heading-only chunks.
+ *
+ * AND THE FALLBACK IS THE OLD BEHAVIOUR, BYTE FOR BYTE. A block whose marker
+ * never stands in the prose — a manifest entry the writer cited in the trailer
+ * and never used, a marker that only appears inside a fence — goes at the END,
+ * exactly where every figure went before this function existed. That is the
+ * honest answer for the case the data genuinely does not cover, and it is why
+ * this is a placement rule rather than a placement guess.
+ * @param prose - the chapter's rewritten, report-global prose.
+ * @param blocks - `[{token, citationIndex}]`, in mint order.
+ * @returns the prose with the tokens placed.
+ */
+function placeFigures(prose, blocks) {
+  if (blocks.length === 0) return prose;
+  const pending = [...blocks];
+  const chunks = prose.split(/\n{2,}/u);
+  const out = [];
+  let fenced = false;
+  for (const chunk of chunks) {
+    out.push(chunk);
+    // A CHUNK THAT OPENS AND CLOSES A FENCE IS STILL CODE. The flag tracks a
+    // fence left open ACROSS chunks, and a block written as one paragraph
+    // toggles it twice — so by the time the guard below is read it is false
+    // again, and a `[1]` inside the code claimed a figure that was emitted
+    // immediately after the block as if the code had cited something.
+    let touchedFence = false;
+    for (const line of chunk.split("\n")) {
+      if (/^\s*```/u.test(line)) { fenced = !fenced; touchedFence = true; }
+    }
+    if (fenced || touchedFence || /^\s*#{1,6}\s/u.test(chunk)) continue;
+    const claimed = pending.filter((block) => marks(chunk, block.citationIndex));
+    if (claimed.length === 0) continue;
+    for (const block of claimed) {
+      out.push(block.token);
+      pending.splice(pending.indexOf(block), 1);
+    }
+  }
+  for (const block of pending) out.push(block.token);
+  return out.join("\n\n");
+}
+
 export function assemble(chapterRows, { figures = new Map(), figureCap = MAX_CHAPTER_FIGURES } = {}) {
   const rows = asArray(chapterRows);
   // ONE FIGURE NUMBERING FOR THE WHOLE REPORT, minted in the loop that mints
@@ -698,22 +783,30 @@ export function assemble(chapterRows, { figures = new Map(), figureCap = MAX_CHA
         // is copied into the document, so nothing about the figure can go stale
         // in it, and an index that resolves to nothing has nothing to leave
         // behind: no orphan caption, no bordered box, no broken image.
-        figureBlocks.push(`:::figure ${index}\n:::`);
+        // THE TOKEN AND THE NUMBER THAT PLACES IT. `citationIndex` is already
+        // minted three lines up and already stored on the figure row; carrying
+        // it beside the token is what lets `placeFigures` find the paragraph
+        // without reading anything this loop did not already have.
+        figureBlocks.push({ token: `:::figure ${index}\n:::`, citationIndex });
       }
     }
-    // AT THE END OF THE CHAPTER, NOT INSIDE THE PROSE. Nothing in
-    // `mission_chapters.body` says which paragraph a figure supports: the writer
-    // never recorded one, and the publisher's own anchor is a span of THEIR
-    // page, not of ours. Placing it mid-chapter would be this assembler
-    // asserting a relationship nobody wrote down — the same refusal
-    // lib/client.js already makes when it puts the evidence spread at the
-    // boundary "where the report stops making claims and starts listing what
-    // they rest on" rather than beside a paragraph it guessed at.
+    // BESIDE THE PARAGRAPH IT SUPPORTS, which this assembler can say because it
+    // reached the figure THROUGH a citation. The comment that stood here read
+    // "nothing in `mission_chapters.body` says which paragraph a figure
+    // supports", and that was wrong on its own evidence: the manifest says which
+    // CITATION (the figure was fetched by `figures.get(entry.findingId)`), and
+    // the marker rewritten thirty lines up says which PARAGRAPH that citation is
+    // made in. Two facts already in the row, joined on a number this loop mints.
+    // Nothing is asserted that the writer did not write.
+    //
+    // A figure whose marker is not in the prose still goes at the end, so the
+    // refusal the old comment was really making is kept exactly where it applies
+    // — see `placeFigures`.
     //
     // INSIDE `[start, end)`, which is load-bearing: `end` is taken on the next
     // line, so a chapter read on its own — `readSlice` in `MissionReport` cuts
     // exactly these offsets — carries its own figures with it.
-    markdown += `## ${heading}\n\n${prose}\n\n${figureBlocks.map((block) => `${block}\n\n`).join("")}`;
+    markdown += `## ${heading}\n\n${placeFigures(prose, figureBlocks)}\n\n`;
     const end = markdown.length;
     if (!markdown.slice(start, end).startsWith(`## ${heading}`)) {
       throw fail("input_invalid", `the section offset for "${heading}" does not resolve against the assembled markdown. Offset drift is silent and catastrophic; nothing downstream may use this document.`);

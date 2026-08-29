@@ -540,3 +540,89 @@ test("lib/mission-routes.js is CRLF, and the figure block did not arrive as LF",
   assert.ok(block.length > 0, "the figure block is gone from the router");
   assert.equal((block.match(/(?<!\r)\n/gu) ?? []).length, 0, "the figure routes were applied with LF endings into a CRLF file");
 });
+
+test("a figure stands after the paragraph that cites its page, not at the end of the chapter", async () => {
+  // RULE 4, AND THE COMMENT IT REPLACES CLAIMED THE DATA FOR IT DOES NOT EXIST.
+  // It does, and the chain is two hops long: `assemble` reaches a figure through
+  // ONE citation manifest entry — `figures.get(entry.findingId)` — and the same
+  // pass rewrites that entry's marker into the prose as the report-global `[N]`
+  // it then stores on the figure row as `citationIndex`. So the paragraph a
+  // figure supports is the paragraph carrying that marker, and both halves were
+  // in `mission_chapters.body` on the day the comment said neither was.
+  //
+  // THE ASSERTION IS ON WHAT IS BETWEEN THEM. "The token is in the chapter" was
+  // true of the old arrangement too; what is new is that a paragraph about
+  // something else no longer sits between a sentence and its own evidence.
+  const { assemble } = await import("../lib/mission-stages-middle.js");
+  const manifest = (entries) => `<!-- mission-citations: ${JSON.stringify(entries)} -->`;
+  const rows = [{
+    dimensionId: "d1", chapterIndex: 0, sectionType: "evidenced", heading: "Shipments",
+    body: [
+      "An opening paragraph that cites nothing at all.",
+      "The shipment curve turned over in 2023 [1].",
+      "A closing paragraph on another matter entirely [2].",
+      manifest([
+        { index: 1, url: "https://a.example/p", findingId: "f-a", inlineQuote: "q" },
+        { index: 2, url: "https://b.example/p", findingId: "f-b", inlineQuote: "q" },
+      ]),
+    ].join("\n\n"),
+  }];
+  const figures = new Map([["f-a", [{
+    id: "fig-a", documentId: "doc-a", caption: "Shipments fell in 2023", width: 900, height: 600,
+  }]]]);
+
+  const placed = assemble(rows, { figures });
+  const chapter = placed.markdown.slice(placed.sections[0].start, placed.sections[0].end);
+
+  assert.equal(placed.figures[0].citationIndex, 1, "the figure lost the citation it was reached through, so nothing on it can name a paragraph");
+  assert.ok(
+    /turned over in 2023 \[1\]\.\n\n:::figure 1\n:::/u.test(chapter),
+    "the figure does not stand immediately after the paragraph carrying its own citation marker; a reader meets the evidence for a sentence somewhere below a paragraph about something else",
+  );
+  assert.ok(
+    chapter.indexOf(":::figure 1") < chapter.indexOf("another matter entirely"),
+    "the figure sits below a paragraph that does not cite it, which is the end-of-chapter placement this patch removes",
+  );
+  assert.ok(chapter.startsWith("## Shipments"), "the section offset no longer resolves against the markdown it indexes");
+  assert.ok(!chapter.includes("http"), "a publisher address was written into the report body");
+
+  // AND THE FALLBACK IS THE OLD BEHAVIOUR, BYTE FOR BYTE. A manifest entry the
+  // writer never wrote a marker for records no paragraph, and a figure with no
+  // paragraph to stand beside must go where every figure went before this
+  // function existed rather than beside a paragraph chosen by position.
+  const orphan = [{
+    dimensionId: "d1", chapterIndex: 0, sectionType: "evidenced", heading: "Silent",
+    body: `One paragraph, no markers.\n\nA second, still none.\n\n${manifest([{ index: 1, url: "https://a.example/p", findingId: "f-a", inlineQuote: "q" }])}`,
+  }];
+  assert.ok(
+    assemble(orphan, { figures }).markdown.endsWith("A second, still none.\n\n:::figure 1\n:::\n\n"),
+    "an unplaceable figure was dropped or wedged in by position instead of falling back to the end of the chapter",
+  );
+
+  // AND A MARKER INSIDE A FENCE IS A STRING, NOT A CITATION. A `:::figure`
+  // opened inside a code block renders as three colons and a number in
+  // monospace, which is the token leaking into the document it exists to stay
+  // out of.
+  const fenced = [{
+    dimensionId: "d1", chapterIndex: 0, sectionType: "evidenced", heading: "Fenced",
+    body: "```\nlookup[1]\n```\n\nProse that never cites anything.\n\n" + manifest([{ index: 1, url: "https://a.example/p", findingId: "f-a", inlineQuote: "q" }]),
+  }];
+  const out = assemble(fenced, { figures }).markdown;
+  // ASSERTED ON THE FENCE SURVIVING, AND ON WHERE THE TOKEN LANDED.
+  //
+  // The original compared two positions, and its right operand is -1 in
+  // exactly the case the assertion exists to catch: once the token has been
+  // inserted between the fence and the prose, the string it looked for is no
+  // longer in the output at all. Any position beats -1, so it passed while
+  // the defect was live, and the mutation that deletes the fence guard
+  // outright left it green.
+  //
+  // The token is NOT absent, and should not be: a figure that finds no
+  // paragraph to sit beside still belongs to its chapter and is appended at
+  // the end. What must not happen is it landing against the code.
+  assert.ok(out.includes("```" + String.fromCharCode(10) + "lookup[1]" + String.fromCharCode(10) + "```"), "a figure token was inserted inside the code block, where it renders as three colons and a number in monospace");
+  assert.ok(
+    out.indexOf(":::figure 1") > out.indexOf("Prose that never cites anything."),
+    "a marker inside a code fence claimed a figure: `lookup[1]` is a string and not a citation, and the picture was hung on the code block instead of falling to the end of the chapter",
+  );
+});
