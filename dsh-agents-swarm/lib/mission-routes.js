@@ -64,6 +64,7 @@ import { concurrencyCap } from "./mission-handlers.js";
 import {
   COUNTING_VERIFY_STATE,
   FETCH_BACKED_VERIFY_STATES,
+  FIGURE_MIME_TYPES,
   FINDING_ORDERS,
   MIN_DOCUMENT_CHARS,
   VERIFY_STATES,
@@ -801,6 +802,206 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
           },
         },
       });
+      return true;
+    }
+
+    // ── the publisher's own figures, and the bytes we kept ──────────────
+    //
+    // TWO ROUTES BECAUSE THERE ARE TWO ANSWERS. `figures` is the metadata a
+    // chapter needs in order to place a picture and credit it; `figure` is the
+    // bytes. One route would mean either a megabyte of base64 inside a JSON
+    // envelope on every poll, or an `<img>` pointed at an envelope.
+    //
+    // NEITHER EVER SENDS THE BROWSER TO THE PUBLISHER, and not with a redirect
+    // either: a 302 to a CDN is hotlinking with an extra hop, and it puts our
+    // readers' addresses in that publisher's logs on every render of a report.
+    // This matters more here than the rule makes it sound, because THIS PRODUCT
+    // ALREADY HOTLINKS ELSEWHERE — client.js:3182 points an `<img src>` at a
+    // publisher's own `og:image` and only falls back to `/proxy/image` after the
+    // load fails — so there is no CSP standing behind this rule anywhere. The
+    // route is the whole of it.
+    //
+    // AND NOT `/proxy/image` EITHER, which exists and is not this. That relay
+    // (index.js:1395) fetches at REQUEST time — so a publisher who 404s next
+    // month is a picture gone out of a report written this month — calls
+    // `fetchDocument` outside `paceRead`, is scoped to nothing, and admits any
+    // `image/*`, `image/svg+xml` included, which is a document that runs script
+    // served from our own origin. This route serves a copy we already hold,
+    // from a closed raster list, scoped through the chapter that cites the page.
+    //
+    // `dimensionId` IS REQUIRED ON THE BYTE ROUTE, in its first version. Rule 3
+    // says an image may appear only in a chapter that cites its page; scoped
+    // mission-wide, a URL minted for chapter A would serve inside chapter B and
+    // the rule would hold by convention in the renderer rather than in SQL. Both
+    // routes therefore run ONE query with the same arguments. It is also why the
+    // parameter cannot be added later: the byte URL is minted into `path` below
+    // and written into a card, so a parameter appended afterwards invalidates
+    // every URL already drawn.
+    if (req.method === "GET" && action === "figures") {
+      const mission = missionOr404(id);
+      if (mission === null) return true;
+      const params = paramsOf(req);
+      const stray = strayParams(params, ["runCount", "dimensionId"]);
+      if (stray !== null) return bad(stray);
+
+      const runCount = boundedInteger(params, "runCount", 1, 1_000_000, mission.runCount);
+      if (runCount.error !== undefined) return bad(runCount.error);
+      const dimensionId = boundedText(params, "dimensionId");
+      if (dimensionId.error !== undefined) return bad(dimensionId.error);
+
+      // WITHOUT A DIMENSION THIS IS AN INVENTORY, NOT A GALLERY. It answers what
+      // the run holds and who each figure is credited to, which is what a
+      // references pane wants; every row's `path` is null, because a figure is
+      // served under the chapter that cites its page and this listing names no
+      // chapter. A null path is not a missing feature — it is rule 3 declining
+      // to mint a URL that would outlive the scope justifying it.
+      const rows = dimensionId.value === undefined
+        ? missionStore.figuresForMission(id, { runCount: runCount.value })
+        : missionStore.figuresForChapter(id, { runCount: runCount.value, dimensionId: dimensionId.value });
+
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          missionId: id,
+          runCount: runCount.value,
+          dimensionId: dimensionId.value ?? null,
+          figures: rows.map((row) => ({
+            figureId: row.id,
+            // Handed over whole, WITHOUT this router's own prefix — the client
+            // prepends `apiBase()` the way it does for every other mission
+            // route. Composed here rather than at the far end so that no caller
+            // ever assembles an image address itself, because the one address
+            // that must never reach an `<img>` is `sourceUrl` ten lines down.
+            path: dimensionId.value === undefined
+              ? null
+              : `/missions/${encodeURIComponent(id)}/figure?figureId=${encodeURIComponent(row.id)}&runCount=${runCount.value}&dimensionId=${encodeURIComponent(dimensionId.value)}`,
+            alt: row.alt,
+            caption: row.caption,
+            // 0 means UNKNOWN, not small: the page declared no intrinsic size.
+            // A layout that treats the two alike will letterbox a chart it could
+            // have measured.
+            width: row.width,
+            height: row.height,
+            mime: row.mime,
+            byteLength: row.byteLength,
+            contentHash: row.contentHash,
+            fetchedAt: row.fetchedAt,
+            // THE ATTRIBUTION, on every row, never optional and never a second
+            // lookup. `page` is JOINed out of `mission_documents` at read time,
+            // so a figure whose page row is gone returns no row at all and
+            // cannot be drawn uncredited. `sourceUrl` is the publisher's own
+            // IMAGE address: it is here to be shown and linked, never fetched.
+            page: row.page,
+            sourceUrl: row.url,
+            sourceHost: row.host,
+          })),
+        },
+      });
+      return true;
+    }
+
+    if (req.method === "GET" && action === "figure") {
+      const mission = missionOr404(id);
+      if (mission === null) return true;
+      const params = paramsOf(req);
+      const stray = strayParams(params, ["figureId", "runCount", "dimensionId"]);
+      if (stray !== null) return bad(stray);
+
+      const runCount = boundedInteger(params, "runCount", 1, 1_000_000, mission.runCount);
+      if (runCount.error !== undefined) return bad(runCount.error);
+      const figureId = boundedText(params, "figureId");
+      if (figureId.error !== undefined) return bad(figureId.error);
+      const dimensionId = boundedText(params, "dimensionId");
+      if (dimensionId.error !== undefined) return bad(dimensionId.error);
+      // BOTH, and refused HERE rather than left to the store. `figuresForChapter`
+      // would throw `assertText` on a missing dimension, and a required
+      // parameter that arrives as a 500 reads as a broken server rather than as
+      // a caller who left something out.
+      if (figureId.value === undefined || dimensionId.value === undefined) {
+        return bad(`figureId and dimensionId are both required: this route serves one stored image inside the one chapter that cites the page it came off. /missions/${id}/figures?dimensionId=<id> returns both on every row, already spelled out as \`path\`.`);
+      }
+
+      // THE SCOPE AND THE MEMBERSHIP TEST IN ONE READ, and it is the SAME read
+      // the list route ran — one query, so what a chapter may show and what
+      // bytes may go out cannot become two rules free to disagree. A finding
+      // demoted to `unchecked-stale` takes its figures off the screen in the
+      // same instant it takes its quote off, with no second rule to keep in step.
+      const held = missionStore.figuresForChapter(id, { runCount: runCount.value, dimensionId: dimensionId.value });
+      const scoped = held.find((row) => row.id === figureId.value) ?? null;
+      if (scoped === null) {
+        // 404 NAMING THE BOUND, the way `document` and `trace/<ref>` do. "This
+        // chapter holds nothing" and "it holds four and that is not one of them"
+        // are different situations, and one sentence for both is how a stale id
+        // becomes indistinguishable from a chapter that got no pictures.
+        sendJson(res, 404, {
+          success: false,
+          error: held.length === 0
+            ? `chapter ${dimensionId.value} of mission ${id} holds no figure at run ${runCount.value}. Either nothing its verified findings cite carried a picture, or the publishers declined them — /missions/${id}/figures?dimensionId=${encodeURIComponent(dimensionId.value)} says which, with a reason on every row.`
+            : `chapter ${dimensionId.value} of mission ${id} holds ${held.length} figure(s) at run ${runCount.value} and none of them is "${figureId.value}". A figure belongs to a chapter only while one of that dimension's own verified findings still cites the page it came off.`,
+          data: { figureId: figureId.value, dimensionId: dimensionId.value, runCount: runCount.value, held: held.length },
+        });
+        return true;
+      }
+
+      const stored = missionStore.figureBytes(figureId.value);
+      // THE SECOND TYPE CHECK, and it is not a copy of the one at the write.
+      // That one stops a hole being dug; this one stops a hole dug by an older
+      // build from being served by this one — a row written when the allow list
+      // was wider must not become servable by an upgrade that widened nothing.
+      // Where the two disagree the narrower wins and the picture does not
+      // appear, which is the safe direction for a picture.
+      if (stored === undefined || !FIGURE_MIME_TYPES.includes(String(stored.mime))) {
+        sendJson(res, 404, {
+          success: false,
+          error: `mission ${id} holds no servable bytes for figure "${figureId.value}"${scoped.reason === null ? "" : `: ${scoped.reason}`}. This route never redirects to the publisher, so a figure we do not hold is a citation with no picture beside it.`,
+          data: { figureId: figureId.value, state: scoped.state, reason: scoped.reason, sourceUrl: scoped.url },
+        });
+        return true;
+      }
+
+      // THE COPY WE KEPT, WHICH IS THE WHOLE POINT. Nothing on this path touches
+      // the network. The publisher can 404 the image, re-crop it or vanish, and
+      // a report written in March still renders in December — the same principle
+      // the document reader is built on, one table further out.
+      const etag = `"${stored.contentHash}"`;
+      if (String(req.headers?.["if-none-match"] ?? "") === etag) {
+        // The validator and the caching terms repeated, because a revalidation
+        // answered without them tells the browser to ask again in full on the
+        // next render of every figure in the report.
+        res.writeHead(304, { etag, "cache-control": "private, max-age=600" });
+        res.end();
+        return true;
+      }
+
+      res.writeHead(200, {
+        "content-type": stored.mime,
+        "content-length": stored.byteLength,
+        // A THIRD PARTY CHOSE THIS BODY, which is true of no other response in
+        // this file. `nosniff` stops the browser deciding for itself that the
+        // bytes are something executable, and the sandbox with an empty
+        // `default-src` makes the response inert if anyone navigates straight at
+        // it instead of loading it into an `<img>`.
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; sandbox",
+        // `inline`, not `attachment`: this is loaded into an `<img>` in a report,
+        // and an attachment disposition turns every figure into a download prompt.
+        "content-disposition": "inline",
+        // NO `cross-origin-resource-policy`, and that is measured rather than
+        // forgotten. `apiBase()` at client.js:2291 is overridable to another
+        // origin and lib/remote.js forwards `/swarm-api/*` to a remote box, so
+        // `same-origin` would blank every figure on exactly the deployments that
+        // work hardest to serve them.
+        //
+        // THE ONE ROUTE IN THIS FILE THAT IS NOT `no-store`, argued rather than
+        // copied: a long report re-requests every figure on every render, the row
+        // id is `(page, image url)` so the bytes under it are stable, and the
+        // validator is the content hash — so a re-extract that replaced the image
+        // replaces the ETag the browser is already holding. `private` keeps a
+        // shared cache from serving one mission's evidence to another reader.
+        "cache-control": "private, max-age=600",
+        etag,
+      });
+      res.end(stored.bytes);
       return true;
     }
 

@@ -26,6 +26,7 @@ import { STAGES } from "../lib/mission-runtime.js";
 import { readFigure } from "../lib/insight-corroborate.js";
 import { driveFigureBytes } from "../lib/mission-stages-front.js";
 import { FIGURE_MIME_TYPES, MAX_FIGURE_BYTES } from "../lib/mission-store.js";
+import { createMissionRoutes } from "../lib/mission-routes.js";
 
 /** One module's source, for the structural assertions. */
 const sourceOf = (name) => readFileSync(new URL(`../lib/${name}`, import.meta.url), "utf8");
@@ -34,7 +35,6 @@ const CORROBORATE = sourceOf("insight-corroborate.js");
 const TOOLS = sourceOf("mission-tools.js");
 const PROXY = sourceOf("proxy.js");
 const STORE = sourceOf("mission-store.js");
-const ROUTES = sourceOf("mission-routes.js");
 const FRONT = sourceOf("mission-stages-front.js");
 
 /**
@@ -106,7 +106,6 @@ void CORROBORATE;
 void TOOLS;
 void PROXY;
 void STORE;
-void ROUTES;
 void FRONT;
 
 /** A migrated mission store over an in-memory database, closed after the test. */
@@ -170,9 +169,15 @@ function figuredMission(missions, { images, unverifiedImage = null, uncitedImage
     sourceUrl: page, verifyState: "verified-source-text",
     documentId: documentIdFor(page), spanIndex: 2, createdAt: "2026-08-24T00:00:06.000Z",
   });
+  // THE SAME INSTANT AS THE DOCUMENT'S OWN FETCH, and it is not tidiness.
+  // `figuresForChapter` and `fetchableFigures` both carry
+  // `g.last_seen_at = d.fetched_at` — the invariant that stops a picture
+  // seen on an OLDER fetch of a page being shown beside the text of the copy
+  // we kept. A fixture that stamps its figures two seconds later describes a
+  // fetch that never happened, and every query correctly returns nothing.
   const figures = images.map((url, at) => putFigure(missions, {
     documentId: documentIdFor(page), url, caption: `figure ${at + 1}`,
-    score: 10 - at, at: "2026-08-24T00:00:07.000Z",
+    score: 10 - at, at: "2026-08-24T00:00:05.000Z",
   }));
 
   let unverified = null;
@@ -184,14 +189,14 @@ function figuredMission(missions, { images, unverifiedImage = null, uncitedImage
       claim: "The line ships this quarter.", evidence: "shipping this quarter",
       sourceUrl: claimed, verifyState: "unverifiable", createdAt: "2026-08-24T00:00:06.000Z",
     });
-    unverified = putFigure(missions, { documentId: documentIdFor(claimed), url: unverifiedImage, at: "2026-08-24T00:00:07.000Z" });
+    unverified = putFigure(missions, { documentId: documentIdFor(claimed), url: unverifiedImage, at: "2026-08-24T00:00:05.000Z" });
   }
 
   let uncited = null;
   if (uncitedImage !== null) {
     const orphan = "https://example.net/nobody-cited-this";
     missions.putDocument({ url: orphan, markdown: "uncited text ".repeat(40), status: 200, fetchedAt: "2026-08-24T00:00:05.000Z" });
-    uncited = putFigure(missions, { documentId: documentIdFor(orphan), url: uncitedImage, at: "2026-08-24T00:00:07.000Z" });
+    uncited = putFigure(missions, { documentId: documentIdFor(orphan), url: uncitedImage, at: "2026-08-24T00:00:05.000Z" });
   }
 
   return { id, page, figures, unverified, uncited };
@@ -379,4 +384,159 @@ test("only a verified finding licenses a request to a publisher", () => {
   assert.match(query, /f\.verify_state IN \(\$\{holes\}\)/u, "the fetch queue admits verify states outside FETCH_BACKED_VERIFY_STATES, so an unchecked claim can spend a request at a publisher");
   assert.match(query, /const holes = FETCH_BACKED_VERIFY_STATES\.map\(\(\) => "\?"\)\.join\(","\)/u, "the placeholders are built from something other than FETCH_BACKED_VERIFY_STATES, so the list the query names and the list it binds can drift apart");
   assert.match(query, /g\.state = 'candidate'/u, "the queue no longer restricts itself to candidates, so a held or refused figure can be asked for again");
+});
+
+/* ── the byte route ────────────────────────────────────────────────────── */
+
+const ROUTES = readFileSync(new URL("../lib/mission-routes.js", import.meta.url), "utf8");
+
+/** Bytes standing in for an image. Not a valid PNG — nothing here decodes one. */
+const PNG = Buffer.from("89504e470d0a1a0a0000000d4948445200000001", "hex");
+
+/**
+ * The mission router, with the response body kept as BYTES.
+ *
+ * NOT `callRoute` from mission.test.mjs. That one does `String(chunk)` because
+ * `report.md` is text, and a shim that stringifies cannot tell a PNG from its
+ * own mangling of one — the byte comparison below would pass against garbage.
+ */
+async function callBytes(missions, url, headers = {}) {
+  const chunks = [];
+  const res = {
+    writeHead(status, head) { res.status = status; res.headers = head ?? {}; },
+    write(chunk) { chunks.push(Buffer.from(chunk)); },
+    end(chunk) { if (chunk !== undefined) chunks.push(Buffer.from(chunk)); },
+    on() {},
+  };
+  const handler = createMissionRoutes({
+    missionStore: missions,
+    runtime: { start: () => ({ started: true }), running: () => [], bootId: "boot-1", clock: () => "2026-08-24T01:00:00.000Z" },
+    sendJson: (target, status, body) => { target.status = status; target.body = body; },
+    readJson: async () => ({}),
+  });
+  const handled = await handler({ method: "GET", url, headers }, res, new URL(url, "http://local").pathname);
+  return { handled, status: res.status, body: res.body, headers: res.headers ?? {}, bytes: Buffer.concat(chunks) };
+}
+
+/** The fixture from the driver section, with the bytes put in by hand. */
+function servedMission(missions) {
+  const held = figuredMission(missions, { images: ["https://cdn.example.net/d1/figure-1.png"] });
+  // Written directly, because the only way through the driver is a live
+  // publisher and there is deliberately no seam to fake one. The mime arrives
+  // with a parameter on purpose: `holdFigure` stores the type as SERVED with its
+  // parameters cut off, and comparing the raw header would refuse it.
+  missions.holdFigure({ id: held.figures[0], bytes: PNG, mime: "image/png; charset=binary", status: 200, fetchedAt: "2026-08-24T00:01:00.000Z" });
+  return held;
+}
+
+test("a chapter's figure is served from our own origin, as the bytes we kept, and never as a redirect", async (t) => {
+  const { missions } = library(t);
+  const { id, figures } = servedMission(missions);
+
+  const listed = await callBytes(missions, `/missions/${id}/figures?dimensionId=d1`);
+  assert.equal(listed.status, 200, JSON.stringify(listed.body));
+  const [row] = listed.body.data.figures;
+  assert.equal(row.figureId, figures[0]);
+  assert.equal(row.page.url, "https://arxiv.org/abs/2401.00001", "the row carries no page to credit; an image with no attribution is a fabricated figure");
+  assert.equal(row.page.title, "Sulfide electrolytes at pilot scale", "the credit has no words to be a link with");
+  assert.equal(row.sourceUrl, "https://cdn.example.net/d1/figure-1.png", "the publisher's own image address is missing, so the credit cannot name what it is crediting");
+  assert.equal(row.mime, "image/png", "the stored type is the raw header rather than the type as served");
+  assert.match(
+    row.path, /^\/missions\/[^/]+\/figure\?figureId=[^&]+&runCount=1&dimensionId=d1$/u,
+    "the card was handed something other than our own route, carrying its chapter, to point an <img> at",
+  );
+
+  const served = await callBytes(missions, row.path);
+  assert.equal(served.status, 200, JSON.stringify(served.body));
+  assert.equal(served.headers["content-type"], "image/png", "the bytes went out under a type nothing checked");
+  assert.equal(served.headers["x-content-type-options"], "nosniff", "a third party's bytes are served from our origin with the browser free to decide for itself what they are");
+  assert.match(String(served.headers["content-security-policy"]), /default-src 'none'/u, "navigating straight at a publisher's bytes on our origin is not made inert");
+  assert.equal(Buffer.compare(served.bytes, PNG), 0, "the bytes on the wire are not the bytes in the row");
+  assert.equal(
+    String(served.headers.location ?? ""), "",
+    "the route answered with a redirect; a 302 to a publisher's CDN is hotlinking with an extra hop, and client.js:3182 already hotlinks elsewhere so there is no CSP behind this rule",
+  );
+  assert.equal(
+    served.headers["cross-origin-resource-policy"], undefined,
+    "CORP would blank every figure wherever apiBase() points at another origin, which lib/remote.js exists to support",
+  );
+
+  // THE COPY WE KEPT. Nothing on the serving path touches the network, which is
+  // the difference between this route and /proxy/image and the reason a
+  // publisher who 404s the image next month changes nothing here.
+  const block = ROUTES.slice(ROUTES.indexOf('action === "figure"'), ROUTES.indexOf("res.end(stored.bytes);"));
+  assert.ok(block.length > 0, "the byte route is gone from the router");
+  assert.equal(/fetchDocument|\bfetch\(|admissibleUrl/u.test(block), false, "the byte route reaches a publisher at request time, which is /proxy/image's design and the opposite of this one");
+
+  // Revalidation is cheap, and a re-extract that replaced the image replaces
+  // the validator the browser is holding.
+  const again = await callBytes(missions, row.path, { "if-none-match": served.headers.etag });
+  assert.equal(again.status, 304, "every render of a long report re-sends every figure whole");
+  assert.equal(again.bytes.byteLength, 0, "a 304 carried a body");
+});
+
+test("a figure is served only under the chapter that cites its page", async (t) => {
+  // RULE 3 IN SQL, NOT IN THE RENDERER. Both routes run ONE query, so the rule
+  // deciding what a chapter may SHOW and the rule deciding what bytes go OUT
+  // cannot drift apart.
+  const { missions } = library(t);
+  const { id, figures } = servedMission(missions);
+  missions.upsertDimension({ missionId: id, dimensionId: "d2", name: "监管口径", facet: "policy", at: "2026-08-24T00:00:01.000Z" });
+
+  const other = await callBytes(missions, `/missions/${id}/figure?figureId=${figures[0]}&runCount=1&dimensionId=d2`);
+  assert.equal(other.status, 404, "a chapter was served a picture off a page its own findings never cite, which is decoration presented as evidence");
+  assert.equal(other.body.data.held, 0, "the bound is not on the answer, so a caller cannot tell a stale id from a chapter with no pictures");
+
+  const elsewhere = mission(missions);
+  const leak = await callBytes(missions, `/missions/${elsewhere}/figure?figureId=${figures[0]}&runCount=1&dimensionId=d1`);
+  assert.equal(leak.status, 404, "one mission's image came back under another mission's path, which is the fetch cache served as evidence");
+
+  const mine = await callBytes(missions, `/missions/${id}/figure?figureId=${figures[0]}&runCount=1&dimensionId=d1`);
+  assert.equal(mine.status, 200, "the scope is a scope, not a ban: the chapter that cites the page lost its own picture");
+
+  // The byte route cannot be talked out of naming a chapter, because a URL that
+  // could would leave rule 3 holding by convention in the renderer.
+  const loose = await callBytes(missions, `/missions/${id}/figure?figureId=${figures[0]}&runCount=1`);
+  assert.equal(loose.status, 400, "the byte route served a figure without being told which chapter was asking");
+
+  // And the unscoped listing mints no byte URL at all, while still carrying the
+  // attribution a references pane exists to show.
+  const inventory = await callBytes(missions, `/missions/${id}/figures`);
+  assert.equal(inventory.body.data.figures[0].path, null, "an unscoped listing handed out a byte URL, which is a URL that outlives the scope justifying it");
+  assert.equal(inventory.body.data.figures[0].page.url, "https://arxiv.org/abs/2401.00001", "the inventory dropped the attribution, which is the one thing it exists to carry");
+
+  assert.equal(
+    ROUTES.split("missionStore.figuresForChapter(id, { runCount: runCount.value, dimensionId: dimensionId.value })").length - 1, 2,
+    "the two routes stopped asking the same question, so what a chapter may show and what bytes go out are now two rules free to disagree",
+  );
+});
+
+test("the byte route refuses a type this build would never have stored", async (t) => {
+  // The write-side check stops a hole being dug; this one stops a hole dug by an
+  // older build from being served by this one.
+  const { missions } = library(t);
+  const { id, figures } = servedMission(missions);
+  assert.equal(FIGURE_MIME_TYPES.includes("image/svg+xml"), false, "an SVG is a document that runs script; served from our origin as an image it is also offered as a page");
+
+  missions.db.prepare("UPDATE mission_figures SET mime = 'image/svg+xml' WHERE id = ?").run(figures[0]);
+  const served = await callBytes(missions, `/missions/${id}/figure?figureId=${figures[0]}&runCount=1&dimensionId=d1`);
+  assert.equal(served.status, 404, "a content type this build refuses to store was served anyway, because only the write path checked it");
+  assert.equal(
+    String(served.body.data.sourceUrl ?? ""), "https://cdn.example.net/d1/figure-1.png",
+    "the refusal does not name the image it declined, so nobody can tell which figure vanished out of the report",
+  );
+});
+
+test("lib/mission-routes.js is CRLF, and the figure block did not arrive as LF", () => {
+  // MEASURED, NOT ASSUMED. This is the only file in lib/ with CRLF line endings
+  // (mission-store.js, mission-stages-front.js, client.js and proxy.js are all
+  // LF). Two bare LFs already survive in it, at CRLF-lines 1069 and 1072, from
+  // an earlier patch applied with the wrong ones — so this is not hypothetical,
+  // it has happened here before. A multi-line anchor written with \n matches
+  // ZERO times in this file, and a replacement written with \n leaves a block
+  // whose every line ends differently from the file around it.
+  assert.ok(ROUTES.includes("\r\n"), "mission-routes.js is no longer CRLF; every multi-line anchor written against it is now wrong");
+  const block = ROUTES.slice(ROUTES.indexOf("// ── the publisher's own figures"), ROUTES.indexOf("res.end(stored.bytes);"));
+  assert.ok(block.length > 0, "the figure block is gone from the router");
+  assert.equal((block.match(/(?<!\r)\n/gu) ?? []).length, 0, "the figure routes were applied with LF endings into a CRLF file");
 });
