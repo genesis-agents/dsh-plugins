@@ -3198,3 +3198,43 @@ test("the surface paints in the reference's values, not the harness's", () => {
   // the dark one, and the light/dark guard caught it.
   assert.ok(!block.includes("--swm-h-"), "a hue is declared a second time in the theme block, where it reads as the dark value");
 });
+
+test("the model that spent the tokens reaches the screen", () => {
+  // Recording it and never drawing it is the shape this whole batch keeps
+  // finding: the value is stored, projected, and read by nobody.
+  assert.ok(SOURCE.includes("function MissionModelTable("), "the per-model table is gone");
+  const table = code(body("function MissionModelTable("));
+  // NOT RECORDED, not blank. A row from before the column existed is a
+  // different statement from a model whose name is the empty string.
+  assert.ok(table.includes('zh ? "未记录" : "not recorded"'), "an unrecorded model renders as an empty cell");
+  // The share is what makes the row worth reading; a token count alone repeats
+  // the meter four inches above it.
+  assert.ok(table.includes("row.tokens / spent"), "the table drops the share, so it restates the total meter per row");
+  assert.match(
+    code(body("function MissionDetail(")),
+    /jsx\(MissionModelTable, \{ byModel: view\.cost\.byModel, zh \}\)/,
+    "the table exists and nothing mounts it",
+  );
+});
+
+test("both spend writers stamp the model, not just the one with tools", () => {
+  // Two writers reach the ledger: `onUsage` for stages that hold tools, and
+  // `recordSpend` for the middle stages that do not — which is most of them. A
+  // fix applied to one writes NULL for the other, and the table then reports
+  // that a deep mission ran one model for its collection and nothing for its
+  // reasoning.
+  const agent = readFileSync(new URL("../lib/mission-agent.js", import.meta.url), "utf8");
+  assert.match(agent, /model: route\?\.model \?\? null,/, "the tool-bearing writer stopped stamping the model");
+  const middle = readFileSync(new URL("../lib/mission-stages-middle.js", import.meta.url), "utf8");
+  assert.match(
+    middle,
+    /model: run\?\.model \?\? null,/,
+    "recordSpend stopped stamping the model, so every stage without tools writes NULL",
+  );
+  // From the RESULT, never re-resolved: re-resolving at write time reports the
+  // selection then, which is not necessarily the one that produced the tokens.
+  assert.ok(
+    !/model: ctx\.agentDefaultModel/.test(middle),
+    "the middle writer re-resolves the model at write time instead of reading what the run reported",
+  );
+});

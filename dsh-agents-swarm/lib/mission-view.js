@@ -910,6 +910,17 @@ function projectCost({ row, spendSums, stages, chapters, policy, now }) {
     // note on the query in `readMissionViewInput`. `avgLatencyMs` is therefore
     // computed over the measured calls and is NULL when none were measured —
     // never 0, which would read as "instant" about a tool nobody timed.
+    // PER MODEL. An empty name is a row written before the ledger recorded
+    // one, and it is reported as null rather than as a model called "" —
+    // "not recorded" and "some model" are different answers.
+    byModel: asArray(spendSums.byModel).map((r) => ({
+      model: r.model == null || String(r.model) === "" ? null : String(r.model),
+      calls: numberOr(r.calls, 0),
+      tokens: numberOr(r.prompt_tok, 0) + numberOr(r.completion_tok, 0),
+      promptTok: numberOr(r.prompt_tok, 0),
+      completionTok: numberOr(r.completion_tok, 0),
+      cacheReadTok: numberOr(r.cache_read_tok, 0),
+    })),
     byTool: asArray(spendSums.byTool).map((r) => {
       const calls = numberOr(r.calls, 0);
       const latencyMeasured = numberOr(r.latency_measured, 0);
@@ -1661,6 +1672,20 @@ export function readMissionViewInput(db, missionId, opts = {}) {
            COALESCE(SUM(calls),0)          AS calls
       FROM mission_spend WHERE mission_id = ? AND run_count = ? GROUP BY agent_id, role`, [missionId, runCount]);
 
+  // WHICH MODEL SPENT WHAT. One GROUP BY beside the two already here, and
+  // scoped to the run like them: a mission that switched models mid-flight
+  // is the case this exists to show, and a lifetime sum would blend two
+  // generations' choices into one row.
+  const byModel = query(db, `
+    SELECT COALESCE(model, '') AS model,
+           COALESCE(SUM(prompt_tok),0)     AS prompt_tok,
+           COALESCE(SUM(completion_tok),0) AS completion_tok,
+           COALESCE(SUM(cache_read_tok),0) AS cache_read_tok,
+           COALESCE(SUM(calls),0)          AS calls
+      FROM mission_spend WHERE mission_id = ? AND run_count = ?
+     GROUP BY COALESCE(model, '')
+     ORDER BY calls DESC`, [missionId, runCount]);
+
   // `pace_key` is which ceiling a call consumed, so this is the meter for
   // arXiv, web and fetch. Calls with no pace key consume no ceiling and are
   // excluded rather than bucketed under a made-up key.
@@ -1734,6 +1759,7 @@ export function readMissionViewInput(db, missionId, opts = {}) {
       totals,
       byStage,
       byAgent,
+      byModel,
       toolsByPaceKey,
       toolsByAgent,
       byTool,

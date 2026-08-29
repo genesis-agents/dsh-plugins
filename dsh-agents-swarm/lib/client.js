@@ -7233,6 +7233,46 @@ window.__ModuleLoader__.load({
 		* @param byTool - `cost.byTool` from the view route.
 		* @param zh - whether to write Chinese.
 		*/
+		/**
+		* WHICH MODEL SPENT IT.
+		*
+		* The ledger recorded the role, the agent instance and four token counts,
+		* and never the model — so a mission that ran three of them could not say
+		* which one ate the budget. The value was in hand the whole time: the seam
+		* resolves a route per call and hands it to `llm.stream`.
+		*
+		* A row with no name is a call from before the ledger recorded one. It says
+		* so, rather than being folded into whichever model is selected now.
+		*/
+		function MissionModelTable({ byModel, zh }) {
+			const rows = (Array.isArray(byModel) ? byModel : []).filter((row) => row.calls > 0);
+			if (rows.length === 0) return null;
+			const spent = rows.reduce((sum, row) => sum + row.tokens, 0);
+			return jsx("div", {
+				style: { overflowX: "auto" },
+				children: jsxs("table", {
+					style: { width: "100%", borderCollapse: "collapse" },
+					children: [
+						jsx("thead", { children: jsx("tr", { children: [
+							zh ? "模型" : "Model", zh ? "调用" : "Calls", zh ? "令牌" : "Tokens",
+							zh ? "占比" : "Share", zh ? "缓存读取" : "Cache read"
+						].map((label, at) => jsx("th", {
+							style: { ...TH, textAlign: at === 0 ? "left" : "right" }, children: label
+						}, `h${at}`)) }, "hr") }, "head"),
+						jsx("tbody", { children: rows.map((row) => jsxs("tr", {
+							children: [
+								jsx("td", { style: TD, children: row.model ?? (zh ? "未记录" : "not recorded") }, "m"),
+								jsx("td", { style: { ...TD, textAlign: "right" }, children: String(row.calls) }, "c"),
+								jsx("td", { style: { ...TD, textAlign: "right" }, children: missionCompact(row.tokens) }, "t"),
+								jsx("td", { style: { ...TD, textAlign: "right" }, children: spent === 0 ? "—" : `${Math.round((row.tokens / spent) * 100)}%` }, "s"),
+								jsx("td", { style: { ...TD, textAlign: "right" }, children: missionCompact(row.cacheReadTok) }, "k")
+							]
+						}, row.model ?? "unknown")) }, "body")
+					]
+				})
+			}, "models");
+		}
+
 		function MissionToolTable({ byTool, zh }) {
 			const rows = Array.isArray(byTool) ? byTool : [];
 			// EVERY COLUMN DECLARES A WIDTH, which is the half of the clipping
@@ -12189,6 +12229,14 @@ window.__ModuleLoader__.load({
 												: "broken down by stage — one total cannot say which step is burning it",
 											children: jsx(MissionStageSpend, { byStage: view.cost.byStage, zh })
 										}, "byStage"),
+										(view.cost?.byModel ?? []).length === 0 ? null : jsx(MissionPanel, {
+											title: zh ? "哪个模型花的" : "Which model spent it",
+											count: view.cost.byModel.length,
+											note: zh
+												? "按模型分解 —— 一个档位跑了三个模型时，总数说不出是哪一个在烧"
+												: "broken down by model — with three of them in one run, a total cannot say which is burning it",
+											children: jsx(MissionModelTable, { byModel: view.cost.byModel, zh })
+										}, "byModel"),
 										(view.cost?.byTool ?? []).length === 0 ? null : jsx(MissionPanel, {
 											title: zh ? "哪个工具在失败" : "Which tool is failing",
 											count: view.cost.byTool.length,

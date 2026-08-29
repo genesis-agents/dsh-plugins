@@ -434,6 +434,10 @@ export function createMissionChat(ctx, { logger = null, turnCap = AGENT_TURN_CAP
     let stopReason = null;
     let usageSettled = false;
     let usageWhy = null;
+// THE MODEL THIS RUN ACTUALLY USED. Resolved per call, so a mission whose
+// selection changed mid-run reports the one that produced its last turn
+// rather than the one selected when somebody happens to read the row.
+let ranOn = null;
 
     const finalizeName = finalizeTool === undefined || finalizeTool === null
       ? null
@@ -460,6 +464,7 @@ export function createMissionChat(ctx, { logger = null, turnCap = AGENT_TURN_CAP
         iterations,
         wallMs: Date.now() - startedAt,
         tokens,
+model: ranOn,
         toolsUsed,
         toolStats,
         messages,
@@ -531,6 +536,7 @@ export function createMissionChat(ctx, { logger = null, turnCap = AGENT_TURN_CAP
       //    exposes a method, not fields, because the settings document can
       //    replace the selection between two calls of one mission.
       const route = ctx.agentDefaultModel.currentSelection();
+ranOn = route?.model ?? ranOn;
       const turn = await streamTurnResiliently(
         { ctx, route, system: fitted.system, messages, tools: wire, maxTokens, signal, budget, note },
         { note, signal, backoff: transportBackoffMs },
@@ -555,6 +561,12 @@ export function createMissionChat(ctx, { logger = null, turnCap = AGENT_TURN_CAP
               // `agentId`, which is the column the loop rule and the trajectory
               // read.
               role: agent === "" ? "code" : agent,
+              // THE MODEL THAT PRODUCED THESE TOKENS. `route` is resolved per
+              // call a few lines above, because the settings document can
+              // replace the selection between two calls of one mission — so a
+              // mission that switched models mid-run says so per row rather
+              // than being attributed wholesale to whichever is selected now.
+              model: route?.model ?? null,
               agentId: agentId ?? (agent === "" ? null : agent),
               promptTok: turn.usage.prompt,
               completionTok: turn.usage.completion,

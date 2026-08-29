@@ -2445,3 +2445,43 @@ test("the evidence export carries every finding, not the first page of them", as
     `the export carries ${rows.length - 1} of ${held.length} findings`,
   );
 });
+
+test("the ledger records which model spent the tokens", (t) => {
+  // "Which model ran this stage, how many calls did it take, what share of the
+  // tokens did it eat" could not be asked at all: the ledger recorded the role,
+  // the agent instance and four token counts, and never the model. The value
+  // was in hand the whole time — the seam resolves a route per call and hands
+  // it to `llm.stream`.
+  const { missions } = library(t);
+  const id = missions.createMission({
+    topic: "t", depth: "deep", bootId: "b", pid: 1, at: "2026-08-28T09:00:00.000Z",
+    config: {}, budget: { maxTokens: 100_000, maxCalls: 200, maxArxiv: 10, maxWeb: 10, maxFetch: 10, wallMs: 3_600_000 },
+  }, STAGES.map((stage, index) => ({ stepId: stage.id, ordinal: index + 1, status: "pending" }))).id;
+
+  missions.insertSpend({
+    missionId: id, stepId: "s3-collect", role: "researcher", model: "gpt-5.6-luna",
+    promptTok: 1000, completionTok: 500, calls: 3, at: "2026-08-28T09:00:01.000Z",
+  });
+  missions.insertSpend({
+    missionId: id, stepId: "s5-reconcile", role: "reconciler", model: "gpt-5.4-mini",
+    promptTok: 400, completionTok: 100, calls: 1, at: "2026-08-28T09:00:02.000Z",
+  });
+  // A row from before the column existed. It must stay distinguishable from a
+  // model actually called "": "not recorded" and "some model" are different.
+  missions.insertSpend({
+    missionId: id, stepId: "s6-synthesize", role: "analyst",
+    promptTok: 200, completionTok: 50, calls: 1, at: "2026-08-28T09:00:03.000Z",
+  });
+
+  const byModel = missions.readModelInputs(id).spendByModel
+    ?? readMissionViewInput(missions.db, id, { tail: 10, sinceSeq: 0 }).spendSums.byModel;
+  const named = byModel.filter((row) => String(row.model ?? "") !== "");
+  assert.equal(named.length, 2, `two models spent, ${named.length} recorded: ${JSON.stringify(byModel)}`);
+  const luna = named.find((row) => row.model === "gpt-5.6-luna");
+  assert.equal(luna.calls, 3, "the calls are not attributed to the model that made them");
+  assert.equal(Number(luna.prompt_tok) + Number(luna.completion_tok), 1500);
+  assert.ok(
+    byModel.some((row) => String(row.model ?? "") === ""),
+    "a row written before the column existed was dropped rather than reported as not recorded",
+  );
+});

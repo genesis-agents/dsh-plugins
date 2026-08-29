@@ -772,6 +772,21 @@ export const MISSION_MIGRATIONS = Object.freeze([
   // cited takes the mission's current generation: it is part of the plan on
   // screen, and retiring it to a generation nobody queries would empty a
   // running mission's pane.
+  // WHICH MODEL SPENT IT. The ledger recorded the role, the agent instance
+  // and four token counts, and never the model — so "which model ran this
+  // stage, how many calls did it take, what share of the tokens did it eat"
+  // could not be asked at all. The value was in hand the whole time:
+  // streamTurn passes route.model to ctx.llm.stream on every call.
+  //
+  // Rows written before this get NULL, which is honest — nobody recorded it
+  // then — and reads as "not recorded" rather than as some model's name.
+  Object.freeze({
+    id: "008-spend-model",
+    up: (db) => {
+      const has = db.prepare("PRAGMA table_info(mission_spend)").all().some((column) => column.name === "model");
+      if (!has) db.exec("ALTER TABLE mission_spend ADD COLUMN model TEXT");
+    },
+  }),
   Object.freeze({
     id: "007-dimension-generation",
     up: (db) => {
@@ -3955,13 +3970,14 @@ export class MissionStore {
     const runCount = Number(record?.runCount ?? this.getMission(missionId)?.runCount ?? 0) || 0;
     const info = this.db.prepare(`
       INSERT INTO mission_spend (
-        mission_id, step_id, role, agent_id, run_count,
+        mission_id, step_id, role, agent_id, run_count, model,
         prompt_tok, completion_tok, cache_read_tok, estimated_tok, calls, at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       missionId, stepId, role,
       typeof record?.agentId === "string" ? record.agentId : null,
       runCount,
+      typeof record?.model === "string" && record.model !== "" ? record.model : null,
       assertCount(record?.promptTok ?? 0, "promptTok", 0),
       assertCount(record?.completionTok ?? 0, "completionTok", 0),
       assertCount(record?.cacheReadTok ?? 0, "cacheReadTok", 0),

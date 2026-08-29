@@ -224,3 +224,39 @@ test("the retry path never probes the harness context for a property it did not 
   assert.equal(state.attempts, 3);
   assert.equal(result.state, "completed", `the retry path failed against a real-shaped context: ${result.diagnostic}`);
 });
+
+test("the run says which model produced it", async () => {
+  // The ledger's model column is only as good as what reaches it, and the
+  // middle stages write from the RESULT rather than from the seam — so a result
+  // that does not carry the model silently writes NULL for every stage that
+  // has no tools, which is most of them.
+  const { ctx } = stub(0);
+  const result = await run(ctx);
+  assert.equal(result.model, "stub-1", `the result reports ${JSON.stringify(result.model)} as the model that ran it`);
+});
+
+test("a run that switched models reports the one that produced its last turn", async () => {
+  // `agentDefaultModel.currentSelection()` is resolved PER CALL, deliberately:
+  // the settings document can replace the selection between two calls of one
+  // mission. Reporting the selection at write time would attribute a run to
+  // whichever model happens to be selected when somebody reads the row.
+  let turn = 0;
+  const ctx = {
+    agentDefaultModel: { currentSelection: () => ({ provider: "stub", model: turn === 0 ? "first" : "second" }) },
+    llm: {
+      async *stream() {
+        turn += 1;
+        if (turn === 1) {
+          yield { type: "tool-call-delta", id: "c1", name: "no_such_tool", argumentsDelta: "{}" };
+          yield { type: "finish", reason: { kind: "tool-calls" } };
+          return;
+        }
+        yield { type: "text-delta", id: "t", text: "done" };
+        yield { type: "finish", reason: { kind: "stop" } };
+      },
+    },
+  };
+  const result = await run(ctx);
+  assert.equal(turn, 2, "the fixture did not take a second turn, so this proves nothing");
+  assert.equal(result.model, "second", "the run reports the model it started on rather than the one that finished it");
+});

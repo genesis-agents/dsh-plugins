@@ -402,6 +402,10 @@ function recordSpend(deps, context, run, agent) {
     missionId: context.missionId,
     stepId: context.stage.id,
     role: agent,
+    // The model the seam actually called, carried out on the run result rather
+    // than re-resolved here: re-resolving would report the selection at WRITE
+    // time, which is not necessarily the one that produced these tokens.
+    model: run?.model ?? null,
     agentId: agent,
     promptTok: intOr0(tokens.prompt),
     completionTok: intOr0(tokens.completion),
