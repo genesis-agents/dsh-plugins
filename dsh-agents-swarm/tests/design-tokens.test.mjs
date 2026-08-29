@@ -3783,3 +3783,40 @@ test("the page declares every variable it reads, in both themes", () => {
     assert.ok(dark.has(match[1]), `${match[1]} is a colour set for light only, so dark mode keeps the light value`);
   }
 });
+
+test("a list row is separated by a line, never by a fill", () => {
+  // "为什么是灰色" was pointing at the trajectory. The row carried
+  // `background: var(--dsw-alias-bg-layer-3)` — gray-100 — inside a full
+  // border at an 8px radius, so a hundred records read as a hundred grey
+  // cards with white gutters. It is the same complaint as "太表格化" and the
+  // same cause: separation done with a fill instead of a line.
+  //
+  // Two rules, both checkable:
+  //
+  // GRAY-100 IS NEVER A GROUND. It is the palette's lightest LINE, and a
+  // background at the same value as a border is two greys with nothing to
+  // tell them apart. Insets are gray-50; surfaces are white.
+  for (const match of SOURCE.matchAll(/background:\s*var\(--dsw-alias-bg-layer-3\)/g)) {
+    assert.fail(`gray-100 is painted as a ground here, and it is a line weight: ${SOURCE.slice(Math.max(0, match.index - 60), match.index + 40)}`);
+  }
+
+  // AND A ROW IS NOT A BOX. The one that started this may not go back to
+  // carrying a fill or a full border.
+  // THE WHOLE LINE, not up to the first `}`. The declaration interpolates
+  // `${LINE.hair}`, whose closing brace arrives before the CSS block ends —
+  // so a slice to the first `}` stopped short of the very properties this is
+  // here to check, and passed by reading nothing.
+  const row = SOURCE.split(String.fromCharCode(10)).find((line) => line.includes(".swt-row{"));
+  assert.ok(row !== undefined, "the trajectory row rule is gone");
+  assert.ok(row.includes("background:transparent"), "the trajectory row paints a ground again, so the list reads as a stack of cards");
+  assert.ok(row.includes("border:0"), "the trajectory row took a border back");
+  assert.ok(row.includes("border-bottom:1px solid"), "nothing separates one row from the next");
+  assert.ok(!row.includes("border-radius"), "a row with a radius is a card; a row in a list is a line");
+
+  // AND SELECTED IS A MARK IN THE MARGIN. `inset 0 0 0 2px` draws, on all
+  // four sides, exactly the border the row was just relieved of — so the
+  // boxes come back one at a time as the reader clicks through the list.
+  const pressed = SOURCE.split(String.fromCharCode(10)).find((line) => line.includes('.swt-row[aria-pressed="true"]'));
+  assert.ok(pressed !== undefined, "nothing marks the selected row");
+  assert.match(pressed, /box-shadow:inset 2px 0 0 0/, "the selected row is ringed on all four sides, which is the border it just lost");
+});

@@ -869,7 +869,7 @@ window.__ModuleLoader__.load({
 			// `0 10px 34px rgba(0,0,0,0.20)` would be a second elevation for the
 			// same altitude, and it is the exact literal the segmented control's
 			// guard was written to keep out of this file.
-			`.swm-modal{display:flex;flex-direction:column;width:100%;max-width:640px;max-height:90vh;overflow:hidden;border-radius:${RADIUS.lg};border:1px solid ${LINE.rule};background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-shadow-lv3)}`,
+			`.swm-modal{display:flex;flex-direction:column;width:100%;max-width:640px;max-height:90vh;overflow:hidden;border-radius:${RADIUS.lg};border:1px solid ${LINE.rule};background:var(--dsw-alias-bg-layer-0);box-shadow:var(--dsw-shadow-lv3)}`,
 			`.swm-modalhead{display:flex;flex:none;align-items:flex-start;gap:${SPACE.md};padding:14px ${SPACE.lg};border-bottom:1px solid ${LINE.rule}}`,
 			// THE BODY IS THE ONLY THING THAT SCROLLS. `max-height:90vh` on the
 			// box with the scroll on the body is what keeps the title and the way
@@ -8659,9 +8659,22 @@ window.__ModuleLoader__.load({
 		*/
 		const TRACE_STYLE_ID = "dsw-swarm-trace-style";
 		const TRACE_CSS = [
-			`.swt-row{display:flex;align-items:center;box-sizing:border-box;height:38px;padding:0 8px 0 10px;gap:12px;border-radius:8px;border:1px solid ${LINE.rule};background:var(--dsw-alias-bg-layer-3);min-width:0;width:100%;appearance:none;font:inherit;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary)}`,
+			// A LIST IS ROWS ON A GROUND, SEPARATED BY A LINE — not a stack of
+			// boxes. This row was `bg-layer-3` (gray-100) inside a full border at an
+			// 8px radius, so a hundred records read as a hundred grey cards with
+			// white gutters between them, which is what "why is it grey" was looking
+			// at and what "too table-ified" was before it.
+			//
+			// The reference's list is the plain one: transparent rows, one hairline
+			// between siblings, grey only on hover. Separation costs a line, not a
+			// fill — and a fill is what makes a row look like an object instead of a
+			// line of a log.
+			`.swt-row{display:flex;align-items:center;box-sizing:border-box;height:38px;padding:0 8px 0 10px;gap:12px;border:0;border-bottom:1px solid ${LINE.hair};background:transparent;min-width:0;width:100%;appearance:none;font:inherit;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary)}`,
 			".swt-row:hover{background:var(--dsw-alias-interactive-bg-hover)}",
-			'.swt-row[aria-pressed="true"]{border-color:transparent;box-shadow:inset 0 0 0 2px var(--dsw-alias-state-business-primary)}',
+			// SELECTED IS A MARK IN THE MARGIN, not a ring around a box. A 2px inset
+			// ring drew the border the row no longer has, which put the boxes back
+			// one at a time.
+			'.swt-row[aria-pressed="true"]{background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 2px 0 0 0 var(--dsw-alias-state-business-primary)}',
 			".swt-row:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}",
 			".swt-idx{flex:none;width:24px;font:var(--dsw-font-xs-13);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}",
 			// TWO LINES IN THE SAME SLOT: the offset from the run's start over
@@ -8694,7 +8707,7 @@ window.__ModuleLoader__.load({
 			".swt-res{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}",
 			".swt-trail{flex:none;display:flex;align-items:center;justify-content:flex-end;width:72px;min-width:0}",
 			".swt-metric{flex:none;width:69px;text-align:right;font:var(--dsw-font-xs-13);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
-			`.swt-band{flex:none;border:1px solid ${LINE.rule};border-radius:8px;overflow:hidden;user-select:none;margin-bottom:10px}`,
+			`.swt-band{flex:none;border:1px solid ${LINE.hair};border-radius:8px;overflow:hidden;user-select:none;margin-bottom:10px}`,
 			".swt-plot{display:grid;grid-template-columns:44px minmax(0,1fr);height:50px;overflow:hidden;background:var(--dsw-alias-bg-layer-2)}",
 			`.swt-lanelabels{position:relative;border-right:1px solid ${LINE.rule};color:var(--dsw-alias-label-caption);font-size:10px;line-height:1}`,
 			".swt-lanelabels span{position:absolute;right:4px;display:flex;align-items:center;justify-content:flex-end;height:8px}",
@@ -8736,7 +8749,7 @@ window.__ModuleLoader__.load({
 			// pane itself is drawn on, so a payload block sat on its own
 			// background with no edge — a wall of monospace that began and ended
 			// nowhere. Layer 3 and a hairline give it a lid.
-			`.swt-code{margin:0 14px;padding:8px 10px;border-radius:6px;overflow:auto;max-height:340px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3);border:1px solid ${LINE.rule};font:11px/17px var(--ds-font-family-code,monospace);white-space:pre-wrap;word-break:break-word}`,
+			`.swt-code{margin:0 14px;padding:8px 10px;border-radius:6px;overflow:auto;max-height:340px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:1px solid ${LINE.hair};font:11px/17px var(--ds-font-family-code,monospace);white-space:pre-wrap;word-break:break-word}`,
 			// THE THREE RULES THAT WERE NEVER WRITTEN. `missionColourJson` has
 			// been emitting `k`, `s` and `n` on every payload since it was
 			// added and no stylesheet in this file defined any of them, so the
@@ -8751,7 +8764,7 @@ window.__ModuleLoader__.load({
 			`.swt-code .s{color:rgb(${PALETTE.green})}`,
 			`.swt-code .n{color:rgb(${PALETTE.amber})}`,
 			".swt-scrim{position:fixed;inset:0;z-index:40;display:flex;justify-content:flex-end;background:rgba(0,0,0,0.30);backdrop-filter:blur(2px)}",
-			`.swt-drawer{display:flex;height:100%;width:100%;max-width:672px;flex-direction:column;overflow:hidden;border-left:1px solid ${LINE.rule};background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-shadow-lv3)}`,
+			`.swt-drawer{display:flex;height:100%;width:100%;max-width:672px;flex-direction:column;overflow:hidden;border-left:1px solid ${LINE.rule};background:var(--dsw-alias-bg-layer-0);box-shadow:var(--dsw-shadow-lv3)}`,
 			".swt-drawer .swt-pane{width:100%;max-width:none;border-left:0;height:100%}",
 			// `currentColor`, WHERE THIS HARD-CODED THE SUCCESS GREEN. One rule
 			// with one colour served two opposite things: the verbatim quote
