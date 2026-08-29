@@ -152,6 +152,24 @@ const MANIFEST_CLOSE = " -->";
 /** Finds the manifest at the end of a stored chapter body. */
 const MANIFEST_RE = /\n*<!-- mission-citations: (.*?) -->\s*$/su;
 
+/**
+ * How many of a publisher's pictures one chapter may reproduce.
+ *
+ * A CEILING ON REPRODUCTION, not a layout preference. Every figure in a chapter
+ * is somebody else's image republished inside our document under the citation
+ * that licenses discussing it. Three per chapter is illustration; thirty is a
+ * scrape with prose around it, and no amount of correct attribution makes it
+ * anything else.
+ *
+ * ENFORCED AT THE MINT, NEVER AT THE DRAW. A renderer that dropped the fourth
+ * would leave a `:::figure` token in `mission_artifacts.markdown` — and so in
+ * the .md export and the .json — pointing at a figure the screen refuses to
+ * show. The document and the page would disagree about what the report
+ * contains, which is the class of defect the section-offset assertion below
+ * exists to catch in the other direction.
+ */
+const MAX_CHAPTER_FIGURES = 3;
+
 /** An inline `[N]` citation marker in chapter prose. */
 const MARKER_RE = /\[(\d{1,3})\]/gu;
 
@@ -566,11 +584,27 @@ function attachManifest(prose, citations) {
  * drift is silent and catastrophic, and `contentGuard` checks it again for the
  * same reason.
  * @param chapterRows - `store.listChapters(missionId, runCount)`, in report order.
- * @returns `{markdown, sections, citations, wordCount, unresolvedMarkers}`.
+ * @param options - `{figures}` — findingId → held figure rows, from `freezeFigures`. Empty places none.
+ * @returns `{markdown, sections, citations, wordCount, unresolvedMarkers, figures}`.
  * @throws `input_invalid` on a headingless chapter, an unreadable manifest, or an offset that does not resolve.
  */
-export function assemble(chapterRows) {
+export function assemble(chapterRows, { figures = new Map(), figureCap = MAX_CHAPTER_FIGURES } = {}) {
   const rows = asArray(chapterRows);
+  // ONE FIGURE NUMBERING FOR THE WHOLE REPORT, minted in the loop that mints
+  // the citation numbering and for the reason this function's own docblock
+  // gives about citations: two independent numberings of one report are two
+  // different `[7]`s. There is no chapter-local figure index anywhere in this
+  // pipeline, so — unlike `[N]`, which IS chapter-local in
+  // `mission_chapters.body` and is rewritten below — there is nothing for a
+  // later pass to renumber and nothing that can be stale.
+  const figureRows = [];
+  // A page cited in three chapters must not print its chart three times. The
+  // FIRST chapter that cites it carries it; the others cite the page in prose
+  // and draw nothing, exactly as they did before figures existed. The cost is
+  // named rather than hidden: chapter five loses a picture it was entitled to.
+  // The alternative is one image under three numbers, which is what
+  // `missionReferences` is keyed by index to avoid on the citation side.
+  const placed = new Set();
   const sections = [];
   const citations = [];
   let markdown = "";
@@ -610,7 +644,76 @@ export function assemble(chapterRows) {
     }).trim();
 
     const start = markdown.length;
-    markdown += `## ${heading}\n\n${prose}\n\n`;
+    // THE FIGURES OF THIS CHAPTER, AND ONLY OF THIS CHAPTER. The keys read
+    // here are `split.citations` — the chapter's OWN manifest, written by code
+    // at s8 and unreadable to the writer. So "an image may only appear in a
+    // chapter that cites its page" is not a check that runs here; it is the
+    // only thing that CAN happen here. There is no expression in this loop
+    // that could reach a figure off a page this chapter does not cite.
+    //
+    // `figures` holds only rows the store returned in state `held`, so a
+    // picture the publisher refused, served as a 9 MB TIFF, or answered 403
+    // for is not here — no token is minted for it and the report never mentions
+    // it. That is the whole reason nothing downstream ever draws an empty frame.
+    const figureBlocks = [];
+    for (const entry of split.citations) {
+      if (figureBlocks.length >= figureCap) break;
+      const citationIndex = localToGlobal.get(Number(entry?.index));
+      if (citationIndex === undefined) continue;
+      for (const held of asArray(figures.get(asText(entry?.findingId)))) {
+        if (figureBlocks.length >= figureCap) break;
+        const figureId = asText(held?.id);
+        if (figureId === "" || placed.has(figureId)) continue;
+        placed.add(figureId);
+        const index = figureRows.length + 1;
+        figureRows.push({
+          index,
+          // THE REPORT-GLOBAL NUMBER, the same one the prose beside it carries.
+          // Taken from `localToGlobal` rather than from `entry.index`, which is
+          // the chapter's local index and points at another chapter's source
+          // once four chapters have been assembled ahead of this one.
+          citationIndex,
+          figureId,
+          documentId: asText(held?.documentId),
+          dimensionId: row.dimensionId,
+          chapterIndex: row.chapterIndex,
+          // THE PUBLISHER'S OWN SENTENCE, and `caption` before `alt` on purpose.
+          // A `<figcaption>` is written to be read BESIDE the picture; `alt` is
+          // written to REPLACE it. The case that decides between them is the one
+          // where there is no picture — refused bytes, an unreachable route —
+          // and there the figcaption is the better of the two.
+          alt: compact(held?.caption ?? held?.alt ?? "", 400),
+          width: Number(held?.width ?? 0),
+          height: Number(held?.height ?? 0),
+          // A CONSTANT, WRITTEN ANYWAY. Only `held` rows reach this function, so
+          // this is always true. It is stored because the card draws a different
+          // sentence for a figure we chose not to keep, and "we never kept it"
+          // and "we kept it and it will not draw" must never be told apart by
+          // the ABSENCE of a field.
+          stored: true,
+        });
+        // TWO LINES AND NO PROSE. Everything a reader sees beside the picture —
+        // the caption, the host, the page, the stamp, the `[N]` — is read at
+        // display time off the row this number names. Nothing about the figure
+        // is copied into the document, so nothing about the figure can go stale
+        // in it, and an index that resolves to nothing has nothing to leave
+        // behind: no orphan caption, no bordered box, no broken image.
+        figureBlocks.push(`:::figure ${index}\n:::`);
+      }
+    }
+    // AT THE END OF THE CHAPTER, NOT INSIDE THE PROSE. Nothing in
+    // `mission_chapters.body` says which paragraph a figure supports: the writer
+    // never recorded one, and the publisher's own anchor is a span of THEIR
+    // page, not of ours. Placing it mid-chapter would be this assembler
+    // asserting a relationship nobody wrote down — the same refusal
+    // lib/client.js already makes when it puts the evidence spread at the
+    // boundary "where the report stops making claims and starts listing what
+    // they rest on" rather than beside a paragraph it guessed at.
+    //
+    // INSIDE `[start, end)`, which is load-bearing: `end` is taken on the next
+    // line, so a chapter read on its own — `readSlice` in `MissionReport` cuts
+    // exactly these offsets — carries its own figures with it.
+    markdown += `## ${heading}\n\n${prose}\n\n${figureBlocks.map((block) => `${block}\n\n`).join("")}`;
     const end = markdown.length;
     if (!markdown.slice(start, end).startsWith(`## ${heading}`)) {
       throw fail("input_invalid", `the section offset for "${heading}" does not resolve against the assembled markdown. Offset drift is silent and catastrophic; nothing downstream may use this document.`);
@@ -629,7 +732,19 @@ export function assemble(chapterRows) {
     });
   }
 
-  return { markdown, sections, citations, wordCount, unresolvedMarkers };
+  // `figures` BESIDE `citations`, and an empty array on every report assembled
+  // without them. s12 freezes it onto the artefact; `report.md` uses it to turn
+  // each token back into a line of text; `report.json` ships it so the token in
+  // the markdown beside it can be resolved at all. A reader handed the markdown
+  // and not this array holds a document with an unreadable directive in it,
+  // which is the broken export this whole seam is arranged to prevent.
+  //
+  // Note what is NOT recomputed: `wordCount` is `countWords(prose)` per chapter
+  // and the block was appended after it, so a report's measured length is what
+  // the WRITER wrote. A token that counted as words would move `contentGuard`'s
+  // floor by however many pictures the publishers happened to serve — a length
+  // gate whose answer depends on somebody else's markup.
+  return { markdown, sections, citations, wordCount, unresolvedMarkers, figures: figureRows };
 }
 
 /* ── the outline planner, shared by s7 and by quick-tier s8 ────────────── */
@@ -2312,6 +2427,22 @@ function sanitizeBody(text, heading) {
   const fenced = /^```(?:markdown|md)?\n([\s\S]*?)\n```$/u.exec(body);
   if (fenced !== null) body = fenced[1].trim();
   body = body.replace(/<!-- mission-citations:[\s\S]*?-->/gu, "").trim();
+  // AND A FIGURE TOKEN THE WRITER TYPED, for the reason the manifest strip one
+  // line up exists. `splitManifest` records that this pipeline's provenance
+  // markup is "written by CODE — never by the writer", and a figure placement is
+  // provenance in exactly that sense: the number resolves to a stored row
+  // carrying a publisher, a page, a fetch stamp and a picture. A model that has
+  // seen `:::figure 12` — in a prompt, on a retrieved page, in its training —
+  // can type it into a chapter that cites nothing of the kind, and without this
+  // line every reader downstream would treat it as this pipeline's own mint.
+  //
+  // BROADER THAN THE SHAPE `assemble` EMITS, deliberately. The emitter writes
+  // exactly `:::figure N` closed by `:::`; this removes any line opening with
+  // the directive however the model spelled the rest of it, and the bare `:::`
+  // closer with it. Two patterns for two jobs — one recognises code's own
+  // output, the other refuses a model's — and a refusal narrower than the mint
+  // is a refusal a model can step around.
+  body = body.replace(/^[ \t]*:::[ \t]*figure\b.*$/gimu, "").replace(/^[ \t]*:::[ \t]*\r?$/gmu, "").trim();
   const first = body.split("\n", 1)[0] ?? "";
   if (/^#{1,3}\s/u.test(first) && normalisePart(first.replace(/^#{1,3}\s*/u, "")) === normalisePart(heading)) {
     body = body.slice(first.length).trim();

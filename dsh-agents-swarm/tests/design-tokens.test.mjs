@@ -5631,3 +5631,84 @@ test("a figure token resolves to a stored figure, or to nothing at all", () => {
   assert.match(card, /const held = typeof figure\.path === "string"/, "the card no longer distinguishes a figure we hold from one we do not");
   assert.match(card, /!held \? null : jsx\("img"/, "a figure with no stored bytes still mounts an img, which draws a broken-image mark inside a bordered box");
 });
+
+test("the chapter card's preview carries no figure directive", () => {
+  // THE PREVIEW IS PLAIN TEXT, cut from the chapter's own markdown at
+  // `section.start` — which is why the `## ` heading and the `[N]` markers
+  // already come off here: both are syntax pointing at things this card does not
+  // have and cannot reach. `:::figure 3` is the third of them. It points at a
+  // picture the card cannot draw, and unremoved it reads as a typo in the
+  // opening line of a chapter.
+  //
+  // The pair regex is what is pinned rather than the loose one. The block is two
+  // lines and the slice can cut between them, so a reader that only handled the
+  // orphan would leave the closing `:::` on the card of any chapter short enough
+  // for both lines to fall inside 1200 characters.
+  const preview = code(body("function missionChapterPreview("));
+  assert.ok(
+    preview.includes(":::figure[ \\t]+\\d{1,3}[ \\t]*\\r?\\n:::"),
+    "the chapter preview no longer strips the whole figure block, so a short chapter's card opens with `:::figure 3` and a line of colons under it"
+  );
+  assert.ok(preview.includes("\\[\\d+\\]"), "the preview no longer strips citation markers either");
+});
+
+test("the writer's token and the renderer's parser are the same token", () => {
+  // THE DEFECT THIS EXISTS TO MAKE IMPOSSIBLE, caught with both halves green.
+  //
+  // The renderer was written expecting `:::figure <figureId>` — one line, a hex
+  // id, resolved against a live index. The writer mints `:::figure N` followed
+  // by a closing `:::`, where N indexes the manifest frozen into the artefact.
+  // Each half was correct on its own and the whole suite passed, and every
+  // figure in every report would have been invisible: the writer would emit a
+  // token the renderer could not parse, and the renderer draws NOTHING for a
+  // token it cannot resolve, by design.
+  //
+  // So the two are asserted against each other rather than each against its own
+  // idea of the shape.
+  const mint = readFileSync(new URL("../lib/mission-stages-middle.js", import.meta.url), "utf8");
+  const minted = /figureBlocks\.push\(`(:::figure [^`]*)`\)/.exec(mint);
+  assert.ok(minted !== null, "the assembler no longer mints a figure block, or mints it somewhere this cannot see");
+
+  // What the writer actually produces, with its index filled in.
+  const sample = minted[1].replace("${index}", "7").split(String.fromCharCode(92) + "n");
+  const pattern = /const FIGURE_TOKEN = (\/[^;]*\/);/.exec(SOURCE);
+  assert.ok(pattern !== null, "FIGURE_TOKEN is gone, so nothing declares the shape both halves have to agree on");
+  const token = new RegExp(pattern[1].slice(1, pattern[1].lastIndexOf("/")));
+  assert.match(sample[0], token, `the writer mints ${JSON.stringify(sample[0])} and the renderer's FIGURE_TOKEN does not match it, so every figure would be invisible`);
+  assert.equal(token.exec(sample[0])[1], "7", "the token captures something other than the index the writer put in it");
+
+  // AND THE CLOSING FENCE IS SWALLOWED. Left to the paragraph branch it prints
+  // three colons under every picture.
+  assert.ok(sample.length < 2 || sample[1].trim() === ":::", "the writer's second line is not a bare fence, so this assertion is checking the wrong thing");
+  const render = code(body("function renderMarkdown("));
+  assert.match(render, /line\.trim\(\) === ":::"/, "the closing fence reaches the paragraph branch and prints three colons under every figure");
+});
+
+test("the figure index is 1-based, and the parser is as narrow as the mint", () => {
+  // TWO MUTATIONS SURVIVED THE CROSS-CHECK and this closes both. The
+  // cross-check proves the writer's token PARSES; neither of these breaks
+  // parsing, and both change what the reader sees.
+  //
+  // OFF BY ONE. `:::figure 1` is the first row of the manifest. Shifting the
+  // lookup by one draws the SECOND figure under the first caption — a picture
+  // credited to a page it did not come from, which is the one failure this
+  // whole feature is built to make impossible, and it draws perfectly.
+  const detail = code(body("function MissionReport("));
+  assert.match(
+    detail,
+    /figure: \(index\) => manifest\[index - 1\] \?\? null,/,
+    "the figure lookup is not 1-based, so `:::figure 1` draws the second figure and every picture is credited to the wrong page",
+  );
+
+  // AND THE PARSER IS AS NARROW AS THE MINT. The writer emits a small integer
+  // chosen from a list it was handed. A parser that also accepts a hex id or a
+  // slug is a parser that will one day resolve something the writer invented —
+  // `manifest[NaN - 1]` is undefined and draws nothing, which is safe, but the
+  // narrowness is the guarantee and it should be checked rather than relied on.
+  const pattern = /const FIGURE_TOKEN = (\/[^;]*\/);/.exec(SOURCE);
+  // Written as an inclusion rather than a pattern-of-a-pattern: matching a
+  // regex's own source with a regex is where the last two of these went
+  // wrong, and the thing being asserted is one literal.
+  assert.ok(pattern[1].includes("{1,3}"), "the token accepts more than an index, so the writer could name something it was never handed");
+  assert.ok(!/A-Za-z/.test(pattern[1]), "the token accepts letters; the writer mints an integer chosen from a list it was handed");
+});

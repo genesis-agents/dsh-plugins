@@ -3902,14 +3902,20 @@ window.__ModuleLoader__.load({
 		const ARTICLE_HEADING_SIZES = { 1: "24px", 2: "20px", 3: "18px", 4: "16px" };
 
 		/**
-		* A figure reference in a chapter's markdown: `:::figure <id>` alone on a line.
+		* A figure reference in a chapter's markdown: `:::figure N`, then a `:::`.
+		*
+		* N IS A 1-BASED INDEX INTO `mission_artifacts.figures`, the manifest
+		* frozen with the report — not a figure id and not a URL. Nothing about
+		* the figure is copied into the document, so nothing about it can go stale
+		* in it, and an index that resolves to nothing leaves nothing behind: no
+		* orphan caption, no bordered box, no broken image.
 		*
 		* DECLARED ONCE, because three places have to agree about it — the writer
-		* that mints it, the renderer that draws it, and the sanitiser that strips it
-		* from the exported markdown. Two copies of this pattern is how an export
-		* ships a token no other reader understands.
+		* that mints it, the renderer that draws it, and the sanitiser that strips
+		* it from the exported markdown. Two copies of this pattern is how an
+		* export ships a token no other reader understands.
 		*/
-		const FIGURE_TOKEN = /^:::figure\s+([A-Za-z0-9_-]{1,128})\s*$/;
+		const FIGURE_TOKEN = /^:::figure[ \t]+(\d{1,3})[ \t]*$/;
 
 		/**
 		* The publisher's own figure, with the page it came off named under it.
@@ -4116,21 +4122,28 @@ window.__ModuleLoader__.load({
 				// happens here, once, for any line that is not itself a table row.
 				if (fence === null && !/^\s*\|/.test(line)) flushTable();
 
-				// A FIGURE, BY ID, AND NEVER BY URL. `:::figure <id>` on its own line.
-				// The writer references a figure the pipeline already stored; it cannot
-				// name an address, and that is the whole difference between a citation and
-				// an invented one — a model that can write a URL into a report can write a
-				// URL that was never fetched.
+				// A FIGURE, BY INDEX, AND NEVER BY URL OR BY ID. `:::figure N` names
+				// the Nth row of the manifest frozen into this artefact. The writer
+				// cannot name an address, which is the whole difference between a
+				// citation and an invented one — a model that can write a URL into a
+				// report can write a URL that was never fetched — and it cannot name a
+				// figure this run did not hold either, because the list it chooses from
+				// is the list the pipeline handed it.
+				//
+				// THE CLOSING `:::` IS SWALLOWED HERE. It is a fence, not a paragraph,
+				// and left to the paragraph branch it prints three colons under every
+				// picture.
 				//
 				// AN ID THAT DOES NOT RESOLVE RENDERS AS NOTHING. Not a broken image, not
 				// an empty frame, and not the token itself. A hole in a research report
 				// reads as a figure that was meant to be evidence and is missing, which is
 				// worse than a paragraph with no picture in it.
+				if (fence === null && line.trim() === ":::") continue;
 				const figureToken = FIGURE_TOKEN.exec(line.trim());
 				if (fence === null && figureToken !== null) {
 					flushParagraph();
 					flushList();
-					const found = typeof refs?.figure === "function" ? refs.figure(figureToken[1]) : null;
+					const found = typeof refs?.figure === "function" ? refs.figure(Number(figureToken[1])) : null;
 					if (found !== null && found !== undefined) {
 						blocks.push(MissionFigure({ figure: found, zh: refs?.zh === true }, `fig${key++}`));
 					}
@@ -15071,6 +15084,15 @@ window.__ModuleLoader__.load({
 				// list that is not on this card and cannot be reached from it — the one
 				// piece of syntax a preview cannot carry.
 				.replace(/\[\d+\]/gu, "")
+				// AND SO DOES THE FIGURE BLOCK, for the same reason the markers do:
+				// `:::figure 3` is syntax pointing at something this card does not
+				// have and cannot reach, and left in it reads as a typo in the
+				// opening line of a chapter. The pair goes first; the second pass
+				// catches an opener whose closing `:::` fell outside the 1200-
+				// character cut above, which is the only half of the block a slice
+				// starting at `section.start` can ever see alone.
+				.replace(/^:::figure[ \t]+\d{1,3}[ \t]*\r?\n:::[ \t]*\r?$/gmu, "")
+				.replace(/^:::figure[ \t]+\d{1,3}[ \t]*\r?$/gmu, "")
 				.replace(/[*_`>#]/gu, "")
 				.replace(/\s+/gu, " ")
 				.trim();
@@ -15675,6 +15697,28 @@ window.__ModuleLoader__.load({
 			// anything behind it, and the list under the article is the same set.
 			const references = missionReferences(artifact);
 			const numbered = new Set(references.map((entry) => entry.index));
+			// THE FIGURES THIS VERSION OF THE REPORT NAMES, in the order `:::figure N`
+			// counts them.
+			//
+			// TWO SOURCES, EACH ANSWERING THE HALF IT OWNS. The WORDS — the caption and
+			// the page it credits — come from `artifact.figures`, frozen with this
+			// version, which is what migration 010 exists for. The `path` — our own byte
+			// route, carrying the chapter — comes from the live list, because a route is
+			// a fact about this server now rather than about the day the report was
+			// written.
+			//
+			// A frozen row whose figure the server no longer holds keeps its caption and
+			// its link and loses only the picture, which is the degradation the card is
+			// built for: the citation is the evidence, the image is the illustration.
+			const manifest = (Array.isArray(artifact?.figures) ? artifact.figures : []).map((row) => {
+				const live = figures?.get(String(row?.figureId ?? "")) ?? null;
+				return {
+					...row,
+					path: live?.path ?? null,
+					caption: row?.alt ?? live?.caption ?? null,
+					page: live?.page ?? null,
+				};
+			});
 			const byIndex = new Map(references.map((entry) => [entry.index, entry]));
 			// Built once beside the map it reads, not per row: the chapter list walks
 			// every citation on the artefact, and doing that inside the row callback
@@ -16064,11 +16108,18 @@ window.__ModuleLoader__.load({
 								// long report draws two hundred of these and every one of
 								// them would walk the whole array.
 								peek: (index) => byIndex.get(index) ?? null,
-								// THE FIGURE A `:::figure` TOKEN NAMES, or null. Null is a complete
-								// answer here and the renderer treats it as one: a token whose figure
-								// this run does not hold draws nothing at all, rather than a broken
-								// image or an empty frame.
-								figure: (id) => figures?.get(String(id)) ?? null,
+								// THE FIGURE `:::figure N` NAMES, or null.
+								//
+								// THE FROZEN MANIFEST, NOT THE LIVE LIST. `artifact.figures` is
+								// what migration 010 exists for: it holds each figure's caption
+								// and attribution AS THEY WERE when this version was written, so
+								// a re-fetch that rewrites a publisher's figcaption cannot change
+								// what a published report says. The live route is what the
+								// picture's BYTES come from; the words beside it come from here.
+								//
+								// Null is a complete answer: an index that resolves to nothing
+								// draws nothing at all.
+								figure: (index) => manifest[index - 1] ?? null,
 								// The browser's own anchor, not a router: the list is on this page, and
 								// a marker that navigated would lose the reader's place in the prose.
 								jump: (index) => {

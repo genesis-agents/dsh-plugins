@@ -2903,6 +2903,110 @@ export function buildBibliography(artifact, { language = "zh" } = {}) {
   return lines.join("\n");
 }
 
+/**
+ * The two-line figure block, exactly as `assemble` mints it.
+ *
+ * NARROW ON PURPOSE, and narrower than the strip in `sanitizeBody`. That one has
+ * to refuse anything a MODEL typed, so it is broad; this one recognises what
+ * CODE wrote, so it can be exact. A reader that matched loosely would silently
+ * eat a `:::` a publisher's own page used for something else.
+ *
+ * `\r?` on both line ends because `prose` is the model's text and can arrive
+ * with CRLF; the emitter itself writes `\n`.
+ *
+ * Global and multiline because it is used ONLY with `replace`, which resets
+ * `lastIndex` on entry and exit. It must never be handed to `test` — a `/g`
+ * regex carries state between calls and would answer false every second time.
+ */
+export const FIGURE_BLOCK_RE = /^:::figure[ \t]+(\d{1,3})[ \t]*\r?\n:::[ \t]*\r?$/gmu;
+
+/**
+ * Turn each `:::figure N` block in an exported report into a line a reader can read.
+ *
+ * AN EXPORT THAT CARRIES A TOKEN NO OTHER READER UNDERSTANDS IS A BROKEN
+ * EXPORT. The block is this pipeline's own directive: it means nothing to a
+ * Markdown viewer, GitHub prints it as a paragraph of colons, and somebody who
+ * opens the .md sees `:::figure 7` where the app showed a chart.
+ *
+ * REPLACED WITH TEXT, NEVER WITH `![](url)`. The export is a file that leaves
+ * this machine: our byte route is not reachable from it, so an `![](/missions/…)`
+ * is a broken image in every copy. And a publisher URL in the `src` would make
+ * every viewer of every copy fetch the publisher directly — the fan-out rule 4
+ * exists to prevent, and nothing inside a downloaded file could pace it or read
+ * a host deny list. So the export carries what a file can actually carry: the
+ * publisher's own caption, the page, the host, the fetch stamp and the `[N]`.
+ * That is the same set the screen falls back to when the bytes will not draw,
+ * which is deliberate — one answer to "there is no picture here", drawn twice.
+ *
+ * AN INDEX THAT DOES NOT RESOLVE BECOMES NOTHING, matching the renderer. A
+ * figure with no row behind it has no caption, no link and no attribution, so
+ * there is no honest thing to print. That is not hiding a fault: the fault is
+ * that there is no figure, and a line saying so would be a sentence about our
+ * bookkeeping in the middle of somebody's report. The same for a figure whose
+ * citation is not in this report — an image we cannot attribute to a page this
+ * run cited is decoration, and decoration presented as evidence is the one
+ * failure the whole block exists to prevent.
+ *
+ * JOINED, NOT DERIVED, exactly as `buildBibliography` is: the host, the title,
+ * the url and the stamp live once, on `citations` and `evidence`. Freezing a
+ * third copy of them onto each figure row would be three fields free to drift
+ * from the reference list printed two screens below.
+ *
+ * @param markdown - `artifact.markdown`.
+ * @param artifact - the stored artefact row, with `figures`, `citations` and `evidence`.
+ * @param options - `{language}` — "zh" picks the Chinese wording.
+ * @returns the markdown with every figure block replaced by a line or removed.
+ */
+export function renderFigureTokens(markdown, artifact, { language = "zh" } = {}) {
+  const source = typeof markdown === "string" ? markdown : "";
+  const rows = asArray(artifact?.figures);
+  // THE CASE EVERY REPORT ON DISK IS IN. `replace` with a `/g` regex that
+  // matches nothing returns the same content, so an artefact written before
+  // figures existed exports byte for byte what it exported before this function
+  // did. That is asserted in the guard test rather than assumed.
+  if (rows.length === 0) return source.replace(FIGURE_BLOCK_RE, "");
+
+  const zh = String(language ?? "zh").toLowerCase().startsWith("zh");
+  const evidence = new Map();
+  for (const row of asArray(artifact?.evidence)) {
+    if (row && typeof row.findingId === "string") evidence.set(row.findingId, row);
+  }
+  const cited = new Map();
+  for (const row of asArray(artifact?.citations)) {
+    const index = Number(row?.index);
+    if (Number.isInteger(index) && !cited.has(index)) cited.set(index, row);
+  }
+  const byIndex = new Map();
+  for (const row of rows) {
+    const index = Number(row?.index);
+    if (Number.isInteger(index) && !byIndex.has(index)) byIndex.set(index, row);
+  }
+
+  return source.replace(FIGURE_BLOCK_RE, (whole, digits) => {
+    const figure = byIndex.get(Number(digits));
+    if (figure === undefined) return "";
+    const citation = cited.get(Number(figure?.citationIndex));
+    if (citation === undefined) return "";
+    const found = typeof citation?.findingId === "string" ? evidence.get(citation.findingId) ?? null : null;
+    const label = textOrNull(found?.sourceTitle) ?? textOrNull(found?.sourceHost)
+      ?? (zh ? "（来源不详）" : "(source unknown)");
+    const url = textOrNull(citation?.url) ?? textOrNull(found?.sourceUrl);
+    const caption = oneLineQuote(figure?.alt ?? "");
+    const parts = [
+      zh ? `**图 ${Number(digits)}**` : `**Figure ${Number(digits)}**`,
+      caption === "" ? null : `“${caption}”`,
+      `— ${label}`,
+      url ?? (zh ? "（无链接）" : "(no url)"),
+      found?.fetchedAt == null ? null : `(${zh ? "抓取于" : "fetched"} ${found.fetchedAt})`,
+      `[${Number(figure.citationIndex)}]`,
+    ].filter((part) => part !== null);
+    // A blockquote, so the figure's own attribution separates from the sentence
+    // above it the way the card separates them with a hairline. Never an image:
+    // this file carries no bytes and names no route a downloaded copy could reach.
+    return `> ${parts.join(" ")}`;
+  });
+}
+
 /** One line of quote, so a multi-paragraph span cannot break the list it sits in. */
 function oneLineQuote(text) {
   return String(text).replace(/\s+/gu, " ").trim();

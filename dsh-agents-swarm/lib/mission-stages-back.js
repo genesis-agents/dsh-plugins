@@ -1956,6 +1956,66 @@ function freezeEvidence(store, missionId, runCount) {
 }
 
 /**
+ * Which held figure each of this run's verified findings can carry.
+ *
+ * `freezeEvidence`'s sibling and deliberately shaped like it: one store read per
+ * run, joined in one place, handed to `assemble` as data rather than reached for
+ * inside it. A figure belongs to a page; a finding was checked against a page; a
+ * chapter cites findings. That chain IS rule 3 — an image may only appear in a
+ * chapter that cites its page — and it is closed here rather than asserted in a
+ * comment somewhere downstream.
+ *
+ * THE TIGHT HALF IS ALREADY SQL. `figuresForChapter` admits only figures whose
+ * document one of THIS run's verified findings in THAT dimension was checked
+ * against, and only in state `held`. This walks its answer one step further out,
+ * from the dimension to the finding, because a citation names a finding and not
+ * a dimension — so `assemble` can bind a figure to the exact citation it hangs
+ * off instead of to the chapter's whole dimension.
+ *
+ * ONLY `held` ARRIVES, and that is why the report never draws an empty frame. A
+ * figure the publisher refused, served as a 9 MB TIFF, or answered 403 for is
+ * `refused` or `failed` in the store and never leaves it: no token is minted, so
+ * there is nothing on the page and nothing in the export to explain. The absence
+ * is silent because the absence is total.
+ *
+ * @param store - the mission store.
+ * @param missionId - the mission.
+ * @param runCount - the run whose findings and figures count.
+ * @param chapterRows - `store.listChapters(missionId, runCount)`.
+ * @returns Map of findingId → `[figure]`, best-scoring first; empty when the store holds none.
+ */
+export function freezeFigures(store, missionId, runCount, chapterRows) {
+  // OPTIONAL AT THE SEAM, and this is not defensive habit. `figuresForChapter`
+  // arrives with migration 009 and this stage must keep assembling reports on a
+  // library that predates it: every mission already on disk was written by a
+  // build with no figure table at all. A persist stage that threw here would
+  // take the one artefact write down for a picture.
+  if (typeof store?.figuresForChapter !== "function") return new Map();
+  const byDocument = new Map();
+  const dimensions = new Set(arrayOf(chapterRows)
+    .map((row) => String(row?.dimensionId ?? ""))
+    .filter((id) => id !== ""));
+  for (const dimensionId of dimensions) {
+    for (const figure of arrayOf(store.figuresForChapter(missionId, { runCount, dimensionId }))) {
+      const key = String(figure?.documentId ?? "");
+      const id = String(figure?.id ?? "");
+      if (key === "" || id === "") continue;
+      const held = byDocument.get(key) ?? [];
+      // One page can back findings in two dimensions, and the per-dimension
+      // query answers with the same figure once for each.
+      if (!held.some((row) => String(row?.id ?? "") === id)) held.push(figure);
+      byDocument.set(key, held);
+    }
+  }
+  const found = new Map();
+  for (const finding of arrayOf(store.verifiedFindings(missionId, { runCount }))) {
+    const held = byDocument.get(String(finding?.documentId ?? "")) ?? [];
+    if (held.length > 0) found.set(String(finding?.id ?? ""), held);
+  }
+  return found;
+}
+
+/**
  * Stage twelve: the content guard, the one artefact write, and the intent.
  *
  * No agent and no model call. It does NOT call `finalize`: the runtime calls it
@@ -1974,7 +2034,18 @@ export function createS12Persist(deps) {
     const { policy, hydrated } = tierPolicyOf(crossState, tier, zh);
 
     const chapterRows = store.listChapters(missionId, runCount);
-    const report = assemble(chapterRows);
+    // FIGURES ARE PLACED IN THE ONE ASSEMBLY THAT IS STORED, AND IN NO OTHER.
+    // `assemble` is called four times in this file — s9 verifies quotes against
+    // it, s10 reads its headings, s11 reads its word count, s12 writes it — and
+    // only this call becomes `mission_artifacts.markdown`. The three earlier
+    // ones judge the PROSE, and every number they judge it by is untouched here:
+    // `wordCount` counts `prose` and not the block, `citations` and
+    // `sections[].citationCount` come off the manifest, `sectionType` off the
+    // chapter row. So the four assemblies still agree about everything any of
+    // them measures. They differ only in a document nobody but this stage keeps,
+    // and reproducing third-party pictures into three documents nobody displays
+    // would cost three more store reads to change nothing.
+    const report = assemble(chapterRows, { figures: freezeFigures(store, missionId, runCount, chapterRows) });
     const scorecard = crossState?.scorecard
       ?? { evidenced: emptyTally(), interpretive: emptyTally(), unplaced: emptyTally(), total: 0 };
     const signature = crossState?.signature ?? null;
@@ -2033,6 +2104,12 @@ export function createS12Persist(deps) {
         trigger,
         title,
         markdown: artifact.markdown,
+        // THE MANIFEST THE TOKENS IN THAT MARKDOWN RESOLVE AGAINST, frozen
+        // beside the evidence and for the reason `freezeEvidence`'s docblock
+        // gives: a page re-fetched later can rewrite the `<figcaption>` under a
+        // caption this version already printed. Both halves go in one call or
+        // the artefact ships a document carrying a directive nothing can read.
+        figures: report.figures,
         sections: artifact.sections,
         citations: artifact.citations,
         evidence,

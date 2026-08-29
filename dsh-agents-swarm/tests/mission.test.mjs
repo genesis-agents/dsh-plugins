@@ -3616,3 +3616,115 @@ test("a figure candidate is bounded, and only ever an address we could fetch our
   assert.equal(figureCandidates(many).length, MAX_FIGURE_CANDIDATES,
     "a page with forty images hands the stage all forty, which grows the observation toward the ceiling where the whole page is spilled and lost");
 });
+
+test("a figure is placed only in the chapter that cites its page, and it costs the report no words", async () => {
+  // RULE 3 AT THE MINT, which is the only place it can be structural instead of
+  // checked. `assemble` reaches figures through `split.citations` — the
+  // chapter's OWN manifest, written by code at s8 — so there is no expression in
+  // that loop by which chapter one could reach a figure off a page only chapter
+  // two cites. A projection that filtered afterwards would be a second opinion
+  // about the same question; this asserts there is nothing to have one about.
+  //
+  // THE WORD COUNT IS THE HALF THAT BREAKS QUIETLY. `contentGuard` refuses a
+  // report under half its floor and the floor is scaled to the evidence, so a
+  // token counted as prose would move the gate by however many pictures the run
+  // happened to hold — a length test whose answer depends on somebody else's
+  // markup, failing on the missions richest in figures.
+  //
+  // AND THE CITATION INDEX IS THE HALF THAT BREAKS LOUDLY AND LATE. `[N]` is
+  // chapter-local in `mission_chapters.body` and renumbered report-global here;
+  // a figure that kept the local number would name whatever source happened to
+  // land at that index once four chapters were assembled ahead of it. The
+  // second chapter's citation is global 2, and that is the number asserted.
+  const { assemble } = await import("../lib/mission-stages-middle.js");
+  const manifest = (entry) => `<!-- mission-citations: ${JSON.stringify([entry])} -->`;
+  const rows = [
+    {
+      dimensionId: "d1", chapterIndex: 0, sectionType: "evidenced", heading: "Uncited",
+      body: `This chapter leans on a different page entirely [1].\n\n${manifest({ index: 1, url: "https://b.example/p", findingId: "f-b", inlineQuote: "q" })}`,
+    },
+    {
+      dimensionId: "d2", chapterIndex: 0, sectionType: "evidenced", heading: "Cited",
+      body: `The shipment chart is discussed here [1].\n\n${manifest({ index: 1, url: "https://a.example/p", findingId: "f-a", inlineQuote: "q" })}`,
+    },
+  ];
+  const figures = new Map([["f-a", [{
+    id: "fig-a", documentId: "doc-a", caption: "Global shipments, 2019-2024", alt: "a chart", width: 900, height: 600,
+  }]]]);
+
+  const bare = assemble(rows);
+  const placed = assemble(rows, { figures });
+
+  assert.equal(placed.figures.length, 1, "the one held figure of the one cited page was not placed at all");
+  assert.equal(placed.figures[0].index, 1);
+  assert.equal(placed.figures[0].citationIndex, 2, "the figure kept its chapter-local citation index, so it names whichever source happens to sit at that number once the earlier chapters are assembled");
+  assert.equal(placed.figures[0].alt, "Global shipments, 2019-2024", "the publisher's own figcaption is not frozen, so a figure whose bytes will not draw has nothing left to say");
+  assert.equal(placed.figures[0].stored, true, "only held figures are minted, and a card told nothing cannot tell 'we never kept it' from 'we kept it and it broke'");
+
+  const uncited = placed.markdown.slice(placed.sections[0].start, placed.sections[0].end);
+  const cited = placed.markdown.slice(placed.sections[1].start, placed.sections[1].end);
+  assert.ok(!uncited.includes(":::figure"), "a chapter that cites a different page was handed a figure, which is decoration presented as evidence");
+  assert.ok(cited.includes(":::figure 1\n:::"), "the block is not inside the offsets of the chapter that cites it, so chapter reading — which slices exactly these offsets — would drop it");
+  assert.ok(cited.startsWith("## Cited"), "the section offset no longer resolves against the markdown it indexes");
+
+  assert.equal(placed.wordCount, bare.wordCount, "the figure block was counted as prose, which moves the content guard's word floor by however many pictures the publishers happened to serve");
+  assert.equal(placed.citations.length, bare.citations.length, "placing a figure changed the citation numbering");
+  assert.ok(!placed.markdown.includes("http"), "a publisher address was written into the report body; a figure is referenced by a stored id so that the document itself can never name a url");
+});
+
+test("the export rewrites the figure token into a line, or removes it, and never into an image", async () => {
+  // AN EXPORT THAT CARRIES A TOKEN NO OTHER READER UNDERSTANDS IS A BROKEN
+  // EXPORT. `report.md` is a file that leaves this machine: our byte route is
+  // unreachable from it and a publisher `src` would make every viewer of every
+  // copy fetch the publisher directly, unpaced, with no host deny list anywhere
+  // in the chain. So the only honest thing an exported figure can be is the
+  // text a figure still has when there is no picture — which is exactly what
+  // the screen falls back to, drawn twice on purpose.
+  //
+  // The unresolvable index is the case worth pinning. `assemble` deletes a `[N]`
+  // with no citation behind it rather than leaving a marker pointing at nothing;
+  // a figure with no row behind it has no caption, no link and no attribution,
+  // so the same rule applies and there is nothing left to print.
+  const { renderFigureTokens } = await import("../lib/mission-view.js");
+  const artifact = {
+    figures: [{ index: 1, citationIndex: 2, alt: "Global shipments, 2019-2024" }],
+    citations: [{ index: 2, url: "https://a.example/p", findingId: "f-a" }],
+    evidence: [{
+      findingId: "f-a", sourceTitle: "A Example", sourceHost: "a.example",
+      sourceUrl: "https://a.example/p", fetchedAt: "2026-08-01T00:00:00.000Z",
+    }],
+  };
+  const source = "## Chapter\n\nProse here [2].\n\n:::figure 1\n:::\n\n:::figure 9\n:::\n\n";
+  const out = renderFigureTokens(source, artifact, { language: "en" });
+
+  assert.ok(!out.includes(":::"), "a directive only this pipeline understands survived into a file a reader opens in some other program");
+  assert.ok(out.includes("Global shipments, 2019-2024"), "the publisher's own caption is gone, so the export dropped the one sentence a figure with no bytes still has");
+  assert.ok(out.includes("https://a.example/p"), "a reproduced figure carries no link back to the page it came off, which is a fabricated figure");
+  assert.ok(out.includes("[2]"), "the export does not tie the figure to the citation that licenses reproducing it");
+  assert.ok(!out.includes("!["), "the export hotlinks: every viewer of every copy of this file would fetch the publisher directly, and nothing inside a downloaded file can pace that or read a deny list");
+  assert.ok(!/figure 9/iu.test(out), "a token with no row behind it printed something; an index that does not resolve has no caption, no link and no attribution, so there is nothing honest to leave behind");
+
+  const plain = "## Chapter\n\nNo figures were ever placed here.\n";
+  assert.equal(renderFigureTokens(plain, { citations: [] }, { language: "en" }), plain, "a report with no figures no longer exports byte for byte what it exported before this function existed, which is every report already on disk");
+});
+
+test("a figure token the writer typed is stripped before the chapter is stored", async () => {
+  // THE SAME RULE THE CITATION MANIFEST GETS, one line up in the same function.
+  // `splitManifest`'s docblock records why: this pipeline's provenance markup is
+  // "one machine-readable HTML comment written by CODE — never by the writer",
+  // and `sanitizeBody`'s says what happens otherwise — "a chapter could mint its
+  // own provenance". A figure placement is provenance in exactly that sense: the
+  // number resolves to a stored row carrying a publisher, a page, a fetch stamp
+  // and a picture. A model that can type the number can hang any of this run's
+  // figures off any sentence it likes, in a chapter that cites none of them, and
+  // every reader downstream would treat it as this pipeline's own mint.
+  //
+  // Read off the source rather than exercised: `sanitizeBody` is not exported,
+  // and exporting it to test it would widen the very door this guard is about.
+  const middle = readFileSync(new URL("../lib/mission-stages-middle.js", import.meta.url), "utf8");
+  const at = middle.indexOf("function sanitizeBody(text, heading) {");
+  assert.notEqual(at, -1, "sanitizeBody is gone, so nothing cleans a submitted chapter at all");
+  const rows = middle.slice(at, middle.indexOf("\n}", at));
+  assert.ok(rows.includes(":::"), "sanitizeBody no longer removes a `:::figure` the writer typed, so the one piece of markup that resolves to a publisher's picture is writable by a model");
+  assert.ok(rows.includes("mission-citations"), "sanitizeBody no longer removes an echoed citation manifest either");
+});

@@ -78,6 +78,7 @@ import {
   TRACE_RESULT_CHARS,
   TRACE_ROLES,
   buildBibliography,
+  renderFigureTokens,
   buildMissionTrace,
   parseTraceRef,
   projectDegradeReason,
@@ -1396,7 +1397,15 @@ if (req.method === "GET" && (action === "facts.csv" || action === "citations.csv
         title: artifact.title, wordCount: artifact.wordCount, degraded: artifact.degraded,
         sections: artifact.sections, citations: artifact.citations, quality: artifact.quality,
       },
+      // THE TOKEN STAYS IN THIS ONE, AND THE MANIFEST SHIPS BESIDE IT. This
+      // export is "the whole projection of this run, for a machine to read", and
+      // the .md rewrites the directive into prose because a PERSON opens that
+      // file. Stripping it here would delete the only record of where in the
+      // document each figure sits; keeping it without `figures` would ship a
+      // document carrying a directive nothing can resolve. Both halves or
+      // neither — that pair is what makes an export honest rather than complete.
       markdown: artifact.markdown ?? "",
+      figures: artifact.figures ?? [],
     }, null, 2), "application/json; charset=utf-8", "json");
   }
 
@@ -1464,7 +1473,17 @@ if (req.method === "GET" && (action === "facts.csv" || action === "citations.csv
       // the change, and would also put the reference list inside the very
       // `markdown` the content guard counts words over, which quietly moves the
       // word-count floor.
-      const markdown = body + buildBibliography(artifact, { language: mission.language });
+      // THE FIGURE BLOCKS COME OUT FIRST, then the bibliography goes on. Both
+      // are joins over columns already on the artefact and both are done HERE
+      // for the reason the note above gives about the bibliography: every
+      // artefact already on disk exports correctly, and neither changes the
+      // `markdown` the content guard counted its words over.
+      //
+      // Order matters. The bibliography is appended after the last chapter, so
+      // rewriting the tokens first keeps the rewrite confined to the report's
+      // own body and cannot reach into a reference list that never had one.
+      const markdown = renderFigureTokens(body, artifact, { language: mission.language })
+        + buildBibliography(artifact, { language: mission.language });
       const filename = `${id}${artifact.version ? `-v${artifact.version}` : ""}.md`;
       res.writeHead(200, {
         "content-type": "text/markdown; charset=utf-8",
