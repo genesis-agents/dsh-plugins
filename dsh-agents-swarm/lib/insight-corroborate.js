@@ -35,7 +35,7 @@
  * engine's formatting rather than the publisher's words.
  */
 
-import { fetchDocument, readArticle } from "./proxy.js";
+import { admissibleUrl, fetchDocument, readArticle } from "./proxy.js";
 import { normalizeForQuote, verifyQuote } from "./insights.js";
 
 /** How many search hits to consider for one claim, before independence filtering. */
@@ -144,6 +144,33 @@ const paceArxiv = createPacer(ARXIV_MIN_INTERVAL_MS);
  * them costs a pass eight seconds and costs nobody a block.
  */
 const paceRead = createPacer(1000);
+
+/**
+ * The figure fetcher's fallbacks, and what actually decides in production.
+ *
+ * THE CLAIM THIS COMMENT USED TO MAKE WAS FALSE WHEN IT WAS WRITTEN. It said
+ * `mission-store.js` owns the real `FIGURE_MIME_TYPES` and `MAX_FIGURE_BYTES`;
+ * neither identifier existed anywhere in `lib/` at the time. It is true now,
+ * and true only in one order: migration `009-figures` exports both, and
+ * `driveFigureBytes` in `mission-stages-front.js` passes them into every call
+ * this package makes. A tree holding this file without 009 is a tree whose
+ * docblock describes a file that does not say that, which is the defect this
+ * repository has a dozen commits about.
+ *
+ * THESE TWO ARE COPIES BY VALUE, NOT AN IMPORT. `mission-tools.js` imports this
+ * file and the store imports neither, so importing the store here would point
+ * the dependency arrow backwards. They are reached only by a call that passes
+ * no options, which no call site in `lib/` makes.
+ *
+ * DRIFT IN EITHER DIRECTION IS A BUG, NOT A POLICY, so a test pins them equal
+ * to the store's by value. Wider here is a request whose bytes `holdFigure`
+ * then refuses — wasted, not dangerous. Narrower here is a picture that
+ * silently never appears, and "silently" is the whole problem. Neither can
+ * widen what is stored or served: the store checks at the write and the route
+ * checks again at the read, and the narrower of the two always wins.
+ */
+const DEFAULT_FIGURE_TYPES = Object.freeze(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const DEFAULT_FIGURE_MAX_BYTES = 1_500_000;
 
 /**
  * A courtesy User-Agent.
@@ -428,6 +455,81 @@ export async function readHit(hit, options = {}) {
     };
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Fetch one image's bytes, in the SAME queue that paces the page fetch.
+ *
+ * HERE, BESIDE `readHit`, AND NOWHERE ELSE. `paceRead` is module-private and
+ * only `createPacer` is exported, so any other module wanting to pace an image
+ * fetch could only call `createPacer` again and build a SECOND chain — two
+ * concurrent request streams aimed at the publishers this library is built out
+ * of. That is what `PACER_CHAINS` in mission-tools.js is a registry to prevent,
+ * and what the note above `fetch_page` refuses a `fetchImpl` for. A figure is
+ * one more request to the same publisher as the page it sits on, so it belongs
+ * in that publisher's queue rather than beside it.
+ *
+ * THE DENY LIST IS APPLIED TO THE IMAGE'S HOST, NOT THE PAGE'S, and that is not
+ * pedantry. A page on a perfectly ordinary public host can carry an `<img src>`
+ * pointing at this installation's own infrastructure, and a check already
+ * satisfied by the page's host would follow it there. `fetch_page` checks the
+ * host it is about to fetch; so does this, against the same `denyHosts` and
+ * after the same `admissibleUrl` private-range refusal.
+ *
+ * Returns rather than throws for every ordinary refusal: a publisher serving a
+ * 9 MB TIFF is an ordinary event, and an exception would abandon the other
+ * figures on the same page.
+ *
+ * @param url - the absolute image URL, already resolved against its page.
+ * @param options - `{ denyHosts, maxBytes, allowedTypes }`.
+ * @returns `{ ok, status, mime, bytes, reason }`; `bytes` is a Buffer or null.
+ */
+export async function readFigure(url, options = {}) {
+  const maxBytes = Number(options.maxBytes) > 0 ? Number(options.maxBytes) : DEFAULT_FIGURE_MAX_BYTES;
+  const allowed = Array.isArray(options.allowedTypes) && options.allowedTypes.length > 0
+    ? options.allowedTypes
+    : DEFAULT_FIGURE_TYPES;
+
+  const admitted = admissibleUrl(url);
+  if (admitted === undefined) {
+    return { ok: false, status: 0, mime: "", bytes: null, reason: `${String(url)} is not a public http(s) image URL` };
+  }
+  const host = admitted.hostname.toLowerCase();
+  const denied = (options.denyHosts ?? []).some((entry) => {
+    const bare = String(entry ?? "").toLowerCase().trim();
+    return bare !== "" && (host === bare || host.endsWith(`.${bare}`));
+  });
+  if (denied === true) {
+    return { ok: false, status: 0, mime: "", bytes: null, reason: `${host} is this installation's own infrastructure, not a publisher` };
+  }
+
+  try {
+    // No `fetchImpl` seam here, for the reason `fetch_page` has none: an
+    // argument able to replace this call is an argument able to unpace it.
+    const doc = await paceRead(() => fetchDocument(admitted.href));
+    const status = Number(doc?.status ?? 0);
+    if (status < 200 || status >= 300) {
+      return { ok: false, status, mime: "", bytes: null, reason: `the publisher answered ${status} for this image` };
+    }
+    // Judged on what the server SAID it sent, never on the path. A trailing
+    // `.png` is a publisher's claim, not a fact about the body, and a route
+    // that will serve any bytes a publisher answers with is a hole.
+    const mime = String(doc?.contentType ?? "").split(";")[0].trim().toLowerCase();
+    if (!allowed.includes(mime)) {
+      return { ok: false, status, mime, bytes: null, reason: `${mime === "" ? "an unnamed content type" : mime} is not an image type this serves` };
+    }
+    const body = doc?.body;
+    const bytes = Buffer.isBuffer(body) ? body : (body instanceof Uint8Array ? Buffer.from(body) : null);
+    if (bytes === null || bytes.byteLength === 0) {
+      return { ok: false, status, mime, bytes: null, reason: "the image came back empty" };
+    }
+    if (bytes.byteLength > maxBytes) {
+      return { ok: false, status, mime, bytes: null, reason: `the image is ${bytes.byteLength} bytes, over the ${maxBytes} ceiling` };
+    }
+    return { ok: true, status, mime, bytes, reason: "" };
+  } catch (cause) {
+    return { ok: false, status: 0, mime: "", bytes: null, reason: `unreachable: ${String(cause?.message ?? cause)}` };
   }
 }
 

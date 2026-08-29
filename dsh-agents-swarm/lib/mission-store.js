@@ -4332,6 +4332,62 @@ export class MissionStore {
    * @param options - `{ runCount, documentId }`.
    * @returns `{ mission, document }` — counts of rows in state 'held'.
    */
+  /**
+   * The figures still worth asking a publisher for, for ONE chapter's pages.
+   *
+   * THE FETCH QUEUE, and it is a different question from `figuresForChapter`
+   * even though it is the same join. That one answers "what may this chapter
+   * SHOW", so it selects `state = 'held'` and is the only shape a screen ever
+   * sees. This one answers "what may this mission ASK FOR", so it selects
+   * `state = 'candidate'` — the rows whose bytes are neither held nor already
+   * refused.
+   *
+   * A SECOND METHOD RATHER THAN A `state` OPTION ON `figuresForChapter`. A read
+   * that can be ASKED for un-held figures is a read that can hand a route a row
+   * for a figure we do not hold, and the whole reason the serving path has one
+   * query is that it cannot be talked into a different one. Splitting on the
+   * question keeps the served set unparameterised.
+   *
+   * RULE 3 IS APPLIED AT THE FETCH AS WELL AS AT THE READ, and that is not
+   * belt-and-braces. A figure lifted off a page no chapter cites must never
+   * cost a request to that publisher, let alone a megabyte on this disk — the
+   * fetch is the expensive half and the cheap half already ran. Because the
+   * join is `figuresForChapter`'s, anything this returns is something the same
+   * dimension would be allowed to show if the bytes arrive; a figure that could
+   * never be shown is never asked for.
+   *
+   * `refused` AND `failed` ARE BOTH EXCLUDED, and excluding `failed` is a
+   * declined decision rather than a policy. `refuseFigure`'s docblock keeps the
+   * two states apart precisely so a retry policy can tell a 415 from a timeout;
+   * this driver is not that policy, and retrying `failed` here would double the
+   * requests for exactly the dimension being collected a second time because
+   * the first round went badly. The column keeps the distinction for a policy
+   * that does not exist yet rather than having it silently consumed here.
+   *
+   * @param missionId - the mission.
+   * @param options - `{ runCount, dimensionId, limit }`.
+   * @returns `[figure]`, best-scoring first, each carrying its `page`. Never bytes.
+   */
+  fetchableFigures(missionId, { runCount, dimensionId, limit = MAX_HELD_FIGURES_PER_DOCUMENT * 4 } = {}) {
+    const id = assertText(missionId, "missionId");
+    const dimension = assertText(dimensionId, "dimensionId");
+    const run = runCount ?? this.db.prepare("SELECT run_count FROM missions WHERE id = ?").get(id)?.run_count ?? 1;
+    const holes = FETCH_BACKED_VERIFY_STATES.map(() => "?").join(",");
+    return this.db.prepare(`
+      SELECT DISTINCT ${FIGURE_COLUMNS}
+      FROM mission_figures g
+      JOIN mission_documents d ON d.id = g.document_id
+      JOIN mission_findings  f ON f.document_id = g.document_id
+      WHERE f.mission_id = ? AND f.run_count = ? AND f.dimension_id = ?
+        AND f.verify_state IN (${holes})
+        AND g.state = 'candidate'
+        AND d.status >= 200 AND d.status < 300 AND d.byte_length >= ?
+      ORDER BY g.score DESC, g.id
+      LIMIT ?
+    `).all(id, assertCount(run, "runCount", 1), dimension, ...FETCH_BACKED_VERIFY_STATES, MIN_DOCUMENT_CHARS,
+      clampInt(limit, 1, 500, MAX_HELD_FIGURES_PER_DOCUMENT * 4)).map(shapeFigure);
+  }
+
   heldFigureCounts(missionId, { runCount, documentId } = {}) {
     const id = assertText(missionId, "missionId");
     const run = runCount ?? this.db.prepare("SELECT run_count FROM missions WHERE id = ?").get(id)?.run_count ?? 1;

@@ -43,8 +43,21 @@ import {
   readUsage,
   readSettlement,
 } from "./mission-agent.js";
-import { budgetGate, computeWallFloorMs } from "./mission-runtime.js";
-import { FACETS, documentIdFor } from "./mission-store.js";
+import { budgetGate, checkDeadlines, computeWallFloorMs } from "./mission-runtime.js";
+import {
+  FACETS,
+  FIGURE_MIME_TYPES,
+  MAX_FIGURE_BYTES,
+  MAX_HELD_FIGURES_PER_DOCUMENT,
+  MAX_HELD_FIGURES_PER_MISSION,
+  documentIdFor,
+} from "./mission-store.js";
+// The ONE fetch in this package that runs inside `paceRead` and reads the deny
+// list against the IMAGE's host. Imported rather than reimplemented: only
+// `createPacer` is exported from that module, so a second fetcher here could
+// only build a SECOND chain aimed at the same publishers, which is the outcome
+// `PACER_CHAINS` is a registry to make impossible.
+import { readFigure } from "./insight-corroborate.js";
 import { createSqliteLedger } from "./mission-tools.js";
 import { LADDER } from "./mission-budget.js";
 import { verifyQuote } from "./insights.js";
@@ -1945,6 +1958,49 @@ async function collectOneDimension({ deps, context, dimension, policy, zh, recol
     }
   });
 
+  // ── the pictures, after the evidence and never before it ──────────────
+  //
+  // HERE, at the dimension's boundary: the transaction above has just written
+  // this dimension's findings, so "which pages did this chapter actually cite"
+  // is answerable for the first time, and it is the only question that licenses
+  // a request for an image. The researcher for this dimension has returned, so
+  // the chain `readFigure` shares with `fetch_page` is idle rather than being
+  // queued in front of an agent's next read.
+  //
+  // AFTER the transaction, not inside it. There is an `await` per figure, and
+  // the block above is explicitly "one transaction with no await inside it".
+  //
+  // SKIPPED WHEN THERE IS NOTHING TO LICENSE A REQUEST, or nothing left to make
+  // one with: no verified finding means no cited page; a cancel or an exhausted
+  // allowance means the mission is trying to stop, and pictures are the last
+  // thing worth spending its final seconds on.
+  const figures = { requested: 0, held: 0, refused: 0, failed: 0, left: 0, stopped: "not-run", ms: 0 };
+  if (written.verified > 0 && signal.aborted !== true && stopStage === null) {
+    // THE SLICE, from the mission's own remaining wall rather than a constant.
+    // The same call the runner's own guard makes, so the figure pass and the
+    // wall timer read one number instead of two that can disagree.
+    const wall = checkDeadlines({ mission, now: now(), budget });
+    const slice = wall.expired === true
+      ? 0
+      : Math.min(FIGURE_WALL_SLICE_MS, Math.floor((wall.detail.remainingMs ?? 0) * FIGURE_WALL_SHARE));
+    Object.assign(figures, await driveFigureBytes({
+      store,
+      missionId,
+      runCount,
+      dimensionId: dimension.dimensionId,
+      dimensionCount: Array.isArray(crossState?.dimensions) ? crossState.dimensions.length : 1,
+      // THE SAME ARRAY THE TOOL DOOR WAS GIVEN, read off the context this stage
+      // already built rather than out of `config` a second time. Two readings of
+      // one setting is how the door refuses a host that the figure fetcher then
+      // goes and asks.
+      denyHosts: toolContext.denyHosts,
+      sliceMs: slice,
+      signal,
+      now,
+      log,
+    }));
+  }
+
   // A fetch the tool door reported as successful whose observation the stage
   // could not read back is a page the model was shown and this code cannot
   // verify a quote against. That is a degradation with a named cause, never an
@@ -2010,12 +2066,186 @@ async function collectOneDimension({ deps, context, dimension, policy, zh, recol
       written,
       spanIndexMisses,
       singleSpanPages,
+      // What the second network pass cost and bought. Every number is one
+      // database write the driver made or one request it issued, and `stopped`
+      // names the ceiling that ended it, so a dimension with no pictures can be
+      // told apart from a dimension that ran out of wall clock. NOT rendered
+      // anywhere today: it reaches `crossState.collection.perDimension` and the
+      // trajectory, and it is deliberately not on `gradeAxes`, which IS drawn —
+      // a tile with no owner is a screen value nobody is accountable for.
+      figures,
       fetchesSucceeded,
       unreadableFetches,
       failureCode,
       note,
     },
   };
+}
+
+/* ── the second network pass: the publisher's own pictures ─────────────── */
+
+/**
+ * The most wall clock one dimension's figure pass may spend, flat.
+ *
+ * A ceiling rather than a target. Six dimensions at this rung is six minutes
+ * added to a mission whose tier walls are 20, 60 and 180 minutes
+ * (`mission-budget.js:105-111`), and it can only ever be less, because the
+ * share below cuts it down whenever the mission is running out of room.
+ */
+const FIGURE_WALL_SLICE_MS = 60_000;
+
+/**
+ * And never more than this share of what is actually LEFT.
+ *
+ * The failure being designed away is the figure pass being the thing that trips
+ * the wall timer. `checkDeadlines` answers `wall_time_exceeded`, the runtime
+ * aborts, and the artefact is never written — so a mission at 95% of its wall
+ * gets a slice measured in seconds and a mission at 20% gets the flat rung.
+ */
+const FIGURE_WALL_SHARE = 0.10;
+
+/** Below this a slice cannot finish one paced request, so nothing is started. */
+const FIGURE_MIN_SLICE_MS = 2_000;
+
+/**
+ * Ask the publishers for the pictures on the pages this chapter cited.
+ *
+ * WHY HERE AND NOT AT ABSORB TIME. A deep mission is allowed 250 page fetches.
+ * Fetching bytes as pages arrive is up to 250 x MAX_HELD_FIGURES_PER_DOCUMENT =
+ * 500 extra requests through the SAME one-at-a-time, one-second chain the
+ * researcher's own `fetch_page` calls queue in — 500 seconds of pure gap before
+ * a byte transfers, in front of a tool door whose fetch timeout is 45,000 ms.
+ * Images queued ahead of a page read turn that read into a timeout refusal,
+ * which is recorded as `unchecked-fetch-failed`. A picture would cost a
+ * finding. Here the set is the CITED set and the ceiling is
+ * MAX_HELD_FIGURES_PER_MISSION for the whole mission — 40 requests where the
+ * naive pass makes 500, and the 460 saved are images off pages nobody cited.
+ *
+ * WHY NOT LAZILY, AT THE ROUTE. That puts a paced request — up to
+ * `fetchDocument`'s 30-second timeout — inside a GET a browser makes for an
+ * `<img>`, and it makes the READ path a fetcher: a report opened in December
+ * would re-ask a publisher for an image, which is the exact inversion of the
+ * principle the document reader is built on. It also persists no negative, so a
+ * publisher who 404s is asked again on every render, for ever.
+ *
+ * THE PACING AND THE DENY LIST ARE `readFigure`'s, not a second copy. This
+ * function contains no fetch of its own; every request leaves through
+ * `readFigure`, which runs inside `insight-corroborate.js`'s module-private
+ * `paceRead` and applies the deny list to the IMAGE's host — because a page on
+ * an ordinary public host can carry an `<img src>` aimed at this installation's
+ * own infrastructure, and a check satisfied by the page's host would follow it
+ * there. The caller passes `toolContext.denyHosts`, the same array object the
+ * tool door was given, so the door and the fetcher cannot read one setting
+ * twice and disagree.
+ *
+ * `Date.now()` MEASURES THE SLICE, not the injected `now`. That clock is for
+ * STAMPS — what goes in a column — and the test harness's version advances one
+ * second per read, so measuring a duration with it would expire the slice after
+ * N reads regardless of real elapsed time.
+ *
+ * @param options - `{store, missionId, runCount, dimensionId, dimensionCount, denyHosts, sliceMs, signal, now, log}`.
+ * @returns `{requested, held, refused, failed, left, stopped, ms}`.
+ */
+export async function driveFigureBytes({
+  store, missionId, runCount, dimensionId, dimensionCount = 1,
+  denyHosts, sliceMs, signal = null, now, log = null,
+}) {
+  const tally = { requested: 0, held: 0, refused: 0, failed: 0, left: 0, stopped: null, ms: 0 };
+  const startedMs = Date.now();
+  if (!Number.isFinite(sliceMs) || sliceMs < FIGURE_MIN_SLICE_MS) {
+    // Named, not silent. "No figures" and "no time for figures" want opposite
+    // responses from whoever reads the dimension summary.
+    tally.stopped = "no-wall-clock";
+    return tally;
+  }
+
+  // Both ceilings from ONE read, for `heldFigureCounts`'s own stated reason: a
+  // fetcher that asked separately would race itself and overshoot. Read once
+  // rather than per figure because this loop is serial, so the driver's own
+  // counter is the only thing that can move the number between reads.
+  const counts = store.heldFigureCounts(missionId, { runCount });
+  let missionRoom = MAX_HELD_FIGURES_PER_MISSION - counts.mission;
+  if (missionRoom <= 0) {
+    tally.stopped = "mission-ceiling";
+    return tally;
+  }
+  // A SHARE, NOT FIRST-COME. Dimensions are collected in order, so a greedy
+  // pass would let dimension one spend the mission's whole allowance and leave
+  // chapters two through six with no pictures at all — a quality asymmetry with
+  // no reason behind it that a reader could ever discover. The floor is the
+  // per-document ceiling, so a share never rounds down to zero.
+  let dimensionRoom = Math.max(
+    MAX_HELD_FIGURES_PER_DOCUMENT,
+    Math.floor(MAX_HELD_FIGURES_PER_MISSION / Math.max(1, dimensionCount)),
+  );
+
+  const pending = store.fetchableFigures(missionId, { runCount, dimensionId });
+  const perDocument = new Map();
+  const answered = new Map();
+
+  for (const figure of pending) {
+    if (signal?.aborted === true) { tally.stopped = "cancelled"; break; }
+    if (missionRoom <= 0) { tally.stopped = "mission-ceiling"; break; }
+    if (dimensionRoom <= 0) { tally.stopped = "dimension-share"; break; }
+    // BEFORE the request and never after. The slice bounds when a request may
+    // START, so the true ceiling is the slice plus one `fetchDocument` timeout.
+    // Checked afterwards it would bound nothing: any number of requests could
+    // begin inside its last millisecond.
+    if (Date.now() - startedMs >= sliceMs) { tally.stopped = "wall-slice"; break; }
+
+    const already = perDocument.get(figure.documentId) ?? 0;
+    if (already >= MAX_HELD_FIGURES_PER_DOCUMENT) continue;
+
+    // ONE REQUEST PER IMAGE URL PER PASS. The same chart syndicated onto two
+    // cited pages is two rows with two attributions — that is `figureIdFor`'s
+    // decision and this does not touch it — but it is one picture, and asking
+    // the publisher for it twice inside one pass is the discourtesy the pacer
+    // exists to prevent, paid for twice. The memo lives for this call only.
+    let answer = answered.get(figure.url);
+    if (answer === undefined) {
+      answer = await readFigure(figure.url, {
+        denyHosts,
+        // The STORE's constants. The copies in insight-corroborate.js are
+        // fallbacks for a bare call, and no call site in lib/ makes one.
+        maxBytes: MAX_FIGURE_BYTES,
+        allowedTypes: FIGURE_MIME_TYPES,
+      });
+      answered.set(figure.url, answer);
+      tally.requested += 1;
+    }
+
+    const at = now();
+    try {
+      // `holdFigure` re-checks the type and the ceiling and files its OWN
+      // refusal when either fails, so there is one write path and this driver
+      // never gets to decide that a set of bytes is servable.
+      const settled = answer.ok === true
+        ? store.holdFigure({ id: figure.id, bytes: answer.bytes, mime: answer.mime, status: answer.status, fetchedAt: at })
+        : store.refuseFigure({ id: figure.id, reason: answer.reason, status: answer.status, at });
+      // Counted from what the STORE returned, never from `answer.ok`. The state
+      // is the store's word, and a second opinion here is how two numbers that
+      // must agree begin to disagree.
+      if (settled.state === "held") {
+        tally.held += 1;
+        missionRoom -= 1;
+        dimensionRoom -= 1;
+        perDocument.set(figure.documentId, already + 1);
+      } else if (settled.state === "refused") {
+        tally.refused += 1;
+      } else {
+        tally.failed += 1;
+      }
+    } catch (cause) {
+      // A write that throws is this code's bug, not the publisher's, and it must
+      // not take the other figures on the same page down with it.
+      log?.warn?.(`mission ${missionId}: figure ${figure.id} could not be settled: ${cause.message}`);
+      tally.failed += 1;
+    }
+  }
+
+  tally.left = pending.length - (tally.held + tally.refused + tally.failed);
+  tally.ms = Date.now() - startedMs;
+  return tally;
 }
 
 /** The researcher's brief at one shrink rung. */
