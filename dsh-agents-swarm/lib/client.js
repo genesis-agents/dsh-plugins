@@ -3473,9 +3473,30 @@ window.__ModuleLoader__.load({
 			};
 			useEffect(() => stop, []);
 			const source = typeof refs?.peek === "function" ? refs.peek(index) : null;
+			// THE THIRD STATE, WHICH WAS DRAWN AS THE FIRST.
+			//
+			// `missionReferences` KEEPS a citation whose index joined no frozen
+			// evidence row and marks it `joined: false`, for the reason its own
+			// docblock gives: "a missing entry turns [7] in the prose into a pointer to
+			// nothing, and a reader cannot tell that from a numbering mistake". The
+			// list at the bottom of the report duly says so, in `rgb(${TONE.warn})`.
+			//
+			// The marker in the prose did not. `has(index)` is TRUE for an unjoined
+			// row — it is in the index, it just has nothing behind it — so `[7]` came
+			// out the same accent blue as a citation quoted verbatim off a live page,
+			// and the only warning was in the bibliography the reader has to scroll to
+			// in order to be warned. The prose disagreed with its own reference list.
+			// `missionCitationMark`'s comment already states the rule this restores: a
+			// marker whose source did not survive and one whose source is one click
+			// away must not look identical.
+			const broken = source?.joined === false;
 			const mark = jsx("button", {
 				type: "button",
-				title: zh ? `跳到参考文献第 ${index} 条` : `Jump to reference ${index}`,
+				title: zh ? (broken ? `第 ${index} 条引用没有对上任何一条冻结证据，来源查不到` : `跳到参考文献第 ${index} 条`) : (broken ? `Reference ${index} matched no frozen evidence row, so its source cannot be shown` : `Jump to reference ${index}`),
+				// STILL A JUMP, in both states. The row exists either way and it is where
+				// the full sentence is; a marker that stopped being pressable would take
+				// the reader's one route to the explanation away at the moment there is
+				// something to explain.
 				onClick: () => { refs.jump?.(index); },
 				// FOCUS OPENS IT TOO. The card is reachable by pointer and by tab,
 				// because a preview only a mouse can see is a preview half the
@@ -3485,7 +3506,7 @@ window.__ModuleLoader__.load({
 				style: { font: FONT.micro,
 					appearance: "none", border: "none", background: "transparent",
 					padding: "0 1px", margin: 0, cursor: "pointer", lineHeight: 1, verticalAlign: "super",
-					color: "var(--dsw-alias-state-business-primary)"
+					color: broken ? `rgb(${TONE.warn})` : "var(--dsw-alias-state-business-primary)"
 				},
 				children: token
 			}, "mark");
@@ -3520,7 +3541,21 @@ window.__ModuleLoader__.load({
 									// the reason to look: a citation whose source was never
 									// fetched and one that was quoted verbatim off a live
 									// page are the same blue number in the prose.
-									Chip({
+									//
+									// UNLESS THERE IS NO VERDICT TO DRAW. An unjoined row
+									// carries `verifyState: null`, and `missionFace` answers
+									// "" for a value its table has no face for — so this drew
+									// an EMPTY neutral pill: a chip that says nothing, beside
+									// a number the reader is already looking at, in a card
+									// that opened in order to say something. The list's own
+									// sentence goes here instead, so the one fact worth
+									// travelling for arrives without the journey.
+									broken ? jsx("span", {
+										style: { color: `rgb(${TONE.warn})` },
+										children: zh
+											? "这条引用没有对上任何一条冻结证据。"
+											: "This index matched no frozen evidence row."
+									}, "state") : Chip({
 										tone: missionHue(MISSION_VERIFY_FACES, source.verifyState),
 										icon: missionIcon(MISSION_VERIFY_FACES, source.verifyState),
 										label: missionFace(MISSION_VERIFY_FACES, source.verifyState, zh)
@@ -3550,6 +3585,15 @@ window.__ModuleLoader__.load({
 		}
 
 		function missionCitationMark(token, key, refs) {
+			// NO INDEX, NO CLAIM. `refs` is null in a chat answer — there is no
+			// reference list, no citation table, and nothing this number could have
+			// failed to match — and the branch below therefore said "Citation metadata
+			// missing: nothing was stored behind this number" about every `[3]` a model
+			// happened to type in the panel. That is the same defect as a marker
+			// pointing at the wrong row, one step earlier: the renderer stating the
+			// provenance of something it was told nothing about. Plain text, which is
+			// what it was before markers had anywhere to go.
+			if (refs === null || refs === undefined) return token;
 			const index = Number(token.slice(1, -1));
 			const zh = refs?.zh === true;
 			const known = typeof refs?.has === "function" && refs.has(index);
@@ -3657,13 +3701,39 @@ window.__ModuleLoader__.load({
 		* @param source - the raw answer text.
 		* @param variant - `"chat"` for a panel answer, `"article"` for a read.
 		* @param refs - the report's citation index, or null when there is none.
+		* @param chapters - `[{number, heading}]` in document order for a report, or null for anything else.
 		* @returns an array of block elements.
 		*/
-		function renderMarkdown(source, variant = "chat", refs = null) {
+		function renderMarkdown(source, variant = "chat", refs = null, chapters = null) {
 			const article = variant === "article";
 			const block = article ? ARTICLE_BLOCK : MD_BLOCK;
 			const headingSizes = article ? ARTICLE_HEADING_SIZES : MD_HEADING_SIZES;
 			const lines = String(source ?? "").split("\n");
+			// THE NUMBER IS THE TABLE OF CONTENTS', NOT A COUNTER'S.
+			//
+			// `MissionReport`'s chapter nav numbers its rows `String(at + 1)` over
+			// `artifact.sections`. A second count taken here would be a second opinion
+			// about the same document, and it would be wrong the first time a writer
+			// emits a `##` of its own inside a chapter body — `sanitizeBody` strips only
+			// a heading that REPEATS the chapter's own, and `contentGuard` only asserts
+			// that each section STARTS with its heading, so nothing between the writer
+			// and this renderer removes a stray one. A running counter would hand that
+			// stray chapter seven's number and every chapter after it the wrong one,
+			// two inches under a list that still says otherwise.
+			//
+			// So a number is ISSUED, not counted: to an h2 that matches the section the
+			// table expects in that position, and to nothing else. Both numbers on the
+			// screen then come out of one array and cannot disagree.
+			//
+			// `taken` is the cursor into that table, `chapter` the stem sub-headings
+			// hang off, `sub` the counter inside one chapter. h3 is COUNTED rather than
+			// checked because the section table has no h3 rows — and for the same reason
+			// it cannot disagree with a list that does not list them. h1 and h4 are left
+			// plain: `assemble` writes `## ` and only `## `, so an h1 is the writer's own
+			// and a fourth level has nothing above it to hang a third dot on.
+			const numbering = article && Array.isArray(chapters) && chapters.length > 0
+				? { table: chapters, taken: 0, chapter: null, sub: 0 }
+				: null;
 			const blocks = [];
 			let paragraph = [];
 			let list = null;
@@ -3791,6 +3861,30 @@ window.__ModuleLoader__.load({
 					flushParagraph();
 					flushList();
 					const level = heading[1].length;
+					// The stem, decided before anything is drawn. See `numbering` above.
+					let stem = "";
+					if (numbering !== null && level === 2) {
+						const expected = numbering.table[numbering.taken];
+						numbering.sub = 0;
+						// `assemble` writes `## ${heading}` from the same column the section
+						// row carries, and `asText` trimmed it on the way in, so this is a
+						// string comparison against the string that produced the line.
+						if (expected !== undefined && expected.heading === heading[2]) {
+							numbering.taken += 1;
+							numbering.chapter = expected.number;
+							stem = `${expected.number}. `;
+						} else {
+							// UNNUMBERED AND UNCOUNTED. An h2 the table did not put here is
+							// not a chapter, so it takes no number AND does not advance the
+							// cursor — the next real chapter still gets the number the list
+							// beside it prints. Numbering the stray is one defect; letting it
+							// consume the cursor is the same defect once per chapter after it.
+							numbering.chapter = null;
+						}
+					} else if (numbering !== null && level === 3 && numbering.chapter !== null) {
+						numbering.sub += 1;
+						stem = `${numbering.chapter}.${numbering.sub}. `;
+					}
 					blocks.push(jsx(`h${level}`, {
 						style: {
 							margin: blocks.length === 0 ? "0 0 8px" : article ? "32px 0 12px" : "14px 0 8px",
@@ -3807,9 +3901,30 @@ window.__ModuleLoader__.load({
 							fontSize: (headingSizes[level] ?? (article ? "16px" : "13px")),
 							fontWeight: article ? 600 : 650,
 							lineHeight: article ? "1.3" : "22px",
-							color: INK.primary
+							// THE ACCENT, AND ONLY ON THE REPORT'S OWN STRUCTURE.
+							//
+							// `numbering !== null` is exactly "this is a document whose section
+							// table we hold". The source reader renders a FETCHED page through
+							// this same `article` variant, and repainting somebody else's page
+							// in our report's colour would be this file claiming that page's
+							// structure as its own. It keeps the ink it has.
+							//
+							// THE HUE IS NOT A NEW ONE. SWM_THEME declares
+							// `--dsw-alias-state-business-primary` as #1d4ed8 light and #60a5fa
+							// dark, which are rgb(29,78,216) and rgb(96,165,250) — the exact
+							// blue-700 / blue-400 steps the one-ramp guard holds every hue in
+							// this file to. Nothing enters the palette.
+							//
+							// AND IT CLEARS THE BUDGET. 6.70:1 on #ffffff and 6.98:1 on
+							// #111827, against the 4.5:1 normal-size text needs — INK's docblock
+							// puts `quiet` at 3.71:1 and rules it decoration-only for exactly
+							// that reason. A chapter title is the opposite of decoration.
+							color: numbering === null ? INK.primary : "var(--dsw-alias-state-business-primary)"
 						},
-						children: renderInline(heading[2], `h${key}`, refs)
+						// The stem is part of the heading TEXT, not a floated ornament: a
+						// reader who copies "9.1. 术语谱系" out of the pane should get the
+						// number they would cite it by.
+						children: stem === "" ? renderInline(heading[2], `h${key}`, refs) : [stem, ...renderInline(heading[2], `h${key}`, refs)]
 					}, `h${key++}`));
 					continue;
 				}
@@ -15010,7 +15125,22 @@ window.__ModuleLoader__.load({
 									if (typeof document?.getElementById !== "function") return;
 									document.getElementById(`ref-${index}`)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
 								}
-							})
+							},
+							// THE SAME ARRAY THE CHAPTER LIST NUMBERS. `readSections` is
+							// `artifact.sections` — one entry per `## ` that `assemble` wrote,
+							// in report order — and the nav above numbers its rows
+							// `String(at + 1)` off the very same array. Both numbers on this
+							// screen are that expression, so there is no second numbering to
+							// disagree with the first.
+							//
+							// AND THE CHAPTER VIEW IS SEEDED, not restarted. The slice begins at
+							// `readSections[readAt].start`, so the one chapter inside it is
+							// `readAt + 1` — chapter nine drawn as "1." beside a list still
+							// calling it nine is the disagreement this whole seam exists to
+							// prevent.
+							reading === "chapter" && readSections[readAt] !== undefined
+								? [{ number: readAt + 1, heading: String(readSections[readAt].heading ?? "") }]
+								: readSections.map((section, at) => ({ number: at + 1, heading: String(section.heading ?? "") })))
 						}, "body"),
 						references.length === 0 ? null : jsx(MissionReferenceList, { references, zh }, "references"),
 						jsxs("div", {

@@ -4743,3 +4743,137 @@ test("the drawer has one heading device, and it is MissionPanel", () => {
   const drawer = code(body("function MissionStageDetail("));
   assert.match(drawer, /MissionPanel\(\{\s*\n?\s*bare: true,\s*\n?\s*title: zh \? "降级说明"/, "the degradation note lost its heading, so the sentence a degraded stage wrote about itself is an unlabelled amber block");
 });
+
+test("a citation with nothing behind it is not drawn like one that holds up", () => {
+  // THE RULE THIS FILE ALREADY STATES, enforced one level below where it was
+  // written. `missionCitationMark` splits a marker on `has(index)` — is this
+  // number in the reference list at all — and `missionReferences` deliberately
+  // KEEPS an index that joined no frozen evidence row so the list can say so in
+  // TONE.warn. So `[7]` with nothing behind it passed `has`, came out the same
+  // accent blue as a quote taken verbatim off a live page, and the reader's
+  // only warning sat in the bibliography they have to scroll to in order to be
+  // warned. The prose disagreed with its own reference list, which is the exact
+  // shape of a fabricated citation on screen.
+  const peek = code(body("function MissionCitationPeek("));
+  assert.match(
+    peek,
+    /const broken = source\?\.joined === false;/,
+    "the marker no longer reads the join, so a citation that resolved to no evidence is accent blue again",
+  );
+  assert.match(
+    peek,
+    /color: broken \? `rgb\(\$\{TONE\.warn\}\)` : "var\(--dsw-alias-state-business-primary\)"/,
+    "an unresolvable citation is drawn in the accent, which is the colour this file spends on a source that IS one click away",
+  );
+  // AND THE CARD SAYS WHICH OF THE TWO IT IS. `missionFace` answers "" for a
+  // null verify state — MISSION_VERIFY_FACES has nine keys and none of them is
+  // "" — so the head drew an empty neutral pill in a card that opened in order
+  // to say something.
+  assert.match(
+    peek,
+    /broken \? jsx\("span", \{/,
+    "the hover card still puts an empty chip where the verdict would be, which is the one thing worse than no card",
+  );
+  // The jump SURVIVES in both states: the row is where the full sentence is,
+  // and a marker that stopped being pressable would remove the route to the
+  // explanation at the moment there is something to explain.
+  assert.match(peek, /onClick: \(\) => \{ refs\.jump\?\.\(index\); \},/, "a broken citation lost its jump, so the row that explains it is unreachable from the prose");
+
+  // A CHAT ANSWER HAS NO CITATION TABLE, so nothing in it can be missing from
+  // one. `refs` is null there, `has` is undefined, and every `[3]` a model typed
+  // in the panel was labelled "Citation metadata missing: nothing was stored
+  // behind this number" — a sentence about a report that does not exist.
+  const mark = code(body("function missionCitationMark("));
+  assert.match(
+    mark,
+    /if \(refs === null \|\| refs === undefined\) return token;/,
+    "a bracketed number in a chat answer is accused of missing citation metadata again, which is the renderer stating provenance it was told nothing about",
+  );
+  // The UNKNOWN branch is still the grey one: an index the report never issued
+  // is a hole in the record, and it is not the same hole as one it issued and
+  // could not back.
+  assert.ok(mark.includes("INK.quiet"), "the unknown-citation branch lost its grey, so a number the report never issued looks like a working link");
+});
+
+test("a chapter's number is the chapter list's number, or there is no number", () => {
+  // The reference numbers its headings — "2. RSI边界与术语", then "2.1. 术语谱系…"
+  // — and a number that disagrees with the list two inches above it is worse
+  // than no number at all, because the list is how a reader gets back to it.
+  //
+  // So the number is not COUNTED here. It is read off `artifact.sections`, the
+  // same array `MissionReport`'s nav numbers `String(at + 1)` over, and issued
+  // only to an h2 that matches the section the table expects in that position.
+  // `sanitizeBody` strips only a heading that REPEATS the chapter's own and
+  // `contentGuard` only asserts each section STARTS with its heading, so a
+  // writer's own `##` reaches this renderer intact — and a running counter
+  // would hand it chapter seven's number and every chapter after it the wrong
+  // one.
+  const markdown = code(body("function renderMarkdown("));
+  assert.match(
+    markdown,
+    /const expected = numbering\.table\[numbering\.taken\];/,
+    "the section number is counted in the renderer again rather than read off the table the chapter list numbers, so the prose and the list are two opinions about one document",
+  );
+  assert.match(
+    markdown,
+    /expected !== undefined && expected\.heading === heading\[2\]/,
+    "an h2 takes a number without being checked against the section it claims to be, so a stray `##` inside a chapter body is drawn as the next chapter",
+  );
+  // AND DOES NOT ADVANCE THE CURSOR. Numbering the stray is one defect; letting
+  // it consume a slot is the same defect once per chapter after it.
+  const branch = markdown.slice(markdown.indexOf("if (numbering !== null && level === 2)"));
+  assert.ok(
+    branch.indexOf("numbering.taken += 1") < branch.indexOf("numbering.chapter = null;"),
+    "the unmatched branch advances the cursor, so one stray heading shifts every number after it off the list",
+  );
+  // A SUB-HEADING HANGS OFF A CHAPTER THAT HAS ONE. `numbering.chapter` is null
+  // for an h2 the table did not vouch for, and "null.1." under it would be the
+  // renderer printing its own bookkeeping into the report.
+  assert.match(
+    markdown,
+    /level === 3 && numbering\.chapter !== null/,
+    "a sub-heading is numbered under a chapter the section table never confirmed",
+  );
+
+  // THE SEED, which is what makes the chapter view agree with itself: the slice
+  // starts at `readSections[readAt].start`, so its one chapter is `readAt + 1`.
+  const report = code(body("function MissionReport("));
+  assert.match(
+    report,
+    /\[\{ number: readAt \+ 1, heading: String\(readSections\[readAt\]\.heading \?\? ""\) \}\]/,
+    "the chapter view restarts the numbering at 1, so chapter nine is drawn as chapter one while the list beside it still says nine",
+  );
+  assert.match(
+    report,
+    /readSections\.map\(\(section, at\) => \(\{ number: at \+ 1, heading: String\(section\.heading \?\? ""\) \}\)\)/,
+    "the continuous view is handed no section table, so the report's own prose is the one reading with no numbers in it",
+  );
+});
+
+test("the report's headings carry the accent, and only the report's", () => {
+  const markdown = code(body("function renderMarkdown("));
+  assert.match(
+    markdown,
+    /color: numbering === null \? INK\.primary : "var\(--dsw-alias-state-business-primary\)"/,
+    "the article's headings are back in body ink, so a thirty-thousand-word report is one column of one colour and its chapters read as paragraphs",
+  );
+  // SCOPED, and the scope is the point. `MissionSourceReader` renders a FETCHED
+  // page through this same `article` variant; tinting its headings would be
+  // this file painting somebody else's document in our report's colour.
+  assert.ok(
+    !/color: article \?[^\n]*state-business-primary/.test(markdown),
+    "the accent went on every article read, so a source page opened from a quote is repainted as if it were our report",
+  );
+
+  // THE HUE IS THE RAMP'S, IN BOTH THEMES. The guard above holds every `--swm-h-*`
+  // to the reference's 700 step light and 400 dark; a heading colour off that
+  // step would be the eleventh colour on a page that has ten, and it would be
+  // the largest text on the screen.
+  const theme = SOURCE.slice(SOURCE.indexOf("const SWM_THEME"), SOURCE.indexOf("const SWM_SHEET"));
+  const declared = [...theme.matchAll(/"--dsw-alias-state-business-primary:(#[0-9a-f]{6});"/g)].map(([, hex]) => hex);
+  assert.deepEqual(
+    declared,
+    ["#1d4ed8", "#60a5fa"],
+    "the accent is no longer blue-700 light / blue-400 dark, so the heading tint is off the one ramp — and #1d4ed8 measures 6.70:1 on white and #60a5fa 6.98:1 on #111827, which is the budget a heading in it was chosen against",
+  );
+});
