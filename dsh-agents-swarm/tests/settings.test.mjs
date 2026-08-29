@@ -174,12 +174,29 @@ function exportsOf() {
 }
 
 /** Every string rendered anywhere in a tree. */
+/**
+ * The text a reader would read, which is not every string in the tree.
+ *
+ * DECORATIVE SUBTREES ARE SKIPPED. Every glyph in this app is drawn as an
+ * inline SVG with `aria-hidden` on it — Icon sets it deliberately, because a
+ * glyph that repeats the word beside it is read twice by a screen reader.
+ * This walker read the props of every node, so the moment the tab strip
+ * gained a glyph per tab, four tests that assert on the strip's LABELS
+ * started comparing against path data: 任务 arrived as
+ * `pxpx nonecurrentColorroundroundtrueM l -M l -...任务`.
+ *
+ * Skipping them is not a workaround for those four. It is what these tests
+ * were always claiming to do — a screen reader skips exactly this subtree,
+ * and so does a reader's eye when it is looking for a word.
+ */
 function textOf(node, out = []) {
   if (node === null || node === undefined || node === false) return out;
   if (typeof node === "string" || typeof node === "number") { out.push(String(node)); return out; }
   if (Array.isArray(node)) { for (const child of node) textOf(child, out); return out; }
   if (typeof node === "object") {
-    for (const value of Object.values(node.props ?? {})) textOf(value, out);
+    const props = node.props ?? {};
+    if (props["aria-hidden"] === "true" || props["aria-hidden"] === true) return out;
+    for (const value of Object.values(props)) textOf(value, out);
     return out;
   }
   return out;
@@ -2097,7 +2114,22 @@ test("the trajectory is one dense row per step, whatever the step was", async ()
   // glyph instead of at whatever weight the row's font happened to render.
   // The GUARANTEE is unchanged — there is a mark between input and output —
   // so this asserts the path rather than deleting the assertion.
-  assert.ok(text.includes("M5 12h14"), "there is no arrow between what went in and what came out");
+  // ON THE PATH, NOT ON THE PROP, AND NOT ON THE TEXT.
+  //
+  // Three layers have to line up here and only one of them is obvious. The
+  // arrow is `Icon name:"arrowRight"`; this harness CALLS function components,
+  // so `Icon` has already run by the time the tree is walked and the `name`
+  // prop does not survive into it — what survives is the `<path d=…>` it
+  // returned. And that path sits inside an `aria-hidden` svg, which `textOf`
+  // now skips, as a screen reader does. So neither the old text assertion nor
+  // the obvious prop assertion can see it.
+  //
+  // The guarantee is unchanged: a mark stands between what went in and what
+  // came out.
+  assert.ok(
+    findAll(view.tree, (node) => typeof node.props?.d === "string" && node.props.d.startsWith("M5 12h14")).length > 0,
+    "there is no arrow between what went in and what came out",
+  );
   // A stage id and an event type are vocabulary this page has words for.
   assert.ok(text.includes("规划"), "a stage row prints its raw step id");
   assert.ok(text.includes("开始运行"), "an event row prints its raw type");
@@ -2591,7 +2623,13 @@ test("a finished pane with nothing in it is a final answer, not a wait", async (
 test("the strip is five panes, and 证据 is not one of them", async () => {
   const { tree } = await render("MissionDetailTabs", {
     pane: "tasks", setPane: () => {}, zh: true,
-    findings: 14, steps: 169, stages: 12, spend: "令牌 412k · 调用 24 次",
+    findings: 14, steps: 169, stages: 12,
+    // THE PROJECTION, NOT A SENTENCE. The strip used to be handed a finished
+    // string; it is handed `cost` itself now, because the component that
+    // knows how much room the figures have is the one that should format
+    // them. A fixture still passing the old prop renders no metrics at all —
+    // which is correct behaviour and a silent test.
+    cost: { tokens: { used: 412000, ceiling: 1500000, ratio: 412000 / 1500000 }, calls: { used: 24 }, byTool: [] },
   });
   assert.equal(findAll(tree, (node) => node.type === "button").length, 5, "the strip is not five panes");
   const text = textOf(tree).join(" ");
@@ -2602,7 +2640,11 @@ test("the strip is five panes, and 证据 is not one of them", async () => {
   // for — is an arrangement on 参考文献 now. Asserted as an ABSENCE so the tab
   // cannot come back without this saying so.
   assert.ok(!text.includes("证据"), "the 证据 pane is back, and with it a third place to read the same finding");
-  assert.ok(text.includes("令牌 412k"), "the spend is not on the tab row");
+  // THE WORD MOVED INTO THE GLYPH'S TITLE. The strip carries a metric cluster
+  // now — a mark, the figure, and its share of the ceiling — so "令牌 412k" as
+  // one run of text is the old sentence, not the new absence. What must stay
+  // true is that the figure is ON the strip.
+  assert.ok(text.includes("412k"), "the spend is not on the tab row");
 });
 
 test("a pane with nothing in it says which nothing", async () => {

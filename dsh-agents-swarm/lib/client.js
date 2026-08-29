@@ -1202,7 +1202,42 @@ window.__ModuleLoader__.load({
 			// of row.
 			globe: "M12 22a10 10 0 100-20 10 10 0 000 20zM2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z",
 			book: "M4 19.5A2.5 2.5 0 016.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z",
-			wrench: "M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.8-3.8a6 6 0 01-8 8l-6.9 6.9a2.1 2.1 0 01-3-3l6.9-6.9a6 6 0 018-8l-3.8 3.8z"
+			wrench: "M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.8-3.8a6 6 0 01-8 8l-6.9 6.9a2.1 2.1 0 01-3-3l6.9-6.9a6 6 0 018-8l-3.8 3.8z",
+			// THE TAB MARKS, and the count is the finding. The page strip draws a
+			// glyph beside every one of its five labels and the mission strip drew
+			// five bare words under it: one product, two tab strips, five marks and
+			// nought. A label alone is read at the speed of reading; the mark is
+			// what makes a strip scannable, which is the same argument the eight
+			// role glyphs above are here on.
+			//
+			// THEY GO IN THIS TABLE AND NOT IN TAB_ICONS, which is the second one
+			// and the reason this note is long. TAB_ICONS holds five entries of
+			// `[jsx("path"…)]` arrays, stroked at 1.7 on a 15px box; this holds
+			// twenty-nine `d` strings stroked at 2 and rendered at ICON's 12, 14 and
+			// 16. A mission tab drawn out of the first would be a hairline lighter
+			// than the count badge sitting beside it. One more row in the table the
+			// Icon primitive already reads costs nothing; a second primitive costs a
+			// weight, and a weight is what a reader sees.
+			//
+			// Each says what its pane HOLDS rather than what it is called, because at
+			// ICON.sm detail dies: ticked rows for a list of tasks, a trace for a
+			// trajectory, a written sheet for the report, a stack for the corpus, a
+			// dial for what the run spent.
+			checklist: "M3 6l2 2 4-4M3 13l2 2 4-4M3 20l2 2 4-4M13 6h8M13 13h8M13 20h8",
+			pulse: "M22 12h-4l-3 9L9 3l-3 9H2",
+			fileText: "M15 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V7zM14 2v6h6M16 13H8M16 17H8M10 9H8",
+			// The SAME drawing as TAB_ICONS' 信源 mark, restated as a `d` string
+			// rather than shared across the two tables: a corpus is a stack on both
+			// strips, and two products' worth of stack is exactly the defect this
+			// table exists to close.
+			layers: "M12 3l9 4.5-9 4.5-9-4.5zM3 12l9 4.5 9-4.5M3 16.5L12 21l9-4.5",
+			gauge: "M3.34 19a10 10 0 1117.32 0M12 14l4.5-4.5",
+			// The strip's own three figures. `clock` is already drawn and is what a
+			// latency takes. The other two are not: a model call is a round trip —
+			// out and back — and tokens are COMPUTE, so a coin here would name the
+			// one quantity this ledger does not meter.
+			chip: "M4 4h16v16H4zM9 9h6v6H9zM12 2v2M12 20v2M2 12h2M20 12h2",
+			exchange: "M8 3L4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4"
 		};
 
 		/**
@@ -1271,6 +1306,24 @@ window.__ModuleLoader__.load({
 		* thing drawn in one shape is a hierarchy that has to be re-read every
 		* time.
 		*
+		* AND SO DOES THE TREATMENT, WHICH IS THE HALF THAT WAS MISSING. The
+		* reference draws three kinds of chip and separates them by how the box is
+		* FILLED, not by hue: a ROLE is a glyph and a word in a BORDERED box on no
+		* fill, a CATEGORY is TINTED WITH NO BORDER, and a MODEL is grey on grey.
+		* Here, thirty-nine of the forty-one `Chip({` sites took one treatment —
+		* tinted AND ringed — so `RoleChip("Researcher")` and
+		* `StageModeChip("综合")` differed by hue alone, and the hue is already
+		* spent saying WHICH role and WHICH mode. The only two chips on the page
+		* that matched the reference were `.swt-tag` and `.swt-evkind`, both
+		* hand-drawn in the trajectory and both tinted with no ring.
+		*
+		* SO: a category carries no ring; `outline` drops the tint and keeps the
+		* ring, and RoleChip is its one caller, the way Callout is `solid`'s; and
+		* the grey-on-grey box is COUNT_CHIP, which was declared already. The
+		* colour still belongs to the role — that is the guard, and a researcher
+		* row must stay tellable from a reviewer's — but it is no longer the only
+		* thing carrying the difference.
+		*
 		* THE COUNT RIDES INSIDE. What the task board had was three sibling
 		* spans in three colours in one cell, with the figure the row exists to
 		* report drawn in `INK.quiet` — decoration weight for the load-bearing
@@ -1289,10 +1342,10 @@ window.__ModuleLoader__.load({
 		* precisely so a long label cannot squash its neighbours — and in a cell
 		* the opposite is true: twelve chips that each sized to their own word
 		* would not be a ruler.
-		* @param props - `{tone, label, icon, count, size, title, solid, pill, onClick, className}`.
+		* @param props - `{tone, label, icon, count, size, title, solid, outline, pill, onClick, className}`.
 		* @param key - React's key, so a chip can be called straight into a list.
 		*/
-		function Chip({ tone, label, icon, count, size, title, solid, pill, onClick, className }, key) {
+		function Chip({ tone, label, icon, count, size, title, solid, outline, pill, onClick, className }, key) {
 			const hue = tone ?? TONE.neutral;
 			// THE DENSE STEP IS THE EXCEPTION NOW, AND IT HAS ONE CALLER. `size`
 			// used to read "sm is the big one", which is why the trajectory asked for
@@ -1328,7 +1381,12 @@ window.__ModuleLoader__.load({
 				borderRadius: RADIUS.sm,
 				background: `rgba(${hue},${TINT.soft})`,
 				color: `rgb(${hue})`,
-				boxShadow: `inset 0 0 0 1px rgba(${hue},${TINT.ring})`,
+				// NO RING. A category is tinted and nothing else, which is what the two
+				// hand-drawn tags in the trajectory have always been — and being tinted
+				// with no border is the only respect in which those two matched the
+				// reference while every real `Chip` did not. The ring is the ROLE's mark
+				// now, through `outline` below, and a STATE keeps its own through
+				// `pillStyle`, where it rides on a round corner that says it twice.
 				whiteSpace: "nowrap"
 			};
 			return jsxs(pressable ? "button" : "span", {
@@ -1354,6 +1412,21 @@ window.__ModuleLoader__.load({
 					// Callout — is 10% over 10% and disappears. `solid` is the
 					// same chip with the tone standing in for the surface, which
 					// is the one case where a tint cannot separate the two.
+					// THE ROLE'S TREATMENT: the ring without the tint. `transparent` and
+					// not SURFACE.base, which would be the reference read too literally —
+					// a white box is a white box on a hovered trajectory row and on every
+					// SURFACE.subtle card, and both of those are grey. Inheriting the
+					// ground gives the reference's look wherever the ground IS white and
+					// disappears everywhere else, while the hue stays on the border, the
+					// glyph and the word — which is what keeps a researcher row tellable
+					// from a reviewer's, the one thing the role palette exists for.
+					//
+					// BEFORE `solid`, so `solid` still wins if a caller ever passes both:
+					// Callout's header chip sits on a surface of its own tone and has to
+					// stay solid whatever else is asked for.
+					...(outline === true
+						? { background: "transparent", boxShadow: `inset 0 0 0 1px rgba(${hue},${TINT.ring})` }
+						: {}),
 					...(solid === true
 						? { background: `rgba(${hue},${TINT.fill})`, color: SURFACE.base, boxShadow: "none" }
 						: {}),
@@ -1450,6 +1523,13 @@ window.__ModuleLoader__.load({
 				icon: glyph,
 				label: iconOnly === true ? undefined : word,
 				size,
+				// BORDERED, NOT TINTED, and this one prop is what makes a role chip a
+				// role chip. Every chip on this page was a tinted box, so the only thing
+				// separating "Researcher" from "维度规划" was which hue — and the hue is
+				// already answering a different question. The reference spends the
+				// TREATMENT on the kind and the COLOUR on the instance; we were spending
+				// the colour on both and the treatment on nothing.
+				outline: true,
 				// The raw id, always, even when the chip is showing the word: it is
 				// the string a log grep uses and the string the trajectory's search
 				// box matches, and it must stay reachable from the pixels.
@@ -13567,7 +13647,116 @@ window.__ModuleLoader__.load({
 			});
 		}
 
-		function MissionDetailTabs({ pane, setPane, zh, findings, steps, stages, spend }) {
+		/**
+		* The three figures the strip carries on its right, and where each is read.
+		*
+		* THE MEASUREMENT. The strip carried ONE: a pre-formatted `调用 N 次`,
+		* drawn at FONT.micro on INK.quiet — 11px on `label-tertiary`, which INK's
+		* own docblock puts at 3.71:1 and reserves for a unit suffix and a row
+		* ordinal. It is the only figure on the mission screen that is not inside a
+		* pane, and it was the smallest, faintest thing in the row.
+		*
+		* WHERE THE OTHER TWO WERE. Both were already projected and both cost a
+		* click on 成本 to read:
+		*   令牌  `cost.tokens` — the SAME meter MissionCostMeters grades, so the
+		*         share here and the bar there cannot drift apart. `ratio` is null
+		*         when the mission row froze no ceiling; `meter()` returns null
+		*         rather than 0 precisely so an unset limit cannot read as "plenty
+		*         left", and the share is then not printed at all.
+		*   调用  `cost.calls.used`, which is `mission_spend.calls`: MODEL calls,
+		*         not tool calls. The glyph's title says which, for the same reason
+		*         the stage drawer's fourth tile spells it out.
+		*   延迟  the mean over `cost.byTool`, weighted by MEASURED calls —
+		*         sum of `latencyMs` over sum of `latencyMeasured`, never over
+		*         `calls`. The projection keeps those two columns apart for exactly
+		*         this division: dividing by `calls` reports a door nobody timed as
+		*         instant. `missionLatency` does the formatting, so 93ms here and
+		*         93ms in the tool table are one function's answer.
+		*
+		* NOTHING IS DASHED. A figure with no source is dropped from the row, so a
+		* mission whose tools were never timed shows two metrics and not a third
+		* reading `—ms`, which is a measurement of nothing standing where a
+		* measurement goes.
+		* @param props - `{cost, zh}`; `cost` is the view route's cost projection.
+		*/
+		function MissionTabMetrics({ cost, zh }) {
+			if (cost === null || cost === undefined) return null;
+			const items = [];
+			const tokens = cost.tokens ?? null;
+			if (tokens !== null) {
+				const share = tokens.ratio === null || tokens.ratio === undefined
+					? "" : `${Math.round(tokens.ratio * 100)}%`;
+				items.push({
+					id: "tokens", icon: "chip", title: zh ? "令牌" : "Tokens",
+					value: missionCompact(tokens.used ?? 0),
+					// GRADED ON THE LADDER THE SIX CEILING METERS READ, through
+					// the one function that owns it — not a second copy of 0.9
+					// and 0.7 typed up here, which is the copy nobody edits.
+					share, shareTone: share === "" ? null : missionLadderHue(tokens.ratio, cost.ladder)
+				});
+			}
+			const calls = cost.calls ?? null;
+			if (calls !== null) {
+				items.push({
+					id: "calls", icon: "exchange", title: zh ? "模型调用" : "Model calls",
+					value: String(calls.used ?? 0), share: "", shareTone: null
+				});
+			}
+			// SUMMED, THEN DIVIDED — not a mean of the per-tool means. Averaging
+			// `avgLatencyMs` across the rows weights a tool called twice the same
+			// as one called four hundred times, which is how a single slow lookup
+			// becomes the mission's headline latency.
+			let latencyMs = 0;
+			let measured = 0;
+			for (const row of (Array.isArray(cost.byTool) ? cost.byTool : [])) {
+				latencyMs += Number(row.latencyMs) || 0;
+				measured += Number(row.latencyMeasured) || 0;
+			}
+			const latency = measured > 0 ? missionLatency(Math.round(latencyMs / measured), zh) : "";
+			if (latency !== "") {
+				items.push({
+					id: "latency", icon: "clock", title: zh ? "平均延迟" : "Mean latency",
+					value: latency, share: "", shareTone: null
+				});
+			}
+			if (items.length === 0) return null;
+			return jsx("div", {
+				// `paddingBottom` MATCHES THE TAB'S OWN 10px so the figures sit on
+				// the labels' baseline rather than on their optical centre — the
+				// same alignment the one spend span was carrying, kept.
+				style: {
+					display: "flex", alignItems: "center", gap: SPACE.lg,
+					flex: "none", paddingBottom: "10px"
+				},
+				children: items.map((item) => jsxs("span", {
+					// THE MARK MAY BE QUIET; THE FIGURE MAY NOT. A glyph is
+					// decoration and INK.quiet is the decoration budget — but these
+					// are the two numbers a person opens this screen to read, so
+					// they come off 11px/tertiary and onto 12px/secondary. `font`
+					// FIRST, then the family and the figures: the shorthand resets
+					// both, which is COUNT_CHIP's note one region up.
+					style: {
+						font: FONT.small, fontFamily: MONO, fontVariantNumeric: "tabular-nums",
+						display: "inline-flex", alignItems: "center", gap: SPACE.xs,
+						color: INK.secondary
+					},
+					children: [
+						// `title` IS NOT DECORATION HERE. Every other Icon on this
+						// screen sits beside the word it marks and is correctly
+						// aria-hidden; these three replace the word, so a reader
+						// who cannot see the glyph gets three bare numbers.
+						jsx(Icon, { name: item.icon, size: ICON.sm, title: item.title }, "glyph"),
+						jsx("span", { children: item.value }, "value"),
+						item.share === "" ? null : jsx("span", {
+							style: { color: `rgb(${item.shareTone})` },
+							children: item.share
+						}, "share")
+					]
+				}, item.id))
+			});
+		}
+
+		function MissionDetailTabs({ pane, setPane, zh, findings, steps, stages, cost }) {
 			// The set gens.team's playground arrived at for the same object, and
 			// it is taken rather than re-derived: 任务列表 · 协作动态 · 输出报告 ·
 			// 参考文献 · 图谱分析 · 算力消耗. Two of those were folded into an
@@ -13583,14 +13772,18 @@ window.__ModuleLoader__.load({
 			// unreliable, and "还没有生成报告" is a better answer than a missing tab —
 			// it says the mission has not written one yet, which a gap cannot.
 			const panes = [
-				{ id: "tasks", label: zh ? "任务" : "Tasks", count: stages },
-				{ id: "trace", label: zh ? "轨迹" : "Trajectory", count: steps },
-				{ id: "report", label: zh ? "报告" : "Report", count: null },
+				// THE MARK IS PART OF THE PANE RECORD, not of the render. A strip
+				// that maps `entry.id` onto a glyph in a second table two hundred
+				// lines away is a strip where adding a pane silently adds a tab with
+				// a hole in it — `Icon` answers null for a name nobody drew.
+				{ id: "tasks", label: zh ? "任务" : "Tasks", count: stages, icon: "checklist" },
+				{ id: "trace", label: zh ? "轨迹" : "Trajectory", count: steps, icon: "pulse" },
+				{ id: "report", label: zh ? "报告" : "Report", count: null, icon: "fileText" },
 				// The findings count rides on 参考文献 now. It was the evidence
 				// tab's count and it is still the same number — what was read is
 				// what produced them — so losing the tab must not lose the figure.
-				{ id: "sources", label: zh ? "参考文献" : "References", count: findings },
-				{ id: "cost", label: zh ? "成本" : "Cost", count: null }
+				{ id: "sources", label: zh ? "参考文献" : "References", count: findings, icon: "layers" },
+				{ id: "cost", label: zh ? "成本" : "Cost", count: null, icon: "gauge" }
 			];
 			// THE THIRD TAB VOCABULARY, RETIRED. This strip was a segmented pill
 			// track — a `fill-tertiary` rail, a raised thumb, `aria-pressed` — one
@@ -13631,6 +13824,12 @@ window.__ModuleLoader__.load({
 							color: on ? "var(--dsw-alias-state-business-primary)" : INK.secondary
 						},
 						children: [
+							// THE MARK, THEN THE WORD, THEN THE COUNT. The button's own
+							// `gap: SPACE.xs` already spaces the three, so nothing here
+							// sets a margin of its own. ICON.sm — 14px — is the size that
+							// sits at the 13px label's cap height; ICON.md beside a 13px
+							// word is a mark that out-weighs the word it marks.
+							jsx(Icon, { name: entry.icon, size: ICON.sm }, "glyph"),
 							jsx("span", { children: entry.label }, "label"),
 							// A BADGE, not grey text. "6" beside a pane name in
 							// `INK.quiet` reads as an artefact of the label rather
@@ -13668,12 +13867,12 @@ window.__ModuleLoader__.load({
 				},
 				children: [
 					strip,
-					(spend ?? "") === "" ? null : jsx("span", {
-						style: { font: FONT.micro, fontFamily: MONO, fontVariantNumeric: "tabular-nums",
-							flex: "none", paddingBottom: "10px", color: INK.quiet
-						},
-						children: spend
-					}, "spend")
+					// THREE FIGURES, NOT ONE SENTENCE. What hung off the end of the
+					// rule was `调用 N 次` — one number, formatted a screen away, in
+					// the weight this file reserves for a timestamp. The component
+					// that owns the room the figures have is the component that
+					// decides how many of them fit and which one has no source.
+					jsx(MissionTabMetrics, { cost, zh }, "metrics")
 				]
 			});
 		}
@@ -13932,13 +14131,17 @@ window.__ModuleLoader__.load({
 					: ""
 			].filter((piece) => piece !== "").join(" · ");
 
-			// WHAT IS LEFT of the strip's spend line. Tokens and the score moved
-			// up into the tiles, four inches higher and in the same viewport, so
-			// keeping them here as well would be the same two figures twice on
-			// one screen. Calls is the one spend figure with no tile — a tile for
-			// it would be a fifth column of the same fact the token tile already
-			// carries a ceiling for — and the strip is where it already lived.
-			const spend = zh ? `调用 ${view.cost?.calls?.used ?? 0} 次` : `${view.cost?.calls?.used ?? 0} calls`;
+			// THE STRIP'S FIGURES BELONG TO THE STRIP. A `调用 N 次` string was
+			// built here and handed down, and the note that stood in its place
+			// argued that tokens must not repeat on the strip because they were up
+			// in the header tiles.
+			//
+			// MEASURED: THEY ARE NOT. `statTiles` is declared in this function and
+			// rendered by nothing — one occurrence of the name in eighteen thousand
+			// lines, its own declaration — so the token figure this screen exists to
+			// report is reachable only by opening 成本. The argument outlived the
+			// tiles it was about. If those tiles are ever mounted again, the strip's
+			// token metric is the copy that goes, not this reasoning.
 
 			// THE FOUR FIGURES A PERSON OPENS THIS SCREEN FOR. Every one of them
 			// was inside a dot-joined string: two in the meta line above and two
@@ -14321,7 +14524,11 @@ window.__ModuleLoader__.load({
 											findings: evidence.total ?? 0,
 											steps: view.timeline?.lastEventSeq ?? null,
 											stages: (view.stages ?? []).length,
-											spend
+											// THE PROJECTION, NOT A SENTENCE ABOUT IT. The strip was
+											// handed a finished string, so the one component that
+											// knows how much room the figures have could not grade
+											// them, could not align them and could not drop one.
+											cost: view.cost ?? null
 										}, "panes"),
 
 										// THE ONE SCROLLER on this screen. Everything above it stays put.

@@ -237,13 +237,30 @@ test("radii and icon sizes stay countable", () => {
 test("raw style values only ever decrease", () => {
   // Measured 2026-08-26, the day FONT/SPACE/RADIUS/ICON landed. Lower these in
   // the commit that migrates a batch; never raise one.
-  const ceiling = { fontSize: 0, fontWeight: 9, lineHeight: 5, borderRadius: 0, gap: 5 };
+  const ceiling = { fontSize: 0, fontWeight: 9, lineHeight: 5, borderRadius: 0, gap: 5, padding: 128, height: 19 };
   const counted = {
     fontSize: [...SOURCE.matchAll(/fontSize: "\d+px"/g)].length,
     fontWeight: [...SOURCE.matchAll(/fontWeight: \d+/g)].length,
     lineHeight: [...SOURCE.matchAll(/lineHeight: "[^"]+"/g)].length,
     borderRadius: [...SOURCE.matchAll(/borderRadius: "[^"]+"/g)].length,
     gap: [...SOURCE.matchAll(/gap: "[^"]+"/g)].length,
+    // PADDING WAS THE HOLE IN THIS RATCHET, AND IT IS THE LARGEST ONE IN THE
+    // FILE. Counted the day this line was written: `gap` is a SPACE step at 193
+    // of its 198 sites — 97% — while 128 paddings still hard-code a pixel, and
+    // twenty of those are off the four-pixel grid entirely (9px 13px, 10px 13px,
+    // 11px 13px, 11px 14px). Air lives in padding. Five rounds of design work
+    // could change the density of every screen in this tab without moving a
+    // number anybody was watching, which is exactly what happened.
+    //
+    // THE TEMPLATE FORM COUNTS TOO. `padding: `10px ${SPACE.sm}`` is half a
+    // token and reads on the page as a whole one — it was the vertical air on
+    // all six tables and it was invisible to a quoted-string counter.
+    padding: [...SOURCE.matchAll(/padding(?:Top|Bottom|Left|Right)?: (?:"[^"]*\d+px[^"]*"|`[^`]*\d+px[^`]*`)/g)].length,
+    // AND A PINNED BOX HEIGHT, for the same reason one property over. TH wrote
+    // `height: "30px"` and TD wrote `minHeight: "30px"`, and both are the claim
+    // TD's own docblock refuses: a box is as tall as what it has to say plus its
+    // air. CONTROL exists for the boxes that genuinely are a fixed size.
+    height: [...SOURCE.matchAll(/height: "\d+px"/g)].length,
   };
   for (const [key, limit] of Object.entries(ceiling)) {
     assert.ok(
@@ -1533,12 +1550,29 @@ test("no figure on the mission header is stated twice", () => {
     "the dimension and chapter fractions were deleted along with the stage one, and nothing else on this screen carries them",
   );
 
-  const spendAt = detail.indexOf("const spend =");
-  const spend = detail.slice(spendAt, detail.indexOf(";", spendAt));
-  assert.ok(spendAt !== -1, "the tab strip's spend line is gone entirely, prop and all");
+  // THE PROJECTION, NOT A SENTENCE ABOUT IT. This used to read a local called
+  // `spend` that MissionDetail built as a finished string. The strip is handed
+  // `cost` itself now — the component that knows how much room the figures have
+  // is the one that should format them — so the guard reads the prop, and the
+  // rule it exists for moves to the component that draws them.
   assert.ok(
-    !spend.includes("missionCompact"),
-    "the token count is back on the tab strip as well as in a tile, four inches apart in the same viewport",
+    detail.includes("cost: view.cost"),
+    "the tab strip is no longer handed the spend at all, so the one figure a reader wants on every pane is a click away again",
+  );
+  const spend = code(body("function MissionTabMetrics("));
+
+  // THIS RULE CHANGED, DELIBERATELY, AND THE REVERSAL IS THE POINT.
+  //
+  // It used to forbid the token figure appearing on the strip at all, on the
+  // grounds that the 成本 pane owns it and the same number twice in one viewport
+  // is the reader checking whether they are the same number. The reference puts
+  // it in both places, and having built it the reason is clear: they are not the
+  // same statement. The strip says "412k, 27% of what this run may spend" — a
+  // headline with a ceiling — and the pane says how it was spent. What must not
+  // come back is the BARE figure, which really would be the tile repeated.
+  assert.ok(
+    spend.includes("ratio") && spend.includes("missionLadderHue"),
+    "the strip prints the token figure with no share of the ceiling beside it, which is the cost tile's statement repeated rather than a headline",
   );
   assert.ok(!spend.includes("mission.score"), "the score is back on the tab strip as well as in a tile");
 });
@@ -5412,4 +5446,158 @@ test("the two table recipes indent to the same column, and neither pins a height
     !/height: "[0-9]+px"/i.test(declared(cell) + declared(head)),
     "a table cell pins a pixel height again, which crushes the two-line name cell back into something the eye reads as one line",
   );
+});
+
+test("three kinds of chip, three treatments, and the treatment is what separates them", () => {
+  // The reference tells a ROLE from a CATEGORY from a MODEL by how the box is
+  // FILLED: a role is a glyph and a word in a bordered box on no fill, a
+  // category is tinted with no border, a model is grey on grey. Here,
+  // thirty-nine of the forty-one `Chip({` sites took ONE treatment — tinted AND
+  // ringed — so "Researcher" and "维度规划" differed by hue alone, and the hue is
+  // already spent saying which role and which category. The only two chips on
+  // the page that matched the reference were `.swt-tag` and `.swt-evkind`, both
+  // hand-drawn in the trajectory and both tinted with no ring.
+  const chip = code(body("function Chip("));
+  const shape = chip.slice(chip.indexOf("const shape ="), chip.indexOf("return jsxs("));
+  assert.ok(shape.length > 0, "Chip no longer builds a `shape` before it returns, so nothing here can be read off it");
+  assert.ok(
+    !shape.includes("boxShadow"),
+    "the category chip has its ring back, and a category with a ring is a role with a different hue — which is exactly the distinction the reference spends the treatment on",
+  );
+  // THE ROLE KEEPS THE RING AND LOSES THE TINT, and `outline` is how.
+  assert.match(
+    chip,
+    /outline === true/,
+    "Chip has no outline treatment, so nothing on the page is drawn the way the reference draws a role",
+  );
+  assert.match(
+    chip,
+    /background: "transparent", boxShadow: `inset 0 0 0 1px rgba\(\$\{hue\},\$\{TINT\.ring\}\)`/,
+    "the outlined chip either paints a ground of its own or draws no ring; the reference's role chip is a hue-coloured border over whatever is behind it",
+  );
+  // WITH EXACTLY ONE CALLER, which is the rule this file writes down four times.
+  // `solid` has one caller (Callout) and this has one (RoleChip); a second is
+  // the moment the treatment stops meaning "this is a role".
+  const role = code(body("function RoleChip("));
+  assert.match(
+    role,
+    /outline: true/,
+    "RoleChip is tinted like everything else again, so who did it and what kind of thing it is are drawn identically",
+  );
+  assert.equal(
+    SOURCE.split("outline: true").length - 1,
+    1,
+    "the outline treatment has no caller, or more than the one it means — a second caller is the point at which it stops saying ROLE",
+  );
+});
+
+test("the strip's metrics are measured figures, and an unmeasured one is dropped", () => {
+	// Three figures on the strip, each read from the projection that already
+	// computes it. The reference puts a token count with its share of budget, a
+	// count and a latency there; ours had one call count at 11px in the
+	// decoration weight, and the other two cost a click on 成本.
+	const metrics = code(body("function MissionTabMetrics("));
+	for (const source of ["cost.tokens", "cost.calls", "cost.byTool"]) {
+		assert.ok(
+			metrics.includes(source),
+			`the strip stopped reading ${source}. A figure on this row is read from the projection or it is invented, and there is no third option`,
+		);
+	}
+	assert.ok(
+		metrics.includes("latencyMeasured"),
+		"the mean latency divides by calls rather than by the calls the ledger actually timed. `mission_tool_calls.latency_ms` is NOT NULL DEFAULT 0, so every untimed call drags the mean towards instant",
+	);
+	assert.ok(
+		metrics.includes("measured > 0"),
+		"a mission whose tools were never timed prints a latency anyway. A figure with no source is dropped from the row, never dashed",
+	);
+	assert.ok(
+		metrics.includes("missionLatency("),
+		"the strip formats its own milliseconds. `missionLatency` is what the tool table reads, and two formatters is how 93ms here becomes 0.1s there",
+	);
+	assert.ok(
+		/ratio === null/.test(metrics),
+		"a mission whose row froze no token ceiling prints a share of a limit it does not have. `meter()` answers null instead of 0 for exactly this reason",
+	);
+	assert.ok(
+		metrics.includes("missionLadderHue"),
+		"the token share grades itself. Six ceiling meters and the header read one ladder; this would be the copy nobody edits",
+	);
+	assert.ok(
+		!metrics.includes("font: FONT.micro"),
+		"the strip's figures are back at 11px, which INK's own docblock budgets at 3.71:1 for a unit suffix — not for the two numbers this screen exists to report",
+	);
+});
+
+test("the tab strip is handed the projection, not a sentence about it", () => {
+	assert.ok(
+		!code(SOURCE).includes("const spend = zh ?"),
+		"the strip is fed a pre-formatted `调用 N 次` again. A component handed a finished sentence cannot grade a figure inside it, cannot align it and cannot drop the one with no source",
+	);
+	assert.ok(
+		body("function MissionDetailTabs(").includes("MissionTabMetrics"),
+		"the strip draws its own figures inline again, which is where the third one — the one that is null on a mission nobody timed — gets a dash instead of an absence",
+	);
+	assert.ok(
+		/function MissionDetailTabs\(\{[^}]*cost[^}]*\}/.test(SOURCE),
+		"MissionDetailTabs takes no cost projection, so whatever stands on the right of its rule was formatted somewhere it cannot see",
+	);
+});
+
+test("every mission tab is a glyph and a label, out of the one glyph table", () => {
+	// The page strip has drawn a mark beside each of its five labels since
+	// TAB_ICONS landed. The mission strip — the one a reader moves along ten
+	// times a session — drew five bare words under it, and the two strips are
+	// forty pixels apart on the same screen.
+	const strip = body("function MissionDetailTabs(");
+	const at = strip.indexOf("const panes = [");
+	assert.notEqual(at, -1, "the mission strip no longer declares its panes as a table");
+	const panes = strip.slice(at, strip.indexOf("\n\t\t\t];", at));
+	const ids = [...panes.matchAll(/id: "([a-z]+)"/g)].map((match) => match[1]);
+	const marks = [...panes.matchAll(/icon: "([A-Za-z]+)"/g)].map((match) => match[1]);
+	assert.ok(ids.length >= 5, `the strip declares ${ids.length} panes; it had five`);
+	assert.equal(
+		marks.length,
+		ids.length,
+		`${ids.length} panes and ${marks.length} marks. A strip where some tabs carry a glyph and some do not is read as two kinds of tab, which is worse than none carrying one`,
+	);
+	assert.equal(
+		new Set(marks).size,
+		marks.length,
+		"two panes share one mark. A mark that names two panes is the single thing a mark on a six-tab strip cannot do",
+	);
+	for (const mark of marks) {
+		assert.ok(
+			SOURCE.includes(`\n\t\t\t${mark}: "M`),
+			`\`${mark}\` is named by a tab and drawn in no table. Icon renders an unknown name as null, so the tab loses its glyph silently instead of throwing — the gap is the only symptom`,
+		);
+	}
+	assert.ok(
+		code(strip).includes("jsx(Icon, { name: entry.icon"),
+		"the tab draws a fixed mark rather than its pane's. A glyph that does not come off the pane record is decoration, and a sixth pane would inherit the fifth's",
+	);
+});
+
+test("the ratchet counts the property air is made of", () => {
+  // A RATCHET IS ONLY A RATCHET FOR WHAT IT COUNTS, and this one held five
+  // properties, none of which was the one that decides how the page breathes.
+  // `fontSize` and `borderRadius` were driven to zero and stayed there because
+  // they were watched; `padding` sat at 129 hard-coded pixels across the same
+  // file and nothing said a word. Deleting a key from the ceiling is a silent
+  // way to unwatch a property, so the keys themselves are asserted here rather
+  // than left to whoever edits the object next.
+  //
+  // IT READS ITS OWN SOURCE. Every other guard in this file reads
+  // lib/client.js; this one is about the guard, so the file it opens is this
+  // one.
+  const SELF = readFileSync(fileURLToPath(import.meta.url), "utf8");
+  const ceiling = /const ceiling = \{([^}]+)\}/.exec(SELF);
+  assert.ok(ceiling, "the ratchet's ceiling is gone, so nothing holds any raw-value count down");
+  for (const key of ["fontSize", "fontWeight", "lineHeight", "borderRadius", "gap", "padding", "height"]) {
+    assert.match(
+      ceiling[1],
+      new RegExp(`\\b${key}: \\d+`),
+      `the ratchet stopped counting \`${key}\`. Unwatching a property is not the same as fixing it, and the two look identical from a passing test run`,
+    );
+  }
 });
