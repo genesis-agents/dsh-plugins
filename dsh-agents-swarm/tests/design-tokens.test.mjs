@@ -1835,9 +1835,20 @@ test("the stage drawer shows what the step did, not only what it is", () => {
     drawer.includes("value: started ? String(stage.calls) : null"),
     "`calls` is attached to every stage by the projector and reaches no pixel again: the drawer says a step took four minutes and not that it took eleven model calls to do it",
   );
+  // ONE RENDERER, NOW THROUGH ONE HOP. The invariant is unchanged and it is
+  // the reason this assertion exists: the drawer must not grow a row shape of
+  // its own. It reaches `MissionTraceRow` through `MissionRail` rather than
+  // directly, so the guard follows the hop instead of asserting the old
+  // spelling — asserting the spelling would have failed a file that still
+  // satisfies the rule, and passing the rail through without checking what it
+  // mounts would satisfy the spelling while a second renderer hid inside it.
   assert.ok(
-    drawer.includes("jsx(MissionTraceRow, {"),
-    "the drawer draws its own row shape, which is a second renderer for a row the trajectory pane already renders — they drift the moment one gains a field",
+    drawer.includes("MissionRail({"),
+    "the drawer stopped drawing its step as a sequence and went back to a stack, in a 672px drawer where the row's two elastic columns are 95px and 47px wide",
+  );
+  assert.ok(
+    code(body("function MissionRail(")).includes("jsx(MissionTraceRow, {"),
+    "the rail draws its own row shape, which is a second renderer for a row the trajectory pane already renders — they drift the moment one gains a field",
   );
   assert.match(
     drawer,
@@ -4574,4 +4585,161 @@ test("a permanent tile is never a permanent dash", () => {
     "the pages-read tile draws a dash instead of standing down, so every assessed mission carries a hole in its figure strip",
   );
   assert.ok(!drawer.includes("pagesFetched ?? 0"), "an absent page count is coerced to zero, which reports 'read nothing' for 'never recorded'");
+});
+
+test("a step's rows are a sequence, and one row is not one", () => {
+  // THE COMPLAINT UNDERNEATH: the stage drawer reused the trajectory's row,
+  // which is right, inside a container the row was never measured for. That
+  // row is eight FIXED columns — 24 + 64 + 96 + 132 + 12 + 72, seven 12px gaps
+  // and 18px of padding, 502px before a character of content. `.swt-drawer` is
+  // capped at 672 and the section is inset 14, so the two ELASTIC columns
+  // share 142px: the arguments get ~95px and the result ~47px. The two columns
+  // that answer "what did this step actually do" are the two that vanish.
+  assert.ok(SOURCE.includes("function MissionRail("), "the rail is gone and a stage's steps are a flat stack again");
+  const rail = code(body("function MissionRail("));
+
+  // THE SPINE IS THE CONTAINER'S, and it is the whole difference between a
+  // sequence and a stack. A per-card left border draws the line through the
+  // first dot and past the last one instead of between them.
+  const spine = TRACE_RULES.split("\n").find((line) => line.includes(".swt-rail:before{"));
+  assert.ok(spine, "the rail has no spine, so its dots are bullets");
+  assert.ok(spine.includes('content:""'), "the spine is not a pseudo-element, so it is a border on something");
+
+  // ONE END. A lone card beside 12px of hairline is a rule that reaches
+  // nothing, and there is nothing for it to connect.
+  assert.ok(rail.includes("list.length === 1"), "a single-row step still draws a spine between it and nothing");
+  assert.ok(
+    TRACE_RULES.includes('.swt-rail[data-solo="true"]:before{display:none}'),
+    "the solo attribute is set and never read, so switching the spine off does nothing",
+  );
+
+  // THE OTHER END. Two hundred cards at their natural height is a scroll
+  // nobody can use; `clampBox` is this file's one three-property spell for
+  // capping lines and the whole string stays reachable on the hover.
+  const row = code(body("function MissionTraceRow("));
+  const branch = row.slice(row.indexOf("if (rail === true) {"));
+  assert.ok(branch.length > 0, "the rail layout is gone from the row, so the rail has nothing to draw");
+  assert.ok(branch.includes("clampBox("), "the rail's text boxes are uncapped, so one long payload is the whole drawer");
+  assert.ok(branch.includes("title: said"), "a clamped box with no title is a truncation the reader cannot get past");
+  // AND IT WINDOWS NOTHING. A second cap here is a second answer to "is this
+  // all of it", and the caller already prints the one the route gave it.
+  assert.ok(!rail.includes(".slice("), "the rail caps its own list, so it and MISSION_STAGE_TRACE_TAKE can disagree about how much was withheld");
+
+  // A SECOND LAYOUT, NOT A SECOND RENDERER. Every field either shape draws is
+  // derived ABOVE the branch, once — which is what makes "one renderer" a
+  // property of the source rather than a promise in a comment.
+  for (const derived of ["const name =", "const kindHue =", "const verdict =", "const took =", "const band ="]) {
+    const at = row.indexOf(derived);
+    assert.ok(at !== -1, `${derived} is gone from the row`);
+    assert.ok(at < row.indexOf("if (rail === true) {"), `${derived} is computed inside one layout, so the other one has its own copy`);
+  }
+  // AND THE BAND IS DRAWN FROM THAT ONE COPY. `MISSION_WARN_MS`'s own docblock
+  // is about two screens disagreeing over what slow means; two branches of one
+  // component is the same defect at closer range.
+  assert.equal(
+    row.split("MISSION_SLOW_MS").length - 1,
+    1,
+    "the slow threshold is read in more than one place inside one row component",
+  );
+
+  // THE OFFSET IS NOT COMPUTED A SECOND TIME. `missionSince` against the
+  // anchor the caller was handed is this file's one answer to "how far in";
+  // subtraction anywhere in this component is a second one.
+  assert.ok(!row.includes("Date.parse("), "the row parses instants itself, which is a second derivation of the offset missionSince already owns");
+  assert.ok(branch.includes("missionSince(row.at, anchor, zh)"), "the rail prints a wall clock only, so `how far into the run` is subtraction done by hand");
+  assert.ok(
+    branch.indexOf("missionSince(") < branch.indexOf("missionClock("),
+    "the rail prints the clock before the offset; the flex row and the event stream both print the offset first, and a shape that reorders the facts is a second screen to learn",
+  );
+
+  // AND THE CARD IS NOT A BOX AT REST. Same rule the list rows already carry:
+  // separation costs a line, not a fill, or twenty cards down a drawer is the
+  // "hundred grey cards" complaint again.
+  const card = TRACE_RULES.split("\n").find((line) => line.includes(".swt-ev{"));
+  assert.ok(card, "the rail card lost its rule");
+  assert.ok(card.includes("background:transparent"), "the rail card paints a ground, so a step reads as a stack of grey boxes");
+  assert.ok(card.includes("border:1px solid transparent"), "the card's hover border is added rather than coloured, so every row shifts a pixel under the pointer");
+});
+
+test("a section that folds still says how much is inside it", () => {
+  const panel = code(body("function MissionPanel("));
+  const signature = /function MissionPanel\(\{([^}]+)\}/.exec(SOURCE);
+  assert.ok(signature, "MissionPanel no longer destructures its props");
+  assert.ok(signature[1].includes("collapsible"), "the panel cannot fold, so the drawer's twenty rail cards push four blocks below the fold with no way to shut them");
+  // A PROP WITH A CALLER, which is the rule that kept it out until now. The
+  // docblock's sentence is about WHEN, not whether.
+  assert.ok(code(SOURCE).includes("collapsible: true"), "`collapsible` is declared and nothing passes it, which is the next geometry rather than a feature");
+  assert.ok(!signature[1].includes("defaultOpen"), "`defaultOpen` came in beside it with no caller; a section that arrives shut is a section the reader has to discover");
+  assert.ok(panel.includes("useState(true)"), "the panel starts folded, so the step's rows are hidden from a reader who never asked for them to be");
+
+  // THE FOLD NEEDS A HANDLE, AND THE HANDLE IS THE HEADING. A panel with a
+  // count and an action but no title has nothing to press.
+  assert.match(
+    panel,
+    /const folds = collapsible === true && title !== undefined/,
+    "a title-less panel can be asked to fold, which draws a chevron beside a number with nothing naming what it shuts",
+  );
+  assert.ok(panel.includes('name: open ? "chevronDown" : "chevronRight"'), "the chevron does not turn, so the control says nothing about which way it is");
+  assert.ok(panel.includes('"aria-expanded": open'), "the fold's state reaches the pixels and not the accessibility tree");
+
+  // THE COUNT SURVIVES THE FOLD, and that is the only reason folding is not
+  // hiding: shut, the heading still answers "how much is in there". Positional,
+  // because the count is a sibling in the header bar and the body is what the
+  // fold gates — moving the badge inside the fold is the regression.
+  const head = panel.indexOf('}, "head")');
+  const gate = panel.indexOf("folds && !open");
+  assert.ok(gate !== -1, "nothing is gated on the fold, so the chevron is decoration");
+  assert.ok(head < gate, "the count is inside the folded region, so a shut section says nothing about what it is holding");
+  assert.match(panel, /folds && !open \? null : jsx\("div", \{ children \}/, "the body is hidden rather than dropped, so twenty subtrees are still reconciled on every poll of the screen above them");
+
+  // AND THE DRAWER PASSES A COUNT THAT IS A MEASUREMENT. Nought before the
+  // rows are in is a number nobody took — the same distinction the three
+  // states under it draw in words.
+  const drawer = code(body("function MissionStageDetail("));
+  assert.ok(!drawer.includes('"didHead"'), "the section heading is a loose paragraph again, so the count has nowhere to sit and the block cannot fold");
+  assert.ok(
+    drawer.includes("count: steps === null ? undefined : steps.length"),
+    "the drawer prints 0 while the read is still out, which says the step did nothing and is a claim the page has not checked",
+  );
+});
+
+test("the rail is the only thing that draws a step's rows", () => {
+  // THE MUTATION THAT SURVIVED, AND WHY IT MATTERED. The rail guard asserts
+  // `drawer.includes("MissionRail({")`, which stays true when the flat stack
+  // is put back IN FRONT of it:
+  //
+  //   : steps.map((row) => jsx(MissionTraceRow, {…})) || MissionRail({…})
+  //
+  // The rail is still named, still in the source, and never renders. A guard
+  // that a dead tail satisfies is a guard on a string, not on behaviour —
+  // which is exactly the class of hole this file's mutation runs exist for,
+  // and it took an audit's own mutation to find this one.
+  const drawer = code(body("function MissionStageDetail("));
+  assert.ok(drawer.includes("MissionRail({"), "the stage drawer stopped using the rail");
+  assert.ok(
+    !/jsx\(MissionTraceRow,/.test(drawer),
+    "the stage drawer renders trajectory rows directly again; the rail is what places them in a sequence, and a second renderer beside it means whichever comes first wins",
+  );
+});
+
+test("the drawer has one heading device, and it is MissionPanel", () => {
+  // The audit proposed a `TraceSectionHead` — "a title, a count badge and a
+  // right-hand context". That component already exists: MissionPanel's
+  // docblock opens "A section heading that is actually a header: a rule, a
+  // count and a slot for whatever the panel wants on the right", its
+  // signature already takes `count` and `action`, and `bare` exists precisely
+  // so a panel inside a drawer drops the card and keeps the heading.
+  //
+  // So the class was retired instead of a fourth one added. `.swt-secthead`
+  // was a hand-rolled `p` with a font-weight, and it was the third heading
+  // device in one drawer.
+  // `code(SOURCE)`, NOT `SOURCE`. Two comments in the drawer record that the
+  // class was retired and why, and a guard that reads the prose is a guard
+  // that fires on its own explanation — the third time in this file that a
+  // check has matched the sentence describing the thing instead of the thing.
+  assert.ok(!code(SOURCE).includes("swt-secthead"), "`.swt-secthead` is back: a hand-rolled heading beside MissionPanel, which is the component it duplicates");
+  assert.ok(!SOURCE.includes("TraceSectionHead"), "a second section-heading component exists beside MissionPanel");
+  // The one call site it had reads as a panel now, with its amber quote inside.
+  const drawer = code(body("function MissionStageDetail("));
+  assert.match(drawer, /MissionPanel\(\{\s*\n?\s*bare: true,\s*\n?\s*title: zh \? "降级说明"/, "the degradation note lost its heading, so the sentence a degraded stage wrote about itself is an unlabelled amber block");
 });

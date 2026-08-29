@@ -7375,19 +7375,43 @@ window.__ModuleLoader__.load({
 		*      clause to find. `count` renders as the neutral badge `COUNT_CHIP`
 		*      already declares, beside the title where it is looked for.
 		*
-		* `accent`, `collapsible` and `defaultOpen` are NOT in this signature,
-		* though the batch spec named them. No call site in this file wants any
-		* of the three, and B7 already retired `dot` from `Chip` for exactly that
-		* reason: a prop nobody passes is not a head start, it is the next
-		* geometry, added by whoever first needs something near it.
+		* `accent` and `defaultOpen` are NOT in this signature, though the batch
+		* spec named them. No call site in this file wants either, and B7 already
+		* retired `dot` from `Chip` for exactly that reason: a prop nobody passes
+		* is not a head start, it is the next geometry, added by whoever first
+		* needs something near it.
+		*
+		* `collapsible` WAS ON THAT LIST AND HAS COME OFF IT — by that rule, not
+		* against it. The sentence above is a rule about WHEN, and the stage
+		* drawer is the when: its 这一步做了什么 is up to twenty rail cards inside a
+		* 672px drawer that also has to show the property grid, the degrade note,
+		* the judgement and two actions, and it is the first section in this file
+		* a reader has a reason to fold. `defaultOpen` is still out: a section
+		* that arrives shut is a section that has to be discovered.
+		*
+		* THE COUNT STAYS IN THE HEADING WHEN IT IS SHUT, which is the only
+		* reason folding is not hiding: a closed section still says how much is
+		* inside, so the reader is choosing not to look rather than not knowing
+		* there is anything to look at.
 		* @param title - the heading word. Rendered as an eyebrow, always.
 		* @param count - a finite number renders as a badge; anything else renders nothing.
 		* @param note - a sentence, rendered as the first line of the BODY.
 		* @param action - a node for the right-hand end of the header row.
 		* @param children - the panel's content.
 		* @param bare - drop the card chrome, and only the card chrome.
+		* @param collapsible - a chevron beside the title folds the body away. The
+		*   count stays in the bar; a panel with no title cannot fold, because the
+		*   heading is the only thing there is to press.
 		*/
-		function MissionPanel({ title, count, note, action, children, bare }) {
+		function MissionPanel({ title, count, note, action, children, bare, collapsible }) {
+			// OPEN, AND NO PROP TO SAY OTHERWISE. See the docblock: a section that
+			// arrives shut is a section the reader has to discover, and no call
+			// site wants that yet.
+			const [open, setOpen] = useState(true);
+			// A FOLD NEEDS A HANDLE, and the handle is the heading. A panel with no
+			// title has nothing to press, so it does not fold whatever it asks for
+			// — the alternative is a bare chevron floating beside a number.
+			const folds = collapsible === true && title !== undefined && title !== null && title !== "";
 			return jsxs("section", {
 				// `bare` drops the CARD. A pane whose only child is a panel is a
 				// border and 32px of padding spent drawing a box around the whole
@@ -7429,6 +7453,27 @@ window.__ModuleLoader__.load({
 							borderBottom: `1px solid ${LINE.rule}`
 						},
 						children: [
+							// THE CHEVRON IS BEFORE THE TITLE AND OUTSIDE IT. The
+							// reference draws a chevron, a title, and the count as a
+							// chip beside it, in that order, and this keeps the three
+							// as siblings in the one header bar rather than nesting the
+							// heading inside a control — `title` still gates the `h3`
+							// and nothing else, which is the one-character regression
+							// the guard below this component exists to catch.
+							//
+							// `.swm-iconbtn` rather than a hand-built button: it is the
+							// file's 24px control with its own hover and focus ring, and
+							// a fold that cannot be tabbed to is a fold half the readers
+							// of this drawer cannot open.
+							!folds ? null : jsx("button", {
+								type: "button",
+								className: "swm-iconbtn",
+								"aria-expanded": open,
+								"aria-label": String(title),
+								style: { flex: "none", width: CONTROL.xs, height: CONTROL.xs },
+								onClick: () => { setOpen((value) => !value); },
+								children: jsx(Icon, { name: open ? "chevronDown" : "chevronRight", size: ICON.sm })
+							}, "fold"),
 							// THE `h3` IS WHAT `title` GATES, and it is the only thing that
 							// does. A panel with a count and no heading is a bar with a
 							// number in it, which is what the reference draws over a table.
@@ -7468,7 +7513,14 @@ window.__ModuleLoader__.load({
 								style: { font: FONT.small, color: INK.secondary, margin: `0 0 ${SPACE.md}` },
 								children: note
 							}, "note"),
-							jsx("div", { children }, "content")
+							// SHUT MEANS NOT RENDERED, not hidden. Twenty rail cards
+							// behind `display:none` are twenty subtrees React still
+							// reconciles on every poll of the screen above them — and
+							// the drawer this first serves sits over a list that polls.
+							// The `note` above is deliberately NOT folded: no call site
+							// passes both, and the day one does, a lead line that
+							// survives the fold is what tells the reader what they shut.
+							folds && !open ? null : jsx("div", { children }, "content")
 						]
 					}, "body")
 				]
@@ -8994,7 +9046,49 @@ window.__ModuleLoader__.load({
 			".swt-kv>div{display:grid;grid-template-columns:94px minmax(0,1fr);min-height:22px;padding:0 14px;align-items:center;gap:8px}",
 			".swt-kv dt{color:var(--dsw-alias-label-tertiary);margin:0}",
 			".swt-kv dd{min-width:0;margin:0;overflow:hidden;color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap}",
-			".swt-secthead{margin:0;padding:6px 14px 2px;color:var(--dsw-alias-label-secondary);font-size:13px;font-weight:600;user-select:none}",
+			// ── the rail: a sequence, not a list ─────────────────────────
+			// THE SPINE IS A PSEUDO-ELEMENT ON THE CONTAINER, for the same
+			// reason `.swm-rail`'s is: a left border on each card draws a line
+			// THROUGH the first dot and PAST the last one instead of between
+			// them, and between them is the whole claim a rail makes.
+			//
+			// TWO RAILS, TWO PREFIXES, AND THAT IS NOT A DUPLICATE. `.swm-rail`
+			// is on the sheet the whole tab injects and carries the event
+			// stream's ONE-LINE rows at a 16px inset; this one mounts with the
+			// trajectory and carries CARDS at 18px. Putting card geometry on the
+			// sheet the missions list injects before first paint is the reverse
+			// of the move that took `.swt-tab` to `.swm-tab`.
+			`.swt-rail{position:relative;display:flex;flex-direction:column;gap:${SPACE.xs};padding-left:18px}`,
+			`.swt-rail:before{content:"";position:absolute;left:3px;top:14px;bottom:14px;width:1px;background:${LINE.rule}}`,
+			// ONE EVENT IS NOT A SEQUENCE. A single card with 12px of hairline
+			// beside it is a rule that failed to reach anything, and there is
+			// nothing for it to connect. The dot stays: it is the card's mark.
+			'.swt-rail[data-solo="true"]:before{display:none}',
+			// TRANSPARENT AT REST, exactly as `.swt-row` is and for the recorded
+			// reason: a fill is what makes a row look like an object, and twenty
+			// filled cards down a drawer is the "hundred grey cards" the list
+			// rules already refused. The border is transparent rather than absent
+			// so the card does not move by a pixel when it lights up.
+			`.swt-ev{position:relative;display:flex;flex-direction:column;gap:${SPACE.xs};box-sizing:border-box;width:100%;min-width:0;padding:6px 8px;border:1px solid transparent;border-radius:${RADIUS.sm};background:transparent;appearance:none;font:inherit;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary)}`,
+			`.swt-ev:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:${LINE.hair}}`,
+			".swt-ev:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}",
+			// THE DOT SITS ON THE SPINE, by arithmetic rather than by eye: the
+			// rail's 18px inset less this 18px offset puts the 7px box at x=0..7,
+			// whose centre is the 3.5px the 1px line at left:3 occupies.
+			`.swt-evdot{position:absolute;left:-18px;top:12px;width:7px;height:7px;border-radius:${RADIUS.circle}}`,
+			`.swt-evhead{display:flex;align-items:center;gap:${SPACE.xs};min-width:0}`,
+			`.swt-evkind{flex:none;display:inline-flex;align-items:center;height:18px;padding:0 5px;border-radius:${RADIUS.sm};font:${FONT.microStrong};white-space:nowrap}`,
+			".swt-evname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 12px/16px var(--ds-font-family-code,monospace)}",
+			// `margin-left:auto` rather than a spacer element, and the offset, the
+			// clock and the duration ride together so the right end of the head is
+			// ONE block of tabular figures rather than three floating ones.
+			`.swt-evat{flex:none;margin-left:auto;display:flex;align-items:baseline;gap:${SPACE.sm};font:11px/16px var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}`,
+			// THE BOX THE TEXT SITS IN, in `.swt-code`'s material — layer 2 under
+			// a hairline — because it holds the same thing: an argument and a
+			// result, which are data. `hair` and not `rule`: this is a container's
+			// own outer edge. It carries NO margin; the card it is inside owns the
+			// inset, which is what `.swt-code`'s `margin:0 14px` could not do here.
+			`.swt-evbox{display:flex;flex-direction:column;gap:2px;min-width:0;padding:6px 8px;border-radius:${RADIUS.sm};border:1px solid ${LINE.hair};background:var(--dsw-alias-bg-layer-2);font:11px/17px var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-secondary);word-break:break-word}`,
 			// A DIFFERENT MATERIAL FROM THE PROSE ABOVE IT. Layer 2 is what the
 			// pane itself is drawn on, so a payload block sat on its own
 			// background with no edge — a wall of monospace that began and ended
@@ -9076,13 +9170,111 @@ window.__ModuleLoader__.load({
 		* @param active - whether this row is the one open in the panel.
 		* @param onOpen - called with the row's `ref`.
 		*/
-		function MissionTraceRow({ row, zh, active, onOpen, anchor }) {
+		function MissionTraceRow({ row, zh, active, onOpen, anchor, rail }) {
 			const name = missionRowTitle(row, zh);
 			// The KIND's colour, from the table that has always carried it. Five
 			// hues over five kinds, rather than four over "did it fail".
 			const kindHue = missionHue(MISSION_ROLE_FACES, row.role);
 			const verdict = missionOkFace(row.ok, zh);
 			const took = row.kind === "tool" ? missionLatency(row.ms, zh) : missionDuration(row.ms, zh);
+			// THE LATENCY BAND, HOISTED, because both layouts want it and a second
+			// copy of a threshold is how two screens end up disagreeing about what
+			// slow means — the thing MISSION_WARN_MS's own docblock exists to stop.
+			const band = Number(row.ms) >= MISSION_SLOW_MS
+				? { color: `rgb(${TONE.danger})` }
+				: Number(row.ms) >= MISSION_WARN_MS
+				? { color: `rgb(${TONE.warn})` }
+				: undefined;
+			// A SECOND LAYOUT, NOT A SECOND RENDERER, and the distinction is the
+			// whole reason this lives inside this function. Every field either
+			// shape draws is derived ABOVE, once — the name, the kind's hue, the
+			// verdict, the duration, the band — so a field added tomorrow lands in
+			// one place and appears in both. Two components is exactly what the
+			// stage drawer had before this row was shared with it.
+			//
+			// WHY THE STAGE DRAWER CANNOT USE THE FLEX ROW. That row is eight
+			// FIXED columns — 24 + 64 + 96 + 132 + 12 + 72, seven 12px gaps and
+			// 18px of padding: 502px before a character of content — and it is
+			// correct at the trajectory pane's full width. Inside `.swt-drawer`,
+			// which is capped at 672 and inset 14, the two ELASTIC columns are
+			// left 142px between them: `flex:2` gives the arguments ~95px and
+			// `flex:1` gives the result ~47px, six characters each before the
+			// ellipsis. The two columns that answer "what did this step actually
+			// do" are the two that vanish. The rail turns the row on its side: the
+			// fixed marks stay on one line, the text moves under them with the
+			// whole width to itself.
+			if (rail === true) {
+				const said = String(row.detail ?? "");
+				const back = String(row.result ?? "");
+				return jsxs("button", {
+					type: "button",
+					className: "swt-ev",
+					onClick: () => { onOpen(row.ref); },
+					title: `${row.ref} · ${row.title}${row.agentId === null || row.agentId === undefined ? "" : ` · ${row.agentId}`}`,
+					"aria-pressed": active,
+					children: [
+						// THE DOT CARRIES THE KIND, not the verdict, and the same hue
+						// the tag wears in the flex row: a run of blue dots with one
+						// amber in it is a handoff, read before a word of it is.
+						jsx("span", { className: "swt-evdot", style: { background: `rgb(${kindHue})` } }, "dot"),
+						jsxs("span", {
+							className: "swt-evhead",
+							children: [
+								jsx("span", {
+									className: "swt-evkind",
+									style: { color: `rgb(${kindHue})`, background: `rgba(${kindHue},${TINT.soft})` },
+									children: missionFace(MISSION_ROLE_FACES, row.role, zh)
+								}, "kind"),
+								RoleChip({ agentId: row.agentId, zh, iconOnly: true }, "who"),
+								jsx("span", { className: "swt-evname", children: name.text }, "name"),
+								jsxs("span", {
+									className: "swt-evat",
+									children: [
+										// THE OFFSET FIRST, THE CLOCK BEHIND IT, in the order
+										// the flex row and the event stream both print them —
+										// a shape that reorders the facts is a second screen to
+										// learn. `missionSince` is this file's ONE answer to
+										// "how far in", against the anchor the caller was
+										// handed; computing it again here is the defect class
+										// this codebase keeps hitting.
+										jsx("span", { children: missionSince(row.at, anchor, zh) }, "since"),
+										jsx("span", { style: { opacity: OPACITY.quiet }, children: missionClock(row.at) }, "clock"),
+										took === "" ? null : jsx("span", { style: band, children: took }, "took")
+									]
+								}, "at")
+							]
+						}, "head"),
+						// THE TEXT, IN A BOX, AND ONLY WHEN THERE IS TEXT. A stage
+						// transition carries neither an argument nor a result, and an
+						// empty bordered box under it would be the drawer claiming the
+						// step said something it did not.
+						//
+						// CLAMPED, WHICH IS THE HALF THAT MAKES TWO HUNDRED OF THESE
+						// SURVIVABLE: `clampBox` is the file's one three-property spell
+						// for capping lines, and the whole string stays on the hover.
+						said === "" && back === "" ? null : jsxs("span", {
+							className: "swt-evbox",
+							children: [
+								said === "" ? null : jsx("span", { style: clampBox(3), title: said, children: said }, "said"),
+								back === "" ? null : jsx("span", {
+									// THE VERDICT IS CARRIED BY THE RESULT, exactly as the
+									// flex row carries it, rather than repeated as a chip
+									// beside it. `null` stays uncoloured: nobody checked is
+									// not a pass and not a failure.
+									style: {
+										...clampBox(2),
+										color: row.ok === false
+											? "var(--dsw-alias-state-error-primary)"
+											: row.ok === true ? "var(--dsw-alias-state-success-primary)" : undefined
+									},
+									title: `${verdict.mark} ${verdict.label} · ${back}`,
+									children: `→ ${back}`
+								}, "back")
+							]
+						}, "box")
+					]
+				});
+			}
 			return jsxs("button", {
 				type: "button",
 				className: "swt-row",
@@ -9155,16 +9347,57 @@ window.__ModuleLoader__.load({
 							// leaves the class's tertiary grey in place, which is the
 							// right answer for the majority of rows — a band that
 							// coloured everything would be a band that says nothing.
-							style: Number(row.ms) >= MISSION_SLOW_MS
-								? { color: `rgb(${TONE.danger})` }
-								: Number(row.ms) >= MISSION_WARN_MS
-								? { color: `rgb(${TONE.warn})` }
-								: undefined,
+							style: band,
 							children: took
 						}, "took")
 					}, "trail")
 				]
 			});
+		}
+
+		/**
+		* A run of trajectory rows, drawn as a sequence rather than as a list.
+		*
+		* WHAT A RAIL SAYS THAT A STACK DOES NOT. Two rows stacked are two rows;
+		* two dots on one line are a BEFORE and an AFTER. The dots are the whole
+		* mechanism, and the spine is a `::before` on this container rather than a
+		* border on each card for the reason the stylesheet records: a per-card
+		* border draws the line through the first dot and past the last one.
+		*
+		* ONE ROW AND TWO HUNDRED ROWS, BOTH. `data-solo` switches the spine off
+		* at one, because a lone card beside 12px of hairline is a rule that
+		* reaches nothing. At the other end this WINDOWS NOTHING, deliberately:
+		* the stage drawer asks for MISSION_STAGE_TRACE_TAKE and prints the cap
+		* under the list, the trajectory pane asks for MISSION_TRACE_TAKE and
+		* prints its window bounds — a second cap here would be a second answer to
+		* "is this all of it" and the two would disagree. What it does own is the
+		* COST of a long one: every card is clamped, so two hundred is a
+		* predictable scroll rather than two hundred payloads at natural height.
+		*
+		* A DIRECT CALL, like `Chip` and `RoleChip` beside it: it holds no state
+		* and measures nothing, so it needs no hook slots of its own.
+		* @param rows - trajectory rows, in the order they are to be read.
+		* @param zh - whether to write Chinese.
+		* @param anchor - the run's own zero, passed through to the row unchanged.
+		* @param onOpen - called with a row's `ref`.
+		* @param key - this element's key among its siblings.
+		*/
+		function MissionRail({ rows, zh, anchor, onOpen }, key) {
+			const list = Array.isArray(rows) ? rows : [];
+			// NOTHING, not an empty rail. A spine with no dots on it is a line the
+			// reader has to decide the meaning of; the caller already owns the
+			// sentence that says a step recorded nothing.
+			if (list.length === 0) return null;
+			return jsx("div", {
+				className: "swt-rail",
+				"data-solo": list.length === 1 ? "true" : undefined,
+				// THE TRAJECTORY'S OWN ROW, in its rail layout. Not a second row
+				// renderer: `rail` selects a shape inside `MissionTraceRow`, which
+				// is where every field this draws is derived, once.
+				children: list.map((row) => jsx(MissionTraceRow, {
+					row, zh, anchor, rail: true, active: false, onOpen
+				}, row.ref))
+			}, key);
 		}
 
 		/**
@@ -11181,20 +11414,34 @@ window.__ModuleLoader__.load({
 									line(zh ? "结束" : "Ended", when(stage.endedAt))
 								]
 							}, "kv"),
-							note === "" ? null : jsx("p", { className: "swt-secthead", children: zh ? "降级说明" : "Why it degraded" }, "noteHead"),
-							// WHOLE, and in a block that is allowed to wrap. This is
-							// the sentence a degraded stage wrote about itself, and it
-							// was being clipped to two lines inside a table cell.
-							// AMBER. A stage that finished by lowering its own bar wrote
-							// this sentence, and a green rule beside it read as the
-							// stage endorsing itself.
-							note === "" ? null : jsx("div", {
-								className: "swt-quote",
-								style: { borderLeftColor: `rgb(${TONE.warn})` },
-								children: note
+							// THE LAST `.swt-secthead`, AND THE CLASS GOES WITH IT.
+							//
+							// `MissionPanel` already is this component — its docblock opens "A
+							// section heading that is actually a header: a rule, a count and a
+							// slot for whatever the panel wants on the right", and `bare` exists
+							// precisely so a panel inside a drawer drops the card and keeps the
+							// heading. A hand-rolled `p` with a font-weight was the third
+							// heading device in one drawer.
+							//
+							// WHOLE, and in a block that is allowed to wrap: this is the sentence
+							// a degraded stage wrote about itself, and it was being clipped to
+							// two lines inside a table cell. AMBER, because a stage that finished
+							// by lowering its own bar wrote it, and a green rule beside it read
+							// as the stage endorsing itself.
+							note === "" ? null : MissionPanel({
+								bare: true,
+								title: zh ? "降级说明" : "Why it degraded",
+								children: jsx("div", {
+									className: "swt-quote",
+									style: { borderLeftColor: `rgb(${TONE.warn})` },
+									children: note
+								}, "note")
 							}, "note"),
-							missionId === null || missionId === undefined || missionId === ""
-								? null : jsx("p", { className: "swt-secthead", children: zh ? "这一步做了什么" : "What this step did" }, "didHead"),
+							// NO `.swt-secthead` HERE ANY MORE. It was a paragraph with a
+							// sibling div under it, so the number of rows in that div had
+							// nowhere to live and the section could not be folded away
+							// from the four blocks below it. The heading is now the
+							// section's own, which is where a count can sit.
 								// THE STEP'S OWN REASONING, for the four steps that produce any. s4
 								// writes a verdict per dimension, s5 a reconciliation, s10 the
 								// blindspots and biases, s11 the corrections it forced before signing —
@@ -11210,40 +11457,64 @@ window.__ModuleLoader__.load({
 									? null
 									: jsx(MissionJudgement, { missionId, zh, only: stage.stepId }, "judgement"),
 							missionId === null || missionId === undefined || missionId === "" ? null : jsx("div", {
-								style: { display: "flex", flexDirection: "column", gap: SPACE.xs, padding: "0 14px" },
-								// THE SAME RENDERER THE TRAJECTORY PANE USES, filtered to
-								// this step. Not a second row component: two renderers for
-								// one row is how the drawer and the pane start saying
-								// different things about the same call, and this row shape
-								// already carries the kind, the agent, the verdict and the
-								// latency banding that took three batches to get right.
-								children: steps === null
-									? jsx("div", {
-										style: { font: FONT.small, color: stepsError === "" ? INK.secondary : `rgb(${TONE.warn})` },
-										// Three states, not two: a read that has not come
-										// back has the same shape as a step that did nothing.
-										children: stepsError === ""
-											? (zh ? "正在读这一步的轨迹…" : "Reading this step's trajectory…")
-											: (zh ? "读不到这一步的轨迹：" : "Could not read this step's trajectory: ") + stepsError
-									}, "loading")
-									: steps.length === 0
-									? jsx("div", {
-										style: { font: FONT.small, color: INK.secondary },
-										children: zh
-											? "这一步没有留下任何轨迹 —— 它没有调用工具，也没有记录事件。"
-											: "This step recorded no trajectory at all: no tool calls, no events."
-									}, "empty")
-									: steps.map((row) => jsx(MissionTraceRow, {
-										row, zh, anchor,
-										active: false,
-										// A ROW IN HERE GOES WHERE THE JUMP BUTTON GOES. The
-										// drawer has no panel of its own to open a row into,
-										// and a row that does nothing when pressed says there
-										// is somewhere to go and then refuses — so it opens
-										// the trajectory on this step, which is the pane where
-										// that row is selectable.
-										onOpen: () => { onOpenStage?.(stage.stepId); }
-									}, row.ref))
+								// 14px, which is `.swt-kv>div`'s own inset, so the section's
+								// rule starts at the same x as the labels above it rather
+								// than at a second margin nobody chose. The flex column came
+								// off this div: MissionPanel draws one, and two nested is one
+								// of them doing nothing.
+								style: { padding: "0 14px" },
+								children: jsx(MissionPanel, {
+									bare: true,
+									collapsible: true,
+									title: zh ? "这一步做了什么" : "What this step did",
+									// THE COUNT LIVES IN THE HEADING THAT OWNS IT: a step with
+									// one row and a step with twenty are different steps, and
+									// that is the fact a reader wants before deciding to look.
+									//
+									// IT IS HOW MANY ARE SHOWN, and the jump control below
+									// says so when the read hit MISSION_STAGE_TRACE_TAKE. The
+									// step's TOTAL is on the wire — `page.total` on the same
+									// response — and is deliberately not read here: this state
+									// holds the rows and nothing else, and half a total is
+									// worse than none.
+									//
+									// `undefined` WHILE THE READ IS OUT, not 0. Nought before
+									// the rows are in is a measurement nobody took, and
+									// MissionPanel prints a finite count and nothing else.
+									count: steps === null ? undefined : steps.length,
+									children: steps === null
+										? jsx("div", {
+											style: { font: FONT.small, color: stepsError === "" ? INK.secondary : `rgb(${TONE.warn})` },
+											// Three states, not two: a read that has not come
+											// back has the same shape as a step that did nothing.
+											children: stepsError === ""
+												? (zh ? "正在读这一步的轨迹…" : "Reading this step's trajectory…")
+												: (zh ? "读不到这一步的轨迹：" : "Could not read this step's trajectory: ") + stepsError
+										}, "loading")
+										: steps.length === 0
+										? jsx("div", {
+											style: { font: FONT.small, color: INK.secondary },
+											children: zh
+												? "这一步没有留下任何轨迹 —— 它没有调用工具，也没有记录事件。"
+												: "This step recorded no trajectory at all: no tool calls, no events."
+										}, "empty")
+										// A SEQUENCE, DRAWN AS ONE. Still the trajectory pane's own
+										// row — `rail` is a layout inside MissionTraceRow, not a
+										// second component — turned on its side, because the pane's
+										// eight fixed columns leave the arguments 95px and the
+										// result 47px inside a 672px drawer, and those two columns
+										// are exactly what "what did this step do" is asking for.
+										//
+										// A ROW IN HERE GOES WHERE THE JUMP BUTTON GOES. The drawer
+										// has no panel of its own to open a row into, and a row that
+										// does nothing when pressed says there is somewhere to go
+										// and then refuses — so it opens the trajectory on this
+										// step, which is the pane where that row is selectable.
+										: MissionRail({
+											rows: steps, zh, anchor,
+											onOpen: () => { onOpenStage?.(stage.stepId); }
+										}, "rail")
+								}, "didPanel")
 							}, "did"),
 							jsxs("div", {
 								// ONE ACTION ROW, not two stacked blocks. Go and look at this
@@ -17479,7 +17750,7 @@ window.__ModuleLoader__.load({
 			MissionStageSpend, MissionToolTable, MissionDegradeNote, MissionReferenceList,
 			missionReferences, missionMarkerCount, missionCompact,
 			MissionTimeline, MissionReport, MissionEvidenceRow,
-			MissionTrace, MissionTraceRow, MissionTraceDetail,
+			MissionTrace, MissionTraceRow, MissionTraceDetail, MissionRail,
 			MissionSourceReader, MissionClamp, MissionDimensionDrawer, MissionRework, MissionGoals, MissionSignoffCard,
 			VersionLine, libraryLine
 		};
