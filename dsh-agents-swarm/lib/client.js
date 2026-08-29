@@ -1555,6 +1555,31 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		* The column rule the two fact strips share, and the one number they do not.
+		*
+		* `auto-fit` over a `minmax` FLOOR rather than a fixed column count, for the
+		* reason MissionStatTiles already reached for it: a strip is drawn inside a
+		* drawer whose width is the window's, and four fixed columns are four 90px
+		* boxes with the label ellipsised down to nothing on a narrow one.
+		*
+		* THE FLOOR IS THE PARAMETER BECAUSE IT IS THE ONE THING THAT MUST DIFFER. A
+		* figure strip holds `412k` and wants four across the 644px drawer; a context
+		* strip holds a model name and a qualifier and wants two, so the same 150px
+		* floor would lay four columns of clipped prose. Everything else — the gap,
+		* the bottom margin, the auto-fit itself — is written once, so the two bands
+		* cannot drift into two rhythms the way the four bars did before `Meter`.
+		* @param floor - the narrowest a column may be before the grid drops one.
+		* @returns a style fragment to spread.
+		*/
+		function tileGrid(floor) {
+			return {
+				display: "grid",
+				gridTemplateColumns: `repeat(auto-fit, minmax(${floor}, 1fr))`,
+				gap: SPACE.sm, margin: `0 0 ${SPACE.md}`
+			};
+		}
+
+		/**
 		* A row of them, on the grid that fixes itself.
 		*
 		* `auto-fit` with a `minmax` floor rather than a fixed column count, for
@@ -1578,12 +1603,113 @@ window.__ModuleLoader__.load({
 			// is a gap under a header that nothing follows.
 			if (shown.length === 0) return null;
 			return jsx("div", {
-				style: {
-					display: "grid",
-					gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-					gap: SPACE.sm, margin: `0 0 ${SPACE.md}`
-				},
+				// 150px: four `412k`-sized tiles fit the 644px drawer body, and the
+				// same auto-fit drops to three, two and one without a breakpoint.
+				style: tileGrid("150px"),
 				children: shown.map((tile, at) => MetricStat(tile, tile.label ?? `tile-${at}`))
+			}, key);
+		}
+
+		/**
+		* ONE STANDING FACT: a small tinted label over a line of prose.
+		*
+		* THE SIBLING OF MetricStat, NOT A FLAG ON IT. The two are the same box —
+		* same ground, same hairline, same radius, same uppercase eyebrow — and they
+		* differ in exactly one thing: what a value IS. MetricStat's is a figure, so
+		* it is 20px, monospaced and tabular, and its docblock records that as a
+		* decision: every value that reaches it is a figure or a fraction, which is
+		* why it has no `mono` prop. That decision stands here. A model name and its
+		* qualifier set in 20px tabular mono is not a figure given room; it is a
+		* sentence in the face reserved for digits, clipped at the first space that
+		* does not fit — and the half that gets clipped is the qualifier that made
+		* the name worth printing.
+		*
+		* SO THE VALUE WRAPS, at 13px, to two lines, through the same `clampBox`
+		* every other capped block on these screens uses. Two rather than one because
+		* a context value is a name AND a qualifier; two rather than unbounded because
+		* four cards that each set their own height are not a grid.
+		*
+		* THE TONE IS ON THE LABEL, and that is the deviation from MetricStat worth
+		* naming out loud. There the hue means THIS FIGURE IS SHORT, so it is spent on
+		* the figure. Here it means WHICH KIND OF CONTEXT THIS IS — a category, not a
+		* state — so it sits on the eyebrow and the value stays grey. A whole panel is
+		* allowed one tinted exception, and it is not the card that says which model
+		* ran.
+		*
+		* Callers collapse an at-par tone to `null` before passing it, exactly as they
+		* already do for MetricStat, so a budget that is fine draws a grey label
+		* instead of a green one on every run that was fine.
+		* @param props - `{label, value, tone}`; an absent value prints the em dash.
+		* @param key - React's key.
+		*/
+		function MissionFactCard({ label, value, tone }, key) {
+			// The file's own empty convention, spelled the way MetricStat spells it.
+			// `value || "—"` prints the dash over a real `0`, and forking the test
+			// between the two cards is how one of them starts disagreeing with the
+			// other about what an absence looks like.
+			const shown = value === null || value === undefined || value === "" ? "—" : value;
+			return jsxs("div", {
+				style: {
+					display: "flex", flexDirection: "column", gap: SPACE.xs,
+					minWidth: 0,
+					padding: `${SPACE.sm} ${SPACE.md}`,
+					borderRadius: RADIUS.lg,
+					// `hair`, not `rule`: this is the box's OUTER edge, which is the half
+					// of LINE's docblock that is prescriptive.
+					border: `1px solid ${LINE.hair}`,
+					background: SURFACE.subtle
+				},
+				children: [
+					jsx("div", {
+						style: {
+							font: FONT.micro, letterSpacing: "0.04em", textTransform: "uppercase",
+							color: tone === null || tone === undefined ? INK.secondary : `rgb(${tone})`,
+							whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+						},
+						children: label
+					}, "label"),
+					jsx("div", {
+						style: {
+							// `font` FIRST. It is a shorthand and it resets the leading the
+							// clamp then counts in — the same discarded-property bug
+							// MetricStat carries a note about one property along.
+							font: FONT.body, color: INK.secondary,
+							minWidth: 0, wordBreak: "break-word",
+							...clampBox(2)
+						},
+						children: shown
+					}, "value")
+				]
+			}, key);
+		}
+
+		/**
+		* A grid of them, on the reference's 2x2.
+		*
+		* 220px against MissionStatTiles' 150px, which is the whole reason the floor
+		* is a parameter: four context cards across a 644px drawer are four columns of
+		* clipped prose, and two rows of two is what the reference draws. The same
+		* `auto-fit` still collapses it to one column on a narrow window, so nobody
+		* has to pick a breakpoint.
+		*
+		* A NULL CARD IS DROPPED, which MissionStatTiles established and which is
+		* load-bearing rather than convenient here. A slot with no source behind it
+		* must not print an em dash: a dash in a FIGURE strip says "not measured", and
+		* a dash in a CONTEXT strip would say "we did not record which model ran" — a
+		* claim about the run that nobody checked. A fact we cannot source is a card
+		* that does not exist.
+		* @param props - `{facts}`, an array of MissionFactCard props; nulls are dropped.
+		* @param key - React's key.
+		*/
+		function MissionFactGrid({ facts }, key) {
+			const shown = (Array.isArray(facts) ? facts : []).filter((fact) => fact !== null && fact !== undefined);
+			// An absence renders as nothing, for MissionStatTiles' reason: an empty
+			// grid still spends its bottom margin, which is a gap under a header that
+			// nothing follows.
+			if (shown.length === 0) return null;
+			return jsx("div", {
+				style: tileGrid("220px"),
+				children: shown.map((fact, at) => MissionFactCard(fact, fact.label ?? `fact-${at}`))
 			}, key);
 		}
 
@@ -6291,6 +6417,18 @@ window.__ModuleLoader__.load({
 		* @returns the duration, or "" when there is no number to show.
 		*/
 		function missionDuration(ms, zh) {
+			// `Number(null)` IS 0, AND 0 IS FINITE. The line below reads as a guard and
+			// is not one: an absent duration came through it as `0 秒` — a measurement,
+			// "this took no time" — standing exactly where the docblock above promises
+			// "". It is the header's `score ?? 0` one coercion earlier, and it is live
+			// in three places: the trajectory row's 用时, the trace panel's Duration row
+			// for a finding, which carries `timing.ms: null` by construction, and the
+			// mission header's elapsed hint, which printed 上限 0 秒 for a run whose
+			// wall ceiling the mission row does not carry.
+			//
+			// "" IS NOT FOLDED IN WITH THE REST. An empty string is `Number("") === 0`
+			// too, and it reaches here from the same places null does.
+			if (ms === null || ms === undefined || ms === "") return "";
 			const value = Number(ms);
 			if (!Number.isFinite(value) || value < 0) return "";
 			const seconds = Math.round(value / 1000);
@@ -8635,6 +8773,12 @@ window.__ModuleLoader__.load({
 		* @returns the duration, or "" when there is no number.
 		*/
 		function missionLatency(ms, zh) {
+			// The same coercion, and the same answer: `0ms` is "it returned instantly",
+			// which is a claim about a call nobody timed. `mission_tool_calls.latency_ms`
+			// is NOT NULL DEFAULT 0, so a call written by a path that never timed one
+			// stores a 0 that this function cannot tell from a fast call — that half is
+			// the ledger's and stays there; this half is ours.
+			if (ms === null || ms === undefined || ms === "") return "";
 			const value = Number(ms);
 			if (!Number.isFinite(value) || value < 0) return "";
 			if (value < 1000) return `${Math.round(value)}ms`;

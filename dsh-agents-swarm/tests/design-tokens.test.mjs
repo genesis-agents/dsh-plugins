@@ -4324,3 +4324,97 @@ test("a source row's title is one step, at that step's own leading", () => {
     "the search dropdown's row title names no step, so it is back to inheriting the row's 12px while the list it feeds draws 13px",
   );
 });
+
+test("a fact is a label over a value, and the two cards are one box", () => {
+  // WHAT THE REFERENCE REPEATS MORE THAN ANY OTHER DEVICE. Every fact in it is
+  // a small label over a value in a bordered box on a grey ground — four in a
+  // row for figures, four in a 2x2 for context — and this file had exactly half
+  // of that: `MetricStat` for figures, and for everything else a run-on line of
+  // "key · key · key" in one grey sentence.
+  //
+  // THE SECOND HALF IS A SIBLING, NOT A FLAG. MetricStat's docblock records
+  // that every value reaching it is a figure, which is why it sets 20px tabular
+  // mono and why it has no `mono` prop. A model name in that face is a sentence
+  // clipped at the first space that does not fit, so the prose card is its own
+  // component and the decision above it stands.
+  assert.ok(SOURCE.includes("function MissionFactCard("), "the prose fact card is gone, so a context fact is a sentence again");
+  assert.ok(SOURCE.includes("function MissionFactGrid("), "the context grid is gone");
+  const card = code(body("function MissionFactCard("));
+  // THE VALUE READS AS PROSE. `font` first because the shorthand resets the
+  // leading the clamp then counts in — MetricStat carries the same note one
+  // property along, and it is the same discarded-property bug both times.
+  assert.ok(card.includes("font: FONT.body"), "the context value is not FONT.body, so the card has a second opinion about what reading size prose is");
+  assert.ok(card.includes("...clampBox(2)"), "the context value stopped wrapping, so the qualifier that made the name worth printing is what gets clipped");
+  assert.ok(!card.includes("FONT.title") && !card.includes("MONO"), "the context card set its value in the figure face, which is the `mono` prop MetricStat refused, added at a second call site instead");
+  // THE TONE IS ON THE LABEL. On MetricStat the hue means THIS FIGURE IS SHORT
+  // and is spent on the figure; here it means WHICH KIND OF CONTEXT THIS IS,
+  // which is a category, and a context value drawn in a state colour turns
+  // every card on the band into an alarm.
+  const labelAt = card.indexOf("textTransform: \"uppercase\"");
+  const toneAt = card.indexOf("`rgb(${tone})`");
+  assert.ok(labelAt !== -1 && toneAt !== -1 && toneAt - labelAt < 200, "the hue moved off the eyebrow and onto the value, so a card that says which model ran can read as a warning");
+  // ZERO IS A VALUE, spelled the way MetricStat spells it. Forking the test
+  // between the two cards is how one of them starts disagreeing with the other
+  // about what an absence looks like.
+  assert.match(
+    card,
+    /value === null \|\| value === undefined \|\| value === ""/,
+    "the fact card tests its value for truthiness, so a genuine 0 renders as the em dash that means not measured",
+  );
+  // ONE GRID RULE, TWO FLOORS. The floor is the only thing that may differ —
+  // 150px lays four figures across the drawer, 220px lays two context cards —
+  // and everything else is written once so the two bands cannot drift.
+  assert.ok(SOURCE.includes("function tileGrid("), "the two strips each declare their own grid again, which is how four bars became four geometries before Meter");
+  const grid = code(body("function MissionFactGrid("));
+  const stat = code(body("function MissionStatTiles("));
+  assert.ok(stat.includes("tileGrid(\"150px\")"), "the figure strip stopped reading the shared grid");
+  assert.ok(grid.includes("tileGrid(\"220px\")"), "the context grid stopped reading the shared grid, or took the figure strip's floor and lays four columns of clipped prose");
+  // A NULL CARD IS DROPPED, NOT DASHED. A dash in a figure strip says "not
+  // measured"; a dash in a context strip would say "we did not record which
+  // model ran", which is a claim about the run that nobody checked.
+  assert.match(
+    grid,
+    /filter\(\(fact\) => fact !== null && fact !== undefined\)/,
+    "an unsourced context slot is drawn rather than dropped, so the band answers a question it was never told the answer to",
+  );
+});
+
+test("an absent duration is an absence, not nought seconds", () => {
+  // THE GUARD THAT WAS NOT ONE. `const value = Number(ms); if
+  // (!Number.isFinite(value)) return ""` reads as a null check and is not one:
+  // `Number(null)` is 0, 0 is finite, and both functions went on to format it.
+  // So an absent duration printed `0 秒` — "this took no time", a measurement —
+  // where each docblock promises "". Live in three places when it was found:
+  // the trajectory row's 用时, the trace panel's Duration row for a finding
+  // (whose `timing.ms` is null by construction), and the mission header's
+  // elapsed hint, which drew 上限 0 秒 for a run whose wall ceiling the mission
+  // row does not carry. It is the header's `score ?? 0` one coercion earlier.
+  //
+  // THE ORDER IS THE ASSERTION. A guard written after the coercion is the same
+  // bug with a comment over it.
+  for (const opening of ["function missionDuration(", "function missionLatency("]) {
+    const fn = code(body(opening));
+    assert.match(
+      fn,
+      /if \(ms === null \|\| ms === undefined \|\| ms === ""\) return "";/,
+      `${opening} formats whatever Number() makes of its argument again, so an absent duration is printed as nought`,
+    );
+    const guardAt = fn.indexOf("ms === null");
+    const coerceAt = fn.indexOf("Number(ms)");
+    assert.ok(
+      guardAt !== -1 && coerceAt !== -1 && guardAt < coerceAt,
+      `${opening} coerces before it guards, which is the same defect with a check written under it`,
+    );
+  }
+  // AND THE ONE READER THAT DEPENDS ON IT. The trajectory row hands `row.ms`
+  // straight to these two and lets the empty answer through; if either ever
+  // starts saying "0s" again, that column is the first thing to lie.
+  //
+  // It was written against the stage tile, which draws its 用时 through
+  // `line(…)` with the null test spelled out at the call site — so the string
+  // it looked for was not in the file and the assertion could only fail.
+  assert.ok(
+    code(body("function MissionTraceRow(")).includes('const took = row.kind === "tool" ? missionLatency(row.ms, zh) : missionDuration(row.ms, zh);'),
+    "the trajectory row stopped reading these two functions' own empty answer, so it now carries its own copy of the null test",
+  );
+});
