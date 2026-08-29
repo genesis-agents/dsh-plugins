@@ -963,10 +963,18 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
       const sources = missionStore.listSources(id, { runCount: runCount.value, dimensionId: dimensionId.value });
       let findings = 0;
       let verified = 0;
+      // `dated` is counted HERE, beside the other three, rather than left for
+      // the pane to derive: the references screen reads its figures out of this
+      // one object, and a figure computed on the far side of the wire is the
+      // pair that drifts. It is also what lets the pane say "not one of these
+      // pages carries a publish date" — a fact about the mission — instead of
+      // silently omitting the year control.
+      let dated = 0;
       const hosts = new Set();
       for (const source of sources) {
         findings += source.findings;
         verified += source.verified;
+        if (typeof source.publishedAt === "string" && source.publishedAt !== "") dated += 1;
         hosts.add(source.host);
       }
 
@@ -977,7 +985,7 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
           runCount: runCount.value,
           scope: { dimensionId: dimensionId.value ?? null },
           sources,
-          totals: { sources: sources.length, hosts: hosts.size, findings, verified },
+          totals: { sources: sources.length, hosts: hosts.size, findings, verified, dated },
           // The SAME run-picker shape the findings route returns, and for the
           // same reason: every reader on this table scopes to the mission's
           // current run, which is right while it runs and wrong the moment it

@@ -3219,7 +3219,12 @@ export class MissionStore {
    *
    * @param missionId - the mission.
    * @param options - `{ runCount, dimensionId }`.
-   * @returns `[{url, host, title, findings, verified, dimensionIds, verifyStates, firstSeenAt}]`, most findings first.
+   * `publishedAt` is the PUBLISHER's date and is null far more often than not:
+   * only a page a search or the library led us to carries one. It is never
+   * filled in from `firstSeenAt` — that is when we read the page, and a
+   * substitute would date a 2019 paper to the afternoon the mission ran.
+   *
+   * @returns `[{url, host, title, publishedAt, findings, verified, dimensionIds, verifyStates, firstSeenAt}]`, most findings first.
    */
   listSources(missionId, { runCount, dimensionId } = {}) {
     const id = assertText(missionId, "missionId");
@@ -3235,6 +3240,10 @@ export class MissionStore {
       SELECT source_url,
              MIN(source_host)  AS source_host,
              MAX(source_title) AS source_title,
+             -- MAX skips NULLs, so a page whose date reached one of its
+             -- findings and not another keeps the date instead of losing it to
+             -- the row that was written without one. Same rule as the title.
+             MAX(published_at) AS published_at,
              COUNT(*)          AS findings,
              SUM(CASE WHEN verify_state = ? THEN 1 ELSE 0 END) AS verified,
              MIN(created_at)   AS first_seen_at
@@ -3270,6 +3279,7 @@ export class MissionStore {
       url: row.source_url,
       host: row.source_host,
       title: row.source_title ?? null,
+      publishedAt: row.published_at ?? null,
       findings: row.findings,
       verified: row.verified ?? 0,
       dimensionIds: dimensionIds.get(row.source_url) ?? [],

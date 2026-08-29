@@ -1357,6 +1357,15 @@ async function collectOneDimension({ deps, context, dimension, policy, zh, recol
   // read passes through these three.
   const pages = new Map();          // pageKey -> {url, title, markdown}
   const blocks = new Map();         // page url -> markdown, for quote_verify
+  // WHEN THE PAGE WAS PUBLISHED, which only the SEARCH ever knows. `fetch_page`
+  // returns the publisher's text and no date, so a finding written from the
+  // fetch alone lands undated: `published_at` has been in the DDL and null on
+  // every row since the column was added, and the references screen has had no
+  // way to tell a 2019 paper from last Tuesday's press release. Library leads
+  // carry `publishedAt` and the search seams carry whatever their provider
+  // gave, so the date is harvested where it exists and stays null where it
+  // does not.
+  const dates = new Map();          // pageKey -> the lead's publish date
   const refusals = [];              // {tool, code, error, url}
   const stoppedTools = new Set();
   const touched = [];               // {tool, argsHash, ok} rows from the ledger
@@ -1440,6 +1449,19 @@ async function collectOneDimension({ deps, context, dimension, policy, zh, recol
         stoppedTools.add(String(value.tool ?? ""));
       }
       return;
+    }
+    // Every retrieval tool answers with `results`, and a lead is the only place
+    // a publish date appears at all. FIRST WINS: the library's date is the one
+    // the row was collected with, and a later web hit for the same URL must not
+    // overwrite it with the engine's guess.
+    if (Array.isArray(value.results)) {
+      for (const lead of value.results) {
+        const url = typeof lead?.url === "string" ? lead.url : "";
+        const at = typeof lead?.publishedAt === "string" ? lead.publishedAt.trim() : "";
+        if (url === "" || at === "") continue;
+        const key = pageKey(url);
+        if (!dates.has(key)) dates.set(key, at);
+      }
     }
     if (value.tool !== "fetch_page" || typeof value.url !== "string") return;
     // The tool's own extraction, stored as the document body and used as the
@@ -1747,6 +1769,7 @@ async function collectOneDimension({ deps, context, dimension, policy, zh, recol
           evidence: finding.quote,
           sourceUrl: finding.url,
           sourceTitle: finding.title ?? null,
+          publishedAt: dates.get(pageKey(finding.url)) ?? null,
           verifyState: "unchecked-fetch-failed",
           verifyReason: `the stored page for ${finding.url} is not admissible as evidence (missing, non-2xx, or under the normalised character floor)`,
           createdAt: stamp,
@@ -1769,6 +1792,11 @@ async function collectOneDimension({ deps, context, dimension, policy, zh, recol
         // count still correct.
         sourceUrl: finding.url,
         sourceTitle: finding.title ?? null,
+        // The LEAD's date, never `stamp`. The mission's own clock is when we
+        // read the page; writing it here would date every source to the
+        // afternoon the run happened and every date facet built on the column
+        // would agree with it.
+        publishedAt: dates.get(pageKey(finding.url)) ?? null,
         verifyState: "verified-source-text",
         documentId: documentIdFor(finding.url),
         spanIndex: finding.spanIndex,
@@ -1794,6 +1822,10 @@ async function collectOneDimension({ deps, context, dimension, policy, zh, recol
         claim: zh ? `未能读取来源：${refusal.url}` : `the source could not be read: ${refusal.url}`,
         evidence: refusal.error,
         sourceUrl: refusal.url,
+        // A page we were refused still has whatever date the search gave it.
+        // Leaving this null would make "we could not read it" and "nobody
+        // stamped it" the same row on the references pane.
+        publishedAt: dates.get(pageKey(refusal.url)) ?? null,
         verifyState: rateLimited ? "unchecked-rate-limited" : "unchecked-fetch-failed",
         verifyReason: refusal.error,
         createdAt: stamp,

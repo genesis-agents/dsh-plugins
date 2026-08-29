@@ -10931,6 +10931,10 @@ window.__ModuleLoader__.load({
 			const [error, setError] = useState("");
 			const [run, setRun] = useState(null);
 			const [order, setOrder] = useState("cites");
+			// WHICH PUBLICATION YEAR THE LIST IS NARROWED TO, or "all". Up here
+			// with the other hooks, above the early return this component makes
+			// when the run read nothing.
+			const [era, setEra] = useState("all");
 			// Grouping is ONE OF THE FOUR arrangements rather than a switch beside
 			// them — see MISSION_SOURCE_ORDERS for why the old two-state toggle
 			// could not be read without being pressed.
@@ -10974,7 +10978,37 @@ window.__ModuleLoader__.load({
 			}
 
 			const sources = Array.isArray(held.sources) ? held.sources : [];
-			const totals = held.totals ?? { sources: 0, hosts: 0, findings: 0, verified: 0 };
+			const totals = held.totals ?? { sources: 0, hosts: 0, findings: 0, verified: 0, dated: 0 };
+
+			// THE PUBLICATION YEAR, read the same way the row prints it.
+			// `formatDate` renders in the reader's own zone, so a chip grouped by
+			// the UTC year would file a 1 January page under 2025 while the row
+			// beneath it says 2026 — the one disagreement a facet cannot survive.
+			const eraOf = (source) => {
+				const at = Date.parse(String(source?.publishedAt ?? ""));
+				return Number.isFinite(at) ? String(new Date(at).getFullYear()) : "undated";
+			};
+			// The chip's own words, reused by every sentence that has to name the
+			// narrowing, so the control and the explanation cannot drift apart.
+			const eraLabel = (key) => key === "undated" ? (zh ? "未标注日期" : "no publish date") : key;
+			// THE FACET VALUES COME FROM THE ROWS, never from a list of years
+			// typed here. Every chip therefore has at least one page behind it,
+			// which is why there is no "nothing matches" state below: this control
+			// cannot produce one. `undated` is last and it is NAMED — a page whose
+			// publisher stamped no date is a fact about the page, not a gap to be
+			// filled with the day we happened to read it.
+			const eraCounts = new Map();
+			for (const source of sources) {
+				const key = eraOf(source);
+				eraCounts.set(key, (eraCounts.get(key) ?? 0) + 1);
+			}
+			const eras = [...eraCounts.keys()].filter((key) => key !== "undated").sort((a, b) => Number(b) - Number(a));
+			if (eraCounts.has("undated")) eras.push("undated");
+			// A chip the data no longer holds cannot stay selected: switching runs
+			// would otherwise leave the list filtered by something the reader can
+			// neither see nor undo.
+			const narrowed = era !== "all" && eraCounts.has(era);
+			const visible = narrowed ? sources.filter((source) => eraOf(source) === era) : sources;
 			const runs = Array.isArray(held.runs) ? held.runs : [];
 			const names = new Map((Array.isArray(held.dimensions) ? held.dimensions : []).map((row) => [row.dimensionId, row.name]));
 			const current = held.runCount ?? null;
@@ -11035,7 +11069,10 @@ window.__ModuleLoader__.load({
 			// no-sources return for the same reason: a run that read nothing at
 			// all is exactly the run whose dimensions most need to say why.
 			const byDimension = (Array.isArray(held.dimensions) ? held.dimensions : []).map((dimension) => {
-				const rows = sources.filter((source) => (Array.isArray(source.dimensionIds) ? source.dimensionIds : [])
+				// THE FILTERED SET, so a dimension page count agrees with the list
+				// under it. A year chip that narrowed the flat arrangement and left
+				// this one whole would be two answers to one question.
+				const rows = visible.filter((source) => (Array.isArray(source.dimensionIds) ? source.dimensionIds : [])
 					.includes(dimension.dimensionId));
 				return {
 					id: dimension.dimensionId,
@@ -11101,7 +11138,13 @@ window.__ModuleLoader__.load({
 							? entry.summary
 							: entry.state === "pending"
 								? (zh ? "还没有采集这个维度。" : "This dimension has not been collected yet.")
-								: (zh ? "这个维度没有留下任何读过的页面。" : "This dimension left no page behind.")
+								// THREE EMPTIES, NOT TWO. Under a year chip an empty group
+								// means "nothing from this era", and printing "left no page
+								// behind" there states a fact about the whole run that the
+								// filter itself produced.
+								: narrowed
+									? (zh ? `这个维度在「${eraLabel(era)}」里没有页面，别的时段可能有。` : `This dimension left no page from ${eraLabel(era)} — it may have read others.`)
+									: (zh ? "这个维度没有留下任何读过的页面。" : "This dimension left no page behind.")
 					}, "account"),
 					entry.rows.length === 0 ? null : jsx("div", {
 						style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
@@ -11133,7 +11176,7 @@ window.__ModuleLoader__.load({
 			// Sorted by how much each host carried, not alphabetically: the question a
 			// reader has here is whether one site is holding the whole report up.
 			const hosts = new Map();
-			for (const source of sources) {
+			for (const source of visible) {
 				const bag = hosts.get(source.host);
 				if (bag === undefined) hosts.set(source.host, { host: source.host, rows: [source], findings: source.findings });
 				else { bag.rows.push(source); bag.findings += source.findings; }
@@ -11154,10 +11197,10 @@ window.__ModuleLoader__.load({
 			// decision, drifting the first time either side is touched. It is left
 			// alone on purpose, not by omission.
 			const ordered = order === "rate"
-				? [...sources].sort((a, b) => (missionRate(b.verified, b.findings) ?? -1) - (missionRate(a.verified, a.findings) ?? -1))
+				? [...visible].sort((a, b) => (missionRate(b.verified, b.findings) ?? -1) - (missionRate(a.verified, a.findings) ?? -1))
 				: order === "seen"
-					? [...sources].sort((a, b) => seenAt(a.firstSeenAt) - seenAt(b.firstSeenAt))
-					: sources;
+					? [...visible].sort((a, b) => seenAt(a.firstSeenAt) - seenAt(b.firstSeenAt))
+					: visible;
 
 			const row = (source) => {
 				const fed = (Array.isArray(source.dimensionIds) ? source.dimensionIds : [])
@@ -11201,9 +11244,20 @@ window.__ModuleLoader__.load({
 							title: fed,
 							children: fed
 						}, "dims"),
+						// PUBLISHED, and it says which date it is. The row already
+						// carries one stamp — when the mission first read the page —
+						// and two bare numbers side by side are two numbers the reader
+						// has to guess at. A page with no publish date shows NOTHING
+						// here rather than borrowing the other one.
+						formatDate(source.publishedAt) === "" ? null : jsx("span", {
+							style: { flex: "none", fontFamily: MONO },
+							title: zh ? "发表时间" : "Published",
+							children: zh ? `发表 ${formatDate(source.publishedAt)}` : `pub ${formatDate(source.publishedAt)}`
+						}, "published"),
 						source.firstSeenAt === null || source.firstSeenAt === undefined ? null : jsx("span", {
 							style: { flex: "none", fontFamily: MONO },
-							children: formatStamp(source.firstSeenAt)
+							title: zh ? "首次读到" : "First read",
+							children: zh ? `读到 ${formatStamp(source.firstSeenAt)}` : `read ${formatStamp(source.firstSeenAt)}`
 						}, "seen")
 					]
 				}, source.url);
@@ -11259,6 +11313,27 @@ window.__ModuleLoader__.load({
 					jsxs("div", {
 						style: { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: SPACE.md, flexWrap: "wrap", margin: `0 0 ${SPACE.sm}` },
 						children: [
+							// THE FACET, LEFT OF THE ARRANGEMENT, because it changes WHICH
+							// rows exist while the strip beside it only changes their
+							// order. Drawn only when a run holds more than one era: an
+							// "All" and one chip that select the same rows is a control
+							// that cannot do anything.
+							eras.length < 2 ? null : jsx("div", {
+								style: SEGMENT_TRACK,
+								role: "group",
+								"aria-label": zh ? "按发表年份筛选" : "Narrow by publication year",
+								children: [
+									{ id: "all", label: zh ? "全部" : "All", count: sources.length },
+									...eras.map((key) => ({ id: key, label: eraLabel(key), count: eraCounts.get(key) ?? 0 }))
+								].map((chip) => jsx("button", {
+									type: "button",
+									"aria-pressed": chip.id === "all" ? !narrowed : era === chip.id,
+									className: "swm-focus",
+									style: segmentStyle(chip.id === "all" ? !narrowed : era === chip.id),
+									onClick: () => { setEra(chip.id); },
+									children: `${chip.label} · ${chip.count}`
+								}, chip.id))
+							}, "eras"),
 							jsx("div", {
 								style: SEGMENT_TRACK,
 								role: "group",
@@ -11274,6 +11349,27 @@ window.__ModuleLoader__.load({
 							}, "orders")
 						]
 					}, "head"),
+					// WHAT THE TILES ABOVE ARE COUNTING, said out loud whenever the
+					// list below is shorter than they are. The tiles describe the RUN
+					// and the year chip narrows only the list, so without this
+					// sentence a reader compares "14 findings" against three rows and
+					// concludes the pane dropped eleven.
+					!narrowed ? null : jsx("div", {
+						style: { font: FONT.small, color: INK.secondary, margin: `0 0 ${SPACE.sm}` },
+						children: zh
+							? `只显示「${eraLabel(era)}」的 ${visible.length} 个来源，共 ${sources.length} 个；上面的数字仍是整轮的。`
+							: `Showing ${visible.length} of ${sources.length} sources from ${eraLabel(era)}. The figures above still count the whole run.`
+					}, "narrowed"),
+					// WHY THERE IS NO YEAR CONTROL, on the run where there is none.
+					// Omitting it silently leaves "this screen has no date facet" and
+					// "not one of these pages is dated" looking identical, and only
+					// one of the two is a fact about the mission.
+					totals.dated > 0 ? null : jsx("div", {
+						style: { font: FONT.small, color: INK.secondary, margin: `0 0 ${SPACE.sm}` },
+						children: zh
+							? "这些页面都没有发表日期，所以没有按年份筛选。"
+							: "Not one of these pages carries a publish date, so there is nothing to narrow by year."
+					}, "undated"),
 					order === "dim" ? jsx("div", {
 						style: { display: "flex", flexDirection: "column", gap: SPACE.lg },
 						children: byDimension.map(dimensionGroup)

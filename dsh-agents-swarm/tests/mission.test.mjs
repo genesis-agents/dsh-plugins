@@ -2485,3 +2485,106 @@ test("the ledger records which model spent the tokens", (t) => {
     "a row written before the column existed was dropped rather than reported as not recorded",
   );
 });
+
+test("a source carries the date its publisher put on it, and null when nobody did", async (t) => {
+  // THE COLUMN THAT WAS ALWAYS NULL. `published_at` has been in the DDL since
+  // the table was written and the references pane has never had a date to show,
+  // so a 2019 paper and this morning's press release are the same undated row —
+  // and "is this evidence current" is the one question that list cannot answer.
+  const { missions } = library(t);
+  const id = mission(missions);
+  missions.upsertDimension({ missionId: id, dimensionId: "d1", name: "制造路径", facet: "technical", at: "2026-08-24T00:00:01.000Z" });
+
+  const paper = "https://example.org/paper";
+  missions.insertFinding({
+    missionId: id, dimensionId: "d1", runCount: 1, attempt: 0,
+    claim: "Sulfide cells reached ten millisiemens per centimetre.",
+    evidence: "we measured 10 mS/cm at 25 C in a pilot pouch cell",
+    sourceUrl: paper, publishedAt: "2019-04-02T00:00:00.000Z",
+    verifyState: "unverifiable", createdAt: "2026-08-24T00:00:06.000Z",
+  });
+  // The SECOND finding off the same page arrives without the date: the lead
+  // that carried it was only read once. One row per source means these two are
+  // grouped, and the group must keep the date rather than lose it to the
+  // sibling that never had one.
+  missions.insertFinding({
+    missionId: id, dimensionId: "d1", runCount: 1, attempt: 0,
+    claim: "Cost per kilowatt hour fell by forty percent.",
+    evidence: "cost per kWh fell by roughly forty percent",
+    sourceUrl: paper, verifyState: "unverifiable", createdAt: "2026-08-24T00:00:07.000Z",
+  });
+  const note = "https://example.com/note";
+  missions.insertFinding({
+    missionId: id, dimensionId: "d1", runCount: 1, attempt: 0,
+    claim: "The pilot line has been running three shifts.",
+    evidence: "the pilot line has been running three shifts since spring",
+    sourceUrl: note, verifyState: "unverifiable", createdAt: "2026-08-24T00:00:08.000Z",
+  });
+
+  const rows = missions.listSources(id, { runCount: 1 });
+  const dated = rows.find((row) => row.url === paper);
+  assert.equal(
+    dated.publishedAt,
+    "2019-04-02T00:00:00.000Z",
+    "the publisher date did not survive the group-by, so the references pane cannot tell a six-year-old paper from this morning",
+  );
+  const undated = rows.find((row) => row.url === note);
+  assert.equal(undated.publishedAt, null, "a page nobody dated came back with a date, which means something here invented one");
+  assert.notEqual(
+    undated.publishedAt,
+    undated.firstSeenAt,
+    "the moment WE read the page was handed over as the moment it was PUBLISHED, which dates every source to the afternoon the mission ran",
+  );
+
+  const page = await callRoute(missions, `/missions/${id}/sources?runCount=1`);
+  assert.equal(page.status, 200, JSON.stringify(page.body));
+  assert.equal(
+    page.body.data.sources.find((row) => row.url === paper).publishedAt,
+    "2019-04-02T00:00:00.000Z",
+    "the date reaches the store and stops at the route, so the screen that would face it can never be built",
+  );
+  assert.equal(
+    page.body.data.totals.dated,
+    1,
+    "the totals do not count how many sources carry a date, so the pane cannot tell 'this run is undated' from 'this screen has no date control'",
+  );
+  assert.equal(page.body.data.totals.sources, 2, "the two findings on one page stopped collapsing into one row");
+});
+
+test("every finding s3 writes carries the date its lead gave it", () => {
+  // Read at the SOURCE because nothing in this file drives s3: it wants a
+  // model, a ledger, a cache and a pacer, and a harness that stood all four up
+  // would be testing the harness. What is being pinned is small and total —
+  // three call sites, none of which passed the field the store has always
+  // accepted, which is why the column was null on every row ever written.
+  const front = readFileSync(new URL("../lib/mission-stages-front.js", import.meta.url), "utf8");
+
+  const calls = front.split("store.insertFinding({").slice(1);
+  assert.equal(calls.length, 3, `s3 has ${calls.length} insertFinding call sites and this test knows three; a new one may be writing findings with no date`);
+  for (const call of calls) {
+    const record = call.slice(0, call.indexOf("});"));
+    assert.match(
+      record,
+      /publishedAt: dates\.get\(pageKey\(\w+\.url\)\) \?\? null,/u,
+      "a finding is written without the publish date its lead carried, so the column stays null and there is nothing for the references pane to face",
+    );
+    assert.ok(
+      !/publishedAt: (stamp|now\(\))/u.test(record),
+      "the mission's own clock was written into the publish date, which dates every page to the afternoon the run happened and makes the facet agree with itself",
+    );
+  }
+
+  // AND THE MAP HAS TO BE FILLED. A `dates` map nothing writes to is three call
+  // sites passing null in a costume: `fetch_page` returns the publisher's text
+  // and no date, so the search result is the only place one ever appears.
+  assert.match(
+    front,
+    /if \(!dates\.has\(key\)\) dates\.set\(key, at\);/u,
+    "nothing harvests the date out of a search result, so `dates` is empty and every finding is written undated however many leads carried one",
+  );
+  assert.match(
+    front,
+    /typeof lead\?\.publishedAt === "string"/u,
+    "the harvest stopped reading `publishedAt` off a lead, which is the only field library_search, arxiv_search and web_search ever return a date in",
+  );
+});

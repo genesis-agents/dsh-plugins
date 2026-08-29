@@ -3238,3 +3238,83 @@ test("both spend writers stamp the model, not just the one with tools", () => {
     "the middle writer re-resolves the model at write time instead of reading what the run reported",
   );
 });
+
+test("the year facet narrows every arrangement on the references pane", () => {
+  // A filter that reached the flat list and not the grouped one is two answers
+  // to one question: the same run reads as four pages under 按站点 and one under
+  // 按引用, and neither number is wrong on its own. The pane has four
+  // arrangements and one filter, so the filtered set has to be computed ONCE
+  // and read by all of them.
+  const pane = code(body("function MissionSources("));
+  assert.match(
+    pane,
+    /const visible = narrowed \? sources\.filter\(\(source\) => eraOf\(source\) === era\) : sources;/u,
+    "the pane no longer derives the filtered set, so the year chips are a control that selects nothing",
+  );
+
+  const after = pane.slice(pane.indexOf("const visible ="));
+  assert.equal(
+    /\[\.\.\.sources\]\.sort\(/u.test(after),
+    false,
+    "an arrangement sorts the whole run again instead of the rows the chip left, so the filter quietly does nothing in that one mode",
+  );
+  assert.equal(
+    /for \(const source of sources\)/u.test(after),
+    false,
+    "the host roll-up counts the whole run again, so its page counts disagree with the rows printed underneath them",
+  );
+  assert.equal(
+    /const rows = sources\.filter\(/u.test(after),
+    false,
+    "the dimension fan-out reads the whole run again, so 按维度 shows unfiltered groups while 按引用 shows filtered rows",
+  );
+  for (const reader of [/\[\.\.\.visible\]\.sort\(/u, /for \(const source of visible\)/u, /const rows = visible\.filter\(/u]) {
+    assert.match(after, reader, `an arrangement stopped reading the filtered set (${reader.source}), so one tab of this pane answers a different question from the others`);
+  }
+});
+
+test("a year chip never speaks for the whole run", () => {
+  const pane = code(body("function MissionSources("));
+  // THE TILES ARE THE RUN'S AND THE LIST IS THE CHIP'S. Four figures sit above
+  // a list the filter shortens; with nothing between them a reader compares
+  // "14 findings" against three rows and concludes the pane dropped eleven.
+  assert.match(
+    pane,
+    /!narrowed \? null : jsx\("div", \{/u,
+    "a filtered list no longer says that it is filtered, so the totals above it read as a miscount",
+  );
+  assert.match(
+    pane,
+    /\$\{visible\.length\} of \$\{sources\.length\}/u,
+    "the narrowing sentence stopped naming how many of how many, which is the only figure that reconciles this list with the tiles above it",
+  );
+  // THREE EMPTIES, NOT TWO. Under a chip an empty dimension group means
+  // "nothing from this era"; saying "left no page behind" there states a fact
+  // about the whole run that the filter itself produced.
+  assert.match(
+    pane,
+    /left no page from \$\{eraLabel\(era\)\}/u,
+    "a dimension with no page in the chosen year says it left no page behind at all, which is the filter talking about the run",
+  );
+  // AND THE RUN WITH NO DATES ANYWHERE. Dropping the control in silence makes
+  // "this screen has no year facet" and "not one of these pages is dated"
+  // identical, and only one of the two is a fact about the mission.
+  assert.match(
+    pane,
+    /totals\.dated > 0 \? null : jsx\("div", \{/u,
+    "a run whose pages carry no publish date simply loses the year control, and nothing on the pane says why it is gone",
+  );
+  assert.match(
+    pane,
+    /eras\.length < 2 \? null : jsx\("div", \{/u,
+    "the year strip draws with a single value in it — an All and one chip that select the same rows, which is a control that cannot do anything",
+  );
+  // THE VALUES COME FROM THE ROWS. A hard-coded list of years is a chip that
+  // matches nothing the moment the calendar moves, and an empty result this
+  // control is built to be incapable of producing.
+  assert.match(
+    pane,
+    /const eras = \[\.\.\.eraCounts\.keys\(\)\]/u,
+    "the facet stopped being built from the rows it filters, so a chip can now select nothing",
+  );
+});
