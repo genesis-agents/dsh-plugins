@@ -3587,9 +3587,13 @@ test("a dimension's own grade is drawn, and drawn with the two halves it is made
     drawer.includes("missionRateHue(grade, 100)"),
     "the drawer grades its score on rungs of its own instead of the one ladder this tab reads, which is the third copy of a decision already extracted twice",
   );
+  // THE SAME RULE, ONE LAYER EARLIER. The score is a `MetricStat` now, and
+  // MetricStat already draws a null tone in INK.primary — so at par the drawer
+  // hands it NOTHING rather than handing it green. Asserting the old ink
+  // ternary would pin a colour the component no longer takes.
   assert.match(
     drawer,
-    /gradeTone === TONE\.success \? INK\.primary/,
+    /gradeTone === TONE\.success \? null/,
     "a grade at par is painted rather than left in ink, which spends the tab's loudest colour on the ordinary case and leaves nothing louder for the dimension that came in under the floor",
   );
   assert.ok(
@@ -4522,4 +4526,52 @@ test("the drawer's 用时 tile tests its own hole", () => {
   const strip = drawer.slice(drawer.indexOf("MissionStatTiles({ tiles: ["));
   const tinted = strip.slice(0, strip.indexOf("]")).split("tone: TONE.").length - 1;
   assert.equal(tinted, 0, `${tinted} of the four figure tiles are tinted; the hue is for the exception, and a row where two are exceptional has none`);
+});
+
+test("the dimension drawer's figures are tiles, and its box keeps only the argument", () => {
+  const drawer = code(body("function MissionDimensionDrawer("));
+  assert.ok(drawer.includes("MissionStatTiles({ tiles: ["), "the dimension's figures are prose again");
+  // THREE FIGURES THAT WERE REACHABLE ONLY INSIDE SENTENCES, and two of those
+  // only in the branch that runs when a dimension found NOTHING — so how much
+  // it had read left the screen the moment it worked.
+  for (const figure of ["counts?.total", "counts?.uniqueHosts", "axes.pagesFetched"]) {
+    assert.ok(drawer.includes(figure), `${figure} is back inside a sentence, or gone: the drawer states a verdict and not what it was reached over`);
+  }
+  // A COUNT NOBODY STORED IS NOT NONE. The empty branch printed
+  // `pagesFetched ?? 0`, which reads as "it fetched nothing" about a row whose
+  // axes were never written.
+  assert.ok(
+    !/pagesFetched \?\? 0/.test(drawer),
+    "the page count is defaulted to 0 again, which is a measurement about a dimension nobody measured",
+  );
+  // GUARDED ON `detail`. The findings route answers `dimension: null` AND swaps
+  // `counts` for the MISSION-WIDE histogram when it cannot scope; drawing that
+  // here prints the whole run's evidence under one dimension's name.
+  assert.ok(
+    drawer.includes("detail === null ? null : MissionStatTiles({"),
+    "the strip draws whatever `counts` holds, so an unscoped read prints the whole mission's evidence under one dimension",
+  );
+  // AND THE BOX UNDER IT NO LONGER RESTATES THE SCORE IT IS EXPLAINING.
+  assert.ok(
+    !drawer.includes("This dimension's grade"),
+    "the box opens by restating the figure in the tile above it, which is one number stated twice on one drawer",
+  );
+});
+
+test("a permanent tile is never a permanent dash", () => {
+  // The 抓取页数 tile was written to draw an em dash when `pagesFetched` is
+  // absent, which is the right answer to "not recorded" and the WRONG SHAPE
+  // here — because it is absent on every assessed mission, not on a rare one.
+  // `gradeDimension` SETs `grade_axes` whole, and what s4 writes into it is
+  // {verified, floor, uniqueHosts, unchecked}: no `pagesFetched` at all. So
+  // the tile would be a dash always, and a strip of four with one permanent
+  // hole is a strip of three that lies about being four.
+  //
+  // `MissionStatTiles` filters nulls, so a null TILE simply is not drawn.
+  const drawer = code(body("function MissionDimensionDrawer("));
+  assert.ok(
+    /axes\.pagesFetched === undefined\s*\n?\s*\?\s*null\s*\n?\s*:\s*\{ label:/.test(drawer),
+    "the pages-read tile draws a dash instead of standing down, so every assessed mission carries a hole in its figure strip",
+  );
+  assert.ok(!drawer.includes("pagesFetched ?? 0"), "an absent page count is coerced to zero, which reports 'read nothing' for 'never recorded'");
 });

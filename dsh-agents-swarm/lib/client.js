@@ -11889,7 +11889,11 @@ window.__ModuleLoader__.load({
 			// grades a success has cleared the bar and is drawn in ink, and colour is
 			// spent only on the two rungs below it.
 			const gradeTone = grade === null ? null : missionRateHue(grade, 100);
-			const gradeInk = gradeTone === null || gradeTone === TONE.success ? INK.primary : `rgb(${gradeTone})`;
+			// AND THE TILE TAKES A TONE, NOT A COLOUR. `MetricStat` already draws a
+			// null tone in `INK.primary`, so at par this hands it nothing rather than
+			// handing it green — the same sentence the ink version said, one layer
+			// earlier, now that the score is a tile instead of a span.
+			const gradeTileTone = gradeTone === null || gradeTone === TONE.success ? null : gradeTone;
 			const evidenceShare = Math.round(MISSION_GRADE.evidence * 100);
 			const independenceShare = Math.round(MISSION_GRADE.independence * 100);
 
@@ -12011,11 +12015,53 @@ window.__ModuleLoader__.load({
 								: jsxs("div", {
 									style: { display: "flex", flexDirection: "column", gap: SPACE.md },
 									children: [
-										// THE GRADE, AND WHAT IT IS MADE OF. A bare 74 is a figure a
-										// reader can neither trust nor argue with; the two axes under
-										// it are the argument, and between them they are the whole
-										// formula — verified evidence against a bar, and how many
-										// independent hosts carried it.
+										// THE DIMENSION'S OWN FOUR FIGURES, as a strip. Three of them
+										// were reachable only inside prose, and two of those only in
+										// the branch that runs when a dimension found NOTHING — so how
+										// much it had read left the screen the moment it worked.
+										//
+										// GUARDED ON `detail`, and that is not defensiveness. When the
+										// findings route cannot scope to this dimension it answers
+										// `dimension: null` AND swaps `counts` for the mission-wide
+										// histogram; drawing that here would print the whole run's
+										// evidence under one dimension's name.
+										detail === null ? null : MissionStatTiles({ tiles: [
+											{
+												label: zh ? "评分" : "Grade",
+												// null, never 0. A dimension is graded once as collection
+												// settles and again when the assessment measures it against
+												// the derived floor; before either there is no number, and a 0
+												// is a failing mark this dimension was never given.
+												value: grade === null ? null : `${grade}/100`,
+												tone: gradeTileTone
+											},
+											// `counts` IS THE LIVE SCOPE — the same rows the list below is
+											// paged out of — while the axes sentences under it quote the
+											// snapshot the GRADE was computed from. The two differ on a
+											// dimension that collected more after it was graded, which is
+											// why each of them says which one it is.
+											{ label: zh ? "发现" : "Findings", value: String(counts?.total ?? 0) },
+											{ label: zh ? "独立站点" : "Hosts", value: String(counts?.uniqueHosts ?? 0) },
+											// THE TILE GOES, NOT ITS VALUE — and the cause is not what the
+											// comment here used to say. It is not "a row written before the
+											// axes were stored": s4 rewrites `grade_axes` WHOLE, because
+											// `gradeDimension` SETs the column, and what it sets is
+											// {verified, floor, uniqueHosts, unchecked} with no
+											// `pagesFetched` in it. So on every assessed mission this is a
+											// dash on a PERMANENT tile, which is the one thing a strip of
+											// four must not carry. `MissionStatTiles` filters nulls, so the
+											// auto-fit grid simply draws three.
+											axes === null || axes === undefined || axes.pagesFetched === null || axes.pagesFetched === undefined
+												? null
+												: { label: zh ? "抓取页数" : "Pages read", value: String(axes.pagesFetched) }
+										] }, "figures"),
+										// WHAT THE GRADE IS MADE OF. A bare 74 is a figure a reader can
+										// neither trust nor argue with; the two axes under this heading
+										// are the argument, and between them they are the whole formula —
+										// verified evidence against a bar, and how many independent hosts
+										// carried it. The score itself is the tile above; a box that
+										// opened by restating it was stating one figure twice on one
+										// drawer.
 										jsxs("div", {
 											style: {
 												display: "flex", flexDirection: "column", gap: SPACE.xs,
@@ -12023,22 +12069,9 @@ window.__ModuleLoader__.load({
 												borderRadius: RADIUS.md, border: `1px solid ${LINE.hair}`
 											},
 											children: [
-												jsxs("div", {
-													style: { display: "flex", alignItems: "baseline", gap: SPACE.sm },
-													children: [
-														jsx("div", {
-															style: { font: FONT.small, color: INK.secondary, flex: 1, minWidth: 0 },
-															children: zh ? "这个维度的评分" : "This dimension's grade"
-														}, "label"),
-														// A GRADE THAT CLEARED THE BAR IS INK. A screen that paints the
-														// ordinary case green has no louder colour left for the dimension
-														// that came in under the floor, which is the only one on this
-														// drawer worth finding.
-														jsx("div", {
-															style: { font: FONT.smallStrong, color: gradeInk },
-															children: grade === null ? (zh ? "未评分" : "not graded") : `${grade}/100`
-														}, "score")
-													]
+												jsx("div", {
+													style: { font: FONT.smallStrong, color: INK.primary },
+													children: zh ? "这个分数是怎么来的" : "How this grade was reached"
 												}, "head"),
 												grade === null
 													// WHICH EMPTY, again. A dimension is graded once as collection
@@ -12130,15 +12163,12 @@ window.__ModuleLoader__.load({
 																		? (zh ? "这个维度采集失败了，所以一条发现也没有。" : "Collection failed for this dimension, so there is no finding at all.")
 																		: (zh ? "采集跑完了，但没有产出任何发现。" : "Collection finished and produced no finding.")
 													}, "why"),
-													// WHAT IT DID DO, when it did anything. A dimension that
-													// fetched four pages and verified nothing is a different
-													// answer from one that fetched none, and the drawer was
-													// silent about both.
-													(detail?.gradeAxes?.pagesFetched ?? 0) === 0 ? null : jsx("div", {
-														children: zh
-															? `抓到 ${detail.gradeAxes.pagesFetched} 页，来自 ${detail.gradeAxes.uniqueHosts ?? 0} 个独立站点。`
-															: `${detail.gradeAxes.pagesFetched} page(s) fetched across ${detail.gradeAxes.uniqueHosts ?? 0} independent host(s).`
-													}, "read"),
+													// NO "抓到 N 页" SENTENCE HERE. It is two tiles at the top of
+													// this drawer now, drawn whether or not the dimension found
+													// anything — which is the half this line could never cover,
+													// because it lived inside the empty branch, so what a
+													// dimension had READ left the screen the moment it worked.
+													// `?? 0` went with it: a count nobody stored is not none.
 													(detail?.failureCode ?? null) === null ? null : jsx("div", {
 														style: { color: `rgb(${TONE.warn})` },
 														children: missionFace(MISSION_FAILURE_FACES, detail.failureCode, zh)

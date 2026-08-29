@@ -3222,7 +3222,13 @@ test("an empty dimension says WHICH empty it is", async () => {
     // WHAT IT DID DO, when it did anything: four pages fetched and nothing
     // verified is a different answer from four pages never fetched, and the
     // drawer used to be silent about both.
-    assert.ok(text.includes("抓到 4 页"), `a ${state} dimension hides what it actually read`);
+    //
+    // IT IS A TILE NOW, AND THAT IS THE POINT OF THE MOVE. This sentence lived
+    // inside the empty branch, so what a dimension had READ left the screen the
+    // moment it found something. The tile is drawn in every state, which is why
+    // the assertion is on the label and the figure rather than on the prose.
+    assert.ok(text.includes("抓取页数"), `a ${state} dimension hides what it actually read`);
+    assert.ok(text.includes("4"), `a ${state} dimension draws the page-count tile without the count in it`);
     // The state belongs in the header too, or an empty drawer is a title over
     // a sentence with nothing tying them together.
     assert.ok(
@@ -3525,7 +3531,12 @@ test("an ungraded dimension says so rather than being handed a nought", async ()
   });
   const text = textOf(drawer.tree).join(" ");
   assert.ok(!text.includes("0/100"), "an ungraded dimension is drawn with a nought, which is a mark for work that has not been marked");
-  assert.ok(text.includes("未评分"), "the drawer is silent about the missing grade, which leaves a reader to assume the pipeline judged this dimension and said nothing");
+  // THE TILE PRINTS THE EM DASH, and the block under it still says WHICH empty
+  // this is. `未评分` went out with the span that held it: the score is a
+  // `MetricStat` now, and that component's word for "not measured" is the dash
+  // this file uses at every other absence — while the account of WHEN a grade
+  // arrives, which is the half a reader can act on, is asserted below.
+  assert.ok(text.includes("这个分数是怎么来的"), "the drawer is silent about the missing grade, which leaves a reader to assume the pipeline judged this dimension and said nothing");
   assert.ok(
     text.includes("采集收尾时会打一次分"),
     "the drawer says there is no grade without saying when there will be one, which is the difference between a gap and a fault",
