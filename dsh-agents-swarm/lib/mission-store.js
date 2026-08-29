@@ -738,11 +738,274 @@ CREATE TABLE IF NOT EXISTS runtime_owner (
 ) STRICT;
 `;
 
+/**
+ * The image types a publisher's figure may be held and served as.
+ *
+ * A CLOSED raster list, the way `VERIFY_STATES` is closed, and checked TWICE:
+ * once by `holdFigure` before bytes are stored, and again by the byte route
+ * before they are written out. Not a duplicate — the first check stops a hole
+ * being dug, the second stops one dug by an older build from being served by
+ * this one. `mime` is stored for exactly that second check.
+ *
+ * `image/svg+xml` is absent, and that is a security decision rather than a
+ * taste one. An SVG is a document: it carries script and external references,
+ * and served from OUR origin under its honest content type it executes in our
+ * origin. There is no way to serve a publisher's SVG as an image without also
+ * offering it as a page. The cost is real and named in the risks: a page whose
+ * figures are all vector charts yields no pictures at all, and each one is
+ * filed as a `refused` row with a sentence rather than vanishing.
+ */
+export const FIGURE_MIME_TYPES = Object.freeze(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+/**
+ * The states a figure row can be in. Four, never collapsed into "has bytes /
+ * has none": a candidate nobody has asked for yet, a publisher who refused,
+ * and a host we could not reach want three different next moves. `enrich.js`
+ * already wrote down what collapsing them costs — "the reference persists no
+ * negative, so it re-fetches those pages forever".
+ *
+ * No CHECK constraint, matching `verify_state`, `facet` and `decision`, which
+ * are all closed vocabularies enforced in the writer: a CHECK on a STRICT
+ * table cannot be widened later without rebuilding the table, and this list is
+ * the kind that grows.
+ */
+export const FIGURE_STATES = Object.freeze(["candidate", "held", "refused", "failed"]);
+
+/**
+ * The largest single figure whose bytes are kept.
+ *
+ * A 1200px-wide chart or diagram lands between 80 and 300 kB in any of the four
+ * formats above. This is five times the top of that range and still refuses a
+ * full-bleed hero photograph, which is decoration whatever its caption says.
+ */
+export const MAX_FIGURE_BYTES = 1_500_000;
+
+/**
+ * The two held ceilings. THIS IS THE SCALE ARGUMENT, and it is a ceiling rather
+ * than a hope.
+ *
+ * A deep mission fetches hundreds of pages. Holding every page's images would
+ * be 300 pages x 2 figures x 1.5 MB = 900 MB in the library file, for one
+ * mission, nearly all of it for pages no chapter ever cited. So bytes are NOT
+ * fetched when a page is absorbed: every figure the selector kept lands as a
+ * `candidate` row costing a few hundred bytes, and bytes are fetched only for a
+ * document one of this run's verified findings cites. That set is bounded by
+ * the evidence that survived verification rather than by the fetch log, and it
+ * is roughly an order of magnitude smaller.
+ *
+ * Worst case with both ceilings is 40 x 1.5 MB = 60 MB per mission; the
+ * expected case is nearer 40 x 200 kB = 8 MB. There is no configuration in
+ * which it is smaller than it looks. `holdFigure` enforces the PER-DOCUMENT
+ * ceiling itself, because a ceiling that only exists in an unwritten driver is
+ * a ceiling that does not exist; the per-mission one needs the mission and so
+ * belongs to `heldFigureCounts` and its caller.
+ */
+export const MAX_HELD_FIGURES_PER_DOCUMENT = 2;
+export const MAX_HELD_FIGURES_PER_MISSION = 40;
+
+/**
+ * Figures lifted out of a fetched page, and the bytes when we hold them.
+ *
+ * A SEPARATE TABLE, not columns on `mission_documents`. A document has zero or
+ * many figures, and the one thing a column set could not express is the one
+ * this table exists for: WHICH page a figure came off. That is the whole
+ * provenance claim — an image on a screen with no page behind it is a
+ * fabricated figure rather than a citation — so `document_id` is NOT NULL and
+ * is the only way a row is ever reached.
+ *
+ * THE MISSION IS NOT A COLUMN HERE, deliberately, and for the same reason
+ * `mission_documents` does not carry one: that table is a URL-keyed cache
+ * shared by every mission, and a figure inherits exactly the scope of the page
+ * it was lifted from. A mission reaches its figures the way it reaches its
+ * pages — through its OWN findings' `document_id`. A denormalised mission
+ * column could disagree with that join, and the copy that disagreed would be
+ * the one handing out bytes.
+ *
+ * IDENTITY IS (page, image url), never the bytes — the same reasoning
+ * `mission_documents.id` already records. A content-hash key would mint a new
+ * row every time a publisher re-encodes their chart, so the writer could never
+ * upsert and the table would grow a duplicate per re-fetch. The bytes get
+ * `content_hash` as a COLUMN instead, which is what notices a changed image
+ * without being asked to identify one.
+ */
+export const MISSION_DDL_FIGURES = `
+-- ── figures ───────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS mission_figures (
+  -- sha256(document_id + newline + normalizeUrl(image url)). Deterministic, so
+  -- re-absorbing a page upserts its figures instead of duplicating them, and
+  -- two spellings of one image resolve to one row the way two spellings of one
+  -- page already do.
+  id            TEXT PRIMARY KEY,
+  -- The page this came off: mission_documents.id. The provenance, and the only
+  -- route to a mission. A figure whose document is not in this run's
+  -- documentsForMission() is not this mission's to serve.
+  document_id   TEXT NOT NULL,
+  -- Absolute, resolved against the PAGE rather than its origin: img/chart.png
+  -- on https://site.com/blog/post/ is https://site.com/blog/post/img/chart.png,
+  -- and resolving against the origin is the 404 enrich.js records in its header.
+  url           TEXT NOT NULL,
+  -- The IMAGE's host, which is frequently NOT the page's, because publishers
+  -- serve figures off a CDN. Stored because the deny list and the pacer are
+  -- both applied to this host and not to the page's.
+  host          TEXT NOT NULL,
+  alt           TEXT,
+  -- The publisher's own <figcaption>. Shown as the figure's caption and NEVER
+  -- merged into the article text: quote_verify checks a quote as a literal
+  -- substring of exactly the string fetch_page returned, and a caption spliced
+  -- into that string makes every verified quote in the system unverifiable.
+  -- The column is here so the caption has somewhere to live that is not there.
+  caption       TEXT,
+  -- A short run of the page's own prose next to the image, so the accumulator
+  -- can place a figure BESIDE the claim it illustrates instead of by ordinal.
+  anchor_text   TEXT,
+  -- Where that prose sat in the pre-turndown DOM's textContent. A SORT HINT AND
+  -- NOTHING ELSE. It is not an index into mission_documents.markdown: that
+  -- column holds fetch_page's 4,000-character slice of a differently normalised
+  -- string, so indexing into it with this number would land in the wrong place
+  -- silently. -1 means the extractor did not say; 0 is a real offset.
+  text_offset   INTEGER NOT NULL DEFAULT -1,
+  -- Intrinsic size where the page declared it, 0 where it did not. 0 is not
+  -- "small", it is "unknown", and a selector must not treat the two alike.
+  width         INTEGER NOT NULL DEFAULT 0,
+  height        INTEGER NOT NULL DEFAULT 0,
+  -- Why the selector kept this one, and which positive signals fired. Stored
+  -- rather than recomputed, so a filter that starts admitting site furniture is
+  -- a query somebody can run rather than an anecdote somebody reports.
+  score         REAL NOT NULL DEFAULT 0,
+  signals       TEXT NOT NULL DEFAULT '[]',
+  -- FIGURE_STATES, about the BYTES only.
+  state         TEXT NOT NULL DEFAULT 'candidate',
+  -- The sentence for the unhappy states. A refusal with no reason is a figure
+  -- that silently never appears and no way to find out why.
+  reason        TEXT,
+  -- As SERVED, not as guessed from the extension. A path ending .png is a
+  -- publisher's claim, not a fact about the body. Re-checked by the route.
+  mime          TEXT,
+  status        INTEGER NOT NULL DEFAULT 0,
+  byte_length   INTEGER NOT NULL DEFAULT 0,
+  -- sha256 of the BYTES. mission_documents.content_hash hashes TEXT; these two
+  -- columns share a name and hash different things, which is worth saying in
+  -- the one place a reader would assume otherwise.
+  content_hash  TEXT,
+  -- NULL until state='held'. The copy we kept: a publisher URL that 404s next
+  -- month changes nothing here, which is the entire reason bytes are stored
+  -- rather than fetched when a reader opens the report.
+  bytes         BLOB,
+  -- THE STAMP OF THE PAGE VERSION THIS FIGURE WAS SEEN ON, and the answer to
+  -- "the same page fetched twice". The writer passes the SAME instant it passes
+  -- putDocument, so a figure still on the page gets last_seen_at =
+  -- mission_documents.fetched_at and a figure the publisher deleted keeps the
+  -- older stamp. Every read that feeds a screen requires the two to be equal,
+  -- so a removed image stops being drawable at the moment its page is
+  -- re-fetched, instead of being drawn for ever under a caption from a parse
+  -- nobody can check. It fails CLOSED: a future putDocument caller that forgets
+  -- putFigures hides that page's figures rather than showing stale ones.
+  last_seen_at  TEXT NOT NULL,
+  discovered_at TEXT NOT NULL,
+  fetched_at    TEXT
+) STRICT;
+
+-- Every read is "the figures of these documents", because document_id is the
+-- only way in, and every read wants the best-scoring first.
+CREATE INDEX IF NOT EXISTS ix_figures_document ON mission_figures(document_id, score DESC, text_offset);
+-- The held ceilings are counted over this. A partial index keeps that count off
+-- the candidate rows, which outnumber the held ones by design.
+CREATE INDEX IF NOT EXISTS ix_figures_held ON mission_figures(document_id)
+  WHERE state = 'held';
+-- placeableFigures asks how many DISTINCT documents one image address appears
+-- under, because an image on two different pages is site furniture and that is
+-- MEASURED rather than guessed from a filename. Without this the subquery
+-- groups the whole table on every call.
+CREATE INDEX IF NOT EXISTS ix_figures_url ON mission_figures(url);
+`;
+
+/**
+ * The `mission_figures.id` one image on one page must be stored under.
+ *
+ * Exported for the same reason `documentIdFor` is: it is half of the provenance
+ * guarantee. The writer, the byte fetcher and the route all have to mint the
+ * same id from the same pair, or a figure is stored under one key and looked up
+ * under another — and the symptom of that is a report with no pictures and
+ * nothing in any log saying why.
+ *
+ * THE PAGE IS IN THE KEY, not just the image URL. The same chart syndicated
+ * onto two sites is two figures with two attributions, and a key that collapsed
+ * them would credit whichever page happened to be absorbed second.
+ * @param documentId - the `mission_documents.id` the figure was found on.
+ * @param url - the absolute image URL.
+ * @returns lowercase hex sha256 of the pair.
+ */
+export function figureIdFor(documentId, url) {
+  const normalized = normalizeUrl(url);
+  if (normalized === undefined) {
+    throw new Error(`cannot key a figure by an unparseable url: ${JSON.stringify(url)}`);
+  }
+  return sha256(`${assertText(documentId, "documentId")}\n${normalized}`);
+}
+
+/** Lowercase hex sha256 of raw bytes. `sha256` stringifies, and would hash "[object Object]". */
+function sha256Bytes(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * Turn one joined `mission_figures` row into camelCase. NEVER carries bytes.
+ *
+ * `page` is the attribution and it travels ON the row rather than beside it.
+ * Rule 2 is a property of the thing that reaches a screen: an image whose page
+ * title and page URL arrive by a separate lookup is an image that can arrive
+ * without them. Every read below selects FIGURE_COLUMNS, which joins the page,
+ * so `page` is never null on anything a caller can obtain.
+ */
+function shapeFigure(row) {
+  if (row === undefined) return undefined;
+  return {
+    id: row.id,
+    documentId: row.document_id,
+    // The publisher's own image address. Present to be CREDITED and to be
+    // fetched by the byte driver — never handed to a browser as a `src`.
+    url: row.url,
+    host: row.host,
+    alt: row.alt ?? null,
+    caption: row.caption ?? null,
+    anchorText: row.anchor_text ?? null,
+    textOffset: row.text_offset,
+    width: row.width,
+    height: row.height,
+    score: row.score,
+    signals: parseJson(row.signals, []),
+    state: row.state,
+    reason: row.reason ?? null,
+    mime: row.mime ?? null,
+    status: row.status,
+    byteLength: row.byte_length,
+    contentHash: row.content_hash ?? null,
+    lastSeenAt: row.last_seen_at,
+    discoveredAt: row.discovered_at,
+    fetchedAt: row.fetched_at ?? null,
+    page: { documentId: row.document_id, url: row.page_url, title: row.page_title ?? null, host: row.page_host },
+  };
+}
+
 export const MISSION_MIGRATIONS = Object.freeze([
   Object.freeze({ id: "001-spine", up: (db) => db.exec(MISSION_DDL_SPINE) }),
   Object.freeze({ id: "002-corpus", up: (db) => db.exec(MISSION_DDL_CORPUS) }),
   Object.freeze({ id: "003-report", up: (db) => db.exec(MISSION_DDL_REPORT) }),
   Object.freeze({ id: "004-owner", up: (db) => db.exec(MISSION_DDL_OWNER) }),
+  // FIGURES WERE EVIDENCE WITH NOWHERE TO LIVE. `readHit` calls `readArticle`
+  // and keeps `.text`; `readArticle`'s own turndown rule strips
+  // ["img","picture","figure"] before the markdown exists, so no hop downstream
+  // ever saw an image at all. This table is where one lands.
+  //
+  // A NEW TABLE, so the migration is one CREATE IF NOT EXISTS and needs no
+  // PRAGMA guard. 005..008 each widen a table that already exists on somebody's
+  // disk and cannot do without one; this has nothing to widen.
+  //
+  // Its position is not a dependency: it references none of 005..008's tables,
+  // and `#migrate` runs the whole pending list inside ONE transaction, so
+  // either every pending entry applies or none does. It sits at the head of the
+  // block below because that block reads newest-first, which is where 008 sits.
+  Object.freeze({ id: "009-figures", up: (db) => db.exec(MISSION_DDL_FIGURES) }),
   // `args_text` landed after libraries already held tool-call rows, so the DDL
   // above cannot reach them: CREATE TABLE IF NOT EXISTS does nothing to a table
   // that exists. Without this, the first insert after an upgrade fails on a
@@ -843,6 +1106,34 @@ export const MISSION_MIGRATIONS = Object.freeze([
       const has = db.prepare("PRAGMA table_info(mission_tool_calls)").all()
         .some((column) => column.name === "args_text");
       if (!has) db.exec("ALTER TABLE mission_tool_calls ADD COLUMN args_text TEXT NOT NULL DEFAULT ''");
+    },
+  }),
+  // WHICH PICTURES A VERSION PLACED, FROZEN. `evidence` exists because the live
+  // findings and documents move on and "a versioned report must carry its own
+  // provenance regardless of what the live tables later hold"; a caption is the
+  // same kind of claim and rots the same way, only faster. `putFigures` upserts
+  // on (page, image url) — a key that deliberately survives a caption edit — and
+  // its ON CONFLICT list refreshes `caption` and `alt` in place, so the next
+  // run's parse of a rewritten <figcaption> BECOMES version 1's caption with
+  // nothing recorded anywhere. `holdFigure` does the same to `bytes` and
+  // `content_hash` when a publisher swaps the image at one address. Freeze the
+  // words and the byte hash here and version 1 stays checkable; leave them live
+  // and version 1 shows version 2's caption under version 2's picture, credited
+  // to version 1's chapter, and nothing throws.
+  //
+  // A COLUMN ADD, so it carries the PRAGMA guard 005/006/008 carry: ALTER TABLE
+  // is not idempotent and the DDL above cannot reach a table that already
+  // exists on somebody's disk. Rows written before this get '[]', which is
+  // honest — those reports placed no figures because there were none to place.
+  //
+  // At the tail rather than beside 009 because the two are independent: this
+  // widens a table 003 created and touches nothing 009 makes, so whichever runs
+  // first, the one transaction the ledger opens either applies both or neither.
+  Object.freeze({
+    id: "010-figure-manifest",
+    up: (db) => {
+      const has = db.prepare("PRAGMA table_info(mission_artifacts)").all().some((column) => column.name === "figures");
+      if (!has) db.exec("ALTER TABLE mission_artifacts ADD COLUMN figures TEXT NOT NULL DEFAULT '[]'");
     },
   }),
 ]);
@@ -1223,6 +1514,41 @@ const FINDING_COLUMNS = `
   verify_state, verify_reason, document_id, span_index, created_at
 `;
 
+/**
+ * The figure columns every read selects, WITH the page joined on.
+ *
+ * One list rather than four, because the reads differ only in their WHERE
+ * clause and a column added to one and not the others is exactly the "field
+ * that does not survive a hop" defect: the chapter's figures would quietly
+ * carry an attribution the mission's figures did not. It is also why `page` in
+ * `shapeFigure` can be unconditional — every read that produces a shaped figure
+ * goes through here, and every one of them INNER JOINs the page.
+ *
+ * `bytes` is absent and must stay absent. These reads run per render, and a
+ * metadata read that drags a megabyte a row through memory to draw a caption is
+ * the reason `figureBytes` is a separate method a reader can grep for.
+ */
+const FIGURE_COLUMNS = `
+  g.id AS id, g.document_id AS document_id, g.url AS url, g.host AS host,
+  g.alt AS alt, g.caption AS caption, g.anchor_text AS anchor_text,
+  g.text_offset AS text_offset, g.width AS width, g.height AS height,
+  g.score AS score, g.signals AS signals, g.state AS state, g.reason AS reason,
+  g.mime AS mime, g.status AS status, g.byte_length AS byte_length,
+  g.content_hash AS content_hash, g.last_seen_at AS last_seen_at,
+  g.discovered_at AS discovered_at, g.fetched_at AS fetched_at,
+  d.url AS page_url, d.title AS page_title, d.host AS page_host
+`;
+
+/**
+ * The predicate that keeps a figure tied to the page version we hold.
+ *
+ * Written once and spliced into all three scoped reads, because three copies of
+ * one rule is three chances for a renderer's query and the byte route's query
+ * to disagree about which pictures still exist — and the copy that disagreed
+ * would be the one handing out bytes.
+ */
+const FIGURE_STILL_ON_PAGE = "g.last_seen_at = d.fetched_at";
+
 /** Turn one `mission_documents` row into camelCase. */
 function shapeDocument(row) {
   if (row === undefined) return undefined;
@@ -1276,6 +1602,11 @@ function shapeArtifact(row) {
     markdown: row.markdown,
     sections: parseJson(row.sections, []),
     citations: parseJson(row.citations, []),
+    // Frozen for the same reason `evidence` is, and read back the same way. A
+    // manifest the writer stores and the shaper drops is a write-only column:
+    // every projection would see `figures: undefined`, decide the version
+    // placed none, and the freeze would protect nothing while looking applied.
+    figures: parseJson(row.figures, []),
     evidence: parseJson(row.evidence, []),
     quality: parseJson(row.quality, {}),
     wordCount: row.word_count,
@@ -3640,6 +3971,380 @@ export class MissionStore {
     }));
   }
 
+  // ── figures: the publisher's own image, and the page it came off ───────
+
+  /**
+   * Record every figure one fetched page offered. Metadata only; no bytes.
+   *
+   * THE BATCH IS THE UNIT because the page is the unit: one page absorbed, one
+   * transaction, one `last_seen_at`. A per-figure writer would let half a
+   * page's figures carry the new stamp and half the old, and the reads below
+   * would then show an arbitrary subset of a page's pictures as "still there".
+   *
+   * Cheap on purpose. This runs for every figure the selector kept on every
+   * fetched page, and a deep mission fetches hundreds; the expensive half —
+   * asking the publisher for the image — happens later and only for a page one
+   * of this run's verified findings cites. That split is what keeps the worst
+   * case at `MAX_HELD_FIGURES_PER_MISSION` rather than at the size of the fetch
+   * log.
+   *
+   * THE PAGE MUST ALREADY BE STORED, checked here rather than filtered at the
+   * read. A figure whose `document_id` names nothing is a figure with no
+   * provenance, and provenance is the only thing separating a cited figure from
+   * a fabricated one — so it is refused at the write, where the caller still
+   * knows what it was trying to do.
+   *
+   * THE SAME PAGE FETCHED TWICE upserts by `(document_id, image url)`. The
+   * publisher's own words are refreshed — alt, caption, anchor text, offset,
+   * size, score, signals — and `state`, `reason`, `mime`, `status`,
+   * `byte_length`, `content_hash`, `bytes`, `fetched_at` and `discovered_at`
+   * are deliberately NOT in the SET list. Re-reading a page's markup teaches us
+   * nothing about whether the publisher will serve us the image, and
+   * overwriting `held` with `candidate` would re-request a picture we already
+   * hold on every re-absorb, for ever — the loop `enrich.js` persists a
+   * negative to avoid, arriving from the other direction.
+   *
+   * @param documentId - `mission_documents.id` for the page these came off.
+   * @param candidates - `[{url, alt?, caption?, anchorText?, textOffset?, width?, height?, score?, signals?}]`.
+   * @param at - the ISO instant of the fetch. MUST be the same instant passed
+   *   to `putDocument` for this page, or every figure on it reads as removed.
+   * @returns `{ documentId, ids, written, dropped }`.
+   */
+  putFigures(documentId, candidates, at = new Date().toISOString()) {
+    const document = assertText(documentId, "documentId");
+    assertIso(at, "at");
+    const rows = Array.isArray(candidates) ? candidates : [];
+    return withTx(this.db, () => {
+      const page = this.db.prepare("SELECT id FROM mission_documents WHERE id = ?").get(document);
+      if (page === undefined) {
+        throw new Error(`cannot attach figures to document ${document}, which this library does not hold; store the page with putDocument() first`);
+      }
+      const write = this.db.prepare(`
+        INSERT INTO mission_figures (
+          id, document_id, url, host, alt, caption, anchor_text, text_offset,
+          width, height, score, signals, last_seen_at, discovered_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET
+          url = excluded.url, host = excluded.host, alt = excluded.alt,
+          caption = excluded.caption, anchor_text = excluded.anchor_text,
+          text_offset = excluded.text_offset, width = excluded.width,
+          height = excluded.height, score = excluded.score,
+          signals = excluded.signals, last_seen_at = excluded.last_seen_at
+      `);
+      const ids = [];
+      let dropped = 0;
+      for (const row of rows) {
+        const raw = typeof row?.url === "string" ? row.url.trim() : "";
+        let id;
+        try {
+          id = figureIdFor(document, raw);
+        } catch {
+          // An unkeyable address is dropped and COUNTED, never stored under its
+          // raw string: a figure whose id nobody else can mint is a row the
+          // route will look for under a different key and never find.
+          dropped += 1;
+          continue;
+        }
+        const text = (value, limit) => (typeof value === "string" && value.trim() !== "" ? value.trim().slice(0, limit) : null);
+        write.run(
+          id, document, raw, sourceHostOf(raw),
+          text(row?.alt, 1_000), text(row?.caption, 2_000), text(row?.anchorText, 300),
+          Number.isInteger(row?.textOffset) ? row.textOffset : -1,
+          assertCount(row?.width ?? 0, "width", 0), assertCount(row?.height ?? 0, "height", 0),
+          Number.isFinite(Number(row?.score)) ? Number(row.score) : 0,
+          JSON.stringify(Array.isArray(row?.signals) ? row.signals.map(String) : []),
+          at, at,
+        );
+        ids.push(id);
+      }
+      return { documentId: document, ids, written: ids.length, dropped };
+    });
+  }
+
+  /**
+   * Store the bytes of one figure, and say we hold them.
+   *
+   * Refuses anything outside `FIGURE_MIME_TYPES`, over `MAX_FIGURE_BYTES`, or
+   * past this document's held ceiling by RECORDING a refusal rather than by
+   * throwing: a publisher serving a 9 MB TIFF is an ordinary event, and an
+   * exception here would abandon the other figures on the same page.
+   *
+   * The CEILING IS ENFORCED HERE, not only in the driver that calls this. A
+   * ceiling that lives in a caller is a ceiling the next caller does not have,
+   * and there is no caller yet — see the risks. The per-mission ceiling needs a
+   * mission, which this row does not carry, so it stays with
+   * `heldFigureCounts`.
+   *
+   * This is the inner of the two mime checks. The route runs the outer one
+   * again over what it is about to write, because a row stored by a build whose
+   * allow list was wider must not become servable by this one.
+   *
+   * @param record - `{ id, bytes, mime, status, fetchedAt? }`; `bytes` is a Uint8Array.
+   * @returns `{ id, state, reason }`.
+   */
+  holdFigure(record) {
+    const id = assertText(record?.id, "id");
+    const fetchedAt = record?.fetchedAt ?? new Date().toISOString();
+    assertIso(fetchedAt, "fetchedAt");
+    const status = assertCount(record?.status ?? 0, "status", 0);
+    // The type as SERVED, with its parameters cut off: "image/jpeg; charset=x"
+    // IS image/jpeg, and comparing the raw header would refuse it.
+    const mime = String(record?.mime ?? "").split(";")[0].trim().toLowerCase();
+    const bytes = record?.bytes instanceof Uint8Array ? record.bytes : null;
+    const refuse = (reason) => this.refuseFigure({ id, reason, status, at: fetchedAt });
+
+    if (status < 200 || status >= 300) return refuse(`the publisher answered ${status} for this image`);
+    if (bytes === null || bytes.byteLength === 0) return refuse("the image came back empty");
+    if (!FIGURE_MIME_TYPES.includes(mime)) {
+      return refuse(`${mime === "" ? "an unnamed content type" : mime} is not one of ${FIGURE_MIME_TYPES.join(", ")}`);
+    }
+    if (bytes.byteLength > MAX_FIGURE_BYTES) {
+      return refuse(`the image is ${bytes.byteLength} bytes, over the ${MAX_FIGURE_BYTES} ceiling`);
+    }
+
+    return withTx(this.db, () => {
+      const row = this.db.prepare("SELECT document_id FROM mission_figures WHERE id = ?").get(id);
+      if (row === undefined) throw new Error(`no figure ${id} to hold bytes for; record the page's figures with putFigures() first`);
+      // `id != ?` so re-holding a figure we already hold does not count itself
+      // out and refuse a refresh of bytes we are already storing.
+      const held = this.db.prepare(
+        "SELECT COUNT(*) AS n FROM mission_figures WHERE document_id = ? AND state = 'held' AND id != ?",
+      ).get(row.document_id, id).n;
+      if (held >= MAX_HELD_FIGURES_PER_DOCUMENT) {
+        return refuse(`this page already holds ${held} figures, which is the ${MAX_HELD_FIGURES_PER_DOCUMENT} allowed`);
+      }
+      this.db.prepare(`
+        UPDATE mission_figures
+        SET state = 'held', reason = NULL, mime = ?, status = ?, byte_length = ?,
+            content_hash = ?, bytes = ?, fetched_at = ?
+        WHERE id = ?
+      `).run(mime, status, bytes.byteLength, sha256Bytes(bytes), bytes, fetchedAt, id);
+      return { id, state: "held", reason: null };
+    });
+  }
+
+  /**
+   * Record that a figure's bytes will not be held, and why.
+   *
+   * A PERSISTED NEGATIVE, which `enrich.js` already argues for on the same kind
+   * of data: "the reference persists no negative, so it re-fetches those pages
+   * forever". A refused figure is never asked for again and never served.
+   *
+   * `refused` and `failed` are kept apart because a retry policy that cannot
+   * tell them apart either re-requests a 415 for ever or never re-requests a
+   * timeout, and those are opposite mistakes. status 0 means the request never
+   * completed, which is `failed`; any status the publisher actually sent is a
+   * `refused`.
+   *
+   * IT CLEARS BYTES IT WAS HOLDING. A re-fetch that finds something we will not
+   * serve must not leave the old copy servable under a row that now says we
+   * refused it — the state column and the blob would be telling a reader two
+   * different things. The cost is named in the risks.
+   *
+   * @param record - `{ id, reason, status?, at? }`.
+   * @returns `{ id, state, reason }`.
+   */
+  refuseFigure(record) {
+    const id = assertText(record?.id, "id");
+    const reason = assertText(record?.reason, "reason");
+    const at = record?.at ?? new Date().toISOString();
+    assertIso(at, "at");
+    const status = assertCount(record?.status ?? 0, "status", 0);
+    const state = status === 0 ? "failed" : "refused";
+    const changed = this.db.prepare(`
+      UPDATE mission_figures
+      SET state = ?, reason = ?, status = ?, bytes = NULL, byte_length = 0,
+          content_hash = NULL, fetched_at = ?
+      WHERE id = ?
+    `).run(state, reason, status, at, id).changes;
+    if (changed === 0) throw new Error(`no figure ${id} to refuse; record the page's figures with putFigures() first`);
+    return { id, state, reason };
+  }
+
+  /**
+   * One figure's metadata and the page it came off, by id, unscoped. No bytes.
+   *
+   * DECLARED ONCE. Two patches proposed this name with two different row
+   * shapes, and class-method redeclaration is silent JavaScript: the second
+   * wins and every caller written against the first reads undefined without
+   * anything throwing. There is one `getFigure` and one `figureBytes` in this
+   * file, and a test counts them.
+   *
+   * Unscoped, so it is NOT a screen read — the two scoped reads below are. It
+   * exists for the byte driver, which knows an id and needs the row.
+   * @param id - the figure id.
+   * @returns the camelCase row with its `page`, or undefined.
+   */
+  getFigure(id) {
+    return shapeFigure(this.db.prepare(`
+      SELECT ${FIGURE_COLUMNS}
+      FROM mission_figures g
+      JOIN mission_documents d ON d.id = g.document_id
+      WHERE g.id = ?
+    `).get(String(id)));
+  }
+
+  /**
+   * The stored bytes of one held figure.
+   *
+   * Separate from `getFigure` so no metadata read ever drags a megabyte a row
+   * through memory to render a caption, and so the ONE place bytes leave this
+   * database is a method a reader can grep for. It does NOT check scope: the
+   * route must have satisfied itself through `figuresForMission` or
+   * `figuresForChapter` first, because an id alone says nothing about who may
+   * see it.
+   * @param id - the figure id.
+   * @returns `{ bytes, mime, byteLength, contentHash }`, or undefined when we hold none.
+   */
+  figureBytes(id) {
+    const row = this.db.prepare(`
+      SELECT bytes, mime, byte_length, content_hash FROM mission_figures
+      WHERE id = ? AND state = 'held' AND bytes IS NOT NULL
+    `).get(String(id));
+    if (row === undefined) return undefined;
+    return { bytes: Buffer.from(row.bytes), mime: row.mime, byteLength: row.byte_length, contentHash: row.content_hash };
+  }
+
+  /**
+   * The held figures of every page this run's findings cite. THE ROUTE'S SCOPE.
+   *
+   * Mirrors `documentsForMission` exactly, one table further out: a figure is
+   * this mission's when one of this run's own findings was checked against the
+   * page it came off, and nothing else is ever served under this mission's
+   * path. A byte route keyed on a figure id alone would hand anyone holding an
+   * id every image every other mission ever pulled, under a URL that says it
+   * belongs to this one.
+   *
+   * The join to `mission_documents` is not decoration either: it re-applies the
+   * 2xx and `MIN_DOCUMENT_CHARS` bar the document reader applies, so a page
+   * re-fetched into a paywall notice takes its figures out of the answer at the
+   * same moment it takes its own text out.
+   *
+   * @param missionId - the mission.
+   * @param options - `{ runCount, limit }`.
+   * @returns `[figure]`, best-scoring first, each carrying its `page`.
+   */
+  figuresForMission(missionId, { runCount, limit = MAX_HELD_FIGURES_PER_MISSION } = {}) {
+    const id = assertText(missionId, "missionId");
+    const run = runCount ?? this.db.prepare("SELECT run_count FROM missions WHERE id = ?").get(id)?.run_count ?? 1;
+    const holes = FETCH_BACKED_VERIFY_STATES.map(() => "?").join(",");
+    return this.db.prepare(`
+      SELECT DISTINCT ${FIGURE_COLUMNS}
+      FROM mission_figures g
+      JOIN mission_documents d ON d.id = g.document_id
+      JOIN mission_findings  f ON f.document_id = g.document_id
+      WHERE f.mission_id = ? AND f.run_count = ?
+        AND f.verify_state IN (${holes})
+        AND g.state = 'held' AND ${FIGURE_STILL_ON_PAGE}
+        AND d.status >= 200 AND d.status < 300 AND d.byte_length >= ?
+      ORDER BY g.score DESC, g.text_offset, g.id
+      LIMIT ?
+    `).all(id, assertCount(run, "runCount", 1), ...FETCH_BACKED_VERIFY_STATES, MIN_DOCUMENT_CHARS,
+      clampInt(limit, 1, 500, MAX_HELD_FIGURES_PER_MISSION)).map(shapeFigure);
+  }
+
+  /**
+   * The held figures of the pages ONE CHAPTER cites. RULE 3, AS A JOIN.
+   *
+   * A figure may only appear in a chapter whose own findings were checked
+   * against the page the figure came off; a figure lifted from a page the
+   * chapter does not cite is decoration presented as evidence. Enforced HERE,
+   * in SQL, and not in the renderer — a projection that filtered in JavaScript
+   * would be one filter, and the byte route would need a second one that agreed
+   * with it for ever. There is one query and both callers use it.
+   *
+   * A chapter is keyed `(mission, run, dimension, index)` and a finding is keyed
+   * `(mission, run, dimension)`, so the DIMENSION is the tightest bound this
+   * schema can express. That is a real bound rather than a formality: it
+   * excludes every page the mission fetched for another dimension, and every
+   * page it fetched and never cited at all. A tighter bound exists one table
+   * out — `mission_artifacts.citations` carries a `findingId` per citation — and
+   * belongs to the projection, not here.
+   *
+   * @param missionId - the mission.
+   * @param options - `{ runCount, dimensionId, limit }`.
+   * @returns `[figure]`, best-scoring first, each carrying its `page`.
+   */
+  figuresForChapter(missionId, { runCount, dimensionId, limit = MAX_HELD_FIGURES_PER_DOCUMENT * 4 } = {}) {
+    const id = assertText(missionId, "missionId");
+    const dimension = assertText(dimensionId, "dimensionId");
+    const run = runCount ?? this.db.prepare("SELECT run_count FROM missions WHERE id = ?").get(id)?.run_count ?? 1;
+    const holes = FETCH_BACKED_VERIFY_STATES.map(() => "?").join(",");
+    return this.db.prepare(`
+      SELECT DISTINCT ${FIGURE_COLUMNS}
+      FROM mission_figures g
+      JOIN mission_documents d ON d.id = g.document_id
+      JOIN mission_findings  f ON f.document_id = g.document_id
+      WHERE f.mission_id = ? AND f.run_count = ? AND f.dimension_id = ?
+        AND f.verify_state IN (${holes})
+        AND g.state = 'held' AND ${FIGURE_STILL_ON_PAGE}
+        AND d.status >= 200 AND d.status < 300 AND d.byte_length >= ?
+      ORDER BY g.score DESC, g.text_offset, g.id
+      LIMIT ?
+    `).all(id, assertCount(run, "runCount", 1), dimension, ...FETCH_BACKED_VERIFY_STATES, MIN_DOCUMENT_CHARS,
+      clampInt(limit, 1, 500, MAX_HELD_FIGURES_PER_DOCUMENT * 4)).map(shapeFigure);
+  }
+
+  /**
+   * The figures the byte driver may consider fetching, for a set of pages.
+   *
+   * OFFERING IS NOT PLACING. This is the candidate list, so it does not require
+   * `state = 'held'` — nothing would ever be offered if it did, and no figure
+   * would ever be fetched. Rule 3 is finished at draw time by
+   * `figuresForChapter`; this only decides what is worth spending a request on.
+   *
+   * Two exclusions, both about what a picture MEANS rather than what it is. A
+   * `url` appearing under two or more different documents is site furniture — a
+   * masthead, a share icon, an author avatar — and that is MEASURED across the
+   * corpus rather than guessed from a filename denylist, which is why it also
+   * catches furniture nobody has seen before. And a row already `refused` or
+   * `failed` is excluded, so a publisher's 403 is paid for once.
+   *
+   * @param documentIds - `mission_documents.id` values.
+   * @returns `[figure]`, best-scoring first, each carrying its `page`.
+   */
+  placeableFigures(documentIds) {
+    const ids = (Array.isArray(documentIds) ? documentIds : [])
+      .map((value) => String(value ?? "")).filter((value) => value !== "");
+    if (ids.length === 0) return [];
+    const holes = ids.map(() => "?").join(",");
+    return this.db.prepare(`
+      SELECT ${FIGURE_COLUMNS}
+      FROM mission_figures g
+      JOIN mission_documents d ON d.id = g.document_id
+      WHERE g.document_id IN (${holes})
+        AND g.state IN ('candidate', 'held')
+        AND ${FIGURE_STILL_ON_PAGE}
+        AND g.url NOT IN (
+          SELECT url FROM mission_figures GROUP BY url HAVING COUNT(DISTINCT document_id) >= 2
+        )
+      ORDER BY g.score DESC, g.text_offset, g.id
+    `).all(...ids).map(shapeFigure);
+  }
+
+  /**
+   * How many figures already hold bytes, against each ceiling.
+   *
+   * ONE STATEMENT for both numbers. A driver that read them separately would
+   * race itself between two documents of the same mission and overshoot the
+   * mission ceiling by however many pages it had in flight.
+   * @param missionId - the mission.
+   * @param options - `{ runCount, documentId }`.
+   * @returns `{ mission, document }` — counts of rows in state 'held'.
+   */
+  heldFigureCounts(missionId, { runCount, documentId } = {}) {
+    const id = assertText(missionId, "missionId");
+    const run = runCount ?? this.db.prepare("SELECT run_count FROM missions WHERE id = ?").get(id)?.run_count ?? 1;
+    const row = this.db.prepare(`
+      SELECT
+        (SELECT COUNT(DISTINCT g.id) FROM mission_figures g
+           JOIN mission_findings f ON f.document_id = g.document_id
+          WHERE f.mission_id = ? AND f.run_count = ? AND g.state = 'held') AS mission,
+        (SELECT COUNT(*) FROM mission_figures WHERE document_id = ? AND state = 'held') AS document
+    `).get(id, assertCount(run, "runCount", 1), String(documentId ?? ""));
+    return { mission: row.mission, document: row.document };
+  }
+
   // ── chapters ────────────────────────────────────────────────────────────
 
   /**
@@ -3788,6 +4493,22 @@ export class MissionStore {
     if (!Array.isArray(record?.sections)) throw new Error("an artefact needs its typed section offsets; pass sections as an array");
     if (!Array.isArray(record?.citations)) throw new Error("an artefact needs its citation list; pass citations as an array, empty if there are none");
     if (!Array.isArray(record?.evidence)) throw new Error("an artefact needs its frozen evidence blob; pass evidence as an array");
+    // OPTIONAL, unlike the three above, because every artefact written before
+    // the manifest existed had none and a required field would refuse them.
+    // But an ENTRY is not optional about its attribution: rule 2 says every
+    // image on a screen names its page and links to it, and the manifest IS the
+    // screen's source for a published version — the live row it was projected
+    // from can be gone. An entry with no page is an image the report will draw
+    // and cannot credit, so it is refused here, where the caller still knows
+    // what it was assembling, rather than rendered as a picture from nowhere.
+    const figures = Array.isArray(record?.figures) ? record.figures : [];
+    for (const figure of figures) {
+      const pageUrl = typeof figure?.pageUrl === "string" ? figure.pageUrl.trim() : "";
+      const figureId = typeof figure?.figureId === "string" ? figure.figureId.trim() : "";
+      if (pageUrl === "" || figureId === "") {
+        throw new Error(`a frozen figure needs both its figureId and the pageUrl it must be credited to; got ${JSON.stringify(figure)}`);
+      }
+    }
     const degraded = flag(record?.degraded);
     if (record.evidence.length === 0 && degraded === 0) {
       throw new Error("an artefact with no frozen evidence cannot be verified after the live tables move on; mark it degraded if that is genuinely the outcome");
@@ -3800,11 +4521,12 @@ export class MissionStore {
       this.db.prepare(`
         INSERT INTO mission_artifacts (
           mission_id, version, run_count, trigger, title, markdown, sections, citations,
-          evidence, quality, word_count, degraded, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+          figures, evidence, quality, word_count, degraded, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       `).run(
         missionId, version, runCount, record.trigger, title, markdown,
         JSON.stringify(record.sections), JSON.stringify(record.citations),
+        JSON.stringify(figures),
         JSON.stringify(record.evidence), JSON.stringify(record?.quality ?? {}),
         assertCount(record?.wordCount ?? markdown.split(/\s+/u).filter(Boolean).length, "wordCount", 0),
         degraded, at,
@@ -3833,7 +4555,7 @@ export class MissionStore {
     const id = assertText(missionId, "missionId");
     const row = shapeArtifact(this.db.prepare(`
       SELECT mission_id, version, run_count, trigger, title, markdown, sections, citations,
-             evidence, quality, word_count, degraded, created_at
+             figures, evidence, quality, word_count, degraded, created_at
       FROM mission_artifacts WHERE mission_id = ? ORDER BY version DESC LIMIT 1
     `).get(id));
     if (row !== undefined) return row;
@@ -3855,7 +4577,7 @@ export class MissionStore {
   getArtifact(missionId, version) {
     return shapeArtifact(this.db.prepare(`
       SELECT mission_id, version, run_count, trigger, title, markdown, sections, citations,
-             evidence, quality, word_count, degraded, created_at
+             figures, evidence, quality, word_count, degraded, created_at
       FROM mission_artifacts WHERE mission_id = ? AND version = ?
     `).get(String(missionId), assertCount(version, "version", 1)));
   }

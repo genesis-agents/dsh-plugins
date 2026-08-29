@@ -172,6 +172,72 @@ const MAX_UNVERIFIED_FINISH_REFUSALS = 2;
 /* ── small shared helpers ──────────────────────────────────────────────── */
 
 /**
+ * The most figure candidates one page may hand the stage.
+ *
+ * A CEILING ON THE OBSERVATION, not just on the table. The tool door truncates
+ * a result over `MAX_RESULT_CHARS` (32,000) and, for a shape with no
+ * `results[]` array, SPILLS it — and a spilled `fetch_page` result comes back as
+ * `{ok, tool, preview, _truncated}` with no `url` and no `text` at all, so
+ * `absorbObservation` drops it and the PAGE is silently never stored. That is a
+ * page of evidence lost to make room for pictures, and it is the one way this
+ * feature could damage the thing it decorates.
+ *
+ * The headroom is measured, not assumed: `readHit` slices the article to
+ * READ_BUDGET_CHARS = 4,000, so a fetch_page observation is roughly 4–5 kB
+ * against a 32,000 ceiling. Twelve candidates at the caps below is under 4 kB
+ * worst case, which leaves the result at less than a third of the ceiling.
+ */
+export const MAX_FIGURE_CANDIDATES = 12;
+
+/**
+ * The figure candidates one `fetch_page` observation offered, bounded.
+ *
+ * Everything here is REFUSED rather than repaired, because a candidate this
+ * cannot key or cannot fetch is one the store would hold under a key nothing
+ * else can mint. Three refusals in particular:
+ *
+ * - Anything that is not http(s). A `data:` URI would sail through as a "URL",
+ *   be stored as a row, and be served later as bytes NOBODY EVER FETCHED — the
+ *   page's own payload arriving through our route with our origin's authority.
+ *   Rule 4 says the browser fetches image bytes from our route; it does not say
+ *   the publisher may choose what we put there.
+ * - A relative or protocol-relative address. That means the extractor failed to
+ *   resolve against the page (`<base href>` included), and a half-resolved
+ *   address is the 404 `enrich.js` already records in its header.
+ * - Anything past the twelfth. A page with forty images is a gallery or a wall
+ *   of furniture, and the tail is the part that mattered least — the same
+ *   reasoning `truncateResult` applies to search rows.
+ *
+ * @param value - the observation's `figures` field, whatever it turns out to be.
+ * @returns `[{url, alt, caption, anchorText, textOffset, width, height, score, signals}]`.
+ */
+export function figureCandidates(value) {
+  if (!Array.isArray(value)) return [];
+  const text = (raw, limit) => (typeof raw === "string" && raw.trim() !== "" ? raw.trim().slice(0, limit) : null);
+  const whole = (raw) => (Number.isInteger(raw) && raw > 0 ? raw : 0);
+  const out = [];
+  for (const row of value) {
+    const url = typeof row?.url === "string" ? row.url.trim() : "";
+    if (!/^https?:\/\//iu.test(url)) continue;
+    out.push({
+      url,
+      alt: text(row?.alt, 1_000),
+      caption: text(row?.caption, 2_000),
+      anchorText: text(row?.anchorText, 300),
+      // -1, not 0: 0 is a real offset (the top of the article) and "the
+      // extractor did not say" is a different fact from "it said the top".
+      textOffset: Number.isInteger(row?.textOffset) ? row.textOffset : -1,
+      width: whole(row?.width),
+      height: whole(row?.height),
+      score: Number.isFinite(Number(row?.score)) ? Number(row.score) : 0,
+      signals: Array.isArray(row?.signals) ? row.signals.map(String).slice(0, 8) : [],
+    });
+    if (out.length === MAX_FIGURE_CANDIDATES) break;
+  }
+  return out;
+}
+
+/**
  * One canonical key for a page, so the model's own citation finds its own fetch.
  *
  * The model does not echo a URL back byte for byte: it drops a fragment, adds
@@ -1355,7 +1421,7 @@ async function collectOneDimension({ deps, context, dimension, policy, zh, recol
 
   // Everything the model reads and everything the stage learns about what it
   // read passes through these three.
-  const pages = new Map();          // pageKey -> {url, title, markdown}
+  const pages = new Map();          // pageKey -> {url, title, markdown, figures}
   const blocks = new Map();         // page url -> markdown, for quote_verify
   // WHEN THE PAGE WAS PUBLISHED, which only the SEARCH ever knows. `fetch_page`
   // returns the publisher's text and no date, so a finding written from the
@@ -1472,7 +1538,23 @@ async function collectOneDimension({ deps, context, dimension, policy, zh, recol
     if (body.trim() === "") return;
     const key = pageKey(value.url);
     if (pages.has(key)) return;
-    pages.set(key, { url: value.url, title: typeof value.title === "string" ? value.title : null, markdown: body });
+    // THE FIGURES TRAVEL BESIDE THE TEXT AND NEVER INSIDE IT. `body` above is
+    // the exact string `quote_verify` checks a quote against as a literal
+    // substring — `quotableAgainst` names it — so a caption or an alt attribute
+    // concatenated into it would make every verified quote in the system
+    // unverifiable at once. They get their own field here, their own table
+    // below, and nothing on either path ever joins the two.
+    //
+    // They can only arrive as a field, never through `markdown`: `readArticle`
+    // installs a turndown rule stripping ["img", "picture", "figure"] before the
+    // markdown exists, so the extractor reads the pre-turndown DOM and hands
+    // them over separately. That is why this line is the seam and not a parse.
+    pages.set(key, {
+      url: value.url,
+      title: typeof value.title === "string" ? value.title : null,
+      markdown: body,
+      figures: figureCandidates(value.figures),
+    });
     blocks.set(value.url, body);
   };
 
@@ -1725,6 +1807,15 @@ async function collectOneDimension({ deps, context, dimension, policy, zh, recol
   syncPages();
   const documents = new Map();
   for (const page of pages.values()) {
+    // ONE INSTANT FOR BOTH WRITES, read here rather than at each call. The page
+    // and its figures are two rows describing one fetch, and `mission_figures`
+    // decides whether an image is still on the page by comparing its
+    // `last_seen_at` against `mission_documents.fetched_at`. Two reads of the
+    // clock — and `now()` in a mission advances between them — make every figure
+    // on every page read as one the publisher has removed, which is a report
+    // with no pictures and nothing anywhere saying why. Per page, not hoisted
+    // out of the loop, so each document keeps its own stamp exactly as before.
+    const fetchedAt = now();
     try {
       const written = store.putDocument({
         url: page.url,
@@ -1739,9 +1830,29 @@ async function collectOneDimension({ deps, context, dimension, policy, zh, recol
         // than a silent loss; the fix belongs in mission-tools.js's fetch_page.
         markdown: page.markdown,
         status: 200,
-        fetchedAt: now(),
+        fetchedAt,
       });
       documents.set(pageKey(page.url), written);
+      // THE WRITER. Without this line `mission_figures` is a table nothing ever
+      // inserts a row into: every scoped read returns [], `held` is unreachable
+      // because nothing reaches `holdFigure`, and the ceilings count nothing.
+      //
+      // HERE, and not at the tool door, for the same reason `putDocument` is
+      // here: this is where a fetched page becomes a row that belongs to a
+      // library, and `putFigures` refuses a figure whose document is not stored,
+      // so it must run after the page and with the id the page was stored under.
+      // Metadata only — no byte is requested at collect time, because a deep
+      // mission fetches hundreds of pages and almost none of them are cited.
+      //
+      // ITS OWN try/catch, deliberately. A page is evidence and a figure is not:
+      // a figure write that throws must never make the enclosing catch log
+      // `putDocument failed` for a page that was stored perfectly well, and must
+      // never cost the mission the page.
+      try {
+        store.putFigures(written.id, page.figures, fetchedAt);
+      } catch (cause) {
+        log?.warn?.(`mission ${missionId}: putFigures(${page.url}) failed: ${cause.message}`);
+      }
     } catch (cause) {
       log?.warn?.(`mission ${missionId}: putDocument(${page.url}) failed: ${cause.message}`);
     }

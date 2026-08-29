@@ -40,7 +40,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { SourceStore } from "../lib/store.js";
 import { operativeWordFloor } from "../lib/mission-stages-back.js";
-import { MAX_READ_NOTHING_REFUSALS, renderCollectInput, priorRound } from "../lib/mission-stages-front.js";
+import { MAX_FIGURE_CANDIDATES, MAX_READ_NOTHING_REFUSALS, figureCandidates, renderCollectInput, priorRound } from "../lib/mission-stages-front.js";
 import { createBudgetPool, WRITING_RESERVE } from "../lib/mission-budget.js";
 import { WRITING_STAGES } from "../lib/mission-runtime.js";
 import { oneHostRefusal } from "../lib/mission-agent.js";
@@ -3369,4 +3369,250 @@ test("fetch_page's result literal names the figures, or they do not exist", () =
   // AND `text` IS STILL ITS OWN KEY, untouched. The figures travel beside it.
   assert.match(body, /text: doc\.text,/, "fetch_page's quotable text is no longer handed through verbatim");
   assert.ok(!/text: .*figure/i.test(body), "something folded figure metadata into the quotable string, which unverifies every quote in the system");
+});
+
+test("a figure is only reachable through the page it came off, and only in a chapter that cites it", (t) => {
+  // RULE 2 AND RULE 3, AS SQL. Both are the kind of rule a renderer can be
+  // written to honour and a second renderer written six months later cannot,
+  // which is why neither is a convention here: the attribution rides on the row
+  // because every read INNER JOINs the page, and the chapter bound is a join
+  // through mission_findings rather than a filter somebody has to remember.
+  const { missions } = library(t);
+  const id = mission(missions);
+  seedEvidence(missions, id);
+  const url = "https://example.test/solid-state-manufacturing";
+  const documentId = documentIdFor(url);
+  // seedEvidence stored the page at this instant. The figure has to carry the
+  // SAME instant or it reads as an image the page no longer contains.
+  const at = "2026-08-24T00:00:05.000Z";
+
+  const put = missions.putFigures(documentId, [
+    { url: "https://cdn.example.test/yield-by-quarter.png", caption: "Yield by quarter, pilot line", score: 8, width: 1200, height: 700, anchorText: "reached a yield of sixty two percent", textOffset: 41 },
+    { url: "not a url", caption: "unkeyable" },
+  ], at);
+  assert.equal(put.written, 1, "the keyable figure was not written");
+  assert.equal(put.dropped, 1, "an image address this library cannot key was stored anyway, under a key nothing else can mint");
+
+  // RULE 2. The page travels ON the row. A caller cannot obtain the picture
+  // without also obtaining the address it must credit and link to.
+  const [offered] = missions.placeableFigures([documentId]);
+  assert.equal(offered.page.url, url, "a figure arrived with no page behind it, which is a fabricated figure rather than a citation");
+  assert.equal(offered.page.title ?? null, missions.getDocument(documentId).title ?? null);
+  assert.equal(offered.page.documentId, documentId);
+  assert.equal(offered.state, "candidate", "a figure nobody has fetched bytes for is a candidate, not an absence");
+
+  // The bytes, and the closed mime list. `held` is reachable from the store
+  // alone; only the network driver that would normally supply these is missing.
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+  assert.equal(missions.holdFigure({ id: offered.id, bytes: png, mime: "image/png; charset=binary", status: 200, fetchedAt: at }).state, "held",
+    "a content type with parameters was refused, so every publisher that sends one loses every figure");
+  assert.equal(missions.figureBytes(offered.id).byteLength, png.byteLength);
+  assert.equal(missions.getFigure(offered.id).mime, "image/png", "the mime was stored with its parameters, so the route's second check compares against a string that is never in the allow list");
+
+  // RULE 3. d1 cites this page; d2 does not.
+  missions.upsertDimension({ missionId: id, dimensionId: "d2", name: "policy", facet: "policy" });
+  assert.equal(missions.figuresForChapter(id, { runCount: 1, dimensionId: "d1" }).length, 1,
+    "the chapter whose finding was verified against this page cannot draw its figure");
+  assert.deepEqual(missions.figuresForChapter(id, { runCount: 1, dimensionId: "d2" }), [],
+    "a chapter that cites nothing on this page was offered its picture anyway — decoration presented as evidence");
+  assert.deepEqual(missions.heldFigureCounts(id, { runCount: 1, documentId }), { mission: 1, document: 1 });
+
+  // SVG is refused on the header, not on the extension, and the refusal is a
+  // sentence rather than a silence — and it takes the bytes with it, because a
+  // row saying `refused` over a blob we would still serve is two answers.
+  const refused = missions.holdFigure({ id: offered.id, bytes: png, mime: "image/svg+xml", status: 200, fetchedAt: at });
+  assert.equal(refused.state, "refused");
+  assert.match(refused.reason, /image\/svg\+xml is not one of/u, "a refused figure carries no reason, so a report with no pictures cannot be explained");
+  assert.equal(missions.figureBytes(offered.id), undefined, "a refused figure kept the bytes it was holding, so the state column and the blob say different things");
+
+  // A figure with no page is refused at the WRITE, where the caller still knows
+  // what it was trying to do.
+  assert.throws(() => missions.putFigures("no-such-document", [{ url: "https://cdn.example.test/x.png" }], at),
+    /which this library does not hold/u,
+    "a figure was attached to a document that does not exist, which is an image with no provenance at all");
+});
+
+test("a figure the publisher deleted stops being drawable the moment its page is re-fetched", (t) => {
+  // THE ANSWER TO "THE SAME PAGE FETCHED TWICE". The row is keyed on (page,
+  // image url), so a re-fetch UPDATES the caption in place rather than inserting
+  // a second row — which is what the frozen manifest exists to survive. But a
+  // figure the publisher REMOVED has no row to update, so without `last_seen_at`
+  // it would sit there for ever and be drawn under a caption from a parse of a
+  // page that no longer contains it. That is a fabricated figure with a real
+  // URL under it, which is the worst available failure of rule 2.
+  const { missions } = library(t);
+  const id = mission(missions);
+  seedEvidence(missions, id);
+  const documentId = documentIdFor("https://example.test/solid-state-manufacturing");
+  const chart = "https://cdn.example.test/yield-by-quarter.png";
+  const photo = "https://cdn.example.test/factory-floor.jpg";
+
+  missions.putFigures(documentId, [{ url: chart, caption: "Yield by quarter" }, { url: photo, caption: "The factory floor" }], "2026-08-24T00:00:05.000Z");
+  assert.equal(missions.placeableFigures([documentId]).length, 2);
+
+  // The re-fetch: the page is stored again at a new instant, and only the chart
+  // is still on it. Both writes carry the SAME instant, which is the whole
+  // contract between putDocument and putFigures.
+  const again = "2026-08-24T06:00:00.000Z";
+  missions.putDocument({ url: "https://example.test/solid-state-manufacturing", markdown: missions.getDocument(documentId).markdown, status: 200, fetchedAt: again });
+  missions.putFigures(documentId, [{ url: chart, caption: "Yield by quarter, revised" }], again);
+
+  const placeable = missions.placeableFigures([documentId]);
+  assert.deepEqual(placeable.map((figure) => figure.url), [chart],
+    "an image the publisher removed is still offered, so a report can draw a picture the page it credits no longer contains");
+  assert.equal(placeable[0].caption, "Yield by quarter, revised", "a re-fetch did not refresh the publisher's own words");
+});
+
+test("there is one figures table and one of each figure method", () => {
+  // TWO PATCHES PROPOSED THIS TABLE AND THESE METHOD NAMES, with different
+  // columns and different row shapes. Neither collision throws where anybody
+  // would see it: a duplicate ledger entry both running CREATE TABLE fails only
+  // on a FRESH database, so the suite is green on every machine that migrated
+  // yesterday and red on the one that clones tomorrow; and a redeclared class
+  // method is legal JavaScript where the last one silently wins and every
+  // caller written against the first reads undefined. Counted here because
+  // counting is the only way either is visible.
+  const source = readFileSync(new URL("../lib/mission-store.js", import.meta.url), "utf8");
+  assert.equal(source.split("CREATE TABLE IF NOT EXISTS mission_figures").length - 1, 1,
+    "mission_figures is created more than once; on a fresh database the second exec throws and openMissionStore takes every suite that opens a store with it");
+  assert.equal(source.split("MISSION_DDL_FIGURES").length - 1, 2,
+    "the figures DDL is declared or applied more than once — one export and one ledger entry is the whole of it");
+  for (const method of ["  getFigure(", "  figureBytes(", "  putFigures(", "  holdFigure(", "  refuseFigure(", "  placeableFigures(", "  figuresForChapter("]) {
+    assert.equal(source.split(`\n${method}`).length - 1, 1, `${method.trim()} is declared twice on MissionStore; redeclaration is silent and the second one wins`);
+  }
+  // AND EVERY MIGRATION ID IS UNIQUE. A ledger keyed on a duplicated id records
+  // the first and never runs the second, for ever, on that machine only.
+  const ids = [...source.matchAll(/id: "(\d{3}-[a-z-]+)"/gu)].map((match) => match[1]);
+  assert.equal(new Set(ids).size, ids.length, `the migration ledger has ${ids.length} entries and ${new Set(ids).size} distinct ids: ${ids.join(", ")}`);
+});
+
+test("a report version keeps the caption it was published with, and the hash of the picture it placed", (t) => {
+  // THE WHOLE JUSTIFICATION FOR THE COLUMN, and it is not hypothetical: the
+  // figure row is keyed on (page, image url), which deliberately survives a
+  // caption edit, and putFigures refreshes `caption` in place. So a second run
+  // that re-fetches the page rewrites version 1's caption underneath it. The
+  // live table is CORRECT to do that — it holds what the page says now — and
+  // the artefact is correct to disagree, which is exactly why there are two.
+  const { missions } = library(t);
+  const id = mission(missions);
+  seedEvidence(missions, id);
+  const pageUrl = "https://example.test/solid-state-manufacturing";
+  const documentId = documentIdFor(pageUrl);
+  const chart = "https://cdn.example.test/yield-by-quarter.png";
+  const first = "2026-08-24T00:00:05.000Z";
+
+  const { ids: [figureId] } = missions.putFigures(documentId, [{ url: chart, caption: "Figure 1: yield by quarter" }], first);
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  missions.holdFigure({ id: figureId, bytes: png, mime: "image/png", status: 200, fetchedAt: first });
+  const placedHash = missions.getFigure(figureId).contentHash;
+
+  const version = missions.putArtifact({
+    missionId: id, runCount: 1, trigger: "initial", title: "Solid-state manufacturing",
+    markdown: "# Solid-state manufacturing\n\nThe pilot line reached sixty two percent.",
+    sections: [], citations: [], evidence: missions.verifiedFindings(id, { runCount: 1 }),
+    figures: [{ figureId, pageUrl, pageTitle: null, pageHost: "example.test", documentId, caption: "Figure 1: yield by quarter", alt: null, mime: "image/png", contentHash: placedHash, byteLength: png.byteLength, width: 0, height: 0, dimensionId: "d1", chapterIndex: 0 }],
+    quality: {}, at: "2026-08-24T01:00:00.000Z",
+  });
+
+  // The re-fetch. The publisher rewrote the caption and re-encoded the chart at
+  // the same address; both land on the same row.
+  const again = "2026-08-25T00:00:00.000Z";
+  missions.putDocument({ url: pageUrl, markdown: missions.getDocument(documentId).markdown, status: 200, fetchedAt: again });
+  missions.putFigures(documentId, [{ url: chart, caption: "Figure 2: yield by quarter (revised)" }], again);
+  missions.holdFigure({ id: figureId, bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00]), mime: "image/png", status: 200, fetchedAt: again });
+
+  const frozen = missions.getArtifact(id, version).figures;
+  assert.equal(frozen.length, 1, "the manifest did not survive the round trip; a write-only column freezes nothing while looking applied");
+  assert.equal(frozen[0].caption, "Figure 1: yield by quarter",
+    "version 1 now shows the caption of a parse it was never published with, under a picture credited to its own chapter");
+  assert.equal(frozen[0].pageUrl, pageUrl, "the frozen figure lost the page it must be credited to, so a published version can draw an image it cannot attribute");
+  assert.equal(frozen[0].contentHash, placedHash);
+  assert.notEqual(missions.getFigure(figureId).contentHash, frozen[0].contentHash,
+    "the live bytes changed and the manifest moved with them, so nothing can tell that the picture on disk is not the picture this version placed");
+  assert.equal(missions.latestArtifact(id).figures[0].caption, "Figure 1: yield by quarter",
+    "latestArtifact reads a different column list from getArtifact, so the manifest reaches one caller and not the other");
+
+  // Every artefact written before the column existed reads as "placed none",
+  // which is honest rather than a default wearing a costume.
+  const bare = missions.putArtifact({
+    missionId: id, runCount: 1, trigger: "recovered", title: "No pictures", markdown: "none",
+    sections: [], citations: [], evidence: missions.verifiedFindings(id, { runCount: 1 }), quality: {},
+    at: "2026-08-25T01:00:00.000Z",
+  });
+  assert.deepEqual(missions.getArtifact(id, bare).figures, []);
+
+  // RULE 2 AT THE WRITE. An entry with no page is an image the report will draw
+  // and cannot credit, and the live row it was projected from may be gone by
+  // the time anybody opens it.
+  assert.throws(() => missions.putArtifact({
+    missionId: id, runCount: 1, trigger: "recovered", title: "Unattributed", markdown: "x",
+    sections: [], citations: [], evidence: missions.verifiedFindings(id, { runCount: 1 }),
+    figures: [{ figureId, caption: "a picture from nowhere" }], quality: {}, at: "2026-08-25T02:00:00.000Z",
+  }), /needs both its figureId and the pageUrl/u,
+    "an artefact froze a figure with no page behind it, which is a fabricated figure with a version number on it");
+});
+
+test("every page s3 stores stores its figures too, at the same instant", () => {
+  // Read at the SOURCE because nothing in this file drives s3: it wants a
+  // model, a ledger, a cache and a pacer, and a harness that stood all four up
+  // would be testing the harness. What is being pinned is small and total — one
+  // absorb site and one storage site, and if either is missing the figures
+  // table is real, migrated, and permanently empty, which is precisely how both
+  // prior attempts at this feature shipped.
+  const front = readFileSync(new URL("../lib/mission-stages-front.js", import.meta.url), "utf8");
+
+  // ONE ABSORB SITE, and it carries the figures beside the text.
+  const setCalls = front.split("pages.set(key, {").slice(1);
+  assert.equal(setCalls.length, 1, `s3 has ${setCalls.length} places that record a fetched page and this test knows one; a new one may be storing pages with no figures`);
+  const entry = setCalls[0].slice(0, setCalls[0].indexOf("});"));
+  assert.match(entry, /figures: figureCandidates\(value\.figures\),/u,
+    "a fetched page is recorded with no figures field, so the table below is migrated, real and permanently empty");
+  assert.match(entry, /markdown: body,/u,
+    "the quotable string stopped being its own field. quote_verify checks a quote as a literal substring of exactly this, and anything else spliced in makes every verified quote in the system unverifiable");
+  assert.ok(!/caption|alt/u.test(entry.slice(entry.indexOf("markdown: body,"), entry.indexOf("figures:"))),
+    "a caption or an alt attribute reached the markdown field, which is the one string that must not change");
+
+  // ONE STORAGE SITE, and the page and its figures share one stamp.
+  assert.equal(front.split("store.putDocument({").length - 1, 1, "there is more than one place a fetched page becomes a row; each one needs its own putFigures or that page's figures are lost");
+  assert.equal(front.split("store.putFigures(").length - 1, 1, "the figure writer is missing or duplicated");
+  assert.match(front, /store\.putFigures\(written\.id, page\.figures, fetchedAt\);/u,
+    "the figures are written under a different document id or a different instant from the page they came off — a second now() here dates every figure to a page version that does not exist, and they all read as images the publisher removed");
+  assert.match(front, /const fetchedAt = now\(\);/u, "the shared instant is gone, so putDocument and putFigures each read the clock and disagree");
+  assert.match(front, /^\s+fetchedAt,$/mu, "putDocument went back to reading the clock itself");
+  // AND A FIGURE FAILURE MUST NOT COST THE PAGE.
+  assert.match(front, /putFigures\(\$\{page\.url\}\) failed/u,
+    "a figure write that throws is caught by the page's own catch, which logs `putDocument failed` for a page that was stored perfectly well and loses nothing but the diagnosis");
+});
+
+test("a figure candidate is bounded, and only ever an address we could fetch ourselves", () => {
+  // WHAT THE PUBLISHER MAY PUT IN OUR TABLE. A `data:` URI is the one that
+  // matters: it would sail through any "is it a string" check, be stored as a
+  // row, and be served later from our own origin as bytes NOBODY EVER FETCHED —
+  // the page's own payload wearing our route's authority. Rule 4 says the
+  // browser gets image bytes from our route; it does not say the publisher
+  // chooses what we put there.
+  const kept = figureCandidates([
+    { url: " https://cdn.example.test/chart.png ", caption: "  Yield by quarter  ", width: 1200, height: -3, textOffset: 0, signals: ["figure", "caption"] },
+    { url: "data:image/png;base64,iVBORw0KGgo=", caption: "the page's own payload" },
+    { url: "//cdn.example.test/protocol-relative.png" },
+    { url: "/img/unresolved.png" },
+    { url: "" },
+    null,
+  ]);
+  assert.deepEqual(kept.map((figure) => figure.url), ["https://cdn.example.test/chart.png"],
+    "an address this library could not fetch for itself was kept as a figure candidate");
+  assert.equal(kept[0].caption, "Yield by quarter");
+  assert.equal(kept[0].height, 0, "a negative intrinsic size was stored as given; 0 means the page did not say, and a selector must not read a nonsense number as a measurement");
+  assert.equal(kept[0].textOffset, 0, "offset 0 is the top of the article and was collapsed into the -1 that means the extractor never said");
+  assert.equal(figureCandidates([{ url: "https://x.test/a.png", textOffset: "nine" }])[0].textOffset, -1);
+  assert.deepEqual(figureCandidates("not an array"), [], "a non-array figures field threw or leaked instead of meaning none");
+
+  // THE CEILING IS ON THE OBSERVATION, not just on the table. Past
+  // MAX_RESULT_CHARS the tool door spills a fetch_page result to a file and
+  // hands back {ok, tool, preview} with no `url` and no `text` — so
+  // absorbObservation drops it and the PAGE is silently never stored. Pictures
+  // must never be able to cost a page.
+  const many = Array.from({ length: 40 }, (unused, index) => ({ url: `https://cdn.example.test/${index}.png` }));
+  assert.equal(figureCandidates(many).length, MAX_FIGURE_CANDIDATES,
+    "a page with forty images hands the stage all forty, which grows the observation toward the ceiling where the whole page is spilled and lost");
 });
