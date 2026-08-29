@@ -4109,3 +4109,80 @@ test("a child row draws the connector its indent only implied", () => {
     "the elbow is drawn on every child, so a child appended after its parent fell out claims whatever row happens to be above it",
   );
 });
+
+test("the rerun is on the row too, and still only where the pipeline allows one", () => {
+  // THE CONTROL WAS THREE INTERACTIONS FROM THE ROW IT ACTS ON: select the
+  // row, wait for the drawer, read to the bottom of it. `onRerunStage` has
+  // been a prop of this component all along and was only ever forwarded — the
+  // board's own 操作 cell held one link. The reference prints two controls per
+  // row, a tinted 重跑 and a 详情 link, and the rerun is the half that was
+  // missing.
+  //
+  // The gate is the same one the drawer's control is under, for the same
+  // reason: `rerunable` comes up from `dag.rerunable` through the view, the
+  // budget gate declares itself `rerunable: false`, and a button that earns a
+  // 409 teaches that this screen's controls are a guess.
+  const board = code(body("function MissionTaskBoard({"));
+
+  assert.match(board, /onRerunStage\?\.\(stage\.stepId\)/u, "the task board still only forwards the rerun to the drawer, so the row it belongs to cannot re-run itself");
+  assert.match(board, /stage\.rerunable !== true \? null : Chip\(/u, "the row's rerun is drawn without asking whether the pipeline allows it, so it is offered on the budget gate as well");
+  assert.ok(
+    !/onRerunStage\?\.\(stage\.stepId\)[\s\S]{0,400}rerunable/u.test(board),
+    "the rerunable check sits after the click handler rather than around it",
+  );
+
+  // PRESSING IT MUST NOT ALSO SELECT THE ROW. The whole `tr` is a click
+  // target, so without this the rerun opens the drawer over the board it was
+  // pressed on and reads as having navigated somewhere.
+  assert.match(
+    board,
+    /onClick: \(event\) => \{ event\.stopPropagation\(\); onRerunStage\?\.\(stage\.stepId\); \}/u,
+    "the row's rerun does not stop the row's own click, so re-running also opens the drawer",
+  );
+
+  // BOTH CONTROLS, not a swap. 看轨迹 → is the second half of the reference's
+  // pair and the only way onto the trajectory from this table.
+  assert.match(board, /"看轨迹 →" : "Trajectory →"/u, "the trajectory link was replaced by the rerun rather than joined by it");
+  assert.match(board, /icon: "refresh"/u, "the rerun on the row has no glyph, so at FONT.micro it is a second word beside a link");
+
+  // AND THE SENTENCE STAYS IN THE DRAWER. A stage that cannot be re-run
+  // carries a reason `validateStageDag` refuses to let it omit; thirty of those
+  // down a column 16% wide is not a table. The row shows nothing and the
+  // drawer explains, which is why this is a copy of the control and not a move.
+  assert.ok(!board.includes("rerunReason"), "the un-rerunable stage's reason is printed on every row of the board; it belongs to the drawer, where one row is being asked about");
+  assert.match(code(body("function MissionStageDetail({")), /stage\.rerunReason/u, "the drawer lost the reason when the board gained the button, so nothing on the screen says why a stage cannot be re-run");
+});
+
+test("the task board's table sits in the frame it claims to sit in", () => {
+  // `table` declines a border, a radius and a ground with a stated reason —
+  // "the panel around this already carries" all three — and the board then
+  // mounted that panel `bare`, which is the one prop whose whole job is to
+  // drop all three. MissionToolTable and MissionAgentTable copy the same
+  // comment into titled card panels, where it is true; the board is the table
+  // that states the rule and was the only one breaking it, so on the tasks
+  // pane it read as an unframed list under 立项目标 and 成章记录, which are cards.
+  const board = body("function MissionTaskBoard(");
+  assert.ok(
+    board.includes("ONE FRAME PER THING"),
+    "the board's table no longer records why it draws no frame of its own, and that comment is the thing this test keeps true",
+  );
+  // THE COMMENTS ARE STRIPPED, for the reason the header test one section up
+  // records: the fix explains itself in prose that names the prop it stopped
+  // passing, and a guard that reads prose is a guard broken by describing it.
+  assert.ok(
+    !code(board).includes("bare: true"),
+    "the task board mounts its panel `bare` again: the panel then draws no border, no radius and no ground, while the table inside it declines its own on the grounds that the panel has all three",
+  );
+  // AND THE ARITHMETIC STILL REACHES THE PANEL. `display.length` — what
+  // survived grouping, which is neither `stages.length` nor `work.length` — is
+  // the whole stated reason the board mounts its own panel instead of being
+  // handed one by the detail view.
+  assert.ok(
+    board.includes("count: display.length"),
+    "the board stopped passing the count it mounts its own panel in order to compute",
+  );
+  // BOTH RETURNS, one shape. An empty board that kept `bare` while a full one
+  // dropped it makes the pane appear to gain a card when the first task lands.
+  const mounts = board.split("MissionPanel, {").length - 1;
+  assert.equal(mounts, 2, `the board mounts ${mounts} panels; the empty state and the table are the two, and they must be the same shape`);
+});

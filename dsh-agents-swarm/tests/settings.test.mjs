@@ -3502,3 +3502,40 @@ test("an ungraded dimension says so rather than being handed a nought", async ()
     "the drawer says there is no grade without saying when there will be one, which is the difference between a gap and a fault",
   );
 });
+
+test("a stage row re-runs itself, and only the rows the pipeline lets re-run", async () => {
+  // THE CONTROL AT THE ROW, PRESSED. The source guard in design-tokens.test.mjs
+  // can see that the gate is written; only calling it can see that the button
+  // reaches `onRerunStage` with this row's own step id and does not also select
+  // the row underneath it.
+  const stages = [
+    { stepId: "s1-open", status: "done", attempts: 1, durationMs: 900, agent: "leader", rerunable: false, rerunReason: "re-running the gate would re-resolve caps this mission is already graded against" },
+    { stepId: "s3-collect", status: "done", attempts: 1, durationMs: 41000, agent: "researcher", rerunable: true, rerunReason: null },
+  ];
+  const pressed = [];
+  const chosen = [];
+  const board = await render("MissionTaskBoard", {
+    stages, agents: [], zh: true,
+    onRerunStage: (stepId) => { pressed.push(stepId); },
+    onSelect: (key) => { chosen.push(key); },
+  });
+
+  const reruns = findAll(board.tree, (node) => node.type === "button" && textOf(node).some((piece) => piece.includes("重跑")));
+  assert.equal(reruns.length, 1, `${reruns.length} rows offer a rerun; exactly one of these two stages declares itself rerunable, and the budget gate is the other`);
+
+  // Both rows keep the link. The rerun joined it rather than replacing it.
+  const links = findAll(board.tree, (node) => node.type === "button" && textOf(node).some((piece) => piece.includes("看轨迹")));
+  assert.equal(links.length, 2, "the trajectory link was replaced by the rerun rather than joined by it");
+
+  let stopped = false;
+  await board.act(() => { reruns[0].props.onClick({ stopPropagation: () => { stopped = true; } }); });
+  assert.deepEqual(pressed, ["s3-collect"], "the row's rerun did not reach onRerunStage with its own step id");
+  assert.ok(stopped, "the rerun let the row's own click through, so re-running also opens the drawer over the board");
+  assert.deepEqual(chosen, [], "pressing 重跑 selected the row as well, which reads as the rerun having navigated somewhere");
+
+  // And the un-rerunable stage says nothing here: its reason is a sentence
+  // `validateStageDag` refuses to let a stage omit, and it belongs to the
+  // drawer, where one row is being asked about.
+  const text = textOf(board.tree).join(" ");
+  assert.ok(!text.includes("re-resolve caps"), "the un-rerunable reason is printed on the row; thirty of those down a 16% column is not a table");
+});

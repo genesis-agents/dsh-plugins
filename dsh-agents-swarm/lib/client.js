@@ -10288,7 +10288,11 @@ window.__ModuleLoader__.load({
 				// over — once by `bare`, once by returning the notice bare — so a run
 				// with no tasks yet showed a paragraph floating on an unlabelled pane.
 				return jsx(MissionPanel, {
-					bare: true, count: 0,
+					// THE SAME CARD THE FULL BOARD DRAWS. An empty board that dropped the
+					// frame changed shape as well as content between a run with no tasks
+					// and the same run a minute later, so the pane read as GAINING a card
+					// rather than as gaining rows.
+					count: 0,
 					children: jsx(MissionEmptyPane, {
 					mission, zh,
 					waiting: zh
@@ -10635,16 +10639,62 @@ window.__ModuleLoader__.load({
 										}, "took"),
 										jsx("td", {
 											style: { ...TD, textAlign: "right" },
-											children: !ran || stage === null ? null : jsx("button", {
-												type: "button",
-												style: { font: FONT.micro,
-													appearance: "none", border: "none", background: "transparent",
-													padding: 0, cursor: "pointer",
-													color: "var(--dsw-alias-state-business-primary)"
+											// TWO CONTROLS, WHICH IS WHAT THIS COLUMN IS FOR. The
+											// reference prints a tinted 重跑 beside a 详情 link on every
+											// row; ours printed one link, and the rerun — the only thing
+											// a person does TO a row rather than with it — was three
+											// interactions away: select the row, wait for the drawer, read
+											// to the bottom of it. `onRerunStage` was already a prop here
+											// and was only being forwarded.
+											//
+											// COPIED, NOT MOVED. The drawer keeps its own control: it is
+											// where the un-rerunable stage's REASON is printed, and that
+											// sentence has nowhere to go in a cell this wide.
+											children: !ran || stage === null ? null : jsxs("div", {
+												// `inline-flex`, so the cell's own `textAlign: "right"` is
+												// still what places it, and `flexWrap` so a narrow window
+												// stacks the pair instead of pushing one past the edge.
+												style: {
+													display: "inline-flex", alignItems: "center",
+													justifyContent: "flex-end", gap: SPACE.sm, flexWrap: "wrap"
 												},
-												onClick: (event) => { event.stopPropagation(); onOpenStage?.(stage.stepId); },
-												children: zh ? "看轨迹 →" : "Trajectory →"
-											}, "open")
+												children: [
+													// THE PIPELINE'S ANSWER, ASKED HERE TOO, and the third
+													// state is still not "assume yes". `rerunable` comes up
+													// from `dag.rerunable` through the view, so a row that does
+													// not carry it is offered nothing — the budget gate is
+													// `rerunable: false` for a reason, and a button that earns a
+													// 409 teaches that this screen's controls are a guess.
+													stage.rerunable !== true ? null : Chip({
+														// TINTED HERE, NEUTRAL IN THE DRAWER, and the difference
+														// is the surface rather than the act. The drawer spends
+														// its colour on the stage that degraded; a table cell has
+														// no such budget, and an untinted control at FONT.micro
+														// beside a link is indistinguishable from the link.
+														tone: TONE.info,
+														icon: "refresh",
+														label: zh ? "重跑" : "Re-run",
+														// IT SAYS THE CASCADE, in the drawer's own words. Two
+														// characters cannot carry "and everything after it", so
+														// the title does — never nothing.
+														title: zh ? "重跑这一步及其下游" : "Re-run this step and everything after it",
+														// THE ROW'S OWN CLICK SELECTS IT. Without this, pressing
+														// 重跑 also opens the drawer over the board it was pressed
+														// on, which reads as the rerun having navigated somewhere.
+														onClick: (event) => { event.stopPropagation(); onRerunStage?.(stage.stepId); }
+													}, "rerun"),
+													jsx("button", {
+														type: "button",
+														style: { font: FONT.micro,
+															appearance: "none", border: "none", background: "transparent",
+															padding: 0, cursor: "pointer",
+															color: "var(--dsw-alias-state-business-primary)"
+														},
+														onClick: (event) => { event.stopPropagation(); onOpenStage?.(stage.stepId); },
+														children: zh ? "看轨迹 →" : "Trajectory →"
+													}, "open")
+												]
+											}, "controls")
 										}, "action")
 									]
 								}, node.id ?? String(at));
@@ -10706,7 +10756,16 @@ window.__ModuleLoader__.load({
 			// exists to forbid, and the two would disagree exactly when the board is
 			// most worth reading.
 			return jsxs(MissionPanel, {
-				bare: true,
+				// NOT `bare`, AND THE COMMENT IN `table` IS WHY. That element declines
+				// a border, a radius and a ground on the stated grounds that "the panel
+				// around this already carries" all three — and this mount then passed
+				// the one prop whose whole job is to drop all three, so the claim was
+				// true for the two tables that copied the comment and false for the one
+				// that states it. This is also not what `bare` is for: `bare` is scoped
+				// to a panel that IS the pane, and on the tasks pane this one is
+				// followed by 立项目标, 成章记录 and the rest, every one of them a card.
+				// An unframed list under framed cards is verbatim the defect
+				// MissionAgentTable's "THE FRAME THIS TABLE NEVER HAD" describes.
 				count: display.length,
 				action: key,
 				children: [
