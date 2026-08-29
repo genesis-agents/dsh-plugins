@@ -3908,29 +3908,52 @@ test("a table cell has room for two lines", () => {
   // reads as one line again. A row is as tall as what it has to say.
   const td = SOURCE.slice(SOURCE.indexOf("const TD = {"), SOURCE.indexOf("};", SOURCE.indexOf("const TD = {")));
   assert.ok(!/height: "30px"/.test(td), "TD pins a fixed 30px height again, which crushes the two-line name cell");
-  assert.ok(td.includes("padding: `10px ${SPACE.sm}`"), "TD has no vertical padding, so its rows hug their content the way a log does");
+  assert.ok(td.includes("padding: `${SPACE.lg} ${SPACE.md}`"), "TD is back to 10px of vertical air — a log line's rhythm, and 18px short of the reference's two-line row");
 });
 
 test("a category and a state differ in the corner and in nothing else", () => {
-  // The shape IS the meaning here: a CATEGORY takes RADIUS.sm, a STATE takes
+  // The shape IS the meaning: a CATEGORY takes RADIUS.sm, a STATE takes
   // RADIUS.pill, and both docblocks say so. What neither said, and what was
-  // true, is that the two also differed in height. Over the same
-  // `600 12px/16px`, `pillStyle`'s wide step padded `1px ${SPACE.sm}` for 18px
-  // and `Chip`'s wide step padded `2px 8px` for 20px — a second difference on
-  // top of the one that was decided, and the narrow step had agreed at
-  // `1px 6px` all along.
+  // true, is that the two also differed in HEIGHT — one padded by hand, the
+  // other through pillStyle, and the two arithmetics landed two pixels apart.
+  //
+  // THIS TEST USED TO PIN THE MECHANISM RATHER THAN THE RULE. It asserted one
+  // exact literal, so when the chip moved to the reference's 26px and the
+  // variable that literal mentioned stopped existing, the guard failed for
+  // having its old implementation taken away rather than for anything being
+  // wrong. A guard written against one spelling of an answer expires the first
+  // time the answer is spelled differently.
+  //
+  // What is held instead: EVERY STEP THE PILL DECLARES, THE CHIP DECLARES TOO.
+  // Directional on purpose. `Chip` also pads its count badge, which is a
+  // nested span and not a box a pill is ever drawn beside; requiring the two
+  // sets to be equal would make that badge's padding a violation, and it is
+  // not one. What must not happen is a pill step the chip does not match.
   const chip = code(body("function Chip("));
   const pill = code(body("function pillStyle("));
-  assert.ok(
-    chip.includes("padding: wide ? `1px ${SPACE.sm}`"),
-    "the chip pads its wide step by hand again, so a category stands two pixels taller than the state pill beside it",
-  );
-  assert.ok(
-    pill.includes("padding: `1px ${SPACE.sm}`"),
-    "pillStyle's wide step moved and the chip that was matched to it did not",
-  );
-  assert.ok(chip.includes('"1px 6px"'), "the chip's narrow step no longer matches the pill's, which is the half that was never wrong");
-  assert.ok(pill.includes('padding: "1px 6px"'), "pillStyle's narrow step no longer matches the chip's");
+
+  const paddings = (source) => [...source.matchAll(/padding: (`[^`]*`|"[^"]*")/g)].map((m) => m[1]);
+  const pillSteps = paddings(pill);
+  assert.ok(pillSteps.length >= 2, "pillStyle no longer declares two steps, so there is nothing for the chip to agree with");
+  for (const step of pillSteps) {
+    assert.ok(
+      chip.includes(step),
+      `pillStyle pads ${step} and the chip has no step that matches it, so a category and a state beside it stand at different heights`,
+    );
+  }
+
+  // AND BOTH OF THEM ARE ON THE CHIP'S OWN BOX, not scattered across it. The
+  // box is the declaration written beside its corner.
+  const NL = String.fromCharCode(10);
+  const rows = chip.split(NL);
+  const cornerAt = rows.findIndex((row) => /borderRadius: RADIUS\.sm/.test(row));
+  assert.notEqual(cornerAt, -1, "the category chip lost its corner");
+  const box = rows[cornerAt - 1];
+  for (const step of pillSteps) {
+    assert.ok(box.includes(step), `the chip's box does not offer ${step}; it is somewhere else in the function, which is not the same object`);
+  }
+
+  assert.ok(pill.includes("RADIUS.pill"), "the state pill lost its corner");
   assert.equal(
     [...chip.matchAll(/"2px 8px"/g)].length,
     0,
@@ -5294,5 +5317,99 @@ test("the panel head counts in a sentence, not in a box the colour of its own ru
   assert.ok(
     SOURCE.split("COUNT_CHIP").length - 1 >= 12,
     "COUNT_CHIP lost its other callers too; the ten figures that live inside rows are back to bare monospace in the tertiary colour",
+  );
+});
+
+test("a chip stands where the reference's chip stands, and the pill still agrees", () => {
+  // MEASURED ON BOTH SIDES. gens.team/agent-playground draws its chips at about
+  // 26px with a 13px label. Every chip in this file stood 18px with an 11px one:
+  // `--dsw-font-xxxs-strong-11` is a 16px line box and `Chip` padded it a single
+  // pixel top and bottom, and `pillStyle` did the same. Forty-one call sites,
+  // eight pixels short each — which is not a chip that reads dense, it is a
+  // different object, and it is most of why a row of ours reads as a toolbar
+  // where the reference's reads as a set of labels.
+  //
+  // 26 IS ARITHMETIC. FONT.bodyStrong is `600 13px/18px`; 18 + 4 + 4 = 26. The
+  // corner was already right — RADIUS.sm is 6px and the reference's rounded-md
+  // is 6px — which is why this is a height finding and not a shape one.
+  const chip = code(body("function Chip("));
+  assert.match(
+    chip,
+    /font: dense \? FONT\.microStrong : FONT\.bodyStrong/,
+    "the chip's default step is back under 13px, so every label on the page is two sizes below the reference's",
+  );
+  assert.match(
+    chip,
+    /padding: dense \? "1px 6px" : `4px \$\{SPACE\.sm\}`/,
+    "the chip pads one pixel again: an 18px box where the reference draws 26",
+  );
+  // THE DENSE STEP IS AN EXCEPTION WITH A CALLER, not a second geometry. The
+  // trajectory row is 38px because the host app's row is 38px, and a tag plus a
+  // role mark plus a gap have 96px to live in there.
+  assert.match(
+    chip,
+    /const dense = size === "xs"/,
+    "`size` no longer names the dense step, so the one row whose geometry is the host app's has no way to ask for it",
+  );
+  assert.equal(
+    SOURCE.split('size: "xs"').length - 1,
+    1,
+    "the dense step has no caller, or more than the one row that needs it — either way it is a second geometry rather than an exception",
+  );
+  // AND THE TWO STEPS STILL AGREE, which is what the previous round bought: a
+  // chip and a pill on the same row differ in the corner and in nothing else.
+  const pill = declaration("function pillStyle(");
+  assert.match(
+    pill,
+    /font: FONT\.bodyStrong, padding: `4px \$\{SPACE\.sm\}`/,
+    "the pill pads differently from the chip again — the eight-pixel disagreement this file closed once, reopened at the other end",
+  );
+  assert.match(
+    pill,
+    /font: FONT\.microStrong, padding: "1px 6px"/,
+    "the pill's dense step no longer matches the chip's, so the trajectory row holds two boxes at two heights again",
+  );
+});
+
+test("the two table recipes indent to the same column, and neither pins a height", () => {
+  // COUNTED, NOT DESCRIBED. TD padded `10px ${SPACE.sm}`, so a one-line cell
+  // stood 36px and the task board's two-line name cell stood 54. The
+  // reference's rows are ~72px with two lines in them, which is most of what
+  // is left of "it is still visibly not the reference" on a screen made of
+  // tables. SPACE.lg vertical takes those to 48 and 66.
+  //
+  // THE INSET IS THE HALF THAT CANNOT DRIFT. TH and TD agreed at 8px by
+  // accident rather than by rule — nothing held them together — and the task
+  // board's name cell has a whole paragraph about the two pixels that put 任务
+  // out of line with its own column header. Moving one alone reproduces that
+  // defect on all six tables at four times the width.
+  const cell = scale("TD");
+  const head = scale("TH");
+  assert.match(cell, /padding: `\$\{SPACE\.lg\} \$\{SPACE\.md\}`/, "the data cell lost the vertical air that makes its two-line row a row rather than a log line");
+  assert.match(head, /padding: `\$\{SPACE\.sm\} \$\{SPACE\.md\}`/, "the header cell lost its own air, or went back to being a pinned box");
+  // The LAST SPACE step in a two-value padding is the horizontal one. Taken
+  // that way rather than by position, so a three-value padding written later
+  // is read correctly instead of scoring its top edge as its inset.
+  const inset = (source) => [...(/padding: `([^`]*)`/.exec(source)?.[1] ?? "").matchAll(/SPACE\.(\w+)/g)].pop()?.[1];
+  assert.ok(inset(cell) !== undefined, "TD's padding is no longer a SPACE step, so the column inset is a literal again");
+  assert.equal(
+    inset(cell),
+    inset(head),
+    "TH and TD indent their text by different amounts, so every column label on every table sits off the column beneath it",
+  );
+  // NEITHER PINS A PIXEL HEIGHT. `height: "30px"` was TH's and
+  // `minHeight: "30px"` was TD's, and both are the claim TD's docblock
+  // refuses: a box is as tall as what it has to say plus its air. TD's could
+  // not bind once the air was real, which is the honest reason to delete it
+  // rather than raise it.
+  // `declared(...)`, NOT THE RAW SLICE. TD's docblock now explains that a
+  // minHeight of 30px USED to sit here and why deleting it was the honest
+  // move — so the guard fired on the sentence recording its own fix. Fifth
+  // time in this file, and the rule is the same every time: a check that can
+  // match prose is a check on prose.
+  const declared = (source) => source.split(String.fromCharCode(10)).filter((line) => !line.trim().startsWith("//")).join(String.fromCharCode(10));
+  assert.ok(
+    !/height: "[0-9]+px"/i.test(declared(cell) + declared(head)),
+    "a table cell pins a pixel height again, which crushes the two-line name cell back into something the eye reads as one line",
   );
 });

@@ -431,8 +431,14 @@ window.__ModuleLoader__.load({
 		* @returns a style object to spread.
 		*/
 		function pillStyle(tone, size) {
+			// THE SAME TWO STEPS AS THE CHIP, WITH THE SAME AIR. "md" is the
+			// reference's 26px — `600 13px/18px` in an 18px line box plus four pixels
+			// top and bottom — and the unnamed step is the dense one the 38px
+			// trajectory row keeps. A pill that padded 1px while the chip beside it
+			// padded 4 would put back the eight-pixel disagreement this file already
+			// closed once, reopened at the other end.
 			const step = size === "md"
-				? { font: FONT.smallStrong, padding: `1px ${SPACE.sm}`, gap: SPACE.xs }
+				? { font: FONT.bodyStrong, padding: `4px ${SPACE.sm}`, gap: SPACE.xs }
 				: { font: FONT.microStrong, padding: "1px 6px", gap: SPACE.xs };
 			return {
 				...step,
@@ -595,7 +601,16 @@ window.__ModuleLoader__.load({
 		const TH = {
 			font: FONT.smallStrong,
 			boxSizing: "border-box",
-			height: "30px", padding: `0 ${SPACE.sm}`,
+			// PADDING, NOT A HEIGHT — the rule `TD` states one object down, applied
+			// to the header that was still ignoring it. 8px over 16px of line stands
+			// this at 32, within two pixels of the 30 it was pinned to, and it now
+			// grows with its label instead of clipping one.
+			//
+			// TWELVE OF INSET, BECAUSE `TD` MOVED TO TWELVE. A column label that
+			// indents by a different amount from the column under it is the defect
+			// the task board records at its name cell; there it was two pixels and
+			// nobody had noticed for a year.
+			padding: `${SPACE.sm} ${SPACE.md}`,
 			// INK.secondary, not the spec's `label-tertiary`. A column header is
 			// a word the reader has to read to know what the column is, and
 			// INK's docblock puts tertiary at 3.71:1 — the decoration budget.
@@ -616,7 +631,24 @@ window.__ModuleLoader__.load({
 			// is a log line's rhythm — correct while every cell held one short
 			// string, wrong the moment the name cell became a title over a
 			// sentence. A row is as tall as what it has to say plus its air.
-			minHeight: "30px", padding: `10px ${SPACE.sm}`,
+			// VERTICAL PADDING, NOT A FIXED HEIGHT — AND NOT A FLOOR EITHER. The
+			// `minHeight: "30px"` that used to sit here could not bind once the air
+			// was real: 32px of padding alone clears it on an empty cell. It read as
+			// a decision and was not one, and it was the last raw pixel in this pair.
+			//
+			// SPACE.lg VERTICAL, COUNTED OFF THE SCREEN. `10px ${SPACE.sm}` stood a
+			// one-line cell at 36px (16px of line plus 20 of air) and the task
+			// board's two-line name cell at 54 (16 + 2 + 16 + 20). The reference's
+			// rows are ~72px with two lines in them. Sixteen takes the two-line row
+			// to 66 and the one-line row to 48; the six pixels still short are in the
+			// reference's larger type, which is a different change from this one.
+			//
+			// AND THE HORIZONTAL STEP MOVES WITH `TH`'s, ALWAYS. The two agreed at 8
+			// and have to go on agreeing: the name cell one region below carries a
+			// paragraph about the two pixels that put 任务 out of line with its own
+			// column header, and an inset that moves alone is exactly that defect,
+			// four pixels wide, on all six tables at once.
+			padding: `${SPACE.lg} ${SPACE.md}`,
 			color: INK.primary,
 			overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
 			borderBottom: `1px solid ${LINE.rule}`
@@ -1262,19 +1294,37 @@ window.__ModuleLoader__.load({
 		*/
 		function Chip({ tone, label, icon, count, size, title, solid, pill, onClick, className }, key) {
 			const hue = tone ?? TONE.neutral;
-			const wide = size === "sm";
+			// THE DENSE STEP IS THE EXCEPTION NOW, AND IT HAS ONE CALLER. `size`
+			// used to read "sm is the big one", which is why the trajectory asked for
+			// "xs" and got the same 18px box every other chip got — a name that does
+			// nothing is worse than no name, because it looks like the request was
+			// honoured. It reads the other way round now: passing nothing gets the
+			// reference's chip, and only "xs" buys the dense one back, for the one
+			// place that needs it — the 96px tag slot on a 38px trajectory row, whose
+			// geometry is the host app's and not ours to grow.
+			const dense = size === "xs";
 			const pressable = typeof onClick === "function";
-			const shape = pill === true ? pillStyle(hue, wide ? "md" : "sm") : {
-				font: wide ? FONT.smallStrong : FONT.microStrong,
+			const shape = pill === true ? pillStyle(hue, dense ? "sm" : "md") : {
+				font: dense ? FONT.microStrong : FONT.bodyStrong,
 				display: "inline-flex", alignItems: "center", boxSizing: "border-box",
-				// ONE PIXEL OF AIR AT BOTH STEPS, SO THE CORNER IS THE ONLY DIFFERENCE
-				// LEFT. `pillStyle` pads its 12px step `1px ${SPACE.sm}` and this padded
-				// the same step `2px 8px` over the same `600 12px/16px`, so a category
-				// chip stood 20px tall beside an 18px state pill. The docblock above says
-				// the shape carries the meaning and names the corner as the shape; a
-				// second, undecided difference in height says it twice and disagrees once.
-				// The narrow step already agreed at `1px 6px`; this is the half that did not.
-				gap: SPACE.xs, padding: wide ? `1px ${SPACE.sm}` : "1px 6px",
+				// TWENTY-SIX PIXELS, AND IT IS ARITHMETIC RATHER THAN TASTE. The
+				// reference draws its chips at about 26px with a 13px label. Every chip
+				// in this file stood 18px with an 11px one: `--dsw-font-xxxs-strong-11`
+				// is a 16px line box and this padded it a single pixel top and bottom.
+				// Eight pixels short across forty-one call sites is not a chip that reads
+				// dense, it is a different object — and it is most of why a row of ours
+				// reads as a toolbar where the reference's reads as a set of labels.
+				//
+				// FONT.bodyStrong is `600 13px/18px`, so 18 + 4 + 4 = 26 exactly. The
+				// corner does not move: RADIUS.sm is 6px and 6px is the reference's
+				// rounded-md, which is the one measurement that already agreed.
+				//
+				// THE AIR STILL AGREES AT BOTH STEPS, which is the invariant the last
+				// round bought and this one keeps rather than spends: `pillStyle` pads
+				// its 13px step the same `4px ${SPACE.sm}` and its dense step the same
+				// `1px 6px`, so a chip and a pill on one row still differ in the corner
+				// and in nothing else.
+				gap: SPACE.xs, padding: dense ? "1px 6px" : `4px ${SPACE.sm}`,
 				borderRadius: RADIUS.sm,
 				background: `rgba(${hue},${TINT.soft})`,
 				color: `rgb(${hue})`,
