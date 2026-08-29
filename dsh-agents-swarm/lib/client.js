@@ -3902,6 +3902,19 @@ window.__ModuleLoader__.load({
 		const ARTICLE_HEADING_SIZES = { 1: "24px", 2: "20px", 3: "18px", 4: "16px" };
 
 		/**
+		* An ordinal the chapter writer put at the front of its own heading.
+		*
+		* THREE SCHEMES, MEASURED IN ONE REPORT: `一、` eight times, `1. ` seven
+		* times, and nothing seven times. The report derives its own numbers from
+		* the section table, so any of these is a SECOND number beside the first.
+		*
+		* THE PUNCTUATION IS REQUIRED. `2026年的算力供给` is a heading that starts
+		* with a number and is not numbered, and a pattern that ate its year would
+		* be worse than the defect it fixes.
+		*/
+		const WRITER_ORDINAL = /^(?:第[ \t]*[0-9〇一二三四五六七八九十百]+[ \t]*[章节][ \t]*[、.：:]?|[0-9]{1,2}[ \t]*[.、)）]|[〇一二三四五六七八九十百]{1,3}[ \t]*[、.)）])[ \t]*/u;
+
+		/**
 		* A figure reference in a chapter's markdown: `:::figure N`, then a `:::`.
 		*
 		* N IS A 1-BASED INDEX INTO `mission_artifacts.figures`, the manifest
@@ -4185,26 +4198,49 @@ window.__ModuleLoader__.load({
 				if (heading !== null) {
 					flushParagraph();
 					flushList();
-					const level = heading[1].length;
+					let level = heading[1].length;
+					// THE WRITER'S OWN ORDINAL, TAKEN OFF BEFORE ANYTHING IS DRAWN.
+					//
+					// Measured on the finished mission: it numbered its sub-headings `一、`
+					// eight times, `1. ` seven times, and not at all seven times — three
+					// schemes in one document, none agreeing with the chapter list beside it.
+					// The report derives its numbers from the section table, so a number in
+					// the heading TEXT is a second one, and two numberings on one heading is
+					// one of them being wrong.
+					const titled = article ? heading[2].replace(WRITER_ORDINAL, "") : heading[2];
 					// The stem, decided before anything is drawn. See `numbering` above.
 					let stem = "";
 					if (numbering !== null && level === 2) {
 						const expected = numbering.table[numbering.taken];
-						numbering.sub = 0;
 						// `assemble` writes `## ${heading}` from the same column the section
 						// row carries, and `asText` trimmed it on the way in, so this is a
 						// string comparison against the string that produced the line.
 						if (expected !== undefined && expected.heading === heading[2]) {
 							numbering.taken += 1;
 							numbering.chapter = expected.number;
+							numbering.sub = 0;
 							stem = `${expected.number}. `;
+						} else if (numbering.chapter !== null) {
+							// AN h2 THE TABLE DID NOT PUT HERE IS NOT A CHAPTER — AND IT IS NOT
+							// NOTHING EITHER. This branch used to leave it unnumbered at chapter
+							// size, which is honest about what it is not and says nothing about
+							// what it is. Measured: eight chapters, THIRTY `##` headings, so
+							// twenty-two things on screen looked exactly like chapters beside a
+							// list with eight rows in it.
+							//
+							// The section table settles it: a heading the table does not hold is
+							// a heading inside the chapter it follows. Demoted to the third
+							// level and numbered under that chapter, which is where the
+							// reference puts its 2.1.
+							//
+							// The cursor is still NOT advanced: the next real chapter keeps the
+							// number the list beside it prints.
+							level = 3;
+							numbering.sub += 1;
+							stem = `${numbering.chapter}.${numbering.sub}. `;
 						} else {
-							// UNNUMBERED AND UNCOUNTED. An h2 the table did not put here is
-							// not a chapter, so it takes no number AND does not advance the
-							// cursor — the next real chapter still gets the number the list
-							// beside it prints. Numbering the stray is one defect; letting it
-							// consume the cursor is the same defect once per chapter after it.
-							numbering.chapter = null;
+							// Before the first chapter there is nothing to hang a sub-number on.
+							numbering.sub = 0;
 						}
 					} else if (numbering !== null && level === 3 && numbering.chapter !== null) {
 						numbering.sub += 1;
@@ -4258,7 +4294,7 @@ window.__ModuleLoader__.load({
 						// The stem is part of the heading TEXT, not a floated ornament: a
 						// reader who copies "9.1. 术语谱系" out of the pane should get the
 						// number they would cite it by.
-						children: stem === "" ? renderInline(heading[2], `h${key}`, refs) : [stem, ...renderInline(heading[2], `h${key}`, refs)]
+						children: stem === "" ? renderInline(titled, `h${key}`, refs) : [stem, ...renderInline(titled, `h${key}`, refs)]
 					}, `h${key++}`));
 					continue;
 				}

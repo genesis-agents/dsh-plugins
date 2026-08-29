@@ -4887,11 +4887,44 @@ test("a chapter's number is the chapter list's number, or there is no number", (
   );
   // AND DOES NOT ADVANCE THE CURSOR. Numbering the stray is one defect; letting
   // it consume a slot is the same defect once per chapter after it.
+  //
+  // Written against the CURSOR rather than against the line that used to sit
+  // beside it. This assertion read `indexOf("numbering.taken += 1") <
+  // indexOf("numbering.chapter = null;")`, and the branch it was watching no
+  // longer sets the chapter to null — a stray h2 is a sub-heading now, not a
+  // nothing — so the guard was holding a landmark instead of a guarantee.
   const branch = markdown.slice(markdown.indexOf("if (numbering !== null && level === 2)"));
+  const advances = [...branch.matchAll(/numbering\.taken \+= 1/gu)];
+  assert.equal(advances.length, 1, `the cursor is advanced in ${advances.length} places inside the level-2 branch; one stray heading then shifts every number after it off the list`);
   assert.ok(
-    branch.indexOf("numbering.taken += 1") < branch.indexOf("numbering.chapter = null;"),
-    "the unmatched branch advances the cursor, so one stray heading shifts every number after it off the list",
+    advances[0].index < branch.indexOf("} else if (numbering.chapter !== null) {"),
+    "the cursor is advanced outside the arm that matched a section, so a heading the table never vouched for consumes a chapter's number",
   );
+
+  // A STRAY h2 IS A SUB-HEADING, NOT A CHAPTER AND NOT NOTHING.
+  //
+  // MEASURED ON THE FINISHED MISSION: eight chapters, THIRTY `##` headings.
+  // `assemble` writes exactly one per chapter, so twenty-two came from inside
+  // the chapter bodies — and they were drawn unnumbered AT CHAPTER SIZE, which
+  // is honest about what they are not and silent about what they are. Thirty
+  // things that look like chapters, beside a list with eight rows in it.
+  assert.match(
+    markdown,
+    /\} else if \(numbering\.chapter !== null\) \{[\s\S]{0,900}?level = 3;[\s\S]{0,200}?numbering\.sub \+= 1;/u,
+    "an h2 the section table does not hold is drawn at chapter size again, so a reader cannot tell a chapter from a heading inside one",
+  );
+
+  // AND THE WRITER'S OWN ORDINAL COMES OFF. It numbered its sub-headings three
+  // different ways in one report — `一、` eight times, `1. ` seven times, and
+  // not at all seven times — none of which agreed with the number the report
+  // derives. Two numberings on one heading is one of them being wrong.
+  assert.match(SOURCE, /const WRITER_ORDINAL = /u, "nothing strips the writer's own ordinal, so its number and the report's are printed side by side");
+  assert.match(markdown, /heading\[2\]\.replace\(WRITER_ORDINAL, ""\)/u, "the heading is drawn with whatever number the writer put in front of it");
+  assert.ok(
+    !/renderInline\(heading\[2\]/u.test(markdown),
+    "the heading is still drawn from the raw text, so stripping the ordinal changed nothing a reader can see",
+  );
+
   // A SUB-HEADING HANGS OFF A CHAPTER THAT HAS ONE. `numbering.chapter` is null
   // for an h2 the table did not vouch for, and "null.1." under it would be the
   // renderer printing its own bookkeeping into the report.
