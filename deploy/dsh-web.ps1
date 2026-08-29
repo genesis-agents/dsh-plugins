@@ -54,7 +54,13 @@ function Start-Harness {
     $arguments = "`"$dsh`" web --no-open --port $Port"
     $workdir = $env:USERPROFILE
   }
-  $process = Start-Process -FilePath $node -ArgumentList $arguments -WorkingDirectory $workdir -WindowStyle Hidden -PassThru
+  # ITS OUTPUT GOES SOMEWHERE. Hidden with no redirect, a harness that dies
+  # in its first second leaves a supervisor log reading only "harness exited"
+  # -- which is what turned an EADDRINUSE loop into an afternoon. Two files
+  # because Start-Process refuses to point both streams at one.
+  $outLog = "$LogPath.harness.out"
+  $errLog = "$LogPath.harness.err"
+  $process = Start-Process -FilePath $node -ArgumentList $arguments -WorkingDirectory $workdir -WindowStyle Hidden -PassThru -RedirectStandardOutput $outLog -RedirectStandardError $errLog
   Write-Log "started harness pid $($process.Id)"
   return $process
 }
@@ -98,13 +104,53 @@ function Stop-Harness {
 # second would bind-fail in a loop and fill the log with it.
 if (Test-Harness) { Write-Log 'already serving; supervisor exiting'; exit 0 }
 
+# ONE SUPERVISOR PER PORT, held for the life of the process.
+#
+# The check above is a moment, and two supervisors started while the harness
+# was between restarts both passed it. The loser then spent five days starting
+# a harness that died on EADDRINUSE, sleeping 25s, probing a port the WINNER
+# was answering -- so its health check passed every time and it never logged a
+# failure. A metronomic restart every 55 seconds, and each doomed process
+# opened the profile, the session store and the library on its way down.
+#
+# A mutex is a fact about the machine, not a moment in time.
+$owned = $false
+$scope = "Global"
+try {
+  $mutex = New-Object System.Threading.Mutex($false, "Globaldsh-web-supervisor-$Port")
+} catch {
+  # Global needs SeCreateGlobalPrivilege, which a plain user may not have.
+  # Per-session is weaker than per-machine and still closes the common case,
+  # and a supervisor that logs WHICH it got is a supervisor whose guard can
+  # be checked from outside instead of assumed.
+  $scope = "Local"
+  $mutex = New-Object System.Threading.Mutex($false, "Localdsh-web-supervisor-$Port")
+}
+# WaitOne(0), not the constructor's initiallyOwned flag. The flag reports
+# ownership through an out-parameter that PowerShell 5.1 fills unreliably --
+# measured: a second process read $owned as True while the first still held
+# the handle, which is the single failure a lock must not have.
+try { $owned = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $owned = $true }
+if (-not $owned) { Write-Log "another supervisor already owns port $Port ($scope); this one is exiting"; exit 0 }
+Write-Log "holding the $scope supervisor lock for port $Port"
+
 Write-Log "supervisor starting for port $Port"
 $harness = $null
 $fails = 0
 
 while ($true) {
   if ($null -eq $harness -or $harness.HasExited) {
-    if ($null -ne $harness) { Write-Log 'harness exited' }
+    if ($null -ne $harness) {
+      Write-Log 'harness exited'
+      # The mutex should make this unreachable. It is here anyway because
+      # the failure it catches is silent: restarting into a port another
+      # process is serving produces a harness that dies instantly and a
+      # health probe that passes, which reads as healthy forever.
+      if (Test-Harness) {
+        Write-Log 'the port is served by a harness this supervisor did not start; exiting rather than restarting into EADDRINUSE'
+        exit 0
+      }
+    }
     $harness = Start-Harness
     $fails = 0
     # It reads a profile, composes a plugin tree, and opens a database before
