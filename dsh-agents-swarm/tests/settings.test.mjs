@@ -1967,6 +1967,16 @@ test("cancel, rerun and resume reach the route", async () => {
   assert.ok(!text.includes("中止"), "a terminal mission still offers a cancel");
   assert.ok(text.includes("从检查点继续"), "a resumable mission does not offer a resume");
 
+  // THE TWO RERUN MODES ARE BEHIND ONE VERB NOW. The header carried seven
+  // controls beside a 16px title and the reference carries two, so 全新重跑 and
+  // 增量重跑 — one verb with two modes — became one 重跑 menu. Found by
+  // `aria-haspopup` rather than by its word, because the task board draws a
+  // per-row 重跑 as well and `button()` takes the first match in the tree.
+  const rerunMenu = find(second.tree, (node) => node.type === "button"
+    && node.props?.["aria-haspopup"] === "menu"
+    && textOf(node).some((piece) => piece.includes("重跑")));
+  assert.ok(rerunMenu, "there is no way to reach a rerun at all");
+  await second.act(() => { rerunMenu.props.onClick(); });
   await second.act(() => { button(second.tree, "全新重跑").props.onClick(); });
   const rerun = posted.find((call) => call.url.endsWith("/rerun"));
   assert.ok(rerun, "重跑 sent nothing");
@@ -2680,10 +2690,28 @@ test("the download follows the version on screen", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   await open(view, SIGNED.topic);
-  const anchor = (tree) => find(tree, (node) => node.type === "a" && typeof node.props?.download === "string");
+  // THE FOUR EXPORTS ARE BEHIND ONE 导出 CONTROL NOW, so reaching one is two
+  // presses rather than one. What this test is about did not change: the row
+  // it opens is still a real `<a download>` against the same GET, and its href
+  // and its filename still have to follow the version on screen. The helper
+  // opens the menu, reads the markdown row, and shuts it again so the next
+  // call starts from the same state.
+  const anchor = async () => {
+    const trigger = find(view.tree, (node) => node.type === "button"
+      && node.props?.["aria-haspopup"] === "menu"
+      && textOf(node).some((piece) => piece.includes("导出")));
+    assert.ok(trigger, "there is no way to reach the exports at all");
+    await view.act(() => { trigger.props.onClick(); });
+    const hit = find(view.tree, (node) => node.type === "a" && typeof node.props?.download === "string");
+    assert.ok(hit, "the export menu opened onto nothing a browser can save");
+    const props = hit.props;
+    await view.act(() => { trigger.props.onClick(); });
+    return props;
+  };
 
-  assert.ok(!anchor(view.tree).props.href.includes("version="), "the newest report is asked for by number");
-  assert.ok(anchor(view.tree).props.download.endsWith("-v2.md"), "the filename does not say which version it is");
+  const newest = await anchor();
+  assert.ok(!newest.href.includes("version="), "the newest report is asked for by number");
+  assert.ok(newest.download.endsWith("-v2.md"), "the filename does not say which version it is");
 
   await pane(view, "报告");
   await view.act(() => { chip(view.tree, "第 1 版").props.onClick(); });
@@ -2693,8 +2721,9 @@ test("the download follows the version on screen", async () => {
   );
   // A reader looking at v1 who presses 下载 and receives v3 has been handed a
   // different document than the one on their screen.
-  assert.ok(anchor(view.tree).props.href.includes("version=1"), "the download still points at the newest version");
-  assert.ok(anchor(view.tree).props.download.endsWith("-v1.md"), "the filename does not follow the version on screen");
+  const older = await anchor();
+  assert.ok(older.href.includes("version=1"), "the download still points at the newest version");
+  assert.ok(older.download.endsWith("-v1.md"), "the filename does not follow the version on screen");
 });
 
 // ── the trajectory's filters ────────────────────────────────────────────────

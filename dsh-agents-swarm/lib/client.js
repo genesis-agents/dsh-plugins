@@ -728,6 +728,13 @@ window.__ModuleLoader__.load({
 			// builder that switches its own hover off.
 			`.swm-back{background:transparent;color:${INK.secondary}}`,
 			`.swm-back:hover{background:${SURFACE.hover};color:${INK.primary}}`,
+			// A MENU ROW IS A LIST ROW, and this sheet already has the rule for
+			// one: transparent ground, no border, no radius until the pointer
+			// arrives, and gray-50 under it when it does. `SURFACE.hover` IS that
+			// gray-50 — the same fill `.swm-tr` and `.swm-back` take — so the
+			// export menu does not invent a third hover in this file.
+			`.swm-menuitem{background:transparent;transition:background ${MOTION.fast}}`,
+			`.swm-menuitem:hover{background:${SURFACE.hover}}`,
 
 			// ── motion ───────────────────────────────────────────────────
 			// The first animation in 11,248 lines, and it arrives WITH its
@@ -12605,6 +12612,127 @@ window.__ModuleLoader__.load({
 		* who assumes it is empty, which is exactly what happened when the numbers
 		* lived only inside the pane they described.
 		*/
+		/**
+		* SEVEN CONTROLS IN THE SPACE THE REFERENCE GIVES TWO.
+		*
+		* gens.team's mission header carries a back arrow, a rounded-square
+		* glyph, a 24px title, one meta line, one status pill and a gear. Ours
+		* carried the same left half and then SIX controls: 全新重跑, 增量重跑,
+		* 下载 .md, 证据 .csv, 引用 .csv and .json. Measured in English at
+		* FONT.small with CONTROL.sm and 10px of padding those six run about
+		* 636px, and with SPACE.md between them the action group alone is close
+		* to 700px — on a row that also has to hold an 80px back button, a 28px
+		* mark, a ~90px status pill and a title block whose flex basis is 200px.
+		* Below roughly 1140px of frame the row wrapped, so the fixed chrome
+		* above the panes was two bands rather than one, on a screen whose next
+		* element is a table.
+		*
+		* THE EXPORTS ARE NOT LOST AND THEY ARE STILL ANCHORS. `href` and
+		* `download` come through to a real `<a>`, so every one of them is the
+		* same GET the browser already knew how to save, still right-clickable,
+		* still copyable, still openable in a new tab. What each row gains is the
+		* SENTENCE the header row had no width for: 证据 .csv and 引用 .csv sat
+		* beside each other reading as two spellings of one thing, and neither
+		* said what was in it.
+		*
+		* A ROW WITH AN `onSelect` AND NO `href` RENDERS AS A BUTTON, which is
+		* what the two rerun modes are — they POST.
+		* @param label - the trigger's word.
+		* @param items - `{id, label, note, href, download, onSelect}` per row.
+		* @param busy - whether the action behind the trigger is in flight.
+		* @param disabled - whether the trigger refuses.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionHeaderMenu({ label, items, busy, disabled, zh }) {
+			const [open, setOpen] = useState(false);
+			const rootRef = useRef(null);
+			// The dismissal ExportMenu already uses, plus Escape. A popover that
+			// shuts only by pressing its own trigger sits over the tab strip until
+			// the reader finds the trigger again — and this one opens directly
+			// above the strip.
+			useEffect(() => {
+				if (!open) return;
+				const onPointerDown = (event) => {
+					if (rootRef.current !== null && !rootRef.current.contains(event.target)) setOpen(false);
+				};
+				const onKeyDown = (event) => { if (event.key === "Escape") setOpen(false); };
+				document.addEventListener("pointerdown", onPointerDown, true);
+				document.addEventListener("keydown", onKeyDown, true);
+				return () => {
+					document.removeEventListener("pointerdown", onPointerDown, true);
+					document.removeEventListener("keydown", onKeyDown, true);
+				};
+			}, [open]);
+			const rows = (items ?? []).filter((entry) => entry !== null && entry !== undefined);
+			// A trigger that opens an empty sheet is worse than no trigger.
+			if (rows.length === 0) return null;
+			return jsxs("div", {
+				ref: rootRef,
+				style: { position: "relative", flex: "none" },
+				children: [
+					jsxs("button", {
+						type: "button",
+						"aria-haspopup": "menu",
+						"aria-expanded": open === true,
+						disabled: disabled === true,
+						className: "swm-ctl swm-focus",
+						style: {
+							...controlStyle(disabled === true), font: FONT.small, height: CONTROL.sm,
+							padding: "0 8px 0 10px", flex: "none",
+							display: "inline-flex", alignItems: "center", gap: SPACE.xs
+						},
+						onClick: () => { setOpen((value) => !value); },
+						children: [
+							jsx("span", { children: busy === true ? (zh ? "正在处理…" : "Working…") : label }, "label"),
+							jsx(Icon, { name: "chevronDown", size: ICON.xs }, "glyph")
+						]
+					}, "trigger"),
+					!open ? null : jsx("div", {
+						role: "menu",
+						style: {
+							// `LINE.hair`, NOT `LINE.rule`, and the docblock on LINE is
+							// the reason: this is a container's OUTER edge sitting under
+							// its own shadow. There is no divider BETWEEN the rows at
+							// all — four hairlines inside a four-item menu is a table.
+							position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 20,
+							minWidth: "252px", maxWidth: "320px", padding: SPACE.xs,
+							borderRadius: RADIUS.md, border: `1px solid ${LINE.hair}`,
+							background: SURFACE.card, boxShadow: ELEVATION.floating,
+							display: "flex", flexDirection: "column"
+						},
+						children: rows.map((entry) => jsxs(entry.href === undefined ? "button" : "a", {
+							role: "menuitem",
+							type: entry.href === undefined ? "button" : undefined,
+							href: entry.href,
+							download: entry.download,
+							className: "swm-menuitem swm-focus",
+							style: {
+								appearance: "none", border: "none", background: "transparent",
+								display: "flex", flexDirection: "column", alignItems: "stretch",
+								gap: "2px", padding: `6px ${SPACE.sm}`, textAlign: "left",
+								borderRadius: RADIUS.sm, textDecoration: "none", cursor: "pointer"
+							},
+							onClick: () => {
+								setOpen(false);
+								entry.onSelect?.();
+							},
+							children: [
+								jsx("span", { style: { font: FONT.small, color: INK.primary }, children: entry.label }, "label"),
+								// THE SENTENCE, on its own line under the name. It is the
+								// task board's own row shape — a title over a sentence —
+								// and it is the whole reason four exports read as four
+								// different things here and did not on the header row.
+								(entry.note ?? "") === "" ? null : jsx("span", {
+									style: { font: FONT.micro, color: INK.secondary, whiteSpace: "normal" },
+									children: entry.note
+								}, "note")
+							]
+						}, entry.id))
+					}, "menu")
+				]
+			});
+		}
+
 		function MissionDetailTabs({ pane, setPane, zh, findings, steps, stages, spend }) {
 			// The set gens.team's playground arrived at for the same object, and
 			// it is taken rather than re-derived: 任务列表 · 协作动态 · 输出报告 ·
@@ -12930,12 +13058,18 @@ window.__ModuleLoader__.load({
 			const meta = [
 				missionFace(MISSION_TIER_FACES, mission.depth, zh),
 				zh ? `第 ${mission.runCount} 次运行` : `run ${mission.runCount}`,
-				progress.dimensionsTotal > 0
-					? (zh ? `维度 ${progress.dimensionsResolved}/${progress.dimensionsTotal}` : `dimensions ${progress.dimensionsResolved}/${progress.dimensionsTotal}`)
-					: "",
-				progress.chaptersTotal > 0
-					? (zh ? `章节 ${progress.chaptersDone}/${progress.chaptersTotal}` : `chapters ${progress.chaptersDone}/${progress.chaptersTotal}`)
-					: "",
+				// AND THEY TRAIL, because the line is one line now. It is clipped
+				// with an ellipsis rather than wrapped — a second row of 12px grey
+				// under a 16px title is 16px of fixed chrome on every tab of every
+				// mission — so the ORDER decides what a narrow window loses. The
+				// four that lead are stated nowhere else on this screen: the tier,
+				// which run this is, the Leader's signature and grade, and when it
+				// started. These two are drawn in full one click away — 成章记录 on
+				// the 任务 pane is a row per chapter with how each one landed, and
+				// the same pane's board is a row per dimension — so what the
+				// ellipsis eats is the pair a reader can still go and read, never a
+				// fact that would then exist only in a screenshot.
+				//
 				// THE SCORE, and the Leader's own word for it. The sign-off drew a
 				// full-width row above every pane to carry one sentence and one figure —
 				// and the 完成 chip four inches up had already said the run was signed, so
@@ -12955,7 +13089,13 @@ window.__ModuleLoader__.load({
 						? `领队已签署${(mission.verdict ?? "") === "" ? "" : `（${mission.verdict}）`} ${mission.score}/100`
 						: `signed by the leader${(mission.verdict ?? "") === "" ? "" : ` (${mission.verdict})`} ${mission.score}/100`)
 					: "",
-				formatStamp(mission.startedAt)
+				formatStamp(mission.startedAt),
+				progress.dimensionsTotal > 0
+					? (zh ? `维度 ${progress.dimensionsResolved}/${progress.dimensionsTotal}` : `dimensions ${progress.dimensionsResolved}/${progress.dimensionsTotal}`)
+					: "",
+				progress.chaptersTotal > 0
+					? (zh ? `章节 ${progress.chaptersDone}/${progress.chaptersTotal}` : `chapters ${progress.chaptersDone}/${progress.chaptersTotal}`)
+					: ""
 			].filter((piece) => piece !== "").join(" · ");
 
 			// WHAT IS LEFT of the strip's spend line. Tokens and the score moved
@@ -13036,53 +13176,56 @@ window.__ModuleLoader__.load({
 					onClick: () => { void act("resume"); },
 					children: busy === "resume" ? (zh ? "正在继续…" : "Resuming…") : (zh ? "从检查点继续" : "Resume")
 				}, "resume"),
-				!mission.terminal ? null : jsx("button", {
-					type: "button",
-					disabled: busy !== "",
-					className: "swm-ctl swm-focus", style: { ...controlStyle(busy !== ""), font: FONT.small, height: CONTROL.sm, padding: "0 10px", flex: "none" },
-					onClick: () => { void act("rerun", { mode: "fresh" }); },
-					children: busy === "rerun" ? (zh ? "正在重跑…" : "Rerunning…") : (zh ? "全新重跑" : "Rerun from scratch")
-				}, "rerun"),
-				!mission.terminal ? null : jsx("button", {
-					type: "button",
-					disabled: busy !== "",
-					className: "swm-ctl swm-focus", style: { ...controlStyle(busy !== ""), font: FONT.small, height: CONTROL.sm, padding: "0 10px", flex: "none" },
-					onClick: () => { void act("rerun", { mode: "incremental" }); },
-					children: zh ? "增量重跑" : "Rerun incrementally"
-				}, "rerunIncremental"),
-				!hasReport ? null : jsx("a", {
-					// The version on screen, in the query AND in the filename. Both halves
-					// matter: the query is what makes the file the one being read, and the
-					// filename is what stops three downloads of three versions from
-					// overwriting each other in the downloads folder.
-					href: `${apiBase()}/missions/${encodeURIComponent(missionId)}/report.md`
-						+ (reportVersion > 0 ? `?version=${reportVersion}` : ""),
-					download: `${missionId}${shownVersion > 0 ? `-v${shownVersion}` : ""}.md`,
-					className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm, padding: "0 10px", flex: "none", display: "inline-flex", alignItems: "center", textDecoration: "none" },
-					children: zh ? "下载 .md" : "Download .md"
-				}, "download")
-				,
-				// THE OTHER THREE. The reference exports markdown, a facts CSV, a
-				// citations CSV and JSON; this offered markdown alone, so the evidence a
-				// reader might actually want in a spreadsheet — 104 verified findings with
-				// their quotes, hosts and stamps — could only be read one row at a time on
-				// a screen.
+				// ONE VERB AND ONE MENU, which is all the reference's header row
+				// spends on controls. This block WAS four of them wide — 全新重跑,
+				// 增量重跑, and a 下载 .md anchor with three more beside it — and
+				// see MissionHeaderMenu's docblock for what that measured.
 				//
-				// Four plain anchors rather than a menu: each is a GET a browser already
-				// knows how to save, they need no state, and a link the user can copy or
-				// open in a tab is worth more than a dropdown that only works from here.
-				...(!hasReport ? [] : [
-					{ id: "facts.csv", zh: "证据 .csv", en: "Evidence .csv" },
-					{ id: "citations.csv", zh: "引用 .csv", en: "Citations .csv" },
-					{ id: "report.json", zh: ".json", en: ".json" }
-				].map((format) => jsx("a", {
-					href: `${apiBase()}/missions/${encodeURIComponent(missionId)}/${format.id}`
-						+ (reportVersion > 0 ? `?version=${reportVersion}` : ""),
-					download: `${missionId}${shownVersion > 0 ? `-v${shownVersion}` : ""}.${format.id.split(".").pop()}`,
-					className: "swm-ctl swm-focus",
-					style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm, padding: "0 10px", flex: "none", display: "inline-flex", alignItems: "center" },
-					children: zh ? format.zh : format.en
-				}, format.id)))
+				// NOTHING MOVED MORE THAN ONE PRESS AWAY. Both menus list every
+				// option they replaced, in the same order, and each option now
+				// carries the sentence saying what it is that a 100px button could
+				// never hold.
+				!mission.terminal ? null : jsx(MissionHeaderMenu, {
+					zh,
+					label: zh ? "重跑" : "Rerun",
+					busy: busy === "rerun",
+					disabled: busy !== "",
+					items: [
+						{
+							id: "fresh",
+							label: zh ? "全新重跑" : "Rerun from scratch",
+							note: zh ? "从头再跑一遍；上一次的结果一条也不删" : "start over; nothing from the previous run is deleted",
+							onSelect: () => { void act("rerun", { mode: "fresh" }); }
+						},
+						{
+							id: "incremental",
+							label: zh ? "增量重跑" : "Rerun incrementally",
+							note: zh ? "只补这次没跑完的部分" : "only the parts this run did not finish",
+							onSelect: () => { void act("rerun", { mode: "incremental" }); }
+						}
+					]
+				}, "rerun"),
+				!hasReport ? null : jsx(MissionHeaderMenu, {
+					zh,
+					label: zh ? "导出" : "Export",
+					items: [
+						{ id: "report.md", zh: "报告 .md", en: "Report .md", zhNote: "写好的那一版报告，原文", enNote: "the report as it was written" },
+						{ id: "facts.csv", zh: "证据 .csv", en: "Evidence .csv", zhNote: "每条通过核验的发现一行，带原句、来源与时间", enNote: "one row per verified finding, with its quote, host and stamp" },
+						{ id: "citations.csv", zh: "引用 .csv", en: "Citations .csv", zhNote: "报告里引到的每一处出处", enNote: "every source the report cites" },
+						{ id: "report.json", zh: "全量 .json", en: "Everything .json", zhNote: "这次运行的完整投影，机器读的那一份", enNote: "the whole projection of this run, for a machine to read" }
+					].map((format) => ({
+						id: format.id,
+						label: zh ? format.zh : format.en,
+						note: zh ? format.zhNote : format.enNote,
+						// The version on screen, in the query AND in the filename. Both halves
+						// matter: the query is what makes the file the one being read, and the
+						// filename is what stops three downloads of three versions from
+						// overwriting each other in the downloads folder.
+						href: `${apiBase()}/missions/${encodeURIComponent(missionId)}/${format.id}`
+							+ (reportVersion > 0 ? `?version=${reportVersion}` : ""),
+						download: `${missionId}${shownVersion > 0 ? `-v${shownVersion}` : ""}.${format.id.split(".").pop()}`
+					}))
+				}, "export")
 			].filter((entry) => entry !== null);
 
 			return jsx("div", {
@@ -13165,7 +13308,32 @@ window.__ModuleLoader__.load({
 											title: mission.topic,
 											children: mission.topic
 										}, "topic"),
-										jsx("div", { style: META_STYLE, children: meta }, "meta")
+										jsx("div", {
+											// ONE LINE, CLIPPED, NOT WRAPPED. Six dot-joined facts
+											// measure about 540px in English and the title block's
+											// flex basis is 200px, so on every frame narrower than
+											// about 1400px this ran to two rows — 16px of fixed
+											// chrome above the panes, on a screen whose next
+											// element is a table, and the user has twice said the
+											// chrome is what is costing them.
+											//
+											// META_STYLE IS A ROW OF ITEMS and this is one joined
+											// sentence: `text-overflow` has nothing to clip inside
+											// a flex container, the anonymous item just wraps. So
+											// the two things worth sharing are taken by name and
+											// the box is a block.
+											//
+											// AND THE WHOLE LINE IS ON `title`. The tail is the
+											// pair the 任务 pane redraws in full, so nothing here
+											// is reachable only by hovering — but a hover is still
+											// cheaper than a click, and it costs nothing.
+											style: {
+												font: META_STYLE.font, color: META_STYLE.color,
+												whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+											},
+											title: meta,
+											children: meta
+										}, "meta")
 									]
 								}, "who"),
 								// The same state pill the list row carries, one size up
@@ -14631,7 +14799,7 @@ window.__ModuleLoader__.load({
 									flex: 1, minWidth: 0, textAlign: "left", appearance: "none",
 									border: "none", background: "transparent", padding: 0, cursor: "pointer",
 									font: open ? FONT.bodyStrong : FONT.body,
-									lineHeight: "19px", color: INK.primary,
+									color: INK.primary,
 									// Truncated in the list, wrapped when open: the row
 									// being listened to is worth two lines, the forty
 									// below it are not.
@@ -14858,7 +15026,7 @@ window.__ModuleLoader__.load({
 												style: { flex: 1, minWidth: 0 },
 												children: [
 													jsx("span", {
-														style: { display: "block", color: INK.primary, lineHeight: "18px" },
+														style: { font: FONT.body, display: "block", color: INK.primary },
 														children: row.title
 													}),
 													jsx("span", {
@@ -15013,7 +15181,7 @@ window.__ModuleLoader__.load({
 										jsxs("span", {
 											style: { flex: 1, minWidth: 0 },
 											children: [
-												jsx("span", { style: { color: INK.primary, lineHeight: "18px" }, children: row.title }),
+												jsx("span", { style: { font: FONT.body, color: INK.primary }, children: row.title }),
 												jsx("span", {
 													style: { font: FONT.micro, display: "block", marginTop: "2px", color: INK.secondary },
 													children: `${sourceNameOf(row)} · ${formatDate(row.publishedAt)}`
@@ -15120,7 +15288,7 @@ window.__ModuleLoader__.load({
 																flex: 1, minWidth: 0, textAlign: "left", appearance: "none",
 																border: "none", background: "transparent", padding: 0, cursor: "pointer",
 																font: open ? FONT.bodyStrong : FONT.body,
-																lineHeight: "19px", color: INK.primary,
+																color: INK.primary,
 																...(open ? {} : { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" })
 															},
 															children: record.title
@@ -15745,7 +15913,7 @@ window.__ModuleLoader__.load({
 											jsxs("span", {
 												style: { flex: 1, minWidth: 0 },
 												children: [
-													jsx("span", { style: { color: INK.primary, lineHeight: "18px" }, children: row.title }),
+													jsx("span", { style: { font: FONT.body, color: INK.primary }, children: row.title }),
 													jsx("span", {
 														style: { font: FONT.micro, display: "block", marginTop: "2px", color: INK.secondary },
 														children: `${sourceNameOf(row)} · ${formatDate(row.publishedAt)}`

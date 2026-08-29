@@ -237,7 +237,7 @@ test("radii and icon sizes stay countable", () => {
 test("raw style values only ever decrease", () => {
   // Measured 2026-08-26, the day FONT/SPACE/RADIUS/ICON landed. Lower these in
   // the commit that migrates a batch; never raise one.
-  const ceiling = { fontSize: 0, fontWeight: 9, lineHeight: 10, borderRadius: 0, gap: 5 };
+  const ceiling = { fontSize: 0, fontWeight: 9, lineHeight: 5, borderRadius: 0, gap: 5 };
   const counted = {
     fontSize: [...SOURCE.matchAll(/fontSize: "\d+px"/g)].length,
     fontWeight: [...SOURCE.matchAll(/fontWeight: \d+/g)].length,
@@ -2686,7 +2686,15 @@ test("the mission header is a band, and the meta line is inside it", () => {
   // THE META LINE IS A CHILD, not a sibling. It used to be rendered after the
   // header's closing brace — a second line of grey text under a bordered
   // strip, belonging to neither the header nor the pane.
-  assert.match(bar[0], /style: META_STYLE, children: meta/, "the meta line is outside the band again");
+  // MATCHED ON `meta` ITSELF, not on the style object the line used to take
+  // whole. The claim this assertion is named for is unchanged — the meta line
+  // is a CHILD of the band — but the line is clipped to one row now, and
+  // `text-overflow` has nothing to clip inside META_STYLE's flex box: a joined
+  // sentence in a flex container is an anonymous item that wraps. So it takes
+  // that object's font and colour by name instead of spreading it, and pinning
+  // the old literal would be this guard asserting a style rather than the
+  // structure it exists for.
+  assert.match(bar[0], /title: meta,\s*children: meta/, "the meta line is outside the band again");
   assert.match(bar[0], /roleTone\("leader"\)/, "the run lost its mark, so the band opens with a back button and a sentence");
 });
 
@@ -4185,4 +4193,134 @@ test("the task board's table sits in the frame it claims to sit in", () => {
   // dropped it makes the pane appear to gain a card when the first task lands.
   const mounts = board.split("MissionPanel, {").length - 1;
   assert.equal(mounts, 2, `the board mounts ${mounts} panels; the empty state and the table are the two, and they must be the same shape`);
+});
+
+test("the mission header spends two controls where it spent seven", () => {
+  // MEASURED, on a terminal run that has a report. The action group was
+  // 全新重跑, 增量重跑, 下载 .md, 证据 .csv, 引用 .csv and .json — six controls
+  // at FONT.small in CONTROL.sm with 10px of padding, about 636px of label
+  // boxes plus 60px of SPACE.md between them — on a row that also carries an
+  // 80px back button, a 28px mark, a ~90px status pill and a title block whose
+  // flex basis is 200px. Below roughly 1140px of frame the row wrapped and the
+  // fixed chrome above the panes became two bands. gens.team's own header row
+  // spends one status pill and one gear.
+  const detail = code(body("function MissionDetail("));
+  const at = detail.indexOf("const missionActions = [");
+  assert.notEqual(at, -1, "the header's action array is gone or renamed");
+  const actions = detail.slice(at, detail.indexOf("].filter((entry) => entry !== null);", at));
+
+  assert.equal(
+    actions.split('jsx("a", {').length - 1,
+    0,
+    "an export link is back on the header row itself, and four of those are what pushed the row onto two lines",
+  );
+  assert.equal(
+    actions.split("jsx(MissionHeaderMenu,").length - 1,
+    2,
+    "the header no longer holds exactly two menus — one verb for the reruns, one for the exports — so either one was unfolded back into loose buttons or a third has grown",
+  );
+
+  // AND NOTHING WAS LOST. The exports were asked for explicitly and are recent
+  // work: every route the six controls reached is still named here, and the
+  // version on screen still rides in the query AND in the filename.
+  for (const kept of ["report.md", "facts.csv", "citations.csv", "report.json", "全新重跑", "增量重跑"]) {
+    assert.ok(actions.includes(kept), `${kept} was dropped rather than folded`);
+  }
+  assert.ok(
+    actions.includes("reportVersion > 0 ? `?version=${reportVersion}`"),
+    "an export downloads the latest version while the reader is looking at an older one",
+  );
+
+  // THE ROWS ARE STILL ANCHORS, which is the whole of the argument the docblock
+  // this replaced made for four bare links: each is a GET the browser already
+  // knows how to save, right-clickable and copyable. A row with an `href` has
+  // to render as an <a>; a row with an `onSelect` POSTs and is a button.
+  const menu = code(body("function MissionHeaderMenu("));
+  assert.match(
+    menu,
+    /entry\.href === undefined \? "button" : "a"/,
+    "the menu draws every row as one element, so either the exports stopped being real links or the two reruns became anchors that navigate",
+  );
+  assert.ok(
+    menu.includes("download: entry.download"),
+    "the menu row drops the download filename, so three downloads of three versions overwrite each other in the downloads folder",
+  );
+  // AND IT SHUTS BY ITSELF. It opens directly over the tab strip.
+  assert.ok(menu.includes("pointerdown"), "the menu closes only by pressing its own trigger, so it sits over the tab strip until the reader finds the trigger again");
+  assert.ok(menu.includes('event.key === "Escape"'), "the menu cannot be dismissed from the keyboard");
+  // `LINE.hair` because this is a container's OUTER edge under its own shadow,
+  // which is the rule LINE's docblock writes down. There is no divider BETWEEN
+  // the rows at all: four hairlines in a four-item menu is a table.
+  assert.ok(menu.includes("border: `1px solid ${LINE.hair}`"), "the menu's outer edge is drawn at the inner-divider weight");
+  assert.ok(!menu.includes("borderBottom"), "the menu rules between its own rows, which turns a four-item list into a table");
+});
+
+test("the mission header's meta line is one line, and it clips what a pane redraws", () => {
+  // Six dot-joined facts measure about 540px in English — "deep · run 3 ·
+  // signed by the leader (thorough) 88/100 · 2026-08-26 14:22 · dimensions 5/5
+  // · chapters 8/8" — inside a title block whose flex basis is 200px. It ran to
+  // two rows on every frame under about 1400px: 16px of fixed chrome above the
+  // panes, on every tab of every mission, on a screen whose next element is a
+  // table.
+  const detail = code(DETAIL);
+  const metaAt = detail.indexOf("const meta = [");
+  assert.notEqual(metaAt, -1, "the mission header's meta array is not where this test thinks it is");
+  const meta = detail.slice(metaAt, detail.indexOf("].filter", metaAt));
+
+  // THE ORDER IS THE DECISION, because an ellipsis eats the tail. What trails
+  // has to be what a pane one click away draws in full: 成章记录 on the 任务
+  // pane is a row per chapter with how each one landed, and the board beside it
+  // is a row per dimension. The tier, the run number, the Leader's signature
+  // and the start stamp are on this screen exactly once — here.
+  const stamp = meta.indexOf("formatStamp(mission.startedAt)");
+  assert.notEqual(stamp, -1, "the start stamp left the meta line, and nothing else on this screen carries it");
+  for (const restated of ["dimensionsResolved", "chaptersDone"]) {
+    const found = meta.indexOf(restated);
+    assert.notEqual(found, -1, `${restated} was deleted rather than moved to the tail`);
+    assert.ok(
+      found > stamp,
+      `${restated} is back ahead of the start stamp, so a narrow window clips the date — which appears nowhere else on this screen — instead of a fraction the 任务 pane draws in full`,
+    );
+  }
+
+  // AND THE BOX ACTUALLY CLIPS. `text-overflow` needs a block box: META_STYLE
+  // is a flex row, and a joined sentence inside one is an anonymous flex item
+  // that wraps instead of ellipsising. Spreading META_STYLE here is the version
+  // of this that looks fixed in the source and is not fixed on the screen.
+  const bar = /jsxs\("div", \{\s*style: \{\s*display: "flex", alignItems: "center", gap: SPACE\.md, flexWrap: "wrap",[\s\S]*?\}, "bar"\)/.exec(body("function MissionDetail("));
+  assert.ok(bar, "the mission detail's header band is not where this test thinks it is");
+  const band = code(bar[0]);
+  assert.ok(!band.includes("style: META_STYLE,"), "the meta line took META_STYLE whole again, so it is a flex row and text-overflow has nothing to clip");
+  assert.equal(
+    band.split('whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"').length - 1,
+    1,
+    "the meta line wraps again, which is a second row of chrome above every pane of every mission",
+  );
+  assert.ok(band.includes("title: meta,"), "the clipped tail is on no title attribute, so a narrow window loses it with nothing to say so");
+});
+
+test("a source row's title is one step, at that step's own leading", () => {
+  // Five lists draw the same row — a title over a `source · date` meta line.
+  // Three of them (the search dropdown and the two picked-source lists) named
+  // no step at all, so the title inherited the row's FONT.small and came out at
+  // 12px, and then hand-wrote `lineHeight: "18px"` — which IS FONT.body's own
+  // leading, typed out because the step it belongs to was never reached for.
+  // The other two (episodes, documents) did name FONT.body and then overrode
+  // its 18px with a hand-typed 19px. One row, two sizes and two leadings, on
+  // screens one click apart.
+  assert.deepEqual(
+    [...SOURCE.matchAll(/lineHeight: "1[89]px"/g)].map(([value]) => value),
+    [],
+    "a row title hand-writes its leading again. 18px IS FONT.body's leading and 19px is one pixel off it, so the same row draws two heights on two screens",
+  );
+  assert.equal(
+    [...SOURCE.matchAll(/font: FONT\.body, color: INK\.primary \}, children: row\.title/g)].length,
+    2,
+    "a picked-source row's title is not FONT.body, so a source in the episode's own list is a different size from the same source in the search results above it",
+  );
+  assert.equal(
+    [...SOURCE.matchAll(/font: FONT\.body, display: "block", color: INK\.primary \}/g)].length,
+    1,
+    "the search dropdown's row title names no step, so it is back to inheriting the row's 12px while the list it feeds draws 13px",
+  );
 });
