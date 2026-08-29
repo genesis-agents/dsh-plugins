@@ -3400,3 +3400,41 @@ test("the stage panel offers a rerun only where the pipeline allows one", () => 
     "the rerun control is coloured; colour on this panel marks the exception, and re-running a step is not one",
   );
 });
+
+test("every hue is the same step of one ramp", () => {
+  // "The colours are a mess" had a precise cause: half the palette had been
+  // moved onto the reference's values and half had not, and of the half that
+  // moved, some landed on the 600 step and some on the 700 — so ten hues came
+  // from two palettes at two brightnesses, on one page, in chips sitting
+  // beside each other.
+  //
+  // The reference pairs `text-*-700` with `bg-*-50` almost everywhere. One
+  // step for all of them, and the dark theme one step for all of them too.
+  const LIGHT = {
+    green: "4,120,87", amber: "180,83,9", red: "185,28,28", blue: "29,78,216",
+    violet: "109,40,217", indigo: "67,56,202", cyan: "14,116,144", rose: "190,18,60",
+  };
+  const DARK = {
+    green: "52,211,153", amber: "251,191,36", red: "248,113,113", blue: "96,165,250",
+    violet: "167,139,250", indigo: "129,140,248", cyan: "34,211,238", rose: "251,113,133",
+  };
+  const declaredIn = (theme) => {
+    const found = new Map();
+    const darkAt = SOURCE.indexOf('"body[data-ds-dark-theme]{"');
+    for (const match of SOURCE.matchAll(/"--swm-h-([a-z-]+):(\d{1,3},\d{1,3},\d{1,3});"/g)) {
+      const inDark = match.index > darkAt;
+      if ((theme === "dark") === inDark) found.set(match[1], match[2]);
+    }
+    return found;
+  };
+  const light = declaredIn("light");
+  const dark = declaredIn("dark");
+  for (const [name, value] of Object.entries(LIGHT)) {
+    assert.equal(light.get(name), value, `--swm-h-${name} is off the reference's 700 step, so it reads as a different palette beside the others`);
+    assert.equal(dark.get(name), DARK[name], `--swm-h-${name}'s dark value is off the 400 step`);
+  }
+  // The two neutrals are the reference's greys, and they are the only hues that
+  // are not a chip colour.
+  assert.equal(light.get("slate"), "107,114,128");
+  assert.equal(light.get("slate-dim"), "156,163,175");
+});
