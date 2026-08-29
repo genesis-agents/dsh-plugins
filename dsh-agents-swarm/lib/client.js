@@ -1742,10 +1742,15 @@ window.__ModuleLoader__.load({
 		* finding it carried is real even on the runs where the address did not
 		* survive.
 		*
-		* NO TYPE ICON AND NO CREDIBILITY GRADE, against the reference this was
-		* drawn from. There is no `kind` field and no score on a source row
-		* anywhere in this projection, and a grade with no data behind it is a
-		* number the screen would be inventing.
+		* THE TYPE AND THE GRADE ARRIVE THROUGH `meta`, NOT AS PROPS. This card
+		* carried neither for as long as no row held one. `listSources` joins the
+		* library now, so the references pane has a type and a quality score for the
+		* pages this installation had already collected — and nothing at all for the
+		* ones it had not, which is most of them. That third state is exactly why
+		* they did not become props: a `kind` prop is a slot every caller has to
+		* fill, and the two callers with nothing to put in it would fill it with a
+		* guess. `missionLibraryMeta` says the absence in words instead, on the one
+		* caller that actually looked it up.
 		*
 		* THERE IS NO `hits` PROP, also against the reference. The two callers'
 		* counts are different facts — findings taken OFF a page, versus markers
@@ -10573,6 +10578,77 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		* WHAT THE LIBRARY KNOWS ABOUT A PAGE, and the two different silences.
+		*
+		* `listSources` joins `resources`, so a page this installation had already
+		* collected arrives with the type and the quality score the library
+		* recorded. Most pages a mission reads were never collected, and that is the
+		* state this function exists for: it is said in words, because a row drawn
+		* identically to a scored one turns "we hold nothing on this page" into
+		* "this page scored nothing".
+		*
+		* NOTHING IS DERIVED FROM THE ADDRESS. This is handed the joined row and the
+		* locale, never the URL, so the TLD heuristic that would otherwise creep in
+		* here — .gov is policy, .edu scores well — has nothing to read. A guess
+		* drawn the same way as a measurement makes every real score less
+		* trustworthy, not the missing ones more.
+		*
+		* AN ABSENT FIELD IS NOT AN ABSENT ROW. `undefined` is a payload from a Host
+		* half that predates the join, and answering it with 不在信源库 would print,
+		* on every row of the pane, a lookup nobody performed.
+		*
+		* THE TYPE TAKES THE FEED'S OWN COLOUR because a type is a CATEGORY — the
+		* same blue PAPER has two tabs away — and THE SCORE IS INK because it is a
+		* figure at par: this pane grades nothing by it, the range belongs to the
+		* library's upstream, and a hue here would be a verdict this screen has no
+		* ladder to give.
+		* @param library - `source.library`: the joined row, `null` for a page the library has never collected, absent when nothing was looked up.
+		* @param zh - whether to write Chinese.
+		* @returns nodes for a source card's meta line, possibly none.
+		*/
+		function missionLibraryMeta(library, zh) {
+			if (library === undefined) return [];
+			if (library === null) {
+				return [jsx("span", {
+					style: { flex: "none", color: INK.secondary },
+					title: zh
+						? "信源库从未收录过这一页，所以这里没有类型，也没有质量分。"
+						: "The library has never collected this page, so there is no type and no score to show.",
+					children: zh ? "不在信源库" : "not in the library"
+				}, "unlisted")];
+			}
+			// An unlisted type keeps the neutral hue and its own stored name, the way
+			// an unlisted publish format does: rotating through the ramp would hand it
+			// a colour that already means something else on this tab.
+			const kind = KINDS.find((candidate) => candidate.type === library.type);
+			// `Number(null)` is 0 and `Number.isFinite(0)` is true, so coercing
+			// first turns "the library never scored this" into "the library scored
+			// it zero" — the one substitution this whole join exists to avoid. The
+			// null is checked before the coercion, not after it.
+			const scored = typeof library.quality === "number" && Number.isFinite(library.quality);
+			const score = scored ? library.quality : 0;
+			// Two decimals, and NOT a percentage: the range is the library's
+			// upstream's, so rescaling 0.87 to 87% would be this screen inventing a
+			// denominator to make the figure look familiar.
+			const shown = Math.round(score * 100) / 100;
+			return [
+				Chip({
+					tone: kind === undefined ? TONE.neutral : kind.hue,
+					label: kindLabel(library.type, zh)
+				}, "kind"),
+				jsx("span", {
+					style: { flex: "none", fontFamily: MONO, color: INK.secondary },
+					title: scored
+						? (zh ? "信源库自己的质量分，原样照搬，没有换算成百分比。" : "The library's own quality score, as recorded — not rescaled into a percentage.")
+						: (zh ? "这一页在信源库里，但从来没有被打过分。" : "This page is in the library, which has never scored it."),
+					children: scored
+						? (zh ? `质量 ${shown}` : `quality ${shown}`)
+						: (zh ? "未评分" : "unscored")
+				}, "quality")
+			];
+		}
+
+		/**
 		* The four ways to arrange what was read, named once.
 		*
 		* All four are computable from fields the row already carries — findings,
@@ -11214,6 +11290,11 @@ window.__ModuleLoader__.load({
 					// one column.
 					host: byHost ? "" : source.host,
 					meta: [
+						// WHAT THE LIBRARY KNOWS, FIRST — next to the host, because those
+						// two together answer "what is this page" and every chip after
+						// them answers "what did we get out of it". Nothing at all when
+						// the payload never carried the field: see missionLibraryMeta.
+						...missionLibraryMeta(source.library, zh),
 						jsx("span", {
 							style: { ...COUNT_CHIP, flex: "none" },
 							children: zh ? `${source.findings} 条发现` : `${source.findings} finding(s)`

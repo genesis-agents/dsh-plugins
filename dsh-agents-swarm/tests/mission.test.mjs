@@ -2588,3 +2588,99 @@ test("every finding s3 writes carries the date its lead gave it", () => {
     "the harvest stopped reading `publishedAt` off a lead, which is the only field library_search, arxiv_search and web_search ever return a date in",
   );
 });
+
+test("a source carries what the library holds on it, and an explicit nothing when it holds none", async (t) => {
+  const { store, missions } = library(t);
+  const id = reasonedMission(missions);
+
+  // THE SAME PAGE UNDER A DIFFERENT SPELLING. The mission met
+  // `https://example.com/report`; the library collected it as
+  // `https://www.example.com/report/`. Both normalize to one address, and a
+  // join on the raw spelling reports "never collected" for a page the library
+  // is holding — the one answer this join exists to stop being given wrongly.
+  store.put({
+    id: "res-report", type: "BLOG", title: "The pilot line report",
+    sourceUrl: "https://www.example.com/report/",
+  });
+  store.put({
+    id: "res-arxiv", type: "PAPER", title: "Sulfide electrolytes at 10 mS/cm",
+    sourceUrl: "https://arxiv.org/abs/2401.00001", qualityScore: 9.2,
+  });
+
+  const rows = missions.listSources(id, { runCount: 1 });
+  const byUrl = new Map(rows.map((row) => [row.url, row]));
+
+  assert.deepEqual(
+    byUrl.get("https://arxiv.org/abs/2401.00001").library,
+    { type: "PAPER", quality: 9.2 },
+    "the references pane cannot say what kind of thing this page is or what the library scored it, though both are one row away in the same database",
+  );
+
+  const collapsed = byUrl.get("https://example.com/report");
+  assert.equal(
+    collapsed.library?.type,
+    "BLOG",
+    "the library holds this page under its normalized address and the lookup missed it, so a collected page is reported as one nobody has ever read",
+  );
+  assert.equal(
+    collapsed.library.quality,
+    null,
+    "a collected page that was never scored came back carrying a number the library does not hold — 0 is not 'lowest quality', it is 'never graded'",
+  );
+
+  // THE THIRD STATE, as a value rather than a missing key: the pane has to be
+  // able to say "the library has never collected this page" without inferring
+  // it from a field that simply is not there.
+  const unseen = byUrl.get("https://eur-lex.europa.eu/x");
+  assert.ok("library" in unseen, "the key is gone for a page the library does not hold, so a reader cannot tell a miss from a Host half too old to have looked");
+  assert.equal(unseen.library, null, "a page the library has never collected was handed a type or a score out of nowhere");
+
+  // AND IT SURVIVES THE ROUTE, which is what the pane actually reads.
+  const page = await callRoute(missions, `/missions/${id}/sources?runCount=1`);
+  assert.equal(page.status, 200, JSON.stringify(page.body));
+  const served = new Map(page.body.data.sources.map((row) => [row.url, row]));
+  assert.deepEqual(
+    served.get("https://arxiv.org/abs/2401.00001").library,
+    { type: "PAPER", quality: 9.2 },
+    "the route drops what the store joined, so the pane is back to a row that cannot say what kind of page it lists",
+  );
+  assert.equal(served.get("https://eur-lex.europa.eu/x").library, null, "the honest miss did not survive the envelope");
+});
+
+test("the library is asked under the mission's spelling and its own", async (t) => {
+  // BOTH HALVES OF THE IN-LIST. The lookup asks for every address twice — as
+  // the mission met it, and as it normalizes — because either side can be the
+  // messy one. The shared fixture only exercises one direction: its findings
+  // are already in normalized form, so dropping the normalized half of the
+  // list still matches and the join looks fine.
+  //
+  // This is the other direction. The mission met a tracking URL; the library
+  // holds the clean one. Nothing matches unless the MISSION's address is
+  // normalized before the query, and a page the library is holding would be
+  // reported as one nobody has ever read.
+  const { store, missions } = library(t);
+  const id = reasonedMission(missions);
+  const messy = "https://example.com/pilot-line?utm_source=newsletter&utm_medium=email";
+  store.put({ id: "res-clean", type: "REPORT", title: "The pilot line", sourceUrl: "https://example.com/pilot-line" });
+
+  missions.putDocument({
+    url: messy, status: 200, fetchedAt: "2026-08-28T09:00:05.000Z",
+    markdown: "the separator coating step remains the throughput bottleneck at roughly nine hundred cells per hour across both installed lines, "
+      + "and the company confirmed as much in its own disclosure to investors this quarter. ".repeat(4),
+  });
+  missions.insertFinding({
+    missionId: id, dimensionId: "d1", runCount: 1, attempt: 0, agent: "researcher",
+    claim: "the separator coating step is the bottleneck",
+    evidence: "the separator coating step remains the throughput bottleneck",
+    sourceUrl: messy, documentId: documentIdFor(messy), spanIndex: 0,
+    verifyState: "verified-source-text", createdAt: "2026-08-28T09:00:06.000Z",
+  });
+
+  const row = missions.listSources(id, { runCount: 1 }).find((entry) => entry.url === messy);
+  assert.ok(row !== undefined, "the fixture's finding did not reach listSources");
+  assert.equal(
+    row.library?.type,
+    "REPORT",
+    "the library holds this page under its clean address and the lookup only asked for the tracking one, so a collected page is reported as never read",
+  );
+});

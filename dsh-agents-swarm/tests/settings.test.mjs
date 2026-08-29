@@ -3202,3 +3202,53 @@ test("an empty dimension says WHICH empty it is", async () => {
     );
   }
 });
+
+test("a reference says what the library holds on it, and says plainly when the library holds nothing", async () => {
+  // THREE STATES ON ONE PANE. Two are values the join returned; the third is
+  // the one this pane must not paper over, because a mission reads the open web
+  // and most of what it reads was never collected.
+  const payload = {
+    missionId: SIGNED.id, runCount: 1, scope: { dimensionId: null },
+    sources: [
+      {
+        url: "https://arxiv.org/abs/2401.00002", host: "arxiv.org", title: "Replication at two smaller sizes",
+        findings: 3, verified: 3, dimensionIds: ["d1"], verifyStates: { "verified-source-text": 3 },
+        firstSeenAt: "2026-08-22T09:31:00.000Z", library: { type: "PAPER", quality: 9.2 },
+      },
+      {
+        url: "https://example.org/collected", host: "example.org", title: "收录过但从未打分的一份材料",
+        findings: 2, verified: 1, dimensionIds: ["d1"], verifyStates: { "verified-source-text": 1, unverifiable: 1 },
+        firstSeenAt: "2026-08-22T09:32:00.000Z", library: { type: "BLOG", quality: null },
+      },
+      {
+        url: "https://example.org/never", host: "example.org", title: "从未被收录的一份材料",
+        findings: 1, verified: 0, dimensionIds: ["d1"], verifyStates: { unverifiable: 1 },
+        firstSeenAt: "2026-08-22T09:33:00.000Z", library: null,
+      },
+    ],
+    totals: { sources: 3, hosts: 2, findings: 6, verified: 4 },
+    runs: [{ runCount: 1, total: 6, verified: 4, dimensions: 1 }],
+    dimensions: [{ dimensionId: "d1", name: "推理时序扩展的训练侧做法" }],
+  };
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: payload }) });
+
+  const zh = textOf((await render("MissionSources", { missionId: SIGNED.id, zh: true })).tree).join(" ");
+  assert.ok(zh.includes("论文"), "a collected paper is not typed on the row, so a preprint and a press release read the same");
+  assert.ok(zh.includes("质量 9.2"), "the library's own score for a page it holds is not drawn, though the join returned it");
+  assert.ok(zh.includes("未评分"), "a page the library holds but never scored says nothing, so 'nobody scored it' cannot be told from 'nobody looked'");
+  assert.ok(zh.includes("不在信源库"), "a page the library has never collected is drawn exactly like one it holds");
+  assert.ok(!zh.includes("质量 0"), "an unscored page was given a figure — 0 here is not 'lowest quality', it is 'never graded'");
+
+  const en = textOf((await render("MissionSources", { missionId: SIGNED.id, zh: false })).tree).join(" ");
+  assert.ok(en.includes("Papers") && en.includes("quality 9.2"), "the type and the score have no English arm");
+  assert.ok(en.includes("not in the library"), "the honest third state has no English arm, so it is the one sentence half the readers cannot be told");
+
+  // AND A HOST HALF THAT PREDATES THE JOIN SAYS NOTHING AT ALL. This file's own
+  // SOURCES fixture carries no `library` key, and answering an absent field
+  // with 不在信源库 would state a lookup nobody performed, on every row of the
+  // pane whose whole subject is what was actually read.
+  stubFetch();
+  const older = textOf((await render("MissionSources", { missionId: SIGNED.id, zh: true })).tree).join(" ");
+  assert.ok(older.includes("About the Kanata North business association"), "the older payload stopped rendering rows at all");
+  assert.ok(!older.includes("不在信源库"), "a payload that never carried the field is reported as a library miss on every row");
+});

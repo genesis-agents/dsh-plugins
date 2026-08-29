@@ -3318,3 +3318,48 @@ test("a year chip never speaks for the whole run", () => {
     "the facet stopped being built from the rows it filters, so a chip can now select nothing",
   );
 });
+
+test("the library's facts are drawn once, and the absence of them is not a colour", () => {
+  assert.ok(
+    SOURCE.includes("function missionLibraryMeta("),
+    "the type and the score are computed nowhere again, so a references row cannot say whether the page it lists is a preprint or a press release",
+  );
+  const facts = code(body("function missionLibraryMeta("));
+  // THE PARAMETER LIST IS THE GUARD. A score invented from the hostname needs
+  // the address to read from, and this function is handed the joined row and
+  // the locale — so there is nothing in scope to guess with.
+  assert.match(
+    facts,
+    /function missionLibraryMeta\(library, zh\)/,
+    "the helper takes the page's address again, which is the one input a grade guessed off the TLD would need",
+  );
+  // TWO SILENCES, AND THEY ARE NOT THE SAME SILENCE.
+  assert.match(
+    facts,
+    /if \(library === undefined\) return \[\]/,
+    "a payload that predates the join now prints 'not in the library' on every row — a lookup nobody performed, stated on the pane whose whole subject is what was actually read",
+  );
+  assert.match(
+    facts,
+    /if \(library === null\)/,
+    "a page the library has never collected is drawn exactly like one it holds, so 'we have nothing on this' and 'we never asked' read the same",
+  );
+  // THE SCORE IS A FIGURE AT PAR. A hue would grade it, and this pane has no
+  // ladder to grade it on: the range belongs to the library's upstream.
+  for (const verdict of ["TONE.success", "TONE.warn", "TONE.danger", "missionRateHue("]) {
+    assert.ok(
+      !facts.includes(verdict),
+      `the library score is drawn in ${verdict}, which passes a verdict this screen cannot support — and paints an unrated page as a failed one`,
+    );
+  }
+  assert.ok(
+    facts.includes("KINDS.find(") && facts.includes("kindLabel("),
+    "the type badge picks its own colour and its own words instead of the feed's, so PAPER is one colour on 信源 and another here",
+  );
+  // AND THE PANE MOUNTS IT. A helper nothing calls is the same screen as
+  // before with more code behind it.
+  assert.ok(
+    code(body("function MissionSources(")).includes("missionLibraryMeta(source.library, zh)"),
+    "the references rows stopped reading the join, so every page on the pane is typeless and unscored again",
+  );
+});

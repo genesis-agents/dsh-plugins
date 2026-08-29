@@ -3224,7 +3224,15 @@ export class MissionStore {
    * filled in from `firstSeenAt` — that is when we read the page, and a
    * substitute would date a 2019 paper to the afternoon the mission ran.
    *
-   * @returns `[{url, host, title, publishedAt, findings, verified, dimensionIds, verifyStates, firstSeenAt}]`, most findings first.
+   * `library` IS THE JOIN, and its `null` is an answer rather than a gap. The
+   * pane that draws these rows wants to say what kind of thing each page is
+   * and what it scored; `resources` holds both for the pages this
+   * installation collected, and holds NOTHING for the open-web pages a
+   * mission mostly reads. Both cases ship: a page the library has never seen
+   * carries `library: null`, and every reader is expected to say so in words
+   * rather than fill the space with something derived.
+   *
+   * @returns `[{url, host, title, publishedAt, findings, verified, dimensionIds, verifyStates, firstSeenAt, library}]`, most findings first.
    */
   listSources(missionId, { runCount, dimensionId } = {}) {
     const id = assertText(missionId, "missionId");
@@ -3275,6 +3283,8 @@ export class MissionStore {
       else list.push(row.dimension_id);
     }
 
+    const library = this.#libraryFactsFor(grouped.map((row) => row.source_url));
+
     return grouped.map((row) => ({
       url: row.source_url,
       host: row.source_host,
@@ -3285,7 +3295,79 @@ export class MissionStore {
       dimensionIds: dimensionIds.get(row.source_url) ?? [],
       verifyStates: states.get(row.source_url) ?? {},
       firstSeenAt: row.first_seen_at,
+      // ALWAYS PRESENT, EVEN WHEN IT IS NULL. A missing key and a null are two
+      // different sentences on the screen — "this half is older than the join"
+      // and "the library has never collected this page" — and only the second
+      // is something this query actually looked up.
+      library: library.get(row.source_url) ?? null,
     }));
+  }
+
+  /**
+   * What the source library holds for a set of pages, and nothing for a page it
+   * has never collected.
+   *
+   * NOT AN EQUIJOIN IN THE GROUPING STATEMENT, and the reason is the key.
+   * `mission_findings.source_url` is the address as the mission met it, while
+   * `resources` is unique on `normalized_url` — the `www.`-less, fragment-less,
+   * tracking-param-less form `store.js` mints — so `ON f.source_url = r.source_url`
+   * answers "never collected" for a page the library is holding under one extra
+   * slash. `#assertQuotableAbstract` settled the matching rule already:
+   * normalized against normalized, with the raw address as the last chance for a
+   * row stored before normalization existed. This follows it rather than
+   * inventing a second rule that disagrees on a handful of URLs nobody audits.
+   *
+   * ONE QUERY, NOT ONE PER ROW: the outer group is already one row per page
+   * read, and a per-row SELECT here would be N round trips on the one screen
+   * whose whole point is listing everything at once.
+   *
+   * NOTHING IS INVENTED FOR A MISS. The alternative considered and refused was a
+   * type read off the TLD with a score derived from it. On screen that is
+   * indistinguishable from a measured one, which makes every real score less
+   * trustworthy rather than the missing ones more.
+   *
+   * @param urls - the source addresses, spelled as the findings stored them.
+   * @returns Map url → `{ type, quality }`; no entry for a page the library does not hold.
+   */
+  #libraryFactsFor(urls) {
+    const found = new Map();
+    if (urls.length === 0) return found;
+
+    const keys = new Map();
+    for (const url of urls) keys.set(url, normalizeUrl(url) ?? url);
+    // Both spellings in one IN-list, so a page is looked up under the form the
+    // library keys on AND under the form the mission met.
+    const wanted = [...new Set([...keys.keys(), ...keys.values()])];
+    const holes = wanted.map(() => "?").join(",");
+    const rows = this.db.prepare(`
+      SELECT source_url, normalized_url, type, quality_score FROM resources
+      WHERE normalized_url IN (${holes}) OR source_url IN (${holes})
+      ORDER BY id
+    `).all(...wanted, ...wanted);
+
+    // FIRST ROW WINS, UNDER A STABLE ORDER. `normalized_url` is unique only
+    // where it is set, so two rows can answer one address; a chip that changed
+    // between two reads of the same mission would be reporting the query plan.
+    const byKey = new Map();
+    for (const row of rows) {
+      for (const key of [row.normalized_url, row.source_url]) {
+        if (typeof key === "string" && key !== "" && !byKey.has(key)) byKey.set(key, row);
+      }
+    }
+
+    for (const [url, normalized] of keys) {
+      const row = byKey.get(normalized) ?? byKey.get(url);
+      if (row === undefined) continue;
+      found.set(url, {
+        type: row.type,
+        // THE SCORE AS THE LIBRARY RECORDED IT. Not rescaled, and not defaulted:
+        // the column is nullable, a collected row nobody scored is a real third
+        // state, and `?? 0` would print the library's worst score for it — 0 is
+        // not "lowest quality", it is "never graded".
+        quality: typeof row.quality_score === "number" ? row.quality_score : null,
+      });
+    }
+    return found;
   }
 
   /** Verified counts for a page of missions, in one query rather than N. */
