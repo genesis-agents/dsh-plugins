@@ -7956,7 +7956,7 @@ window.__ModuleLoader__.load({
 										style: { font: FONT.small, display: "flex", alignItems: "baseline", gap: SPACE.sm, color: INK.secondary },
 										children: [
 											jsx("span", {
-												style: { fontWeight: tight ? 600 : 400, color: tight ? `rgb(${hue})` : "inherit" },
+												style: { font: tight ? FONT.smallStrong : FONT.small, color: tight ? `rgb(${hue})` : "inherit" },
 												children: missionFace(MISSION_METER_FACES, key, zh)
 											}, "name"),
 											!tight ? null : jsx("span", {
@@ -14593,8 +14593,8 @@ window.__ModuleLoader__.load({
 		/** The − and + of a stepper: same weight, same box, no platform spinner. */
 		const STEPPER_BUTTON = {
 			appearance: "none", border: "none", background: "transparent",
-			width: "28px", height: CONTROL.sm, cursor: "pointer", font: "inherit",
-			font: FONT.base, lineHeight: 1, color: INK.secondary
+			font: FONT.base, lineHeight: 1,
+			width: "28px", height: CONTROL.sm, cursor: "pointer", color: INK.secondary
 		};
 
 		/**
@@ -15510,12 +15510,12 @@ window.__ModuleLoader__.load({
 															void saveSchedule({ publishArtifacts: next });
 														},
 														style: {
-															appearance: "none", cursor: "pointer", font: "inherit",
-															height: CONTROL.sm, padding: "0 11px", borderRadius: RADIUS.pill, font: FONT.small,
+															font: on ? FONT.smallStrong : FONT.small,
+															appearance: "none", cursor: "pointer",
+															height: CONTROL.sm, padding: "0 11px", borderRadius: RADIUS.pill,
 															border: `1px solid ${on ? `rgba(${accent},${TINT.ring})` : LINE.rule}`,
 															background: on ? `rgba(${accent},${TINT.soft})` : "transparent",
 															color: on ? `rgb(${accent})` : INK.secondary,
-															fontWeight: on ? 600 : 400,
 															transition: `background ${MOTION.fast}, color ${MOTION.fast}`
 														},
 														children: choice.label

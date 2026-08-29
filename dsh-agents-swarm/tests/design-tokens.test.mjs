@@ -4017,3 +4017,41 @@ test("every FONT step named at a call site is one FONT declares", () => {
     `FONT.${unknown.join(", FONT.")} is not a step FONT declares, so it renders as \`font: undefined\` and the element takes the browser's default heading size instead of the scale's`,
   );
 });
+
+test("no object literal declares `font` twice, and no control swaps only its weight", () => {
+  // THE MIRROR OF THE RULE TWO TESTS UP. Two objects — STEPPER_BUTTON and the
+  // armed-artifact chip — wrote `font: "inherit"` on one line and
+  // `font: FONT.base` / `font: FONT.small` on the next, in the SAME literal.
+  // The later key wins, so nothing looked wrong and nothing threw; what is
+  // wrong is that the object states two intentions and only a reader who knows
+  // the last-wins rule can say which renders. The test above catches only the
+  // order that discards the step, so this pair sat underneath it.
+  const stack = [];
+  const doubled = [];
+  for (let at = 0; at < SOURCE.length; at += 1) {
+    const character = SOURCE[at];
+    if (character === "{") stack.push({ at, count: 0 });
+    else if (character === "}") {
+      const frame = stack.pop();
+      if (frame !== undefined && frame.count > 1) {
+        doubled.push(`line ${SOURCE.slice(0, frame.at).split(/\r?\n/).length} declares font ${frame.count} times`);
+      }
+    } else if (character === "f" && SOURCE.startsWith("font:", at) && !/[\w.$]/.test(SOURCE[at - 1] ?? "") && stack.length > 0) {
+      stack[stack.length - 1].count += 1;
+    }
+  }
+  assert.deepEqual(doubled, [], "an object declares `font` twice; the later key silently wins and the earlier one is a statement the file does not honour");
+
+  // THE SAME RULE ONE KEY ALONG. Both of those objects also swapped emphasis
+  // with a bare `fontWeight: … ? 600 : 400` written AFTER the step — which is
+  // what chipStyle's own docblock forbids one screen over: 400 and 600 have
+  // different advances at 12px, so toggling one re-measures its own label and
+  // nudges what follows it along the row. Written as a ternary, that 600 is
+  // also invisible to "emphasis is the shell's weight", which reads
+  // `fontWeight: <digits>` — so the ceiling that test holds had two holes in it.
+  assert.equal(
+    [...SOURCE.matchAll(/FONT\.smallStrong : FONT\.small\b/g)].length,
+    3,
+    "the tightest-dimension label, the armed-artifact chip and the pane tab are the three controls that mark emphasis at 12px; one of them is back to riding a `fontWeight` beside a fixed step",
+  );
+});
