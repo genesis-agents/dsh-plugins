@@ -841,6 +841,17 @@ export const TOOLS = Object.freeze({
         // string, and a quote checked against a different extraction of the
         // same page is a quote checked against nothing.
         quotableAgainst: doc.url,
+        // THE KEY THE LITERAL HAS TO NAME. `ok(tool, payload)` builds
+        // `{ok:true, tool, ...payload}`, so a key this object does not
+        // mention is a key that does not exist downstream — the extractor
+        // above it would be correct and the rest of the chain permanently
+        // empty, with nothing anywhere failing.
+        //
+        // METADATA, NOT MARKUP, AND NOT IN `text`. The researcher can see
+        // that a page carries a figure and what its caption says, which is
+        // what lets it cite one deliberately; `text` above is untouched, and
+        // it is the string `quotableAgainst` names.
+        figures: Array.isArray(doc.figures) ? doc.figures : [],
       });
     },
   }),

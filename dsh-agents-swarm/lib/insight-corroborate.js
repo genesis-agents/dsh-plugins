@@ -408,7 +408,24 @@ export async function readHit(hit, options = {}) {
     const budget = Number.isInteger(options.budgetChars) && options.budgetChars > 0
       ? options.budgetChars
       : READ_BUDGET_CHARS;
-    return { url, title: String(hit.title ?? article?.title ?? ""), text: text.slice(0, budget) };
+    return {
+      url,
+      title: String(hit.title ?? article?.title ?? ""),
+      text: text.slice(0, budget),
+      // A SEPARATE KEY, AND THE SEPARATION IS THE CONTRACT. `quote_verify`
+      // checks a quote as a literal substring of exactly the `text` above, so
+      // the figures may not be folded into it, appended to it, or summarised
+      // in it. `corroborateInsight` below reads only `page.url`, `page.title`
+      // and `page.text`, so the corroboration prompt is byte-for-byte what it
+      // was.
+      //
+      // METADATA ONLY. No image bytes are fetched here: paying `paceRead`'s
+      // one-second serialised chain for every candidate picture on every page
+      // of a mission is precisely the unpaced-loop-aimed-at-publishers this
+      // file's own pacing note calls the worse outcome. Bytes are fetched on
+      // demand, once a chapter cites the page.
+      figures: Array.isArray(article?.figures) ? article.figures : [],
+    };
   } catch {
     return undefined;
   }

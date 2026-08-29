@@ -3190,3 +3190,183 @@ test("a page fetched for quoting gets the ceiling its own tool declares", async 
   // was right about.
   assert.match(corroborate, /const READ_BUDGET_CHARS = 4000;/, "the corroboration budget moved, and it was never the thing that was wrong");
 });
+
+test("the figures travel beside the quotable text and never inside it", async () => {
+  // A DIFFERENTIAL TEST, not a snapshot, because the thing that must hold is a
+  // relation and not a value: `readArticle`'s `text` must be what a STOCK
+  // Readability parse of the same HTML produces, normalised the one way this
+  // file normalises it. Pinning a literal string instead would pass the day
+  // somebody changed BLANK_RUN and re-recorded the fixture, and would fail
+  // every time the fixture's prose was edited for an unrelated reason.
+  //
+  // WHY IT IS WORTH A TEST AT ALL. `quote_verify` checks a quote as a literal
+  // substring of exactly the string `fetch_page` returned, which is this
+  // `text`. A caption or an alt spliced into it would not break one quote — it
+  // would retroactively unverify every quote this system has ever recorded,
+  // and nothing anywhere would throw. The failure is silent, corpus-wide and
+  // retroactive, which is the exact profile of a thing that has to be pinned.
+  const PAGE = [
+    "<!doctype html><html><head><title>Sulfide electrolytes reach 12 mS/cm</title></head><body>",
+    "<article><h1>Sulfide electrolytes reach 12 mS/cm</h1>",
+    "<p>The pilot line ran for six hundred hours without a measurable rise in interfacial resistance, which is the number the field has been waiting on since the first argyrodite cells were reported. Cells were cycled at 1C between 3.0 and 4.2 volts at twenty-five degrees, and the capacity retention after five hundred cycles was ninety-four per cent, a figure the authors describe as reproducible across three separately synthesised batches.</p>",
+    '<figure><img src="../figs/conductivity.png" width="960" height="640" alt="ALTSENTINEL conductivity against temperature for three compositions"><figcaption>Figure 1: ionic conductivity against temperature, for three substitution fractions.</figcaption></figure>',
+    "<p>A second batch, synthesised independently, reproduced the result within experimental error, and the authors report the full cycling data in the supplementary material. The interfacial resistance was measured by impedance spectroscopy at open circuit after each hundredth cycle, and the spread across the three batches never exceeded four per cent of the mean.</p>",
+    "</article></body></html>",
+  ].join("");
+  const URL_A = "https://example.com/news/2026/electrolytes";
+
+  // Imported here rather than at the top of the file because these three are
+  // the only reason this file would ever load jsdom, readability and turndown,
+  // and `readArticle` loads them dynamically for the same reason.
+  const { readArticle } = await import("../lib/proxy.js");
+  const { JSDOM } = await import("jsdom");
+  const { Readability } = await import("@mozilla/readability");
+
+  const stock = new Readability(new JSDOM(PAGE, { url: URL_A }).window.document).parse();
+  const expected = String(stock.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
+  const article = await readArticle(PAGE, URL_A);
+
+  assert.equal(
+    article.text,
+    expected,
+    "the string quotes are verified against is no longer the stock Readability extraction of the page. Every quote already recorded in every mission was checked against the old string and is now unverifiable, and nothing threw",
+  );
+
+  // THE ALT SENTINEL. An `alt` is an attribute, so it is not in `textContent`
+  // and never was — this pins that it did not arrive by another route, which
+  // is what a serializer that replaced images with their alt text would do.
+  assert.equal(article.text.includes("ALTSENTINEL"), false, "alt text has reached the quotable string");
+  assert.equal(article.markdown.includes("ALTSENTINEL"), false, "alt text has reached the markdown, which means the serializer is mutating the tree rather than reading it");
+  assert.equal(/<img|!\[/.test(article.markdown), false, "an image is in the markdown; `dropImages` has stopped dropping");
+  assert.equal(article.figures[0].alt.startsWith("ALTSENTINEL"), true, "the alt is not on the figure record either, so it went nowhere rather than staying out of the text");
+
+  // THE ASYMMETRY, PINNED SO NOBODY "FIXES" IT. A figcaption's words are in
+  // `textContent` and always have been, because the caption is part of the
+  // article body Readability keeps — so the caption on a figure record is a
+  // COPY of words already quotable, not an addition. They are absent from the
+  // markdown because `dropImages` filters `figure` and discards its children.
+  assert.equal(article.text.includes("ionic conductivity against temperature"), true, "the figcaption has left the quotable text, which changes it");
+  assert.equal(article.markdown.includes("ionic conductivity against temperature"), false, "the figcaption has entered the markdown");
+});
+
+test("the figure filter keeps what the publisher captioned and drops what it decorated", async () => {
+  // WRITTEN AGAINST A REAL PARSE, because most of the filtering here is not
+  // done by the filter. Readability discards the header, the nav and the footer
+  // before a single rule runs, and on this fixture that alone removes three of
+  // the eight non-figures — the masthead SVG, the share icon and the footer
+  // logo never reach `articleFigures` at all. A test that handed the rules a
+  // picked list of `<img>` tags would credit them with those three and would
+  // keep passing after the filter stopped being called.
+  //
+  // Every survivor and every casualty is one of the shapes the requirement
+  // names: a captioned chart, an art-directed photograph, a 1x1 beacon, a
+  // `data:` spacer, a 48px avatar, a 640x32 sprite strip, an uncaptioned SVG
+  // and a cross-host sponsor banner.
+  const PAGE = [
+    "<!doctype html><html><head><title>Sulfide electrolytes reach 12 mS/cm</title></head><body>",
+    '<header><img src="/static/masthead.svg" width="180" height="40" alt="The Battery Review"></header>',
+    '<nav><a href="/x"><img src="/i/share.png" width="24" height="24" alt="share this article"></a></nav>',
+    "<article><h1>Sulfide electrolytes reach 12 mS/cm</h1>",
+    "<p>The pilot line ran for six hundred hours without a measurable rise in interfacial resistance, which is the number the field has been waiting on since the first argyrodite cells were reported. Cells were cycled at 1C between 3.0 and 4.2 volts at twenty-five degrees, and the capacity retention after five hundred cycles was ninety-four per cent, a figure the authors describe as reproducible across three separately synthesised batches.</p>",
+    '<figure><img src="../figs/conductivity.png" width="960" height="640" alt="Conductivity against temperature for three compositions"><figcaption>Figure 1: ionic conductivity against temperature, for three substitution fractions.</figcaption></figure>',
+    "<p>A second batch, synthesised independently, reproduced the result within experimental error, and the authors report the full cycling data in the supplementary material. The interfacial resistance was measured by impedance spectroscopy at open circuit after each hundredth cycle, and the spread across the three batches never exceeded four per cent of the mean.</p>",
+    '<img src="//cdn.example.com/pixel.gif?u=123" width="1" height="1" alt="">',
+    '<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" width="1" height="1">',
+    "<p>Coverage elsewhere framed the work as a step toward a commercial cell, and the authors are careful to say that the pilot line is not a production line. The separator thickness remains twice what a shipping cell would tolerate, and the stack pressure is held by a fixture that no pack design has yet reproduced.</p>",
+    '<picture><source media="(min-width: 900px)" srcset="/img/line-2400.jpg 2400w, /img/line-1200.jpg 1200w"><img src="/img/line-600.jpg" alt="The pilot line at the Osaka plant, seen from the gantry above"></picture>',
+    "<p>The team's own summary is more measured than the coverage: they report a result, not a product, and the numbers above are the ones they stand behind. Everything else in the release is the press office talking to itself about a number it did not measure.</p>",
+    '<a href="https://ads.example.net/click"><img src="https://ads.example.net/banner.jpg" width="728" height="200" alt="Subscribe to the weekly battery briefing today"></a>',
+    '<img src="/i/author-jane.jpg" width="48" height="48" alt="Jane Doe, senior correspondent, portrait">',
+    '<img src="/i/sprite-icons.png" width="640" height="32" alt="">',
+    '<img src="/i/stack-diagram.svg" width="700" height="400" alt="Stack diagram">',
+    "<p>The full impedance dataset, the synthesis protocol and the fixture drawings are all in the supplementary material, which the authors have posted without an embargo. That is unusual enough in this field to be worth saying out loud, and it is the reason a second group could reproduce the number inside a month.</p>",
+    '</article><footer><img src="/static/logo-footer.svg" width="120" height="30" alt="logo"></footer></body></html>',
+  ].join("");
+
+  const { readArticle } = await import("../lib/proxy.js");
+  const article = await readArticle(PAGE, "https://example.com/news/2026/electrolytes");
+
+  assert.deepEqual(
+    article.figures.map((figure) => figure.url),
+    [
+      // A `<figure>` with a `<figcaption>`: the publisher's own statement that
+      // this is a figure, and the only positive strong enough to stand alone.
+      // The URL is resolved against the PAGE, not the origin: `../figs/` from
+      // `/news/2026/` is `/news/figs/`, and getting that wrong is a 404
+      // wearing a citation.
+      "https://example.com/news/figs/conductivity.png",
+      // Art direction. A 2400w candidate is bought for photographs and never
+      // for chrome, so the widest descriptor is what admits this one — but the
+      // 1200w rendition is what is CARRIED, because `src` is the phone fallback
+      // and the 2400w plate is megabytes times hundreds of pages.
+      "https://example.com/img/line-1200.jpg",
+    ],
+    "the filter no longer separates the publisher's figures from its furniture: a 1x1 beacon, a data: spacer, a 48px byline portrait, a 640x32 sprite strip, an uncaptioned SVG or a cross-host sponsor banner is now being carried into a report as though it were evidence",
+  );
+
+  const chart = article.figures[0];
+  assert.equal(chart.caption, "Figure 1: ionic conductivity against temperature, for three substitution fractions.", "the caption is the one thing that makes a figure citable and it is no longer being read off the figcaption");
+  assert.equal(chart.width, 960, "the declared width is gone; a placer with no intrinsic size cannot tell a plate from a badge and a store with none cannot bound what it fetches");
+  assert.ok(
+    chart.anchorText.endsWith("reproducible across three separately synthesised batches."),
+    "the figure carries no run of the prose it interrupted, so it can only be placed by an offset — and an offset survives neither the blank-run collapse nor the 4,000-character budget slice, which is how a chart lands at the end of a chapter instead of beside its claim",
+  );
+  // RULE 2, AT THE ONLY HOP THAT CAN STILL GUARANTEE IT. Downstream this array
+  // is sliced, concatenated and re-ordered; a figure that has lost its page has
+  // lost its attribution, and an image on a screen with no page behind it is a
+  // fabricated figure rather than a citation.
+  for (const figure of article.figures) {
+    assert.equal(figure.pageUrl, "https://example.com/news/2026/electrolytes", "a figure has left the extractor without the page it came off, so nothing downstream can attribute it without trusting its position in an array");
+  }
+
+  // THE LAZY CDN CASE, which is the whole reason the fallback chain exists.
+  // Readability's `_fixLazyImages` only copies a `data-*` value into `src` when
+  // the value matches `\.(jpg|jpeg|png|webp)`, so an extensionless CDN path is
+  // left in `data-src` and never absolutised — and a reader that trusted `src`
+  // would store the base64 spacer, or nothing.
+  const PROSE = "<p>Paragraph of ordinary article prose about a pilot line that ran for six hundred hours without a measurable rise in interfacial resistance, which is the number the field has been waiting on since the first argyrodite cells were reported and reproduced.</p>".repeat(3);
+  const lazy = await readArticle(
+    `<!doctype html><html><head><title>Lazy</title></head><body><article><h1>Lazy</h1>${PROSE}<figure><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="/i/12345?w=1200&amp;fm=webp" width="1200" height="800" alt="Cell stack cross-section"><figcaption>Figure 2: cross-section of the stack after 500 cycles.</figcaption></figure>${PROSE}</article></body></html>`,
+    "https://example.com/news/2026/piece",
+  );
+  assert.deepEqual(
+    lazy.figures.map((figure) => figure.url),
+    ["https://example.com/i/12345?w=1200&fm=webp"],
+    "a captioned figure whose real address is in `data-src` with no file extension is being lost to its own base64 placeholder — which is every lazy-loading CMS whose CDN takes a size in the query string",
+  );
+
+  // `role="presentation"` IS THE LIVE HALF OF THE ACCESSIBILITY RULE, and
+  // `aria-hidden` is deliberately not tested for: Readability removes those
+  // itself, except the Wikimedia math render it keeps on purpose, so a rule
+  // here would only ever fire on the one image it would be wrong about.
+  const ornament = await readArticle(
+    `<!doctype html><html><head><title>Orn</title></head><body><article><h1>Orn</h1>${PROSE}<img role="presentation" srcset="/i/hero-1600.jpg 1600w, /i/hero-800.jpg 800w" src="/i/hero-800.jpg" alt="A wide photograph of the plant at dusk, shot from the road">${PROSE}</article></body></html>`,
+    "https://example.com/news/2026/piece",
+  );
+  assert.deepEqual(ornament.figures, [], "a plate-sized, art-directed, well-described image the page itself declared as presentation is being carried as a figure; nothing else in the filter can see that declaration");
+
+  // A page with nothing to keep must answer with an empty array, not with
+  // undefined: a caller that spreads `figures` would turn the difference into a
+  // crash three hops from here.
+  const bare = await readArticle(
+    `<html><head><title>Bare</title></head><body><article><h1>Bare</h1><p>${"There is no image anywhere on this page, only prose about a pilot line that ran for six hundred hours without a measurable rise in interfacial resistance. ".repeat(4)}</p></article></body></html>`,
+    "https://example.com/bare",
+  );
+  assert.deepEqual(bare.figures, [], "a page with no figures answers with something other than an empty array");
+});
+
+test("fetch_page's result literal names the figures, or they do not exist", () => {
+  // `ok(tool, payload)` builds `{ok:true, tool, ...payload}`. A key the literal
+  // does not name is a key that does not exist downstream — so the extractor
+  // two files back would be correct, the table would be created, the writer
+  // would run, and every row would be empty, with nothing anywhere failing.
+  //
+  // No patch in the figure set owned this line. It is the whole carrier.
+  const tools = readFileSync(new URL("../lib/mission-tools.js", import.meta.url), "utf8");
+  const literal = tools.slice(tools.indexOf('return ok("fetch_page", {'));
+  const body = literal.slice(0, literal.indexOf("});"));
+  assert.match(body, /figures: Array\.isArray\(doc\.figures\) \? doc\.figures : \[\]/, "fetch_page drops the figures on the floor of its own return literal");
+  // AND `text` IS STILL ITS OWN KEY, untouched. The figures travel beside it.
+  assert.match(body, /text: doc\.text,/, "fetch_page's quotable text is no longer handed through verbatim");
+  assert.ok(!/text: .*figure/i.test(body), "something folded figure metadata into the quotable string, which unverifies every quote in the system");
+});
