@@ -2645,7 +2645,7 @@ test("the mission list is a grid, and its placeholder is laid out in the same on
   // The card's own margin is cancelled AT THE SITE. Stripping it from
   // CARD_STYLE would re-flow the 信源 feed, the starter and MissionPanel, none
   // of which this batch looked at.
-  assert.match(declaration("const CARD_STYLE = {"), /marginBottom: SPACE\.lg/, "CARD_STYLE lost the margin its four consumers are laid out on");
+  assert.match(declaration("const CARD_STYLE = {"), /marginBottom: SPACE\.xl/, "CARD_STYLE lost the margin its four consumers are laid out on, or dropped back to the 16px gutter — the reference's sections stand 24 apart");
   assert.match(
     code(MISSIONS_LIST),
     /\.\.\.\(hover \? CARD_HOVER_STYLE : CARD_STYLE\), marginBottom: 0, height: "100%"/,
@@ -5170,5 +5170,129 @@ test("the re-run is offered in the colour of an action, not the colour of runnin
     [...board.matchAll(/tone: TONE\.accent,\s*icon: "refresh"/g)].length,
     1,
     "the board draws more than one accent re-run chip, which means the row's action is being offered twice",
+  );
+});
+
+test("the trajectory's rows touch, so the line between them is the line", () => {
+  // A LIST IS ROWS SEPARATED BY A LINE — the rule this file already states,
+  // and the one thing that was still stopping it from reading that way. Two
+  // declarations, written a batch apart, cancelled each other: `.swt-row` took
+  // `border-bottom:1px solid` when the row stopped being a card, and
+  // `.swt-list` kept a `gap:2px` from when it was one. A hairline in the
+  // middle of a two-pixel gutter is not an edge, and the hover fill lit a 38px
+  // band with a stripe of page above and below it.
+  //
+  // AND IT IS THE DENSITY THIS BATCH GIVES BACK. The pane renders
+  // MISSION_TRACE_TAKE rows — 120 — so the gap cost 119 gutters and 238px of
+  // scroll on the screen that carries a mission's thousand records.
+  const line = (needle) => SOURCE.split(String.fromCharCode(10)).find((row) => row.includes(needle));
+  const list = line(".swt-list{");
+  assert.ok(list !== undefined, "the trajectory list rule is gone");
+  assert.ok(
+    !/gap:/.test(list),
+    "the trajectory list separates its rows with a gap again, which puts each row's own hairline in the middle of a gutter and breaks the hover into stripes",
+  );
+  const row = line(".swt-row{");
+  assert.ok(row !== undefined, "the trajectory row rule is gone");
+  assert.ok(
+    row.includes("border-bottom:1px solid"),
+    "the row lost the line that is now the only thing separating it from the next one",
+  );
+  // THE CONTAINER'S EDGE IS THE CONTAINER'S. `.swt-wrap` draws it; the last
+  // row drawing a second one a pixel inside is the hair-outside/rule-inside
+  // rule broken where both are visible together.
+  assert.ok(
+    SOURCE.includes(".swt-row:last-child{border-bottom:0}"),
+    "the bottom row draws a divider under nothing, one pixel inside the wrapper's own border",
+  );
+});
+
+test("a card carries the reference's air, and the panel stops taking it back", () => {
+  // MEASURED, NOT FELT. The reference's cards carry 20-24px of interior
+  // padding and its sections stand ~24px apart. Ours carried SPACE.lg for
+  // both — and MissionPanel, which draws seventeen of the cards on the mission
+  // screens, then overrode the interior down to SPACE.md. The component that
+  // owns most of this product's surface was the tightest thing on it, at half
+  // the reference's air.
+  //
+  // SPACE IS PINNED AT FIVE STEPS OF FOUR by the test above, so the reference's
+  // 20 is not a step this file may have and 24 is the step it has.
+  const card = declaration("const CARD_STYLE = {");
+  assert.match(card, /padding: SPACE\.xl/, "a card is back to 16px inside, which is where it measured tighter than the reference on every screen in the tab");
+  assert.match(card, /marginBottom: SPACE\.xl/, "two stacked cards are back to a 16px gutter");
+  // AND THE GAP IS NOT THE MARGIN. `gap` is the space between a card's own
+  // columns — the thumbnail and the text in the 信源 feed — and widening it
+  // with the padding would push a 340px grid card's text off its own image.
+  assert.match(card, /gap: SPACE\.lg/, "the card's internal column gap moved with its padding; they are different distances between different things");
+  // THE OVERRIDE MAY NOT COME BACK. Spreading CARD_STYLE and re-declaring
+  // `padding` is the one way to make a token change land nowhere: the object
+  // says 24 and seventeen mounts render 12, with nothing on either side saying
+  // so.
+  const panel = code(body("function MissionPanel("));
+  assert.match(
+    panel,
+    /\.\.\.CARD_STYLE, display: "flex", flexDirection: "column", gap: SPACE\.md \}/,
+    "MissionPanel overrides CARD_STYLE's padding again, so the card token moves every card in the file except the seventeen that carry the mission screens",
+  );
+  // AND BOTH BRANCHES KEEP ONE RHYTHM. `bare` drops the card and nothing else;
+  // a bare panel in the drawer and a carded one on the page sitting on two
+  // different heading-to-body gaps is two heading devices again, which is the
+  // thing the drawer batch spent a whole commit collapsing.
+  assert.equal(
+    (panel.match(/flexDirection: "column", gap: SPACE\.md/g) ?? []).length,
+    2,
+    "the bare panel and the carded panel disagree about the space between a heading and its body",
+  );
+});
+
+test("the panel head counts in a sentence, not in a box the colour of its own rule", () => {
+  // THE BADGE'S ONE ADVANTAGE, MEASURED, AND IT IS NOT THERE. A badge beats a
+  // sentence by being findable by SHAPE at any x, and that is OUR case rather
+  // than the reference's: these panels stack — thirteen down the overview and
+  // four consecutively down the cost pane — where the reference's
+  // 任务列表 · 共 30 项 sits alone at the top of a pane. So the badge should have
+  // won here, and this test exists because it does not.
+  //
+  // IT IS NOT AT A FIXED x: it follows the title inside a flex row, and the cost
+  // pane's four titles are 3, 5, 6 and 7 CJK characters at `600 14px/20px`, so
+  // its left edge lands at four positions about 56px apart.
+  //
+  // AND THE SHAPE IS NOT A SHAPE: COUNT_CHIP fills on
+  // `--dsw-alias-fill-tertiary`, declared #e5e7eb, six pixels above a rule drawn
+  // in `--dsw-alias-border-l2`, declared #e5e7eb — and #374151 against #374151
+  // in the dark block. That collision is asserted below, so the day either
+  // variable moves, this argument gets re-read instead of inherited.
+  const theme = SOURCE.slice(SOURCE.indexOf("const SWM_THEME = ["), SOURCE.indexOf("const SWM_SHEET"));
+  const valueOf = (name) => [...theme.matchAll(new RegExp(`"${name}:(#[0-9a-f]{3,8});"`, "g"))].map((m) => m[1]);
+  assert.deepEqual(
+    valueOf("--dsw-alias-fill-tertiary"),
+    valueOf("--dsw-alias-border-l2"),
+    "the count badge's fill and the rule under it are no longer the same value in both themes — which is the measurement the panel head's sentence was argued from, so re-read the comment there before trusting it",
+  );
+  const panel = code(body("function MissionPanel("));
+  assert.ok(
+    !panel.includes("COUNT_CHIP"),
+    "the panel head draws a badge again, filled with the exact value of the rule six pixels under it: a grey box on a grey line, which is the one thing a badge cannot be",
+  );
+  assert.match(
+    panel,
+    /children: `· \$\{count\}`/,
+    "the count is not part of the heading's sentence — the reference writes 任务列表 · 共 30 项 and the middot is what makes the two one clause",
+  );
+  assert.match(
+    panel,
+    /font: FONT\.body, color: INK\.secondary/,
+    "the count is set in some step other than the heading's own face one size down, which is two fonts in one heading again",
+  );
+  assert.ok(
+    !panel.includes("INK.quiet"),
+    "the panel head reaches for the decoration weight — INK's docblock puts tertiary at 3.71:1 and a count is a value the reader came for",
+  );
+  // AND THE BADGE SURVIVES WHERE IT IS RIGHT. Ten sites draw a figure INSIDE a
+  // row, at a fixed x in a fixed cell, which is the case COUNT_CHIP was declared
+  // for. This finding is about one heading, not about retiring the badge.
+  assert.ok(
+    SOURCE.split("COUNT_CHIP").length - 1 >= 12,
+    "COUNT_CHIP lost its other callers too; the ten figures that live inside rows are back to bare monospace in the tertiary colour",
   );
 });

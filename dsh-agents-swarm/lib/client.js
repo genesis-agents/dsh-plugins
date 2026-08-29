@@ -2967,7 +2967,27 @@ window.__ModuleLoader__.load({
 
 		const CARD_STYLE = {
 			...PANEL_STYLE,
-			display: "flex", gap: SPACE.lg, padding: SPACE.lg, marginBottom: SPACE.lg,
+			// TWENTY-FOUR INSIDE, AND THE SAME TWENTY-FOUR BETWEEN TWO OF THEM.
+			// Measured off the reference rather than felt: its cards carry 20-24px
+			// of interior padding and its sections stand ~24px apart. Ours carried
+			// SPACE.lg for both — and `MissionPanel`, which draws SEVENTEEN of the
+			// cards on the mission screens, then OVERRODE the interior down to
+			// SPACE.md. So the surface a reader spends the most time on was the
+			// tightest thing in the tab: twelve pixels against the reference's
+			// twenty-four, on a screen whose whole complaint is that it reads as a
+			// denser tool than the thing it is copying.
+			//
+			// `xl` AND NOT A NEW STEP. SPACE is pinned at five steps of four by its
+			// own test, so the reference's 20 is not available and 24 is the step
+			// that is. One value moves six CARD_STYLE style sites, CARD_HOVER_STYLE
+			// and seventeen panels together — which is the whole argument for the
+			// interior being a token rather than a call site.
+			//
+			// `gap` STAYS AT `lg`, and that is not an oversight: it is the space
+			// between a card's OWN COLUMNS — the thumbnail and the text in the 信源
+			// feed — not the space between two cards, and the reference does not
+			// open that one up.
+			display: "flex", gap: SPACE.lg, padding: SPACE.xl, marginBottom: SPACE.xl,
 			transition: `box-shadow ${MOTION.base}, transform ${MOTION.base}`
 		};
 
@@ -7551,8 +7571,11 @@ window.__ModuleLoader__.load({
 		*   3. A COUNT WAS PROSE TOO. Six call sites buried a number in a
 		*      sentence — `已核验 9 条 · 共 23 条发现` — so the one fact a person
 		*      scans a panel header for was the one thing they had to read a
-		*      clause to find. `count` renders as the neutral badge `COUNT_CHIP`
-		*      already declares, beside the title where it is looked for.
+		*      clause to find. `count` is its own clause at the end of the
+		*      heading now: the name, a middot, the figure. It was a grey badge
+		*      for one round; the comment at the render site records, with the
+		*      numbers, why a badge is the wrong shape for THIS header and the
+		*      right one for the ten rows that still use it.
 		*
 		* `accent` and `defaultOpen` are NOT in this signature, though the batch
 		* spec named them. No call site in this file wants either, and B7 already
@@ -7573,7 +7596,7 @@ window.__ModuleLoader__.load({
 		* inside, so the reader is choosing not to look rather than not knowing
 		* there is anything to look at.
 		* @param title - the heading word. Rendered as an eyebrow, always.
-		* @param count - a finite number renders as a badge; anything else renders nothing.
+		* @param count - a finite number renders as a clause on the heading; anything else renders nothing.
 		* @param note - a sentence, rendered as the first line of the BODY.
 		* @param action - a node for the right-hand end of the header row.
 		* @param children - the panel's content.
@@ -7596,8 +7619,19 @@ window.__ModuleLoader__.load({
 				// border and 32px of padding spent drawing a box around the whole
 				// screen; it does not drop the panel's own heading.
 				style: bare === true
-					? { display: "flex", flexDirection: "column", gap: SPACE.sm }
-					: { ...CARD_STYLE, display: "flex", flexDirection: "column", gap: SPACE.sm, padding: SPACE.md },
+					? { display: "flex", flexDirection: "column", gap: SPACE.md }
+					// NO `padding` HERE ANY MORE. This spread CARD_STYLE and then
+					// re-declared the one property the card exists to set, which is how
+					// a token change lands everywhere EXCEPT the seventeen mounts that
+					// matter most: the object said 16 and every panel on the screen drew
+					// 12. An override of an inherited recipe is invisible from the
+					// recipe, which is the same defect the inline-beats-stylesheet notes
+					// all over this file record, one layer up.
+					//
+					// `md` BETWEEN THE HEADING AND THE BODY, matching the bare branch
+					// above so the two agree: eight pixels of gap inside twenty-four of
+					// padding reads as a heading that has fallen onto its own content.
+					: { ...CARD_STYLE, display: "flex", flexDirection: "column", gap: SPACE.md },
 				children: [
 					// A HEADER ROW WITH NOTHING IN IT IS A RULE DRAWN UNDER NOTHING.
 					//
@@ -7673,8 +7707,46 @@ window.__ModuleLoader__.load({
 							// because the panels that survive an empty run are exactly
 							// the ones whose zero is the news — 0 anomalies repaired is
 							// a different statement from a panel that chose not to say.
+							// THE COUNT IS THE HEADING'S OWN CLAUSE, NOT A BOX BESIDE IT.
+							//
+							// A BADGE EARNS ITS PLACE BY BEING FINDABLE BY SHAPE AT ANY x, and
+							// that is our case rather than the reference's: these panels STACK —
+							// thirteen down the overview and four consecutively down the cost
+							// pane — where the reference's 任务列表 · 共 30 项 sits alone at the
+							// top of a pane. So the badge should have won here. It does not, on
+							// two counts, and both are measurements rather than preferences.
+							//
+							// IT IS NOT AT A FIXED x. The badge follows the title inside a flex
+							// row, and the cost pane's four titles are 3, 5, 6 and 7 CJK
+							// characters at `600 14px/20px` — so its left edge lands at four
+							// positions spanning about 56px. It was never a column of figures; it
+							// moves with the title exactly as a sentence would.
+							//
+							// AND ITS SHAPE IS NOT A SHAPE. COUNT_CHIP fills on
+							// `--dsw-alias-fill-tertiary`, which this page declares #e5e7eb, six
+							// pixels above a rule drawn in `--dsw-alias-border-l2`, which it
+							// declares #e5e7eb. The same value — and the same again in the dark
+							// block, #374151 against #374151. A grey box on a grey line is the one
+							// thing a badge cannot afford to be, because being a distinct shape is
+							// the whole of what it was buying.
+							//
+							// SO IT IS TEXT, in the heading's own face one step down in size and
+							// colour, which is what the reference writes. NO UNIT WORD:
+							// MissionPanel is handed no language and twelve call sites is not
+							// where you start threading one, and the title already names what is
+							// being counted — which is the work 项 is doing over there.
+							// INK.secondary and not quiet: INK's docblock puts tertiary at 3.71:1
+							// and keeps it for decoration, and a count is what the reader came
+							// for. The badge stays where it is right — ten sites draw a figure
+							// INSIDE a row, at a fixed x in a fixed cell, which is the case it was
+							// declared for.
 							!Number.isFinite(count) ? null : jsx("span", {
-								style: COUNT_CHIP, children: String(count)
+								style: {
+									font: FONT.body, color: INK.secondary,
+									fontVariantNumeric: "tabular-nums",
+									flex: "none", whiteSpace: "nowrap"
+								},
+								children: `· ${count}`
 							}, "count"),
 							jsx("span", { style: { flex: 1, minWidth: SPACE.sm } }, "spacer"),
 							action === undefined || action === null ? null : jsx("div", {
@@ -9143,6 +9215,14 @@ window.__ModuleLoader__.load({
 			// line of a log.
 			`.swt-row{display:flex;align-items:center;box-sizing:border-box;height:38px;padding:0 8px 0 10px;gap:12px;border:0;border-bottom:1px solid ${LINE.hair};background:transparent;min-width:0;width:100%;appearance:none;font:inherit;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary)}`,
 			".swt-row:hover{background:var(--dsw-alias-interactive-bg-hover)}",
+			// THE LAST ROW HAS NOTHING UNDER IT TO BE SEPARATED FROM. With the list's
+			// gap gone, the bottom row's divider comes to rest one pixel inside
+			// `.swt-wrap`'s own border: two lines where the container draws one, which
+			// is precisely the `hair`-outside / `rule`-inside distinction LINE's
+			// docblock states, broken at the single place in the file where both are
+			// visible at once. The gap used to hide it by putting two pixels between
+			// them.
+			".swt-row:last-child{border-bottom:0}",
 			// SELECTED IS A MARK IN THE MARGIN, not a ring around a box. A 2px inset
 			// ring drew the border the row no longer has, which put the boxes back
 			// one at a time.
@@ -9211,7 +9291,20 @@ window.__ModuleLoader__.load({
 			'.swt-span[data-tone="tool"]{background:var(--dsw-alias-state-warn-label);opacity:1}',
 			'.swt-span[data-tone="bad"]{background:var(--dsw-alias-state-error-primary);opacity:1}',
 			`.swt-wrap{display:flex;align-items:stretch;border:1px solid ${LINE.rule};border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-layer-1)}`,
-			".swt-list{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:2px;padding:8px}",
+			// NO GAP, AND THAT IS THE WHOLE OF `.swt-row`'s OWN RULE FINALLY LANDING.
+			// `.swt-row` has carried `border-bottom:1px solid` since the list stopped
+			// being a stack of cards; this rule kept a 2px gap from before that. A
+			// hairline with two pixels of page under it is not the edge between two
+			// rows — it is a rule floating in a gutter — and the hover fill lights a
+			// 38px band with a stripe of ground above and below it, which is the box
+			// coming back by another route on the one screen the list rules were
+			// written for.
+			//
+			// IT IS ALSO THE ONLY DENSITY THIS BATCH BUYS BACK, and it is bought on
+			// the densest screen in the product. The pane renders MISSION_TRACE_TAKE
+			// rows; at 120 that is 119 gutters — 238px of scroll spent separating
+			// rows that a line already separates. The pitch falls from 40px to 38.
+			".swt-list{flex:1 1 0;min-width:0;display:flex;flex-direction:column;padding:8px}",
 			`.swt-pane{position:relative;display:flex;flex:none;flex-direction:column;width:clamp(300px,32%,392px);min-width:0;min-height:0;border-left:1px solid ${LINE.rule};background:var(--dsw-alias-bg-layer-1)}`,
 			`.swt-panehead{display:flex;flex:none;align-items:center;justify-content:space-between;box-sizing:border-box;height:42px;padding:0 8px 0 12px;border-bottom:1px solid ${LINE.rule};gap:8px}`,
 			".swt-panetitle{display:flex;align-items:center;min-width:0;gap:8px;color:var(--dsw-alias-label-primary)}",
