@@ -3247,7 +3247,16 @@ test("the surface paints in the reference's values, not the harness's", () => {
   // The hues stay in their ONE home, with a light value and a dark correction.
   // Declaring them again in the theme block made the second declaration read as
   // the dark one, and the light/dark guard caught it.
-  assert.ok(!block.includes("--swm-h-"), "a hue is declared a second time in the theme block, where it reads as the dark value");
+  // A DECLARATION, NOT A MENTION. This looked for the STRING `--swm-h-`, and
+  // the accent patch fired it by writing two comments that name the hue its
+  // new hex equals — which is exactly the evidence a reader of that block
+  // wants. Fourth time in this file a guard has matched the sentence
+  // describing the thing instead of the thing; the shape to look for is a
+  // NAME FOLLOWED BY A COLON inside a quoted CSS fragment.
+  assert.ok(
+    !/"--swm-h-[a-z-]+:/.test(block),
+    "a hue is declared a second time in the theme block, where it reads as the dark value",
+  );
 });
 
 test("the model that spent the tokens reaches the screen", () => {
@@ -4873,8 +4882,8 @@ test("the report's headings carry the accent, and only the report's", () => {
   const declared = [...theme.matchAll(/"--dsw-alias-state-business-primary:(#[0-9a-f]{6});"/g)].map(([, hex]) => hex);
   assert.deepEqual(
     declared,
-    ["#1d4ed8", "#60a5fa"],
-    "the accent is no longer blue-700 light / blue-400 dark, so the heading tint is off the one ramp — and #1d4ed8 measures 6.70:1 on white and #60a5fa 6.98:1 on #111827, which is the budget a heading in it was chosen against",
+    ["#6d28d9", "#a78bfa"],
+    "the accent is no longer violet-700 light / violet-400 dark, so the heading tint is off the one ramp — and #6d28d9 measures 7.11:1 on white and #a78bfa 6.52:1 on #111827, which is the budget a heading in it was chosen against",
   );
 });
 
@@ -5059,5 +5068,107 @@ test("the report's toolbar carries what we hold, and refuses the control we do n
   assert.ok(
     !report.includes('versions.length > 1 ? "" :'),
     "the meta line drops the version whenever there is more than one, which is exactly when a reader needs it",
+  );
+});
+
+test("the interactive accent is violet, and it is the ramp's violet", () => {
+  // WHAT WAS MEASURED, AND WHY IT WAS NOT VISIBLE FROM ANY ONE LINE.
+  // `--dsw-alias-state-business-primary` held #1d4ed8 light and #60a5fa dark.
+  // `--swm-h-blue` holds 29,78,216 and 96,165,250. Those are the same two
+  // colours written in two syntaxes, so the name that draws the tab underline,
+  // three strips' active labels, five focus rings, both selected-row margin
+  // marks, the citation marker, the markdown anchor and every chapter heading
+  // was byte-identical to ROLE_TONE.researcher — and the researcher is the role
+  // the board prints MOST, because mission-view mints one
+  // `researcher:<dimensionId>` per dimension while `leader` owns 3 of the 12
+  // rows in STAGES. Nothing threw, nothing looked broken, and "you are here"
+  // and "a researcher owns this" were one colour on every screen that has both.
+  //
+  // The reference is violet there, and this file had ALREADY written that down
+  // without spending it: the palette test above reads "violet for the accent
+  // where ours was the harness blue".
+  const theme = SOURCE.slice(SOURCE.indexOf("const SWM_THEME"), SOURCE.indexOf("const SWM_SHEET"));
+  const hexes = (name) => [...theme.matchAll(new RegExp(`"${name}:(#[0-9a-f]{6});"`, "g"))].map(([, value]) => value);
+  const triple = (value) => [1, 3, 5].map((at) => Number.parseInt(value.slice(at, at + 2), 16)).join(",");
+
+  // ONE COLOUR, TWO SPELLINGS, AND THIS IS THE ONLY THING BETWEEN THEM.
+  // SWM_THEME must spell a hex (it is a CSS declaration) and SWM_CSS must spell
+  // a triple (every consumer builds `rgba(hue,alpha)` out of it, which a var
+  // holding a finished colour cannot do). So `TONE.accent` and the accent alias
+  // are the same violet by hand, and without an assertion they are two violets
+  // one redesign apart — the exact drift the ramp exists to prevent, reopened
+  // at the one name the ramp does not cover.
+  const accent = hexes("--dsw-alias-state-business-primary");
+  assert.equal(accent.length, 2, `the accent is declared ${accent.length} times; it needs one value per theme`);
+  assert.equal(triple(accent[0]), declared("light").get("violet"), "the light accent is off `--swm-h-violet`, so the tab underline and TONE.accent are two different violets fourteen pixels apart");
+  assert.equal(triple(accent[1]), declared("dark").get("violet"), "the dark accent is off `--swm-h-violet`, so the tab underline and TONE.accent are two different violets");
+
+  // AND IT IS NOT THE ROLE HUE. This is the finding itself: an accent equal to
+  // a role hue makes chrome and content one colour, and blue is the role hue
+  // that appears most.
+  assert.notEqual(triple(accent[0]), declared("light").get("blue"), "the accent is the harness blue again — exactly `--swm-h-blue`, which is the researcher's colour on every trajectory row, every owner cell and every roster chip");
+  assert.notEqual(triple(accent[1]), declared("dark").get("blue"), "the dark accent is the harness blue again — exactly `--swm-h-blue`");
+
+  // A LINK IS ONE ACT, SO IT IS ONE HUE. Two of the three link-ish sites read
+  // the accent; the third — a source card's URL — reads `--dsw-alias-label-link`.
+  // They held one value by coincidence. They hold it by assertion now, so an
+  // accent move cannot leave a URL behind in the colour the accent just left.
+  assert.deepEqual(hexes("--dsw-alias-label-link"), accent, "a link and a citation marker are two colours for one act: one of `--dsw-alias-label-link` and `--dsw-alias-state-business-primary` moved and the other did not");
+});
+
+test("a lane in the trajectory plot is a kind, never the accent", () => {
+  // FOUR LANES, AND ONLY THREE OF THEM NAMED AS CONTENT. `finding`, `tool` and
+  // `bad` read the harness's success / warn / error aliases — state names, for
+  // marks that report state. `stage` read `--dsw-alias-state-business-primary`,
+  // which is the name the tab underline and every focus ring read.
+  //
+  // That was never a shade problem; it was a wiring problem, and it only had a
+  // symptom once somebody moved the accent. A span in a chart is a KIND. Wired
+  // to the interactive name it is repainted by decisions about underlines — and
+  // the violet it would have taken is ROLE_TONE.leader, so the stage lane and
+  // the Leader's chip would have become one colour on the pane that shows both.
+  const lanes = TRACE_RULES.split("\n").filter((line) => line.includes(".swt-span[data-tone="));
+  assert.equal(lanes.length, 4, `the plot draws ${lanes.length} lanes; it has four kinds to draw`);
+  for (const lane of lanes) {
+    assert.ok(
+      !lane.includes("state-business-primary"),
+      `a plot lane is painted in the interactive accent: ${lane.trim()}. A span in a chart is a KIND, and a kind wired to the accent changes colour whenever a decision about chrome is taken`,
+    );
+  }
+  assert.ok(
+    lanes.some((lane) => lane.includes('data-tone="stage"') && lane.includes("rgb(${TONE.info})")),
+    "the stage lane stopped naming its own hue. It is the one lane with no state alias behind it, so TONE is the only thing that can hold it to the ramp",
+  );
+});
+
+test("the re-run is offered in the colour of an action, not the colour of running", () => {
+  // MEASURED ON ONE ROW. A running dimension row printed three tinted chips
+  // inside about 300 pixels: 重跑 at TONE.info, 运行中 at TONE.info
+  // (MISSION_STAGE_STATUS_FACES.running), and the owner's RoleChip at
+  // ROLE_TONE.researcher — which is PALETTE.blue, the same triple TONE.info
+  // resolves to. Three chips, three meanings, one colour.
+  //
+  // THE CONTROL IS THE ONE THAT MOVES, and the rule says why: it is the only
+  // one of the three that is CHROME — a thing you press. The status and the
+  // owner are facts about the row and keep the hues that identify them. The
+  // reference draws its 重跑 violet-tinted for the same reason.
+  //
+  // IT IS ALSO REQUIRED BY THE ACCENT MOVE. `看轨迹 →` in the same cell reads
+  // `--dsw-alias-state-business-primary`; leaving 重跑 on TONE.info would put
+  // two controls two pixels apart in two colours, which is worse than the
+  // ambiguity it replaced.
+  const board = code(body("function MissionTaskBoard("));
+  assert.match(
+    board,
+    /tone: TONE\.accent,\s*icon: "refresh",\s*label: zh \? "重跑"/,
+    "the re-run chip is drawn in TONE.info again — the same tint as the 运行中 chip beside it, the same tint as the researcher chip beside that, and a different colour from the 看轨迹 link it shares a cell with",
+  );
+  // The DRAWER's re-run stays neutral on purpose: it spends its colour on the
+  // stage that degraded, and the board's cell has no such budget. So this is
+  // scoped to the board, not asserted file-wide.
+  assert.equal(
+    [...board.matchAll(/tone: TONE\.accent,\s*icon: "refresh"/g)].length,
+    1,
+    "the board draws more than one accent re-run chip, which means the row's action is being offered twice",
   );
 });

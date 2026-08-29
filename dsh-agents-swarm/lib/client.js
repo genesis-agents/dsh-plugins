@@ -972,7 +972,14 @@ window.__ModuleLoader__.load({
 			"--dsw-alias-label-secondary:#4b5563;",
 			"--dsw-alias-label-tertiary:#9ca3af;",
 			"--dsw-alias-label-caption:#9ca3af;",
-			"--dsw-alias-label-link:#1d4ed8;",
+			// A LINK IS ONE ACT, SO IT IS ONE HUE. COUNTED: three sites in this
+			// file draw "a word that takes you somewhere" — `renderInline`'s
+			// anchor and `missionCitationPeek`'s marker read the accent, and a
+			// source card's URL reads this. All three held #1d4ed8, so they
+			// agreed by coincidence rather than by decision. The majority reads
+			// the accent, so this follows it; the guard below now holds the two
+			// names equal, which is the coincidence made into a rule.
+			"--dsw-alias-label-link:#6d28d9;",
 			"--dsw-alias-label-primary-inverted:#ffffff;",
 			"--dsw-alias-bg-base:#ffffff;",
 			"--dsw-alias-bg-layer-0:#ffffff;",
@@ -990,7 +997,52 @@ window.__ModuleLoader__.load({
 			"--dsw-alias-state-success-primary:#047857;",
 			"--dsw-alias-state-warn-label:#b45309;",
 			"--dsw-alias-state-error-primary:#b91c1c;",
-			"--dsw-alias-state-business-primary:#1d4ed8;",
+			// THE INTERACTIVE ACCENT, AND IT IS VIOLET.
+			//
+			// MEASURED, ON THIS FILE. This name is read 20 times: the tab
+			// underline, three strips' active labels, five focus rings, the two
+			// selected-row margin marks, the citation marker, the markdown
+			// anchor, the report's chapter headings, the external-link glyph and
+			// four inline text buttons. It held #1d4ed8 — rgb(29,78,216) — which
+			// is `--swm-h-blue` TO THE BYTE, in both themes (#60a5fa is
+			// rgb(96,165,250)). So the colour that says "you are here" and the
+			// colour ROLE_TONE gives the researcher were ONE VALUE.
+			//
+			// WHAT THAT COST, COUNTED ON ONE SCREEN. A running dimension row on
+			// the task board prints, within about 300px: its selected margin
+			// mark (this name), its 重跑 chip (TONE.info), its 运行中 chip
+			// (TONE.info), its owner RoleChip (ROLE_TONE.researcher =
+			// PALETTE.blue) and its 看轨迹 link (this name) — five marks, five
+			// meanings, one rgb triple. TONE.info spends the same triple on 27
+			// more vocabulary entries. Violet, meanwhile, appeared on that board
+			// exactly once, on the Leader's chip.
+			//
+			// AND THE REFERENCE IS VIOLET — a previous round measured it and
+			// wrote it down without spending it. The palette guard's own note
+			// reads "violet for the accent where ours was the harness blue".
+			//
+			// NOTHING ENTERS THE PALETTE. #6d28d9 is rgb(109,40,217) and #a78bfa
+			// is rgb(167,139,250) — `--swm-h-violet` exactly, the same 700/400
+			// steps the one-ramp guard holds all ten hues to. A role changes
+			// hands; no colour is added.
+			//
+			// IT CLEARS THE BUDGET IT REPLACES. 7.11:1 on #ffffff against blue's
+			// 6.70:1, and 6.52:1 on #111827 against blue's 6.98:1 — both over
+			// the 4.5:1 body text needs, and far over the 3:1 a 2px underline
+			// needs as a non-text component.
+			//
+			// BLUE STAYS A ROLE, AND VIOLET IS ALSO ONE — the Leader's. The two
+			// are told apart by SLOT, not by shade, and the slot rule is the
+			// whole contract: an accent is only ever CHROME — a 2px rule, a
+			// focus ring, a margin mark, ink on a word you can press, a heading
+			// this document numbered. A role is only ever a RoleChip: a tinted
+			// pill carrying that role's glyph and that role's name. Violet
+			// without a glyph and a word is the product talking; violet with
+			// them is the Leader. And the collision moved to the RAREST role —
+			// `leader` owns 3 of the 12 rows in STAGES, while mission-view mints
+			// one `researcher:<dimensionId>` per dimension, which is most of a
+			// thirty-row board.
+			"--dsw-alias-state-business-primary:#6d28d9;",
 			"--dsw-radius-sm:6px;--dsw-radius-md:8px;--dsw-radius-lg:12px;",
 			"--dsw-font-xxxs-11:11px/16px var(--dsw-font-family);",
 			"--dsw-font-xxxs-strong-11:600 11px/16px var(--dsw-font-family);",
@@ -1012,7 +1064,7 @@ window.__ModuleLoader__.load({
 			"--dsw-alias-label-secondary:#d1d5db;",
 			"--dsw-alias-label-tertiary:#6b7280;",
 			"--dsw-alias-label-caption:#6b7280;",
-			"--dsw-alias-label-link:#60a5fa;",
+			"--dsw-alias-label-link:#a78bfa;",
 			"--dsw-alias-label-primary-inverted:#111827;",
 			"--dsw-alias-bg-base:#111827;",
 			"--dsw-alias-bg-layer-0:#111827;",
@@ -1030,7 +1082,10 @@ window.__ModuleLoader__.load({
 			"--dsw-alias-state-success-primary:#34d399;",
 			"--dsw-alias-state-warn-label:#fbbf24;",
 			"--dsw-alias-state-error-primary:#f87171;",
-			"--dsw-alias-state-business-primary:#60a5fa;",
+			// violet-400, the dark step of the same ramp entry. 6.52:1 on
+			// #111827; the guard holds it to `--swm-h-violet` so the two
+			// spellings of one colour cannot drift.
+			"--dsw-alias-state-business-primary:#a78bfa;",
 			"--dsw-shadow-lv1:0 1px 2px 0 rgba(0,0,0,0.4);",
 			"--dsw-shadow-lv3:0 4px 6px -1px rgba(0,0,0,0.5),0 2px 4px -2px rgba(0,0,0,0.5);",
 			"}"
@@ -3910,15 +3965,24 @@ window.__ModuleLoader__.load({
 							// structure as its own. It keeps the ink it has.
 							//
 							// THE HUE IS NOT A NEW ONE. SWM_THEME declares
-							// `--dsw-alias-state-business-primary` as #1d4ed8 light and #60a5fa
-							// dark, which are rgb(29,78,216) and rgb(96,165,250) — the exact
-							// blue-700 / blue-400 steps the one-ramp guard holds every hue in
-							// this file to. Nothing enters the palette.
+							// `--dsw-alias-state-business-primary` as #6d28d9 light and #a78bfa
+							// dark, which are rgb(109,40,217) and rgb(167,139,250) — the exact
+							// violet-700 / violet-400 steps the one-ramp guard holds every hue
+							// in this file to. Nothing enters the palette.
 							//
-							// AND IT CLEARS THE BUDGET. 6.70:1 on #ffffff and 6.98:1 on
+							// IT USED TO BE BLUE, AND THAT WAS THE RESEARCHER'S. The accent held
+							// #1d4ed8 = rgb(29,78,216) = `--swm-h-blue` to the byte, so a chapter
+							// heading and a researcher's RoleChip two panes away were one colour.
+							// The reference tints its section headings violet for the same reason
+							// it tints its tab underline violet: they are the document's own
+							// structure, not one agent's rows.
+							//
+							// AND IT CLEARS THE BUDGET. 7.11:1 on #ffffff and 6.52:1 on
 							// #111827, against the 4.5:1 normal-size text needs — INK's docblock
 							// puts `quiet` at 3.71:1 and rules it decoration-only for exactly
-							// that reason. A chapter title is the opposite of decoration.
+							// that reason. A chapter title is the opposite of decoration. Light
+							// gains 0.41 over the blue it replaces; dark gives up 0.46 and stays
+							// 2.0 over the floor.
 							color: numbering === null ? INK.primary : "var(--dsw-alias-state-business-primary)"
 						},
 						// The stem is part of the heading TEXT, not a floated ornament: a
@@ -9136,7 +9200,13 @@ window.__ModuleLoader__.load({
 			'.swt-span[data-lane="0"]{top:7px}',
 			'.swt-span[data-lane="1"]{top:21px}',
 			'.swt-span[data-lane="2"]{top:35px}',
-			'.swt-span[data-tone="stage"]{background:var(--dsw-alias-state-business-primary)}',
+			// A LANE IS A KIND, NOT A CONTROL. The other three lanes read the
+			// harness's success / warn / error aliases — state names for marks
+			// that report state. This one read the INTERACTIVE alias, so a span
+			// in a chart was repainted by a decision about tab underlines, and
+			// moving the accent to violet would have turned it ROLE_TONE.leader
+			// on the very pane that draws Leader chips.
+			`.swt-span[data-tone="stage"]{background:rgb(${TONE.info})}`,
 			'.swt-span[data-tone="finding"]{background:var(--dsw-alias-state-success-primary)}',
 			'.swt-span[data-tone="tool"]{background:var(--dsw-alias-state-warn-label);opacity:1}',
 			'.swt-span[data-tone="bad"]{background:var(--dsw-alias-state-error-primary);opacity:1}',
@@ -11197,7 +11267,12 @@ window.__ModuleLoader__.load({
 														// its colour on the stage that degraded; a table cell has
 														// no such budget, and an untinted control at FONT.micro
 														// beside a link is indistinguishable from the link.
-														tone: TONE.info,
+														// AND IT IS AN ACTION, SO IT TAKES THE ACCENT. On TONE.info it was
+														// the third tinted blue thing within ~300px of one running row —
+														// the chip itself, 运行中 beside it, and the owner's RoleChip, which
+														// is ROLE_TONE.researcher and also blue — while the 看轨迹 link in
+														// the same cell read the accent. Two vocabularies in one cell.
+														tone: TONE.accent,
 														icon: "refresh",
 														label: zh ? "重跑" : "Re-run",
 														// IT SAYS THE CASCADE, in the drawer's own words. Two
