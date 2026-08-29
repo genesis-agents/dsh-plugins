@@ -7425,6 +7425,81 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		* THE THREE THE TOKEN METER ADDS UP AND THEN THROWS AWAY.
+		*
+		* `projectCost` has returned `tokensBreakdown` since the day it was written
+		* and `grep tokensBreakdown lib/client.js` returned nothing. The bar above
+		* sums prompt, completion and cache-read — correctly, because all three are
+		* charged against the same ceiling — so a run that spent nine tenths of its
+		* allowance re-reading a cached prompt was drawn exactly like one that spent
+		* it writing: the same bar, two completely different bills, and two
+		* different things to do about it.
+		*
+		* ROWS, NOT A DOT-JOINED CLAUSE. MissionRework's docblock is the standing
+		* decision and this is the same shape of mistake: figures welded into one
+		* grey sentence, in the weight of the caption under a meter, are figures
+		* nobody reads.
+		*
+		* NO SPLIT IS AN ANSWER TOO. An older Host half returns the meter without
+		* the breakdown, and three rows of `?? 0` under a bar reading 412k would be
+		* a claim that this run wrote nothing — a fabricated zero, which is worse
+		* than the gap. It says the ledger carries no split instead, and only when
+		* there is spend to be split.
+		* @param breakdown - `cost.tokensBreakdown`, or null on an older Host half.
+		* @param used - the meter's own total, so the absent case knows whether to speak.
+		* @param zh - whether to write Chinese.
+		* @param key - React's key, so it can be called straight into a list.
+		*/
+		function MissionTokenSplit({ breakdown, used, zh }, key) {
+			if (breakdown === null || typeof breakdown !== "object") {
+				return Number(used) > 0 ? jsx("div", {
+					style: { font: FONT.micro, color: INK.secondary },
+					children: zh ? "这次的账本没有分项" : "the ledger carries no split for this run"
+				}, key) : null;
+			}
+			// Named here rather than in a MISSION_*_FACES table: those map whatever a
+			// TEXT column happens to hold, with a fallthrough for a value nobody has
+			// drawn yet. These three are fixed fields of a projection, which is what
+			// MissionModelTable's own header row is — and 缓存读取 is taken from it
+			// verbatim, so the two screens name one thing once.
+			const rows = [
+				{ id: "promptTok", label: zh ? "提示" : "Prompt" },
+				{ id: "completionTok", label: zh ? "生成" : "Completion" },
+				{ id: "cacheReadTok", label: zh ? "缓存读取" : "Cache read" }
+			];
+			return jsx("div", {
+				style: {
+					display: "flex", flexDirection: "column", gap: SPACE.xs,
+					paddingTop: SPACE.xs,
+					// `rule`, not `hair`. LINE's docblock is the guard and it is explicit:
+					// hair is a container's OUTER edge, rule is an INNER divider between
+					// siblings. This one separates the split from the meter it decomposes,
+					// inside a single cell.
+					borderTop: `1px solid ${LINE.rule}`
+				},
+				children: rows.map((row) => jsxs("div", {
+					// `font` ON THE ROW, the numerals' family on the figure. The shorthand
+					// resets font-family and font-variant-numeric, so writing it beside
+					// tabular-nums in one object discards them — the defect MetricStat's
+					// docblock records, one component along.
+					style: { display: "flex", alignItems: "baseline", gap: SPACE.sm, font: FONT.micro },
+					children: [
+						jsx("span", { style: { flex: 1, minWidth: 0, color: INK.secondary }, children: row.label }, "label"),
+						// INK, NOT A HUE. Colour marks the exception here and none of the
+						// three is one: a cache read is spend, on the same ceiling as the
+						// other two, and the green MissionRework gives a cache HIT would say
+						// this one were free. A figure the ledger never carried prints
+						// `missionCompact`'s em dash rather than a nought nobody counted.
+						jsx("span", {
+							style: { flex: "none", fontFamily: MONO, fontVariantNumeric: "tabular-nums", color: INK.primary },
+							children: missionCompact(breakdown[row.id])
+						}, "figure")
+					]
+				}, row.id))
+			}, key);
+		}
+
+		/**
 		* The six ceilings, as bars, with the tight one named.
 		*
 		* Named rather than summed: a mission that has burned 100% of its arXiv
@@ -7475,7 +7550,11 @@ window.__ModuleLoader__.load({
 									jsx("div", {
 										style: { font: FONT.micro, color: INK.secondary },
 										children: missionMeterLine(meter, zh)
-									}, "line")
+									}, "line"),
+									// UNDER THE ONE METER IT DECOMPOSES, and under no other. The
+									// other five ceilings count one thing each; only this bar is a
+									// sum, so only this bar has a sum to break open.
+									key !== "tokens" ? null : MissionTokenSplit({ breakdown: cost.tokensBreakdown ?? null, used: meter.used, zh }, "split")
 								]
 							}, key);
 						})
@@ -8904,8 +8983,9 @@ window.__ModuleLoader__.load({
 		* @param live - whether the mission is still running, which is what polls.
 		* @param timeline - `timeline` from the view route, used only as a fallback.
 		* @param onOpenSource - open a finding's page in the reader.
+		* @param focusDimension - a dimensionId to open filtered to, from the dimension drawer.
 		*/
-		function MissionTrace({ missionId, zh, live, timeline, onOpenSource, focusStep }) {
+		function MissionTrace({ missionId, zh, live, timeline, onOpenSource, focusStep, focusDimension }) {
 			// The stylesheet, before the first row is built. Idempotent, so the
 			// poll and every re-render after it cost one `getElementById`.
 			ensureTraceStyle();
@@ -8914,7 +8994,12 @@ window.__ModuleLoader__.load({
 			// list already filtered to it. A jump that lands on 169 unfiltered
 			// rows is a jump that has not answered the question it was asked.
 			const [stepId, setStepId] = useState(focusStep ?? "");
-			const [dimensionId, setDimensionId] = useState("");
+			// AND FROM THE DIMENSION DRAWER, the same way and for a sharper reason.
+			// The drawer answers what a dimension FOUND; the question it leaves —
+			// asked of every dimension that came back with one finding or none — is
+			// what it went looking for, and that is 169 unfiltered rows away unless
+			// the jump carries the filter with it.
+			const [dimensionId, setDimensionId] = useState(focusDimension ?? "");
 			// WHO DID IT. `role` is a provenance chip — STAGE, TOOL, EVIDENCE, GATE,
 			// SYSTEM — nearly the same axis as `kind`, so "show me only what the
 			// Leader did" had no control at all until this one.
@@ -9010,9 +9095,25 @@ window.__ModuleLoader__.load({
 			// themselves and carries the count, so an option that matches one row says
 			// so before it is chosen.
 			const vocabulary = data?.vocabulary ?? {};
-			const dimensionOptions = Array.isArray(vocabulary.dimensions)
+			const measured = Array.isArray(vocabulary.dimensions)
 				? vocabulary.dimensions
 				: dimensions.map((entry) => ({ dimensionId: entry.dimensionId, name: entry.name, rows: null }));
+			// A JUMP CAN LAND ON A DIMENSION THE ROWS NEVER MENTION, and being
+			// measured is exactly why: d4 was planned, named, and reached by nothing,
+			// so it is legitimately absent from the vocabulary while still being the
+			// dimension the drawer just jumped into. A `<select>` whose value matches
+			// none of its options paints itself BLANK — the list would then read as
+			// unfiltered while it is filtered, which is the one thing a filter must
+			// never do. Named, with the count it has.
+			const dimensionOptions = dimensionId === "" || measured.some((entry) => entry.dimensionId === dimensionId)
+				? measured
+				: [...measured, {
+					dimensionId,
+					name: dimensions.find((entry) => entry.dimensionId === dimensionId)?.name ?? null,
+					// NOUGHT ONLY ONCE THE ROWS ARE IN. Before the read comes back there
+					// is nothing to count, and `0` there is a measurement nobody took.
+					rows: data === null ? null : 0
+				}];
 			const agentOptions = Array.isArray(vocabulary.agents) ? vocabulary.agents : [];
 			const paging = data?.page ?? {};
 			const bounds = data?.window ?? {};
@@ -9702,8 +9803,9 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @param onOpenStage - called with a stepId; opens the trajectory on it.
 		* @param onRerunStage - called with a stepId; re-runs it and its successors.
+		* @param onOpenTrace - called with a dimensionId; opens the trajectory on it.
 		*/
-		function MissionTaskBoard({ stages, agents, zh, onOpenStage, onRerunStage, selected, onSelect, mission, work, onOpenSource }) {
+		function MissionTaskBoard({ stages, agents, zh, onOpenStage, onRerunStage, selected, onSelect, mission, work, onOpenSource, onOpenTrace }) {
 			// WHAT A TASK IS HERE, and it took a rebuild to get right. playground's
 			// board deliberately does NOT show system-stage rows: a todo there is a
 			// piece of work somebody decided on — a dimension to research, a gap the
@@ -10106,7 +10208,8 @@ window.__ModuleLoader__.load({
 							runCount: mission?.runCount ?? null,
 							zh,
 							onClose: () => { onSelect?.(null); },
-							onOpenSource
+							onOpenSource,
+							onOpenTrace
 						})
 					}, "dimDrawer"),
 					jsx(MissionDrawer, {
@@ -10935,9 +11038,16 @@ window.__ModuleLoader__.load({
 		* page, so the thing you were comparing against moves while you read.
 		* `MissionDrawer` is the pattern the task board already uses for exactly
 		* this, and reusing it is why the two read the same.
-		* @param props - `{missionId, dimension, runCount, zh, onClose, onOpenSource}`.
+		* AND THE WAY OUT OF IT, which is the half this drawer was missing. It
+		* says what a dimension FOUND and cannot say what it LOOKED FOR, so the
+		* commonest question a reader arrives with — this one came back with a
+		* single finding, was it searched badly or is there nothing there — was
+		* answered on another pane, by hand, against a filter they had to rebuild.
+		* `onOpenTrace` is a caller that already owns the pane switch; the drawer
+		* names the dimension and nothing else.
+		* @param props - `{missionId, dimension, runCount, zh, onClose, onOpenSource, onOpenTrace}`.
 		*/
-		function MissionDimensionDrawer({ missionId, dimension, runCount, zh, onClose, onOpenSource }) {
+		function MissionDimensionDrawer({ missionId, dimension, runCount, zh, onClose, onOpenSource, onOpenTrace }) {
 			const [held, setHeld] = useState(null);
 			const [error, setError] = useState("");
 			const dimensionId = dimension === null || dimension === undefined ? null : dimension.id;
@@ -11052,6 +11162,22 @@ window.__ModuleLoader__.load({
 									? (zh ? `已核验 ${verified}/${floor}` : `${verified}/${floor} verified`)
 									: (zh ? `已核验 ${verified}` : `${verified} verified`)
 							}, "verified"),
+							// IN THE HEADER, NOT AT THE FOOT OF THE BODY. MissionStageDetail
+							// puts its own jump under the rows it summarises, which works
+							// there because that list always has rows. This drawer is at its
+							// most useful when the body is EMPTY — a dimension that found
+							// nothing is the one you most want to see the searches for — and a
+							// control reachable only past a list is a control an empty
+							// dimension does not have. Guarded on the caller for the reason the
+							// finding rows' 读这一页 is: a pane with nowhere to send the reader
+							// must not offer to send them.
+							typeof onOpenTrace !== "function" || dimensionId === null ? null : jsx("button", {
+								type: "button",
+								className: "swm-ctl swm-focus",
+								style: { ...controlStyle(), flex: "none", height: CONTROL.xs, padding: `0 ${SPACE.sm}`, font: FONT.micro },
+								onClick: () => { onOpenTrace(dimensionId); },
+								children: zh ? "看它搜了什么 →" : "See what it searched →"
+							}, "trace"),
 							jsx(IconButton, {
 								label: zh ? "关闭" : "Close",
 								size: CONTROL.xs,
@@ -11242,7 +11368,7 @@ window.__ModuleLoader__.load({
 			});
 		}
 		
-		function MissionSources({ missionId, zh, mission, onOpenSource }) {
+		function MissionSources({ missionId, zh, mission, onOpenSource, onOpenTrace }) {
 			const [held, setHeld] = useState(null);
 			// Which dimension the drawer is showing. ABOVE the early return, with
 			// the other hooks: this component returns before the list when nothing
@@ -11599,7 +11725,8 @@ window.__ModuleLoader__.load({
 				children: openDim === null ? null : jsx(MissionDimensionDrawer, {
 					missionId, dimension: openDim, runCount: run, zh,
 					onClose: () => { setOpenDim(null); },
-					onOpenSource
+					onOpenSource,
+					onOpenTrace
 				})
 			}, "dimDrawer");
 
@@ -11919,6 +12046,11 @@ window.__ModuleLoader__.load({
 			// Which stage the trajectory should open on, when it was reached from
 			// the task board rather than from the tab.
 			const [focusStep, setFocusStep] = useState("");
+			// And which dimension, when it was reached from a dimension drawer. A
+			// second slot rather than a widened `focusStep`: the trajectory filters on
+			// the two axes independently, and folding them into one would mean a jump
+			// from a dimension silently clearing a stage the reader had already set.
+			const [focusDimension, setFocusDimension] = useState("");
 			// Which task row is open in the panel beside the board.
 			const [task, setTask] = useState(null);
 			// The page behind a quote, opened from the trajectory or from a
@@ -12523,10 +12655,11 @@ window.__ModuleLoader__.load({
 											selected: task,
 											onSelect: (stepId) => { setTask(stepId); },
 											onOpenStage: (stepId) => { setFocusStep(stepId); setPane("trace"); },
-							// THROUGH `act`, like every other write on this screen, so the 409
-							// that names the refusal lands where the rerun's does and the poll
-							// picks the reset stages up on the next tick.
-							onRerunStage: (stepId) => { void act(`stages/${encodeURIComponent(stepId)}/rerun`); },
+											// THROUGH `act`, like every other write on this screen, so the 409
+											// that names the refusal lands where the rerun's does and the poll
+											// picks the reset stages up on the next tick.
+											onRerunStage: (stepId) => { void act(`stages/${encodeURIComponent(stepId)}/rerun`); },
+											onOpenTrace: (id) => { setFocusDimension(id); setPane("trace"); },
 											onOpenSource: (entry) => { setSource(entry); }
 										}, "board"),
 										// THE BRIEF, ABOVE THE JUDGING. Every row on the board is being
@@ -12606,6 +12739,7 @@ window.__ModuleLoader__.load({
 											// was verified against without leaving the mission.
 											children: jsx(MissionSources, {
 												missionId, zh, mission,
+												onOpenTrace: (id) => { setFocusDimension(id); setPane("trace"); },
 												onOpenSource: (entry) => { setSource(entry); }
 											})
 										}, "sources")
@@ -12630,6 +12764,7 @@ window.__ModuleLoader__.load({
 												live: !mission.terminal,
 												timeline: view.timeline,
 												focusStep,
+												focusDimension,
 												onOpenSource: (entry) => { setSource(entry); }
 											})
 										}, "trace")

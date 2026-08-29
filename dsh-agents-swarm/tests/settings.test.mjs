@@ -3252,3 +3252,167 @@ test("a reference says what the library holds on it, and says plainly when the l
   assert.ok(older.includes("About the Kanata North business association"), "the older payload stopped rendering rows at all");
   assert.ok(!older.includes("不在信源库"), "a payload that never carried the field is reported as a library miss on every row");
 });
+
+test("the token meter says which kind of token it was", async () => {
+  // THE FIGURE WAS ON THE WIRE AND ON NO SCREEN. `projectCost` has returned
+  // `tokensBreakdown` since it was written; nothing in lib/client.js read it.
+  // So the bar summed prompt, completion and cache-read and drew one length —
+  // and a run that burned nine tenths of its ceiling re-reading a cached
+  // prompt was the same picture as one that burned it writing. Same bar, two
+  // different bills, two different things to do about it.
+  const cost = {
+    ...costOf({ tokens: 1240000, calls: 24 }),
+    tokensBreakdown: { promptTok: 260000, completionTok: 84000, cacheReadTok: 896000 },
+  };
+  const view = await render("MissionCostMeters", { cost, zh: true });
+
+  // IN THE TOKENS CELL, not merely somewhere on the pane. Asserting against
+  // the whole tree passes on a split rendered under every one of the six,
+  // which is the arrangement that says arXiv requests have a prompt half.
+  const cell = find(view.tree, (node) => node.key === "tokens");
+  assert.ok(cell, "the tokens meter is not on the pane at all");
+  const inside = textOf(cell).join(" ");
+  assert.ok(inside.includes("提示") && inside.includes("260k"), "the prompt half of the bill is not under the bar that charges for it");
+  assert.ok(inside.includes("生成") && inside.includes("84k"), "what this run WROTE is folded back into the total it was split out of");
+  assert.ok(inside.includes("缓存读取") && inside.includes("896k"), "the cache reads are invisible, so the meter cannot say the ceiling went on re-reading rather than on work");
+
+  const calls = find(view.tree, (node) => node.key === "calls");
+  assert.ok(calls, "the calls meter is gone from the pane");
+  assert.ok(
+    !textOf(calls).join(" ").includes("缓存读取"),
+    "a ceiling that counts one thing is drawn with a split under it, which says model calls have a cached half",
+  );
+});
+
+test("a ledger with no split says so instead of inventing three noughts", async () => {
+  // AN OLDER HOST HALF SERVES THE METER WITHOUT THE BREAKDOWN, and `?? 0`
+  // there would print 提示 0 · 生成 0 · 缓存读取 0 under a bar reading 412k —
+  // a fabricated zero, and one that reads as "this run wrote nothing", which
+  // is a claim the screen has not checked.
+  const stale = { ...costOf({ tokens: 412000, calls: 24 }) };
+  delete stale.tokensBreakdown;
+  const view = await render("MissionCostMeters", { cost: stale, zh: true });
+  const cell = find(view.tree, (node) => node.key === "tokens");
+  const inside = textOf(cell).join(" ");
+  assert.ok(inside.includes("412000"), "the meter itself stopped saying what the run spent");
+  assert.ok(!inside.includes("缓存读取"), "a breakdown the ledger never sent is drawn anyway, as noughts nobody counted");
+  assert.ok(inside.includes("没有分项"), "the gap is silent, so a missing split looks exactly like a split that is all zero");
+
+  // AND NOTHING TO SPLIT IS NOT A GAP. A mission that has spent nothing yet
+  // does not need a sentence about a breakdown it could not have; the meter
+  // above already reads 0.
+  const fresh = { ...costOf({ tokens: 0, calls: 0 }) };
+  delete fresh.tokensBreakdown;
+  const early = await render("MissionCostMeters", { cost: fresh, zh: true });
+  assert.ok(
+    !textOf(early.tree).join(" ").includes("没有分项"),
+    "a mission that has spent nothing is told its ledger carries no split, which is chrome about an absence that is not one",
+  );
+});
+
+test("a dimension jumps to what it actually searched for", async () => {
+  // THE HALF THE DRAWER WAS MISSING. It says what a dimension FOUND, and the
+  // question every reader arrives with when it found one thing or nothing is
+  // what it went LOOKING for — which lived on another pane, behind a filter
+  // they had to rebuild from the id by hand. `/trace` has taken a dimensionId
+  // since it was written.
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, SIGNED.topic);
+  await pane(view, "参考文献");
+  await view.act(() => { button(view.tree, "按维度").props.onClick(); });
+
+  const heads = findAll(view.tree, (node) => node.type === "button"
+    && typeof node.props?.["aria-label"] === "string"
+    && node.props["aria-label"].startsWith("打开维度："));
+  assert.ok(heads.length > 0, "there is no way into a dimension to jump out of");
+  await view.act(() => { heads[0].props.onClick(); });
+
+  await view.act(() => { button(view.tree, "看它搜了什么").props.onClick(); });
+  const text = textOf(view.tree).join(" ");
+
+  // THE FILTER CAME WITH IT. A jump that lands on the unfiltered trajectory
+  // has not answered the question it was asked — it has handed the reader the
+  // same rebuild one pane further on.
+  const picker = find(view.tree, (node) => node.props?.["aria-label"] === "按维度筛选");
+  assert.ok(picker, "the trajectory opened without its dimension filter");
+  assert.equal(picker.props.value, "d1", "the trajectory opened unfiltered, so the jump landed the reader in the whole run again");
+  assert.ok(text.includes("显示 2 / 2 条"), "the list is not narrowed to this dimension's rows");
+  assert.ok(text.includes("未筛选共 7 条"), "the list does not say how much of the trajectory it is hiding, so a filtered view reads as the whole of it");
+
+  // AND IT IS A PANE CHANGE, not a drawer over the references list.
+  assert.equal(
+    findAll(view.tree, (node) => typeof node.props?.["aria-label"] === "string"
+      && node.props["aria-label"].startsWith("打开维度：")).length,
+    0,
+    "the references pane is still underneath, so the jump opened a second screen rather than moving to one",
+  );
+});
+
+test("an empty dimension is the one that most needs the jump", async () => {
+  // THE INCIDENT IS THE EMPTY CASE. MissionStageDetail puts its own jump under
+  // the rows it summarises, and copying that here would have hidden this one
+  // behind a list that is not there: a dimension that collected nothing is
+  // exactly the dimension whose searches you want to read.
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      success: true,
+      data: {
+        findings: [],
+        counts: { verified: 0 },
+        dimension: {
+          dimensionId: "d9", name: "空的维度", rationale: null, facet: "technical",
+          state: "collected", attempt: 1, grade: null,
+          gradeAxes: { pagesFetched: 4, uniqueHosts: 2 }, summary: null, failureCode: null,
+        },
+      },
+    }),
+  });
+  let jumped = "nothing";
+  const drawer = await render("MissionDimensionDrawer", {
+    missionId: "m1", dimension: { id: "d9", name: "空的维度" }, runCount: 1, zh: true,
+    onClose: () => {},
+    onOpenTrace: (id) => { jumped = id; },
+  });
+  const jump = find(drawer.tree, (node) => node.type === "button"
+    && textOf(node).some((piece) => piece.includes("看它搜了什么")));
+  assert.ok(jump, "a dimension that found nothing offers no way to see what it looked for, which is the only question left about it");
+  jump.props.onClick();
+  assert.equal(jumped, "d9", "the jump names no dimension, so the trajectory it opens is the whole run's");
+
+  // WITHOUT A CALLER, NO CONTROL. A pane with nowhere to send the reader must
+  // not offer to send them — the rule the finding rows' 读这一页 already follows.
+  const alone = await render("MissionDimensionDrawer", {
+    missionId: "m1", dimension: { id: "d9", name: "空的维度" }, runCount: 1, zh: true,
+    onClose: () => {},
+  });
+  assert.ok(
+    !textOf(alone.tree).join(" ").includes("看它搜了什么"),
+    "the drawer offers a jump its caller cannot perform, so the control is a dead button",
+  );
+});
+
+test("a jump into a dimension the trajectory never recorded still names it", async () => {
+  // FIVE PLANNED, THREE EVER RECORDED. The dimension select is built from the
+  // rows themselves, on purpose, so it cannot offer an option matching nothing
+  // — which means a jump into d4 arrives with a value that is in none of the
+  // options, and a `<select>` in that state paints itself BLANK. The list is
+  // then filtered while its control reads as unfiltered, which is the one
+  // thing a filter must never do.
+  stubFetch();
+  const view = await render("MissionTrace", {
+    missionId: RUNNING.id, zh: true, live: false, timeline: [], focusDimension: "d4",
+  });
+  const picker = find(view.tree, (node) => node.props?.["aria-label"] === "按维度筛选");
+  assert.ok(picker, "the trajectory has no dimension filter at all");
+  assert.equal(picker.props.value, "d4", "the jump was dropped, so the drawer sent the reader to an unfiltered list");
+  const options = textOf(picker).join(" ");
+  assert.ok(options.includes("推理时序扩展的成本账"), "the filter is set to a dimension it will not name, so the control reads as empty over a filtered list");
+  assert.ok(options.includes("0 条"), "the option hides that it matches nothing, which is the answer the reader came for");
+  assert.ok(
+    textOf(view.tree).join(" ").includes("这个筛选下没有记录"),
+    "an empty list under this filter does not say which empty it is — nothing recorded here, against a mission that recorded nothing",
+  );
+});
