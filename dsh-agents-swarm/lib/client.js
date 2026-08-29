@@ -612,7 +612,11 @@ window.__ModuleLoader__.load({
 			font: FONT.small,
 			fontVariantNumeric: "tabular-nums",
 			boxSizing: "border-box",
-			height: "30px", padding: `0 ${SPACE.sm}`,
+			// VERTICAL PADDING, NOT A FIXED HEIGHT. `height:30px` with no padding
+			// is a log line's rhythm — correct while every cell held one short
+			// string, wrong the moment the name cell became a title over a
+			// sentence. A row is as tall as what it has to say plus its air.
+			minHeight: "30px", padding: `10px ${SPACE.sm}`,
 			color: INK.primary,
 			overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
 			borderBottom: `1px solid ${LINE.rule}`
@@ -10256,8 +10260,7 @@ window.__ModuleLoader__.load({
 				for (const kid of kids.get(parent.id) ?? []) display.push({ node: kid, depth: 1 });
 			}
 			// RESOLVED ONCE, HERE, because two things read it now. The row draws
-			// its spine and its status chip from this; the legend above the table
-			// counts it. Resolving it twice — once per row and once per tally —
+			// its status chip from this; the legend above the table counts it. Resolving it twice — once per row and once per tally —
 			// is how a header that says 3 完成 ends up over four green rows, and
 			// the two copies would be forty lines apart.
 			for (const entry of display) {
@@ -10359,7 +10362,18 @@ window.__ModuleLoader__.load({
 										// would ever light up. The selected row still writes its own,
 										// which is correct: it is already lit.
 										background: open ? SURFACE.hover : undefined,
-										boxShadow: `inset 3px 0 0 0 rgba(${hue},${ran ? 0.9 : 0.25})`
+										// A MARK FOR THE SELECTED ROW, AND NOTHING ON THE REST.
+										//
+										// Every row used to draw a 3px bar in its status hue down
+										// its left edge. Twenty rows, twenty bars, touching: on
+										// screen it is not twenty marks, it is one continuous green
+										// stripe down the side of the table, and a mark every row
+										// carries distinguishes nothing.
+										//
+										// It was also the SECOND drawing of a fact the row already
+										// states: the status chip two columns over says 完成 in the
+										// same hue, with the word attached. The chip keeps it.
+										boxShadow: open ? "inset 2px 0 0 0 var(--dsw-alias-state-business-primary)" : undefined
 									},
 									children: [
 										jsx("td", {
@@ -10375,45 +10389,55 @@ window.__ModuleLoader__.load({
 										// that has since been made a single ellipsised line, so it was
 										// pinning one row's contents a few pixels above its neighbours'
 										// for a reason that had stopped existing.
+										// TITLE ON ONE LINE, THE SENTENCE UNDER IT — which is most of what
+										// makes a row of this table a row of the reference's and not a log
+										// line. Both used to sit side by side on ONE line, so the name was
+										// capped at 40% of the cell and the sentence about it was an
+										// ellipsised fragment sharing the remainder: two facts of different
+										// weight competing for one line, and both losing.
+										//
+										// Stacked, the name gets the full width at the weight it deserves and
+										// the sentence gets its own line under it in the secondary grey. The
+										// row grows to fit, which is where the reference's density comes
+										// from — its rows are tall because they say two things.
 										jsxs("td", {
-											style: { ...TD, display: "flex", alignItems: "center", gap: SPACE.sm, minWidth: 0, paddingLeft: child ? "26px" : "10px" },
+											style: { ...TD, whiteSpace: "normal", minWidth: 0, paddingLeft: child ? "26px" : "10px" },
 											children: [
-												// The origin, on the child only. "Why does this row
-												// exist" is the whole difference between a plan and a
-												// progress bar, and for a stage the answer is always
-												// "the pipeline declares twelve".
-												// A CATEGORY, so it keeps the chip's corner. It also
-												// stops mixing vocabularies: this one chip reached
-												// for the harness's state tokens by hand while every
-												// other chip on the screen took a TONE, which is how
-												// one badge ends up a slightly different amber.
-												!child ? null : Chip({
-													tone: node.origin === "leader-assess-recollect" ? TONE.warn : TONE.info,
-													label: node.origin === "leader-assess-recollect"
-														? (zh ? "领队要求重采" : "re-collect")
-														: (zh ? "维度" : "dimension")
-												}, "origin"),
-												// And WHAT KIND OF STEP, on the parent. The origin badge
-												// above answers "why does this row exist" for a child
-												// and deliberately not for a stage, on the grounds that
-												// the pipeline declares twelve — which leaves the stage
-												// row with nothing saying whether it is a gate, a
-												// fan-out or a draft. The catalogue has declared that all
-												// along and it reached the projection and stopped there.
-												child ? null : StageModeChip({ mode: stage?.mode ?? null, stepId: stage?.stepId ?? null, zh }, "mode"),
-												jsx("span", {
+												jsxs("div", {
+													style: { display: "flex", alignItems: "center", gap: SPACE.sm, minWidth: 0 },
+													children: [
+														// The origin, on the child only. "Why does this row exist" is
+														// the whole difference between a plan and a progress bar, and
+														// for a stage the answer is always "the pipeline declares
+														// twelve". A CATEGORY, so it keeps the chip's corner, and it
+														// takes a TONE like every other chip on the screen rather than
+														// reaching for the harness state tokens by hand.
+														!child ? null : Chip({
+															tone: node.origin === "leader-assess-recollect" ? TONE.warn : TONE.info,
+															label: node.origin === "leader-assess-recollect"
+																? (zh ? "领队要求重采" : "re-collect")
+																: (zh ? "维度" : "dimension")
+														}, "origin"),
+														// And WHAT KIND OF STEP, on the parent: the catalogue has
+														// declared gate / fan-out / draft all along, and it reached
+														// the projection and stopped there.
+														child ? null : StageModeChip({ mode: stage?.mode ?? null, stepId: stage?.stepId ?? null, zh }, "mode"),
+														jsx("span", {
+															// NO `maxWidth` ANY MORE: it was 40% because the sentence
+															// shared the line, and nothing shares it now.
+															style: {
+																font: child ? FONT.small : FONT.smallStrong,
+																color: INK.primary, minWidth: 0,
+																whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+															},
+															children: child ? node.title : missionFace(MISSION_STAGE_FACES, stage?.stepId ?? node.title, zh)
+														}, "name")
+													]
+												}, "line"),
+												note === "" ? null : jsx("div", {
 													style: {
-														fontWeight: child ? 400 : 600,
-														color: INK.primary,
-														whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-														maxWidth: child ? "40%" : "none"
-													},
-													children: child ? node.title : missionFace(MISSION_STAGE_FACES, stage?.stepId ?? node.title, zh)
-												}, "name"),
-												note === "" ? null : jsx("span", {
-													style: { font: FONT.micro,
-														flex: "1 1 0", minWidth: 0,
-														overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: INK.secondary
+														font: FONT.micro, color: INK.secondary, marginTop: "2px",
+														whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
 													},
 													title: note,
 													children: note
@@ -10530,11 +10554,11 @@ window.__ModuleLoader__.load({
 						font: FONT.micro, color: INK.secondary, whiteSpace: "nowrap"
 					},
 					children: [
-						// A DOT, NOT THE ROW'S CHIP. The legend keys the spine
-						// down the left of each row, and the spine is a bar of
-						// flat colour — so the key is the same flat colour. A
-						// tinted chip up here would be a fourth shape for one
-						// vocabulary on one screen.
+						// A DOT, NOT THE ROW'S CHIP. What this keys is the status
+						// column — it used to key the spine down the left of each
+						// row, and that spine is gone. Still a flat dot rather than
+						// a tinted chip: repeating the chip up here would put a
+						// second copy of the same shape eight pixels above the first.
 						jsx("span", {
 							className: id === "running" || id === "collecting" ? "swm-live" : undefined,
 							style: {

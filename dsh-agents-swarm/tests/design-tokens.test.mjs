@@ -3820,3 +3820,36 @@ test("a list row is separated by a line, never by a fill", () => {
   assert.ok(pressed !== undefined, "nothing marks the selected row");
   assert.match(pressed, /box-shadow:inset 2px 0 0 0/, "the selected row is ringed on all four sides, which is the border it just lost");
 });
+
+test("the task row says two things, and marks only the selected one", () => {
+  // Held against the reference side by side, two differences accounted for
+  // most of the gap on this screen, and both were structural rather than
+  // chromatic.
+  //
+  // ONE: the reference's row is a title over a sentence. Ours put both on one
+  // line, which forced the name to a 40% cap and left the sentence an
+  // ellipsised fragment in the remainder — two facts of different weight
+  // competing for one line, both losing, and a table half as tall as the one
+  // it was meant to match.
+  const board = body("function MissionTaskBoard(");
+  assert.match(board, /whiteSpace: "normal"/, "the name cell is back to one nowrap line, so the sentence under the title cannot exist");
+  assert.ok(!/maxWidth: child \? "40%"/.test(board), "the task name is capped at 40% of its cell again, which only made sense while the sentence shared the line");
+  assert.match(board, /marginTop: "2px"/, "nothing puts the row's sentence on its own line");
+
+  // TWO: every row drew a 3px bar in its status hue down its left edge.
+  // Twenty rows of that is not twenty marks, it is one continuous stripe — and
+  // it was the second drawing of what the status chip already says in words.
+  assert.ok(!/boxShadow: `inset 3px 0 0 0 rgba\(\$\{hue\}/.test(board),
+    "the per-row status spine is back: on a full table it reads as one stripe down the side, and the status column already says it");
+  assert.match(board, /boxShadow: open \? "inset 2px 0 0 0/, "the selected row has no mark at all");
+});
+
+test("a table cell has room for two lines", () => {
+  // `height:30px` with no vertical padding is a log line's rhythm. It was
+  // correct while every cell held one short string, and it silently crushes
+  // the stacked name cell — title over sentence — back into something the eye
+  // reads as one line again. A row is as tall as what it has to say.
+  const td = SOURCE.slice(SOURCE.indexOf("const TD = {"), SOURCE.indexOf("};", SOURCE.indexOf("const TD = {")));
+  assert.ok(!/height: "30px"/.test(td), "TD pins a fixed 30px height again, which crushes the two-line name cell");
+  assert.ok(td.includes("padding: `10px ${SPACE.sm}`"), "TD has no vertical padding, so its rows hug their content the way a log does");
+});
