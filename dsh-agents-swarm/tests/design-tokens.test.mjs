@@ -4055,3 +4055,57 @@ test("no object literal declares `font` twice, and no control swaps only its wei
     "the tightest-dimension label, the armed-artifact chip and the pane tab are the three controls that mark emphasis at 12px; one of them is back to riding a `fontWeight` beside a fixed step",
   );
 });
+
+test("a child whose parent fell out of the window is still drawn", () => {
+  // THE COMMENT OVER THE GROUPING HAS ALWAYS SAID SO. The loop walked
+  // `parents` and emitted `kids.get(parent.id)`, so a child whose parent was
+  // not among them sat in the map, was never looked up, and vanished — no
+  // row, and no gap where one would have been. It was missing from
+  // `display.length` as well, so the header count and the table agreed with
+  // each other about a row neither of them had, which is the one shape of
+  // this bug nothing on screen can contradict.
+  const board = code(body("function MissionTaskBoard("));
+  const pushes = board.split("display.push(").length - 1;
+  assert.equal(
+    pushes,
+    3,
+    `rows are emitted from ${pushes} places; a parent, the children under it, and the children with no parent left are three`,
+  );
+  assert.match(board, /orphan: true/, "an appended child is emitted unmarked, so it draws the connector and claims the row above it as its parent");
+  assert.match(board, /grouped\.has\(node\)/, "nothing remembers which children were already placed, so every grouped child is drawn a second time at the end");
+  assert.ok(
+    !/fell outside the window is in neither/.test(SOURCE),
+    "the note at the mount still explains the count by a row being dropped, which is the behaviour this test exists to say has ended",
+  );
+});
+
+test("a child row draws the connector its indent only implied", () => {
+  // The reference draws the relationship: an L-shaped glyph in the indent,
+  // then the child's own mark, then its title. Ours drew `paddingLeft: child
+  // ? "26px" : "10px"` and nothing else — 16px of blank cell, so the only
+  // thing saying a dimension belongs to s3-collect was that it started
+  // further right, which is a relationship the reader has to infer from a gap.
+  assert.ok(
+    declaration("const ICON_PATHS = {").includes("treeBranch:"),
+    "the connector is not in the glyph table. Every mark on this page is one stroked 24x24 path at one weight, and a tree drawn anywhere else is the second stroke width this table exists to prevent",
+  );
+  const board = code(body("function MissionTaskBoard("));
+  assert.match(board, /"treeBranch"/, "no child row draws the connector, so the tree is padding again");
+  // AND THE PADDING GOES WITH IT: a slot and a padding is the indent applied
+  // twice. The parent's 10px was also two pixels off the 8px `TH` sets, so
+  // the column header did not line up with its own column.
+  assert.ok(!/paddingLeft/.test(board), "the name cell writes its own padding-left again, which indents the row a second time");
+  // NOT A CHARACTER AND NOT AN INLINE <svg>. `└` is box-drawing: it falls
+  // back to whatever font the platform substitutes, at that font's weight,
+  // and it cannot take `currentColor`. An <svg> typed at the call site is how
+  // this file got a trash can and a close cross at two different weights.
+  assert.ok(!board.includes("└"), "the connector is a box-drawing character, which renders in a substituted font on most platforms");
+  assert.ok(!board.includes('jsx("svg"'), "the board draws its own <svg> again, beside a glyph table that exists so it does not");
+  // And an orphan gets the slot without the elbow: the glyph says "the row
+  // above me is my parent", which for an appended child is not true.
+  assert.match(
+    board,
+    /entry\.orphan === true \? undefined : "treeBranch"/,
+    "the elbow is drawn on every child, so a child appended after its parent fell out claims whatever row happens to be above it",
+  );
+});

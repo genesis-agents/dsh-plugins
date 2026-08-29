@@ -1060,6 +1060,22 @@ window.__ModuleLoader__.load({
 			// separate "not run yet" from "this tier never runs it".
 			circle: "M12 22a10 10 0 100-20 10 10 0 000 20z",
 			minus: "M5 12h14",
+			// THE TREE'S OWN GLYPH. The task board sets a child apart with 16px
+			// of blank cell and nothing else, so the only thing saying a dimension
+			// belongs to s3-collect is that it starts further right — a
+			// relationship the reader has to infer from a gap. The elbow is what
+			// the reference draws there.
+			//
+			// A PATH HERE AND NOT A `└` AT THE CALL SITE: that is a box-drawing
+			// character, so it falls back to whatever font the platform
+			// substitutes, at that font's weight, and it cannot take
+			// `currentColor` from the span around it.
+			//
+			// The arm lands on the box's CENTRE LINE (y=12) so it points at the
+			// middle of the chip beside it whatever height the row is, and the
+			// stem stops there: depth on that board is only ever one, so there is
+			// no rail from a grandparent for it to meet.
+			treeBranch: "M8 2v7a3 3 0 003 3h7",
 			// THE ROLE GLYPHS, and the reason there are eight of them. A role is
 			// a CATEGORY, and a category chip that carries only a word is read at
 			// the speed of reading; the mark is what makes a roster scannable at
@@ -10322,9 +10338,29 @@ window.__ModuleLoader__.load({
 				kids.set(node.parentId, list);
 			}
 			const display = [];
+			// EVERY CHILD LANDS SOMEWHERE, which the comment above has claimed
+			// since it was written and this loop did not do. It walks `parents`
+			// and emits `kids.get(parent.id)`, so a child whose parent is not
+			// among them was in the map, was never looked up, and vanished — no
+			// row, and no gap where a row would have been. It was missing from
+			// `display.length` too, so the count in the panel header agreed with
+			// the table about a row neither of them had.
+			const grouped = new Set();
 			for (const parent of parents) {
 				display.push({ node: parent, depth: 0 });
-				for (const kid of kids.get(parent.id) ?? []) display.push({ node: kid, depth: 1 });
+				for (const kid of kids.get(parent.id) ?? []) {
+					grouped.add(kid);
+					display.push({ node: kid, depth: 1 });
+				}
+			}
+			// The leftovers, in the order they arrived, after everything that had
+			// a parent to sit under. `orphan` is what stops the row drawing the
+			// connector, and it is set HERE because this is the only place that
+			// knows the row above is not the row's parent.
+			for (const node of nodes) {
+				if (node.parentId === null || node.parentId === undefined) continue;
+				if (grouped.has(node)) continue;
+				display.push({ node, depth: 1, orphan: true });
 			}
 			// RESOLVED ONCE, HERE, because two things read it now. The row draws
 			// its status chip from this; the legend above the table counts it. Resolving it twice — once per row and once per tally —
@@ -10450,8 +10486,13 @@ window.__ModuleLoader__.load({
 										// THE ONE CELL THAT IS NOT A FIGURE, and the only one allowed
 										// its own geometry: it is a flex row of a badge, a mode mark,
 										// a name and the Leader's sentence about the row. It keeps
-										// `TD`'s height and rhythm and overrides only the padding-left
-										// that draws the tree indent. `verticalAlign:"top"` is gone
+										// `TD`'s height and rhythm and overrides NOTHING about its padding
+										// any more. The tree indent was a `paddingLeft` — 26px on a child,
+										// 10px on a parent — and the parent's 10px was two pixels off the
+										// 8px `TH` puts the word 任务 at, so the column header did not line
+										// up with its own column. The indent is a slot in the flex line
+										// below now, because blank padding is the one thing a connector
+										// cannot be drawn into. `verticalAlign:"top"` is gone
 										// with the old local `cell` — it was there for a wrapping cell
 										// that has since been made a single ellipsised line, so it was
 										// pinning one row's contents a few pixels above its neighbours'
@@ -10468,11 +10509,35 @@ window.__ModuleLoader__.load({
 										// row grows to fit, which is where the reference's density comes
 										// from — its rows are tall because they say two things.
 										jsxs("td", {
-											style: { ...TD, whiteSpace: "normal", minWidth: 0, paddingLeft: child ? "26px" : "10px" },
+											style: { ...TD, whiteSpace: "normal", minWidth: 0 },
 											children: [
 												jsxs("div", {
 													style: { display: "flex", alignItems: "center", gap: SPACE.sm, minWidth: 0 },
 													children: [
+														// THE INDENT, DRAWN. A 16px slot before the chips rather than a
+														// background on the cell, and the cell is the reason: it is a title
+														// over an OPTIONAL sentence, so its height is one line on some rows
+														// and two on others. A background is positioned against the whole
+														// box, so one elbow would sit beside the title and the next beside
+														// the sentence under it. A flex child sits on the title's line by
+														// construction, at any row height.
+														//
+														// A background could not take the colour either: it would be a data
+														// URI with the stroke baked in, which is the hand-mixed grey that
+														// does not follow the theme. `INK.quiet` here because a connector is
+														// decoration — the one thing INK's contrast note says that budget is
+														// for — and `flex: "none"` because the ellipsising title beside it
+														// would otherwise squeeze the indent away on a narrow column.
+														//
+														// NO ELBOW ON AN ORPHAN. The glyph says "the row above me is my
+														// parent"; a child whose parent is not in `nodes` is appended after
+														// everything else, so the row above it is whichever row happened to
+														// be last. It keeps the slot, so it still reads as indented, and
+														// its origin chip still says what it is.
+														!child ? null : jsx("span", {
+															style: { flex: "none", display: "flex", width: ICON.md, color: INK.quiet },
+															children: jsx(Icon, { name: entry.orphan === true ? undefined : "treeBranch", size: ICON.md })
+														}, "branch"),
 														// The origin, on the child only. "Why does this row exist" is
 														// the whole difference between a plan and a progress bar, and
 														// for a stage the answer is always "the pipeline declares
@@ -10633,9 +10698,10 @@ window.__ModuleLoader__.load({
 			// THE BOARD MOUNTS ITS OWN PANEL, against this file's usual shape, where
 			// the detail view mounts the panel and passes the component as children.
 			// The reason is arithmetic, not taste: the number a reader needs is
-			// `display.length` — what SURVIVED grouping, which is not
-			// `stages.length` and not `work.length`, because a child whose parent
-			// fell outside the window is in neither. Computing it again at the mount
+			// `display.length` — what the grouping emitted, which is not
+			// `stages.length`: these rows are the twelve stages AND the decisions
+			// made under them, plus any child appended after both because its
+			// parent is not in `nodes`. Computing it again at the mount
 			// would be the second copy of a resolution the comment ninety lines above
 			// exists to forbid, and the two would disagree exactly when the board is
 			// most worth reading.
