@@ -9227,18 +9227,139 @@ window.__ModuleLoader__.load({
 
 
 		/**
-		* The page behind one quote, read through 信源's own reader.
+		* The four ways there is no stored copy, one row each.
 		*
-		* The Host half re-fetches the address and extracts it, which is the only
-		* way to answer "does that page still say this" from here. Shared by the
-		* report and the trajectory precisely so there is one answer to that
-		* question rather than two readers that drift.
+		* THREE OF THESE WERE ONE SCREEN. A quote that names no stored page is
+		* normal and permanent — anything verified against a publisher abstract
+		* carries no document id at all. A page this mission no longer holds has
+		* left the corpus, which is a fact about the evidence. A read that failed
+		* is worth pressing again. Merging them into one "could not load" tells
+		* the reader something false about their own evidence in two cases of
+		* three.
+		*
+		* `tone` IS THE RULE, not a preference. Waiting, and "there never was
+		* one", are at par and take ink; the two that say the substrate is gone
+		* are the exception and are the only coloured thing on the bar.
+		*/
+		const MISSION_COPY_STATES = {
+			loading: { tone: null, en: "Fetching the copy we read…", zh: "正在取我们读到的那一版…" },
+			unkeyed: { tone: null, en: "This quote names no stored page — it was checked against a publisher abstract, or against no fetched page at all. What follows is that address as it is now.", zh: "这条引语没有指向任何存下来的页面 —— 它核验的是出版方摘要，或者根本没有对着抓取到的页面核验。下面是这个地址现在的样子。" },
+			gone: { tone: TONE.warn, en: "This page is no longer among the ones this mission holds. What follows is that address as it is now.", zh: "这一页已经不在这个任务存下来的那批里了。下面是这个地址现在的样子。" },
+			failed: { tone: TONE.warn, en: "The stored copy could not be read. What follows is that address as it is now.", zh: "读不到存下来的那一版。下面是这个地址现在的样子。" }
+		};
+
+		/**
+		* Which copy is on screen, in one line.
+		*
+		* `held` is built rather than tabled because it names the row's OWN
+		* instant and size. A stored page with no fetch stamp drops the clause
+		* instead of printing one: a reader checking a quote against "the copy we
+		* read" needs to know WHEN that was, and an invented time is worse than
+		* no time.
+		* @param state - loading | held | unkeyed | gone | failed.
+		* @param why - the route's own refusal, or the read's error, appended verbatim.
+		* @param stored - the stored page, when there is one.
+		* @param zh - whether to write Chinese.
+		* @returns `{ text, tone }`; `tone` is null on a line at par.
+		*/
+		function missionStoredCopyNote(state, why, stored, zh) {
+			if (state === "held") {
+				const when = formatStamp(stored?.fetchedAt);
+				const size = Number.isFinite(stored?.charCount)
+					? (zh ? ` · ${stored.charCount} 字` : ` · ${stored.charCount} characters`)
+					: "";
+				return {
+					text: (when === ""
+						? (zh ? "这是我们读到的那一版" : "This is the copy we read")
+						: (zh ? `这是我们读到的那一版，抓取于 ${when}` : `This is the copy we read, fetched ${when}`)) + size,
+					tone: null
+				};
+			}
+			// A state nobody wrote a row for is a read that did not land, which is
+			// what `failed` says. Never the reassuring one: telling a reader their
+			// evidence never had a page behind it, when the truth is that this
+			// screen could not fetch one, is the exact lie this table exists to stop.
+			const face = MISSION_COPY_STATES[state] ?? MISSION_COPY_STATES.failed;
+			return { text: (zh ? face.zh : face.en) + (why === "" ? "" : ` ${why}`), tone: face.tone };
+		}
+
+		/**
+		* The page behind one quote: the copy we kept, before the address.
+		*
+		* TWO QUESTIONS, AND THEY HAD ONE ANSWER. Re-fetching the address answers
+		* "does that page still say this", which is worth asking. It cannot
+		* answer "what did the page say when the span guard ran over it", and
+		* that is the question somebody checking a quote is actually holding.
+		* They come apart exactly where it matters: a page edited, paywalled or
+		* pulled since re-fetches into something the quote is not in, and the
+		* only conclusion left to the reader is that the quote was invented.
+		*
+		* SO THE STORED COPY IS THE DEFAULT and the live fetch is the second tab,
+		* never the other way round. This docblock used to say the mission
+		* documents are not library rows and no route serves them — true, and the
+		* whole defect. `/missions/<id>/document` serves the markdown every span
+		* was matched against, keyed by the `documentId` the finding carries.
+		*
+		* WHICH ABSENCE IT IS, in four sentences rather than one — see
+		* MISSION_COPY_STATES. All four fall through to the live fetch rather
+		* than leaving an empty pane, because a reader who cannot have the kept
+		* copy still has a quote to check.
 		* @param source - anything carrying `sourceUrl`, `sourceTitle`, `quote`, `documentId`.
+		* @param missionId - the mission that stored the page; the route is scoped to it.
 		* @param zh - whether to write Chinese.
 		* @param back - the label on the control that leaves.
 		* @param onBack - leave the reader.
 		*/
-		function MissionSourceReader({ source, zh, back, onBack }) {
+		function MissionSourceReader({ source, missionId, zh, back, onBack }) {
+			const [stored, setStored] = useState(null);
+			const [state, setState] = useState("loading");
+			const [why, setWhy] = useState("");
+			const [live, setLive] = useState(false);
+			const documentId = source.documentId ?? null;
+
+			useEffect(() => {
+				setLive(false);
+				setStored(null);
+				setWhy("");
+				if (documentId === null || (missionId ?? "") === "") {
+					setState("unkeyed");
+					return undefined;
+				}
+				let alive = true;
+				setState("loading");
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/document?documentId=${encodeURIComponent(documentId)}`)
+					.then(async (response) => {
+						const payload = await response.json();
+						// A 404 IS AN ANSWER HERE, not a failure. The route says in
+						// one sentence why it holds no copy — nothing stored at this
+						// run, or other pages and not this one — and that sentence is
+						// the note. Throwing it would print "the read failed" and
+						// send the reader to the server logs for a page that simply
+						// left the corpus.
+						if (response.status === 404) return { document: null, why: String(payload?.error ?? "") };
+						if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
+						return { document: payload.data?.document ?? null, why: "" };
+					})
+					.then((answer) => {
+						if (!alive) return;
+						setStored(answer.document);
+						setWhy(answer.why);
+						setState(answer.document === null ? "gone" : "held");
+					})
+					.catch((cause) => {
+						if (!alive) return;
+						setWhy(String(cause?.message ?? cause));
+						setState("failed");
+					});
+				return () => { alive = false; };
+			}, [missionId, documentId]);
+
+			const note = missionStoredCopyNote(state, why, stored, zh);
+			const showStored = state === "held" && live === false;
+			const tab = (on) => (on
+				? { ...controlStyle(), height: CONTROL.sm, font: FONT.small, borderColor: hue(MISSION_SOURCE_KIND, TINT.ring), color: hue(MISSION_SOURCE_KIND) }
+				: { ...controlStyle(), height: CONTROL.sm, font: FONT.small });
+
 			return jsxs("div", {
 				style: { height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: SPACE.md, padding: "0 24px 16px" },
 				children: [
@@ -9253,17 +9374,88 @@ window.__ModuleLoader__.load({
 							}, "which")
 						]
 					}, "bar"),
+					jsxs("div", {
+						style: { flex: "none", display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" },
+						children: [
+							// TWO TABS ONLY WHERE THERE ARE TWO THINGS. With no stored
+							// copy there is one page to show, and a pressed tab beside
+							// a dead one would tell the reader they chose this.
+							state !== "held" ? null : jsx("button", {
+								type: "button", className: "swm-ctl swm-focus", style: tab(live === false),
+								onClick: () => { setLive(false); },
+								children: zh ? "我们读到的那一版" : "As we read it"
+							}, "kept"),
+							state !== "held" ? null : jsx("button", {
+								type: "button", className: "swm-ctl swm-focus", style: tab(live === true),
+								onClick: () => { setLive(true); },
+								children: zh ? "现在的页面" : "The page now"
+							}, "now"),
+							jsx("span", {
+								style: { font: FONT.micro, flex: 1, minWidth: 0, color: note.tone === null ? INK.secondary : `rgb(${note.tone})` },
+								children: note.text
+							}, "note")
+						]
+					}, "copies"),
 					jsx("div", {
 						style: { flex: 1, minHeight: 0 },
-						children: jsx(DocumentView, {
-							// A synthetic row, because `DocumentView` reads a resource
-							// and this is a fetched web page: the mission documents are
-							// not library rows and no route serves them. Everything the
-							// reader actually uses — the url, the title, the display
-							// mode it derives from the url — is here.
-							row: { id: source.documentId ?? source.sourceUrl, title: source.sourceTitle ?? "", sourceUrl: source.sourceUrl, type: "" },
-							kind: MISSION_SOURCE_KIND, zh, wide: true
-						})
+						children: state === "loading"
+							// PROSE, SO THE PLACEHOLDER IS PROSE — the same shape the
+							// report screen waits in, because this is the same read.
+							? SkeletonScreen({
+								zh,
+								style: { display: "flex", flexDirection: "column", gap: SPACE.md },
+								children: [
+									Skeleton({ w: "46%", h: "20px" }, "title"),
+									...["100%", "96%", "88%", "100%", "72%", "90%"].map((w, at) => Skeleton({ w, h: "14px" }, "line" + at))
+								]
+							}, "waiting")
+							: showStored
+								? jsx("div", {
+									style: { height: "100%", minHeight: 0, overflowY: "auto" },
+									children: jsxs("article", {
+										// DocumentView's own reading column, to the pixel:
+										// the two tabs are the same read, and a second
+										// measure would make the page change width when
+										// the tab beside it is pressed.
+										style: {
+											font: FONT.large, maxWidth: "860px", margin: "0 auto",
+											padding: `${SPACE.sm} ${SPACE.xl} ${SPACE.xl}`,
+											boxSizing: "border-box", color: INK.primary
+										},
+										children: [
+											jsxs("header", {
+												style: { marginBottom: SPACE.xl },
+												children: [
+													jsx("h1", {
+														style: { font: FONT.display, margin: `0 0 ${SPACE.md}`, color: INK.primary },
+														children: (stored.title ?? "") === "" ? hostOf(stored.url) : stored.title
+													}, "title"),
+													jsx("div", {
+														style: { font: FONT.base, fontFamily: MONO, color: INK.secondary },
+														children: stored.url
+													}, "url"),
+													jsx("div", { style: { marginTop: SPACE.lg, borderBottom: `1px solid ${LINE.rule}` } }, "rule")
+												]
+											}, "head"),
+											// The markdown, rendered rather than dumped: this
+											// is the field the span guard split into
+											// paragraphs, so the paragraph the quote came out
+											// of is a paragraph on screen too.
+											jsx("div", { children: renderMarkdown(stored.markdown, "article") }, "body")
+										]
+									})
+								}, "kept")
+								: jsx(DocumentView, {
+									// A synthetic row, because `DocumentView` reads a
+									// library resource and this is a fetched web page. It
+									// stays synthetic on purpose: this branch is the LIVE
+									// page, `DocumentView`'s only input is a url, and its
+									// answer is therefore always the address as it is now.
+									// The stored copy cannot be served through it, which
+									// is why the branch above draws its own column.
+									row: { id: source.documentId ?? source.sourceUrl, title: source.sourceTitle ?? "", sourceUrl: source.sourceUrl, type: "" },
+									kind: MISSION_SOURCE_KIND, zh, wide: true
+								}, "live")
 					}, "reader")
 				]
 			});
@@ -11877,7 +12069,7 @@ window.__ModuleLoader__.load({
 
 			if (source !== null) {
 				return jsx(MissionSourceReader, {
-					source, zh,
+					source, missionId, zh,
 					back: zh ? "← 返回任务" : "← Back to the mission",
 					onBack: () => { setSource(null); }
 				});
@@ -12577,12 +12769,12 @@ window.__ModuleLoader__.load({
 									jsx("span", { children: name }, "name"),
 									row.fetchedAt === null || row.fetchedAt === undefined ? null
 										: jsx("span", { children: (zh ? "抓取于 " : "fetched ") + formatStamp(row.fetchedAt) }, "fetched"),
-									// Two ways to follow the quote, because they answer
-									// two questions. The reader is 信源's own — the
-									// Host half re-fetches the page and extracts it —
-									// and answers "does the page still say this". The
-									// plain link answers "what else is on that page",
-									// which an extractor cannot.
+									// Two controls, three questions. The reader opens
+									// the copy this mission kept — "what did the page
+									// say when we checked" — and offers the live
+									// re-fetch beside it, which answers "does it still
+									// say this". The plain link answers "what else is
+									// on that page", which an extractor cannot.
 									//
 									// An address that did not survive is neither: the
 									// row still shows its quote and simply does not
@@ -12960,14 +13152,15 @@ window.__ModuleLoader__.load({
 				children: [jsx(Icon, { name: "arrowLeft", size: ICON.xs }, "glyph"), zh ? "返回任务" : "Back to the mission"]
 			}, "back");
 
-			// The source behind one quote, read through 信源's own reader: the
-			// Host half re-fetches the page and extracts it, which is the only
-			// way to answer "does that page still say this" from here. One reader,
-			// shared with the mission's own trajectory — a second one written for
-			// missions would be a second answer to that question.
+			// The source behind one quote, opened on the copy the mission kept:
+			// `mission_documents` holds the markdown the span guard ran over, and
+			// this artefact's evidence rows carry the `documentId` that keys it.
+			// The live re-fetch is the second tab there, not the first. One
+			// reader, shared with the mission's own trajectory — a second one
+			// written for missions would be a second answer to that question.
 			if (source !== null) {
 				return jsx(MissionSourceReader, {
-					source, zh,
+					source, missionId, zh,
 					back: zh ? "← 返回报告" : "← Back to the report",
 					onBack: () => { setSource(null); }
 				});

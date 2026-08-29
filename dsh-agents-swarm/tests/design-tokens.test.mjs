@@ -3438,3 +3438,77 @@ test("every hue is the same step of one ramp", () => {
   assert.equal(light.get("slate"), "107,114,128");
   assert.equal(light.get("slate-dim"), "156,163,175");
 });
+
+test("the source reader opens the copy we kept, not the address", () => {
+  // ONE ANSWER TO TWO QUESTIONS. The reader built a synthetic row and handed it
+  // to `DocumentView`, whose only input is a url — so every open was a
+  // re-fetch, and a page edited since the mission read it came back without the
+  // quote in it. Its own comment said why: "the mission documents are not
+  // library rows and no route serves them". One of them serves them now.
+  const reader = code(body("function MissionSourceReader("));
+  assert.ok(
+    reader.includes("/document?documentId="),
+    "the reader never asks for the stored page, so opening a quote still re-fetches the address and a page that moved on reads as a quote that was invented",
+  );
+  assert.ok(
+    !body("function MissionSourceReader(").includes("no route serves them"),
+    "the docblock still says nothing serves the mission documents, which is the sentence this whole change exists to make false",
+  );
+  // THE DEFAULT IS THE ORDER OF THE BRANCHES. A reader that fetches the kept
+  // copy and still draws the live one first has bought the reader nothing —
+  // and one that fetches it and draws nothing has bought them less.
+  const kept = reader.indexOf("renderMarkdown(stored.markdown");
+  assert.notEqual(
+    kept,
+    -1,
+    "the stored page is fetched and never drawn, so the reader pays for a read whose answer it throws away and still shows the address as it is now",
+  );
+  assert.ok(
+    kept < reader.indexOf("jsx(DocumentView"),
+    "the live re-fetch is drawn ahead of the copy we kept, so the answer on screen is still the one that cannot say what the page said when we checked",
+  );
+  // EVERY HOOK ABOVE EVERY EARLY RETURN — which here is easy, because there are
+  // no early returns; the guard is that none appears before the last hook.
+  assert.ok(
+    reader.lastIndexOf("useEffect(") < reader.indexOf("return "),
+    "a return moved above a hook in the reader, which is the render that throws on the second open and not the first",
+  );
+});
+
+test("the reader says which absence it is, and colours only the exceptional ones", () => {
+  // THREE OF THESE WERE ONE SCREEN. A quote that names no stored page is normal
+  // and permanent — anything verified against a publisher abstract carries no
+  // document id at all. A page the mission no longer holds has left the corpus.
+  // A read that failed is worth pressing again. One "could not load" for all
+  // three tells the reader something false about their own evidence twice.
+  const states = scale("MISSION_COPY_STATES");
+  for (const state of ["loading", "unkeyed", "gone", "failed"]) {
+    assert.ok(
+      states.includes(`${state}: {`),
+      `nothing is written for \`${state}\`, so that absence borrows another one's sentence and the reader is told the wrong reason the page is not there`,
+    );
+  }
+  // COLOUR MARKS THE EXCEPTION. Waiting, and "there never was one", are at par.
+  assert.match(
+    states,
+    /loading: \{ tone: null/u,
+    "a read in flight is drawn as an exception, but waiting is not an anomaly and colour is the only thing on this bar that says one has happened",
+  );
+  assert.match(
+    states,
+    /unkeyed: \{ tone: null/u,
+    "a quote that never had a stored page is coloured like a failure, and that is the normal case for every quote checked against a publisher abstract",
+  );
+  assert.equal(
+    (states.match(/tone: TONE\.warn/gu) ?? []).length,
+    2,
+    "the two states that say the substrate is gone are no longer the only marked ones, so a page we hold and a page we lost read at the same weight",
+  );
+  // And the fallback is the honest one: an unrecognised state is a read that
+  // did not land, never "there never was one".
+  const note = code(body("function missionStoredCopyNote("));
+  assert.ok(
+    note.includes("MISSION_COPY_STATES.failed"),
+    "an unknown state falls back to a reassuring sentence, which tells a reader their evidence has no page behind it when the truth is that this screen could not fetch one",
+  );
+});

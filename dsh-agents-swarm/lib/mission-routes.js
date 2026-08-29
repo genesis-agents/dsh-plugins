@@ -65,6 +65,7 @@ import {
   COUNTING_VERIFY_STATE,
   FETCH_BACKED_VERIFY_STATES,
   FINDING_ORDERS,
+  MIN_DOCUMENT_CHARS,
   VERIFY_STATES,
   isMissionId,
 } from "./mission-store.js";
@@ -704,6 +705,99 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
             fetchBackedStates: FETCH_BACKED_VERIFY_STATES,
             orders: FINDING_ORDERS,
             sourceHosts: allHosts.map((row) => row.host),
+          },
+        },
+      });
+      return true;
+    }
+
+    // ── the page as it was when we checked it ───────────────────────────
+    //
+    // THE READER HAD ONE ANSWER TO TWO QUESTIONS. Opening a quote's source
+    // re-fetched the address and extracted it, which answers "does that page
+    // still say this" and cannot answer "what did the page say when the span
+    // guard ran over it". They come apart exactly where it matters: a page
+    // edited, paywalled or pulled since the mission read it re-fetches into
+    // something the quote is not in, and the only conclusion left to the
+    // person checking that quote is that it was invented.
+    //
+    // THE TEXT WAS ON DISK THE WHOLE TIME. `mission_documents` holds the
+    // markdown every span was matched against, keyed by the `document_id` on
+    // the finding itself, and `freezeEvidence` deliberately does not copy it
+    // into the artefact — copying tens of thousands of words per version
+    // would turn the artefact table into a second corpus. That decision only
+    // holds while the corpus is reachable, and nothing served it.
+    //
+    // SCOPED THROUGH THIS MISSION'S OWN FINDINGS, never by id alone. A
+    // document reader keyed on the id and mounted under a mission path hands
+    // anyone holding an id the whole fetch cache — every page every other
+    // mission ever read, under a URL that says it belongs to this one.
+    if (req.method === "GET" && action === "document") {
+      const mission = missionOr404(id);
+      if (mission === null) return true;
+      const params = paramsOf(req);
+      const stray = strayParams(params, ["documentId", "runCount"]);
+      if (stray !== null) return bad(stray);
+
+      const runCount = boundedInteger(params, "runCount", 1, 1_000_000, mission.runCount);
+      if (runCount.error !== undefined) return bad(runCount.error);
+      const documentId = boundedText(params, "documentId");
+      if (documentId.error !== undefined) return bad(documentId.error);
+      if (documentId.value === undefined) {
+        // Named with the place a caller gets one. This route serves ONE page
+        // and there is no defensible default: guessing the first would hand a
+        // reader a different page from the one their quote came off, which is
+        // the failure the whole route exists to end.
+        return bad(`documentId is required: this route serves one stored page, and its id is the \`documentId\` a finding carries. /missions/${id}/findings returns it on every row that has one.`);
+      }
+
+      // THE SCOPE AND THE MEMBERSHIP TEST, in one read. A page is this
+      // mission's when one of this run's findings was checked against it;
+      // nothing else is served here.
+      const held = missionStore.documentsForMission(id, { runCount: runCount.value });
+      const scoped = held.find((row) => row.id === documentId.value) ?? null;
+      if (scoped === null) {
+        // 404 naming the BOUND, the way `trace/<ref>` does. "This mission
+        // stored nothing at that run" and "it stored eleven pages and that is
+        // not one of them" are different situations, and one sentence for both
+        // is how a stale id becomes indistinguishable from a mission that
+        // fetched nothing.
+        sendJson(res, 404, {
+          success: false,
+          error: held.length === 0
+            ? `mission ${id} holds no stored page at run ${runCount.value}. Nothing it fetched at that run clears the bar a verified quote rests on — 2xx and at least ${MIN_DOCUMENT_CHARS} normalised characters — so there is no text here to read a quote against.`
+            : `mission ${id} holds ${held.length} stored page(s) at run ${runCount.value} and none of them is "${documentId.value}". A page re-fetched into a non-2xx or an empty body leaves this set, and the findings resting on it were re-marked unchecked-stale in the same write.`,
+          data: { documentId: documentId.value, runCount: runCount.value, held: held.length },
+        });
+        return true;
+      }
+
+      // Read again by primary key, and the second read is not waste: the scope
+      // query returns neither `contentHash` nor `admissible`, and those two are
+      // how a later reader tells the text the guard ran over from a re-fetch
+      // that replaced it in place.
+      const stored = missionStore.getDocument(documentId.value);
+
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          missionId: id,
+          runCount: runCount.value,
+          document: {
+            documentId: stored.id,
+            url: stored.url,
+            host: stored.host,
+            title: stored.title,
+            // WHOLE, for the reason `projectFinding` returns the quote whole:
+            // this is the only place the text is served, and a body truncated
+            // on the way out is a reader who cannot find the quote in it and
+            // concludes it was never there.
+            markdown: stored.markdown,
+            charCount: stored.charCount,
+            contentHash: stored.contentHash,
+            status: stored.status,
+            fetchedAt: stored.fetchedAt,
+            admissible: stored.admissible,
           },
         },
       });

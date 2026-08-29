@@ -2907,3 +2907,96 @@ test("the view says which stages may be re-run, and why not when they may not", 
     "the persist stage refuses with nothing to show the reader",
   );
 });
+
+test("the page a quote was checked against can be read back, not re-fetched", async (t) => {
+  // THE DEFECT, AS A SCREEN. Opening a quote's source re-fetched the address
+  // and extracted it, which answers "does that page still say this" and cannot
+  // answer "what did it say when we checked". A page edited, paywalled or
+  // pulled since comes back without the quote in it, and the only conclusion
+  // left to the person reading is that the quote was invented. `freezeEvidence`
+  // declines to copy the text into the artefact on purpose — copying tens of
+  // thousands of words per version would turn the artefact table into a second
+  // corpus — and that decision only holds while the corpus is reachable.
+  const { missions } = library(t);
+  const id = collectedMission(missions);
+  const url = "https://arxiv.org/abs/2401.00001";
+
+  const held = await callRoute(missions, `/missions/${id}/document?documentId=${documentIdFor(url)}`);
+  assert.equal(held.status, 200, JSON.stringify(held.body));
+  const page = held.body.data.document;
+  assert.equal(page.url, url, "the stored page came back under an address other than the one it was stored for, so the reader is checking a quote against the wrong page");
+  assert.equal(
+    page.markdown,
+    "solid electrolyte text ".repeat(40),
+    "the body came back short. A quote the reader cannot find in the text they were handed reads exactly like a quote that was never there",
+  );
+  assert.equal(page.fetchedAt, "2026-08-24T00:00:05.000Z", "nothing on the answer says WHEN this was the page, so 'as we read it' is a claim with no date on it");
+  assert.ok(
+    typeof page.contentHash === "string" && page.contentHash !== "",
+    "the content hash did not travel, so a reader cannot tell the text the span guard ran over from a later fetch that replaced it in place",
+  );
+  assert.equal(page.admissible, true, "the answer does not say whether this page still clears the bar the verified state resting on it requires");
+});
+
+test("a stored page belongs to the mission whose findings point at it", async (t) => {
+  // A document reader keyed on the id alone, mounted under a mission path,
+  // hands anyone holding an id the whole fetch cache — every page every other
+  // mission ever read, under a URL that says it belongs to this one. The scope
+  // is `documentsForMission`: a page is this mission's when one of this run's
+  // own findings was checked against it, and nothing else is served.
+  const { missions } = library(t);
+  const mine = collectedMission(missions);
+  const theirs = mission(missions);
+  const other = "https://nature.com/articles/n-2401";
+  missions.putDocument({ url: other, markdown: "someone else's corpus ".repeat(40), status: 200, fetchedAt: "2026-08-24T00:00:05.000Z" });
+  missions.insertFinding({
+    missionId: theirs, dimensionId: "d1", runCount: 1, attempt: 0,
+    claim: "Not this mission's claim.", evidence: "someone else's corpus",
+    sourceUrl: other, verifyState: "verified-source-text",
+    documentId: documentIdFor(other), spanIndex: 0, createdAt: "2026-08-24T00:00:06.000Z",
+  });
+
+  const leak = await callRoute(missions, `/missions/${mine}/document?documentId=${documentIdFor(other)}`);
+  assert.equal(leak.status, 404, "a page this mission never read came back under this mission's own path, which is the fetch cache served as evidence");
+  assert.match(
+    leak.body.error,
+    /1 stored page/u,
+    "the refusal does not say how many pages this mission does hold, so a stale id and a mission that fetched nothing read as the same answer",
+  );
+  assert.equal(leak.body.data.held, 1, "the bound is not on the answer, so a caller can only tell those two apart by parsing prose");
+
+  // And the mission that DID read it still gets it: the scope is a scope, not a ban.
+  const ok = await callRoute(missions, `/missions/${theirs}/document?documentId=${documentIdFor(other)}`);
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+});
+
+test("the stored-page route names what it holds instead of answering emptily", async (t) => {
+  // Every other route added for this tab refuses a bad parameter by naming the
+  // accepted values, because an empty list from a typo and an empty list from
+  // no data want opposite reactions from the person reading the panel. A
+  // reader is worse: an empty pane where a page should be is indistinguishable
+  // from a page that says nothing.
+  const { missions } = library(t);
+  const id = collectedMission(missions);
+  const url = "https://arxiv.org/abs/2401.00001";
+
+  const noId = await callRoute(missions, `/missions/${id}/document`);
+  assert.equal(noId.status, 400, "a call naming no document was answered as though it named one, which serves somebody a page their quote did not come off");
+  assert.match(noId.body.error, /documentId/u, "the refusal does not name the parameter, or where a caller gets a legal value for it");
+
+  const typo = await callRoute(missions, `/missions/${id}/document?document=abc`);
+  assert.equal(typo.status, 400, "an unknown parameter was silently ignored, which is a filter that looks like it works");
+  assert.match(typo.body.error, /documentId, runCount/u, "the refusal does not name the parameters this route does read");
+
+  const stale = await callRoute(missions, `/missions/${id}/document?documentId=${"0".repeat(64)}`);
+  assert.equal(stale.status, 404);
+  assert.match(stale.body.error, /1 stored page/u, "an id that has gone stale and a mission that stored nothing were told the same sentence");
+
+  const emptyRun = await callRoute(missions, `/missions/${id}/document?documentId=${documentIdFor(url)}&runCount=2`);
+  assert.equal(emptyRun.status, 404);
+  assert.match(
+    emptyRun.body.error,
+    /no stored page at run 2/u,
+    "a run that stored nothing reads as a page that vanished, and those two send the reader looking in different places",
+  );
+});
