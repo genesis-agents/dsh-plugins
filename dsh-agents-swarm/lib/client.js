@@ -14507,6 +14507,80 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		* The opening words of one chapter, cut from the document already in hand.
+		*
+		* NOT A NEW COLUMN. `section.start`/`section.end` are offsets into THIS
+		* artefact's own markdown — written by `assemble` in lib/mission-stages-middle.js,
+		* asserted there against the string they index, and checked again by
+		* `contentGuard`'s section-offset test — so the first paragraph of chapter
+		* nine is a substring of a string this component is already holding for
+		* `readSlice`. A `preview` field written by s12 would be a second copy of
+		* those words travelling through the store, the projection and the route,
+		* free to drift from the document it was cut from, and absent from every
+		* artefact already on disk.
+		*
+		* CUT BEFORE CLEANED. A chapter is twenty thousand characters and the list
+		* draws all of them on every click; the regexes run over the first 1200,
+		* which is four times more than three clamped lines can show.
+		* @param markdown - `artifact.markdown`.
+		* @param section - one entry of `artifact.sections`.
+		* @returns plain text, capped, or "" when the offsets resolve to nothing.
+		*/
+		function missionChapterPreview(markdown, section) {
+			const source = typeof markdown === "string" ? markdown : "";
+			const start = Number(section?.start ?? 0);
+			const end = Math.min(Number(section?.end ?? 0), start + 1200);
+			const text = source.slice(start, end)
+				// The heading comes off because the card draws it above at its own
+				// weight; left in, every preview opens with the title the reader has
+				// just read and three lines are worth two.
+				.replace(/^##\s+.*\r?\n/u, "")
+				// AND THE MARKERS COME OFF. `[12]` in running text is a reference to a
+				// list that is not on this card and cannot be reached from it — the one
+				// piece of syntax a preview cannot carry.
+				.replace(/\[\d+\]/gu, "")
+				.replace(/[*_`>#]/gu, "")
+				.replace(/\s+/gu, " ")
+				.trim();
+			return text.length > 240 ? `${text.slice(0, 239)}…` : text;
+		}
+
+		/**
+		* How many of each chapter's citations actually held up.
+		*
+		* The scorecard at the top of the report splits by section TYPE and its own
+		* docblock says why: "chapter seven cites nothing" must not average into a
+		* healthy-looking total. It still cannot name the chapter, because a type is
+		* not a chapter. This is the same question one grain finer, and every field
+		* it joins on is already on the artefact: `assemble` stamps each citation
+		* with the `dimensionId`/`chapterIndex` it came from, and the frozen evidence
+		* rows carry the `verifyState`.
+		*
+		* NOTHING IS RE-JOINED. `byIndex` is `missionReferences`' answer, built once
+		* at the top of the report and keyed by the same citation index the markers
+		* in the prose use — so a chapter's verdict and the hover card behind `[7]`
+		* cannot disagree about the same row.
+		* @param artifact - the artefact from `/missions/:id/artifact`.
+		* @param byIndex - citation index → reference entry, from `missionReferences`.
+		* @returns `dimensionId#chapterIndex` → how many of that chapter's citations verified.
+		*/
+		function missionChapterVerified(artifact, byIndex) {
+			const citations = Array.isArray(artifact?.citations) ? artifact.citations : [];
+			const counted = new Map();
+			for (const citation of citations) {
+				const key = `${citation?.dimensionId ?? ""}#${citation?.chapterIndex ?? ""}`;
+				const entry = byIndex?.get?.(Number(citation?.index)) ?? null;
+				// The predicate `MissionReferenceList` already counts with: three of the
+				// nine verify states begin `verified` and the other six are the reasons
+				// this one did not. Two spellings of that boundary would be two answers
+				// to "how much of this is checked" on one page.
+				const held = String(entry?.verifyState ?? "").startsWith("verified");
+				counted.set(key, (counted.get(key) ?? 0) + (held ? 1 : 0));
+			}
+			return counted;
+		}
+
+		/**
 		* Why a version was archived degraded, in the words the run itself recorded.
 		*
 		* What stood here was one either/or sentence — the guard fired OR the leader
@@ -14587,6 +14661,193 @@ window.__ModuleLoader__.load({
 							? "报告仍然写出来了，就是为了让你能看见问题出在哪。"
 							: "It was written anyway so the problem is readable."
 					}, "why")
+				]
+			});
+		}
+
+		/**
+		* WHOSE PAGES THIS REPORT IS ACTUALLY STANDING ON.
+		*
+		* The one question a reader brings to a research report that this pane
+		* could not answer. The bibliography under this figure is printed in the
+		* order the prose numbers it, which is the single order that HIDES
+		* concentration: five entries from one host sitting at [3], [17], [22],
+		* [40] and [48] read, down the column, as five sources. The pane already
+		* knew better — `MissionReferenceList` computes `hosts.size` and spends it
+		* as a four-word hint on one tile — and knowing the count is not the same
+		* as seeing the shape.
+		*
+		* EVERY NUMBER HERE IS COUNTED, NOT MODELLED, and the chain is short
+		* enough to state: the host on a reference row is
+		* `artifact.evidence[].sourceHost`, which is `mission_findings.source_host`
+		* copied into `mission_artifacts.evidence` by `freezeEvidence` at s12 and
+		* handed over whole by `GET /missions/:id/artifact`. That column is the
+		* independence key the whole pipeline is built on — `uniqueHosts` counts it
+		* and s7 divides it by two to cap the chapter count — so this is that
+		* column, grouped. There is no estimate, no projection and no inference in
+		* this block: both halves of the join are already on this side of the wire,
+		* so the GROUP BY happens here.
+		*
+		* THE CAPTION IS THE CLAIM, not a title. A figure in a report is evidence
+		* for a sentence and the sentence is what the reader takes away, so the
+		* caption states the finding in the same counts the bars are drawn from —
+		* a reader who doubts it can check it against the rows underneath. A
+		* caption reading 引用来源分布 would tell them nothing they cannot see.
+		*
+		* WHOLE-REPORT, IN BOTH READING MODES, deliberately. `references` is built
+		* from `artifact.markdown` and never from the chapter slice, so the figure
+		* and the list beneath it answer for the same document whether the reader
+		* is on 通读 or 分章. A figure that silently re-scoped itself with the
+		* segmented control would be two answers to one question.
+		* @param references - `missionReferences`'s answer, the same array the list below is drawn from.
+		* @param zh - whether to write Chinese.
+		*/
+		function MissionEvidenceSpread({ references, zh }) {
+			const total = references.length;
+			if (total === 0) return null;
+
+			// GROUPED ON THE HOST THE EVIDENCE ROW CARRIES. An index whose evidence
+			// never joined AND whose url will not parse has no host at all, and it
+			// gets a bucket of its own rather than a site named empty-string.
+			// "We cannot tell where this came from" and "one more page on this site"
+			// are different sentences and only one of them is about sourcing — the
+			// same split `#libraryFactsFor` draws one file away when it refuses to
+			// derive a type off the TLD for a page the library does not hold.
+			const byHost = new Map();
+			for (const entry of references) {
+				const host = entry.host === "" ? null : entry.host;
+				const found = byHost.get(host);
+				if (found === undefined) byHost.set(host, { host, cites: 1, inText: entry.inText });
+				else { found.cites += 1; found.inText += entry.inText; }
+			}
+			const named = [...byHost.values()]
+				.filter((bucket) => bucket.host !== null)
+				.sort((a, b) => b.cites - a.cites || (a.host < b.host ? -1 : 1));
+			const unnamed = byHost.get(null) ?? null;
+
+			// EIGHT BARS AND A REMAINDER LINE — never a ninth bar, and never a
+			// silent truncation. A chart that quietly ends at eight reports a
+			// narrower evidence base than the run has, which on this figure is the
+			// one direction the error must never go; and a bar holding twelve sites
+			// drawn beside a bar holding one compares two different things at one
+			// scale. So the tail is a sentence carrying its own count.
+			const drawn = named.slice(0, 8);
+			const folded = named.slice(8);
+			let foldedCites = 0;
+			for (const bucket of folded) foldedCites += bucket.cites;
+			// THE SCALE IS THE BIGGEST BAR, not the total. Against the total, a
+			// report over eighteen hosts draws eighteen stubs and the shape of the
+			// distribution — which is the whole reason to draw it rather than print
+			// the host count — is gone. The share against the total is stated in
+			// words on every row instead, where it cannot be misread off a length.
+			const widest = drawn.length === 0 ? 1 : drawn[0].cites;
+			const share = (n) => Math.round((n / total) * 100);
+
+			const lead = named.length === 0
+				? (zh
+					? `这份报告的 ${total} 处引用都没有留下来源站点。`
+					: `Not one of this report's ${total} citations records the site it came from.`)
+				: named.length === 1
+				? (zh
+					? `这份报告的 ${total} 处引用全部来自同一个站点 ${named[0].host}。`
+					: `All ${total} of this report's citations come from one site, ${named[0].host}.`)
+				: (zh
+					? `${total} 处引用分布在 ${named.length} 个站点上，其中 ${named[0].host} 一家占了 ${named[0].cites} 处（${share(named[0].cites)}%）。`
+					: `${total} citations are spread over ${named.length} sites, of which ${named[0].host} alone carries ${named[0].cites} (${share(named[0].cites)}%).`);
+			// APPENDED TO THE CLAIM, not printed as a second one. A caption that
+			// states a spread over N sites while M citations sit outside every site
+			// is a sentence that is true of a set the reader was not told about.
+			const caveat = unnamed === null
+				? ""
+				: (zh
+					? `另有 ${unnamed.cites} 处引用没有可用的来源地址，没有计入任何站点。`
+					: ` A further ${unnamed.cites} citation(s) carry no usable address and are counted against no site.`);
+
+			return jsxs("figure", {
+				// A FIGURE IS A BLOCK, and the reference draws it as one: an outer
+				// edge, a caption above, a hairline between the two. `LINE.hair` for
+				// the container's edge and `LINE.rule` for the divider inside it,
+				// which is the rule stated where those two tokens are declared.
+				style: {
+					margin: "0 0 18px",
+					padding: SPACE.md,
+					border: `1px solid ${LINE.hair}`,
+					borderRadius: RADIUS.lg,
+					background: SURFACE.subtle
+				},
+				children: [
+					jsx("figcaption", {
+						style: {
+							font: FONT.baseStrong, color: INK.primary,
+							margin: `0 0 ${SPACE.md}`,
+							paddingBottom: SPACE.sm,
+							borderBottom: `1px solid ${LINE.rule}`
+						},
+						children: lead + caveat
+					}, "caption"),
+					drawn.length === 0 ? null : jsx("div", {
+						style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
+						children: drawn.map((bucket) => jsxs("div", {
+							style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
+							children: [
+								jsxs("div", {
+									style: { font: FONT.small, display: "flex", alignItems: "baseline", gap: SPACE.sm, color: INK.secondary },
+									children: [
+										jsx("span", {
+											style: { flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: INK.primary },
+											children: bucket.host
+										}, "host"),
+										jsx("span", {
+											style: { flex: "none", fontFamily: MONO, fontVariantNumeric: "tabular-nums" },
+											children: zh ? `${bucket.cites} 处 · ${share(bucket.cites)}%` : `${bucket.cites} · ${share(bucket.cites)}%`
+										}, "n")
+									]
+								}, "head"),
+								// THE ONE BAR. Five hand-drawn tracks is what `Meter`
+								// replaced, and a chart is the most tempting place in
+								// this file to draw a sixth.
+								Meter({ value: bucket.cites, max: widest, tone: TONE.info }, "bar"),
+								// ONLY WHEN THE TWO DISAGREE. A citation is listed once in
+								// the bibliography and may be leaned on any number of
+								// times in the prose — including nought, which is a
+								// reference nothing refers to. Printing `= n` on every
+								// ordinary row is the same defect as the chip that
+								// printed 未通过 0，未检查 0，被反驳 0 on a clean section.
+								bucket.inText === bucket.cites ? null : jsx("div", {
+									style: { font: FONT.micro, color: INK.secondary },
+									children: zh
+										? `正文里指向这个站点的标记有 ${bucket.inText} 处`
+										: `${bucket.inText} marker(s) in the prose point here`
+								}, "prose")
+							]
+						}, bucket.host))
+					}, "bars"),
+					folded.length === 0 ? null : jsx("div", {
+						style: {
+							font: FONT.small, color: INK.secondary,
+							marginTop: SPACE.md, paddingTop: SPACE.sm,
+							borderTop: `1px solid ${LINE.rule}`
+						},
+						children: zh
+							? `另外 ${folded.length} 个站点合计 ${foldedCites} 处引用（${share(foldedCites)}%），没有单独画出来。`
+							: `A further ${folded.length} site(s) carry ${foldedCites} citation(s) between them (${share(foldedCites)}%), not drawn separately.`
+					}, "folded"),
+					// THE ONE EXCEPTION THAT TAKES A COLOUR. Every bar above is the
+					// same hue on purpose: concentration has no threshold anywhere in
+					// this pipeline, and a ladder typed on this side of the wire would
+					// be a bar nobody set. A citation that belongs to no site is not a
+					// judgement — it is a hole in the frozen evidence, which is the
+					// same fact the 元数据缺失 tile below already paints amber.
+					unnamed === null ? null : jsx("div", {
+						style: {
+							font: FONT.small, color: `rgb(${TONE.warn})`,
+							marginTop: SPACE.md, paddingTop: SPACE.sm,
+							borderTop: `1px solid ${LINE.rule}`
+						},
+						children: zh
+							? `${unnamed.cites} 处引用没有站点可归：冻结证据里没有 source_host，引用地址也解析不出主机名。`
+							: `${unnamed.cites} citation(s) belong to no site: the frozen evidence carries no source_host and the citation's address will not parse.`
+					}, "unnamed")
 				]
 			});
 		}
@@ -14852,6 +15113,10 @@ window.__ModuleLoader__.load({
 			const references = missionReferences(artifact);
 			const numbered = new Set(references.map((entry) => entry.index));
 			const byIndex = new Map(references.map((entry) => [entry.index, entry]));
+			// Built once beside the map it reads, not per row: the chapter list walks
+			// every citation on the artefact, and doing that inside the row callback
+			// would walk the whole array once per chapter on every click.
+			const chapterVerified = missionChapterVerified(artifact, byIndex);
 			const evidence = Array.isArray(artifact.evidence) ? artifact.evidence : [];
 			const citations = Array.isArray(artifact.citations) ? artifact.citations : [];
 			const tallies = [
@@ -14950,22 +15215,18 @@ window.__ModuleLoader__.load({
 						// rendered as an empty band with a pill parked at the far right.
 						// The version itself moves into the meta line under the title,
 						// where the rest of the facts about this artefact already are.
-						back === null && versions.length <= 1 ? null : jsxs("div", {
+						// BACK ALONE. The version chips have moved down into the reading
+						// toolbar, which is where the reference puts 版本历史 and where this
+						// screen's other control over how the document is read already lives.
+						// The row that stood here is what its own comment described — with the
+						// report a pane rather than a screen there is no back button, so a
+						// two-version report drew a band above the title containing nothing but
+						// two pills parked at the far right, three blocks away from the prose
+						// they change.
+						back === null ? null : jsx("div", {
 							style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", margin: "0 0 12px" },
-							children: [
-								back,
-								jsx("span", { style: { flex: 1 } }, "spacer"),
-								...versions.map((entry) => jsx("button", {
-									type: "button",
-									role: "tab",
-									"aria-selected": entry.version === artifact.version,
-									className: "swm-chip swm-focus", style: chipStyle({ hue: entry.degraded ? TONE.warn : TONE.neutral }, entry.version === artifact.version),
-									onClick: () => { setVersion(entry.version); },
-									children: (zh ? `第 ${entry.version} 版` : `v${entry.version}`)
-										+ (entry.degraded ? (zh ? " · 降级" : " · degraded") : "")
-								}, String(entry.version)))
-							]
-						}, "versions"),
+							children: [back]
+						}, "back"),
 						// Title left, ONE figure right — the reference's header. Three
 						// equal boxes give three numbers equal weight and none of them a
 						// headline; a reader opening a report wants to know whether it
@@ -15004,7 +15265,13 @@ window.__ModuleLoader__.load({
 								zh ? `${citations.length} 处引用` : `${citations.length} citation(s)`,
 								zh ? `${evidence.length} 条冻结证据` : `${evidence.length} frozen evidence row(s)`,
 								artifact.trigger === null || artifact.trigger === undefined ? "" : String(artifact.trigger),
-								versions.length > 1 ? "" : (zh ? `第 ${artifact.version ?? 1} 版` : `v${artifact.version ?? 1}`),
+								// ALWAYS, NOT ONLY WHEN THERE IS ONE. This was suppressed on the
+								// reasoning that the chips said it otherwise — and the chips are now
+								// in the toolbar below the scorecard, so on a three-version report the
+								// top of the page named every fact about the artefact except which one
+								// it was. It is the reference's `v1` beside 版本历史, said once, where
+								// the rest of this artefact's facts already are.
+								zh ? `第 ${artifact.version ?? 1} 版` : `v${artifact.version ?? 1}`,
 								formatStamp(artifact.createdAt)
 							].filter((piece) => piece !== "").join(" · ")
 						}, "meta"),
@@ -15033,10 +15300,34 @@ window.__ModuleLoader__.load({
 						// A thirty-thousand-word report is not something anybody reads top to
 						// bottom in a pane, and the chapter list is also the only table of
 						// contents this screen has ever had.
-						readSections.length < 2 ? null : jsxs("div", {
+						// THE REPORT'S ONE TOOLBAR. The reference's has a three-way segmented
+						// control on the left and four controls on the right: 报告分析 (51),
+						// 版本历史 (v1), 导出报告, 原始数据. Three of those four are accounted for
+						// and the fourth is refused.
+						//
+						// 导出报告 AND 原始数据 ARE ONE FRAME UP, on purpose. They are `report.md`
+						// and `report.json` in MissionDetail's 导出 menu, alongside the two CSVs,
+						// and this component's own docblock records why they live there: the
+						// version on screen has to ride in the query, and a reader looking at v1
+						// who presses a second download control that does not know about `pinned`
+						// is handed a different document than the one in front of them.
+						//
+						// 报告分析 (51) IS NOT HERE BECAUSE WE DO NOT HAVE IT. There is no analysis
+						// object in this pipeline — no table, no artefact field, nothing with a
+						// count that means what that 51 means. Wiring the control to the nearest
+						// available number, `citations.length` or `evidence.length`, would be a
+						// label attached to a figure that does not answer it, and both of those
+						// are already printed in full in the meta line above.
+						//
+						// 版本历史 IS THE ONE WE HOLD, and it is `listArtifactVersions` — the same
+						// chips that used to sit in a band of their own above the title.
+						readSections.length < 2 && versions.length <= 1 ? null : jsxs("div", {
 							style: { display: "flex", alignItems: "center", gap: SPACE.md, flexWrap: "wrap", margin: `0 0 ${SPACE.md}` },
 							children: [
-								jsx("div", {
+								// A ONE-CHAPTER REPORT HAS NO READINGS. The strip used to be the
+								// whole row's reason to exist, so a single-chapter report with three
+								// versions had nowhere to put its switcher at all.
+								readSections.length < 2 ? null : jsx("div", {
 									style: SEGMENT_TRACK,
 									role: "group",
 									"aria-label": zh ? "阅读方式" : "How to read this",
@@ -15051,50 +15342,141 @@ window.__ModuleLoader__.load({
 										onClick: () => { setReading(mode.id); },
 										children: zh ? mode.zh : mode.en
 									}, mode.id))
-								}, "modes")
+								}, "modes"),
+								jsx("span", { style: { flex: 1 } }, "spacer"),
+								versions.length <= 1 ? null : jsxs("div", {
+									style: { display: "flex", alignItems: "center", gap: SPACE.xs, flexWrap: "wrap" },
+									role: "tablist",
+									"aria-label": zh ? "版本" : "Versions",
+									children: [
+										// THE CHIPS ARE NOT SELF-EXPLANATORY WITHOUT THE BAND THEY LOST.
+										// Alone at the top of a page a right-aligned pill reading 第 2 版
+										// was the only thing it could be; in a row beside a segmented
+										// control it needs the word, which is the reference's own 版本历史.
+										jsx("span", {
+											style: { font: FONT.micro, color: INK.secondary, flex: "none" },
+											children: zh ? "版本" : "Versions"
+										}, "label"),
+										...versions.map((entry) => jsx("button", {
+											type: "button",
+											role: "tab",
+											"aria-selected": entry.version === artifact.version,
+											className: "swm-chip swm-focus", style: chipStyle({ hue: entry.degraded ? TONE.warn : TONE.neutral }, entry.version === artifact.version),
+											onClick: () => { setVersion(entry.version); },
+											children: (zh ? `第 ${entry.version} 版` : `v${entry.version}`)
+												+ (entry.degraded ? (zh ? " · 降级" : " · degraded") : "")
+										}, String(entry.version)))
+									]
+								}, "versions")
 							]
 						}, "reading"),
 						reading !== "chapter" ? null : jsx("nav", {
-							// A LIST, not a sidebar: the pane is already inside a two-pane frame
-							// and a third column would be a scroller inside a scroller inside a
-							// scroller. Numbered, because a chapter a reader can refer to by number
-							// is the thing a table of contents is for.
+							// A LIST OF CARDS, not a sidebar: the pane is already inside a two-pane
+							// frame and a third column would be a scroller inside a scroller inside
+							// a scroller. What changed is what a row SAYS. A heading and two figures
+							// let a reader pick a chapter by its title; the reference's card adds
+							// three clamped lines of the chapter's own opening, which is how you pick
+							// one by what it actually argues. Those lines are a substring of the
+							// markdown this component already holds — see missionChapterPreview.
 							style: {
 								display: "flex", flexDirection: "column",
 								margin: `0 0 ${SPACE.lg}`,
-								borderTop: `1px solid ${LINE.rule}`
+								// hair OUTSIDE, rule BETWEEN. LINE's docblock is the guard and this
+								// list had the pair the wrong way round: the container's own top edge
+								// drew at the heavier inner weight while the dividers between ten
+								// cards drew at the one that is allowed to be nearly invisible.
+								borderTop: `1px solid ${LINE.hair}`
 							},
-							children: readSections.map((section, at) => jsx("button", {
-								type: "button",
-								"aria-current": at === readAt ? "true" : undefined,
-								className: "swm-ctl swm-focus",
-								style: {
-									...controlStyle(),
-									display: "flex", alignItems: "baseline", gap: SPACE.sm,
-									width: "100%", textAlign: "left", height: "auto",
-									padding: `${SPACE.sm} 0`,
-									border: "none", borderRadius: 0,
-									borderBottom: `1px solid ${LINE.hair}`,
-									background: at === readAt ? SURFACE.hover : "transparent"
-								},
-								onClick: () => { setChapter(at); },
-								children: [
-									jsx("span", {
-										style: { font: FONT.small, fontVariantNumeric: "tabular-nums", color: INK.secondary, flex: "none" },
-										children: String(at + 1)
-									}, "n"),
-									jsx("span", {
-										style: { font: at === readAt ? FONT.baseStrong : FONT.base, color: INK.primary, flex: 1, minWidth: 0 },
-										children: section.heading
-									}, "h"),
-									jsx("span", {
-										style: { font: FONT.micro, color: INK.secondary, flex: "none" },
-										children: zh
-											? `${section.wordCount} 字 · ${section.citationCount} 处引用`
-											: `${section.wordCount} words · ${section.citationCount} citations`
-									}, "n2")
-								]
-							}, `ch-${at}`))
+							children: readSections.map((section, at) => {
+								// PER CHAPTER, off the join this page already made.
+								const verified = chapterVerified.get(`${section.dimensionId ?? ""}#${section.chapterIndex ?? ""}`) ?? 0;
+								// NEUTRAL AT NOUGHT. A chapter that cites nothing has not verified
+								// everything — that is the clean bill the empty-scorecard branch
+								// twenty lines up refuses to give — and it has not failed either. It
+								// is exactly the fact the by-type scorecard exists to keep visible,
+								// finally said on the row it belongs to.
+								const hue = section.citationCount === 0 ? TONE.neutral : missionRateHue(verified, section.citationCount);
+								const preview = missionChapterPreview(artifact.markdown, section);
+								return jsxs("button", {
+									type: "button",
+									"aria-current": at === readAt ? "true" : undefined,
+									className: "swm-ctl swm-focus",
+									style: {
+										...controlStyle(),
+										display: "flex", alignItems: "flex-start", gap: SPACE.sm,
+										width: "100%", textAlign: "left", height: "auto",
+										padding: `${SPACE.md} ${SPACE.sm}`,
+										border: "none", borderRadius: 0,
+										borderBottom: `1px solid ${LINE.rule}`,
+										background: at === readAt ? SURFACE.hover : "transparent",
+										// AND A MARK IN THE MARGIN, the one the task board's open row
+										// takes. The tint on its own is indistinguishable from a hover
+										// state, and a hover state is not findable in a list scrolled
+										// past the fold.
+										boxShadow: at === readAt ? "inset 2px 0 0 0 var(--dsw-alias-state-business-primary)" : undefined
+									},
+									onClick: () => { setChapter(at); },
+									children: [
+										// THE REFERENCE'S TICK, MEASURED. It draws a green tick on every
+										// chapter; on our data that would mean nothing, because a chapter
+										// that reached the artefact was assembled by definition. The glyph
+										// here reports the citation join instead, so it is a verdict rather
+										// than a decoration a reader will read as one.
+										jsx("span", {
+											style: {
+												flex: "none", marginTop: "2px",
+												width: "18px", height: "18px", borderRadius: RADIUS.circle,
+												display: "inline-flex", alignItems: "center", justifyContent: "center",
+												background: `rgba(${hue},${TINT.soft})`, color: `rgb(${hue})`
+											},
+											title: section.citationCount === 0
+												? (zh ? "这一章没有引用，所以没有可核验的东西。" : "This chapter cites nothing, so there was nothing here to verify.")
+												: (zh ? `${section.citationCount} 处引用里有 ${verified} 处通过核验。` : `${verified} of this chapter's ${section.citationCount} citations verified.`),
+											children: jsx(Icon, {
+												name: section.citationCount === 0 ? "minus" : verified === section.citationCount ? "check" : "alert",
+												size: ICON.xs
+											}, "glyph")
+										}, "mark"),
+										jsxs("span", {
+											style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: SPACE.xs },
+											children: [
+												jsxs("span", {
+													style: { display: "flex", alignItems: "baseline", gap: SPACE.sm },
+													children: [
+														// THE ORDINAL IS IN THE NAME. It was a column of its own, which
+														// is a second alignment to keep and reads as a table; the
+														// reference writes it into the title, where it is the way a
+														// reader says the chapter's name out loud.
+														jsx("span", {
+															style: { font: at === readAt ? FONT.baseStrong : FONT.base, color: INK.primary, flex: 1, minWidth: 0, ...clampBox(2) },
+															children: zh ? `第 ${at + 1} 章：${section.heading}` : `Chapter ${at + 1}: ${section.heading}`
+														}, "h"),
+														Chip({
+															tone: hue,
+															label: section.citationCount === 0
+																? (zh ? "无引用" : "no citations")
+																: (zh ? `${verified}/${section.citationCount} 已核验` : `${verified}/${section.citationCount} verified`)
+														}, "state"),
+														jsx("span", {
+															style: { ...COUNT_CHIP, flex: "none" },
+															children: zh ? `${section.wordCount} 字` : `${section.wordCount} words`
+														}, "words")
+													]
+												}, "top"),
+												// THREE LINES, and the clamp is the only thing holding them to
+												// three: a chapter's first paragraph is longer than its card, and
+												// ten uncapped previews are a page of prose where a list was asked
+												// for. Nothing at all when the slice came back empty, rather than
+												// an empty box under every title.
+												preview === "" ? null : jsx("span", {
+													style: { font: FONT.body, color: INK.secondary, ...clampBox(3) },
+													children: preview
+												}, "preview")
+											]
+										}, "col")
+									]
+								}, `ch-${at}`);
+							})
 						}, "toc"),
 						jsx("div", {
 							// NO MEASURE CAP. `WIDE_STYLE` exists two thousand lines up
@@ -15142,6 +15524,16 @@ window.__ModuleLoader__.load({
 								? [{ number: readAt + 1, heading: String(readSections[readAt].heading ?? "") }]
 								: readSections.map((section, at) => ({ number: at + 1, heading: String(section.heading ?? "") })))
 						}, "body"),
+						// THE FIGURE, ABOVE THE LIST IT IS ABOUT. Not inside the prose:
+						// the reference drops its figures beside the paragraph they
+						// support, and nothing in `artifact.markdown` says which
+						// paragraph that would be — placing it by guess would be this
+						// pane asserting a relationship the writer never recorded. The
+						// boundary where the report stops making claims and starts
+						// listing what they rest on is the honest place for it, and it
+						// is drawn from the same `references` array as the list, so the
+						// two cannot disagree about how many citations there are.
+						references.length === 0 ? null : jsx(MissionEvidenceSpread, { references, zh }, "spread"),
 						references.length === 0 ? null : jsx(MissionReferenceList, { references, zh }, "references"),
 						jsxs("div", {
 							style: { display: "flex", alignItems: "center", gap: SPACE.sm, margin: "0 0 10px" },

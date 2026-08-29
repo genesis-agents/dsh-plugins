@@ -4877,3 +4877,187 @@ test("the report's headings carry the accent, and only the report's", () => {
     "the accent is no longer blue-700 light / blue-400 dark, so the heading tint is off the one ramp — and #1d4ed8 measures 6.70:1 on white and #60a5fa 6.98:1 on #111827, which is the budget a heading in it was chosen against",
   );
 });
+
+test("the report says where its citations come from, and never invents a site", () => {
+  // A bibliography prints in the order the prose numbers it, which is the one
+  // order that hides concentration: five entries from one host at [3], [17],
+  // [22], [40] and [48] read down the column as five sources. Both halves of
+  // the answer were already on this side of the wire — `missionReferences`
+  // joins `artifact.citations` to `artifact.evidence` on `findingId`, and the
+  // host on every joined row is `mission_findings.source_host` frozen into the
+  // artefact at s12 — and the pane spent the whole of it as a four-word hint
+  // on one tile. This is that join, drawn.
+  assert.ok(SOURCE.includes("function MissionEvidenceSpread("), "the evidence-spread figure is gone");
+  const figure = code(body("function MissionEvidenceSpread("));
+
+  // THE HOST IS READ, NEVER DERIVED. `missionReferences` already falls back to
+  // `hostOf(url)` once, for an index the evidence blob does not carry; a
+  // second fallback here would silently re-home the citations the first one
+  // gave up on, and a guessed host is indistinguishable on screen from a
+  // measured one — the trade `#libraryFactsFor` refuses one file away.
+  assert.ok(figure.includes("entry.host"), "the figure stopped reading the host off the reference row");
+  assert.ok(
+    !figure.includes("hostOf("),
+    "the figure derives a host of its own, so a citation the join could not place is drawn as if it had been placed",
+  );
+
+  // AND A CITATION WITH NO HOST IS ITS OWN ANSWER, not a site named "". "We
+  // cannot tell where this came from" and "one more page on this site" are
+  // different sentences and only one of them is about sourcing.
+  assert.ok(
+    figure.includes('entry.host === "" ? null :'),
+    "a citation whose frozen evidence carries no source_host is bucketed as a site called empty-string, so it sorts into the chart as though it were one",
+  );
+
+  // NOTHING IS DROPPED FOR SPACE. Eight bars and then a line carrying the
+  // tail's own count: a chart that quietly ends at eight reports a NARROWER
+  // evidence base than the run has, which on this figure is the one direction
+  // the error must never go.
+  assert.match(
+    figure,
+    /const folded = named\.slice\(8\);/,
+    "the host list is truncated instead of folded into a row that still carries its count",
+  );
+  assert.ok(
+    figure.includes("folded.length === 0 ? null :"),
+    "the remainder line is drawn on a run that has no remainder, which prints 另外 0 个站点 — the same defect as the chip that printed three zeros on a clean section",
+  );
+
+  // THE BAR IS THE ONE BAR. Five hand-drawn tracks is what `Meter` replaced,
+  // and a chart is the most tempting place in this file to draw a sixth.
+  assert.ok(figure.includes("Meter({"), "the figure draws its own track");
+
+  // THE SCALE IS THE BIGGEST BAR AND THE SHARE IS SAID IN WORDS. Against the
+  // total, eighteen hosts draw eighteen stubs and the distribution — the whole
+  // reason to draw this rather than print the host count — disappears.
+  assert.ok(
+    figure.includes("max: widest"),
+    "every bar is measured against the citation total again, so a well-sourced report draws a row of stubs and reads as a broken chart",
+  );
+
+  // THE CAPTION IS THE CLAIM, in the counts the bars are drawn from, so a
+  // reader who doubts the sentence can check it against the rows underneath.
+  // A caption reading 引用来源分布 is a title and tells them nothing they
+  // cannot already see.
+  assert.ok(
+    figure.includes("named[0].cites"),
+    "the caption stopped stating the top host's own count, so it is a title again rather than the finding the figure is evidence for",
+  );
+
+  // MOUNTED, and from the same array as the list below it: two host counts on
+  // one page is the shape this file has paid for four times.
+  assert.match(
+    code(body("function MissionReport(")),
+    /jsx\(MissionEvidenceSpread, \{ references, zh \}, "spread"\)/,
+    "the figure exists and nothing mounts it, which is the state the projector's own `chapters` key sat in for a release",
+  );
+});
+
+test("a chapter card shows the chapter's own opening words", () => {
+  // The reference's 章节视图 is a list of CARDS: a mark, "第 9 章: 北美创业公司版图",
+  // and THREE CLAMPED LINES of the chapter's own opening text. Ours was a table
+  // of contents — one line, an ordinal, a heading, two figures — so a reader
+  // choosing between ten chapters could only choose between ten titles.
+  //
+  // AND THE PREVIEW IS NOT A NEW FIELD. `sections[i].start/end` are offsets into
+  // the markdown this component already holds for `readSlice`, written by
+  // `assemble`, asserted there against the string they index, and re-checked by
+  // contentGuard's section-offset test. A `preview` column written by s12 would
+  // be a second copy of those words crossing the store, the projection and the
+  // route — the hop-by-hop defect this file exists to catch — and it would be
+  // missing from every artefact already on disk.
+  assert.ok(SOURCE.includes("function missionChapterPreview("), "the preview is gone, so the chapter list is a table of contents again");
+  const preview = code(body("function missionChapterPreview("));
+  assert.match(preview, /section\?\.start/, "the preview no longer cuts at the section's own offset, so it previews the whole report or the wrong chapter");
+  assert.ok(!/\.preview/.test(preview), "the preview reads a stored field: a second copy of the chapter's opening that no offset check covers");
+  assert.match(preview, /start \+ 1200/, "the preview cleans the whole chapter — twenty thousand characters through four regexes, once per row, on every click");
+
+  const report = code(body("function MissionReport("));
+  assert.ok(report.includes("missionChapterPreview("), "the chapter list draws no preview");
+  assert.ok(report.includes("clampBox(3)"), "the preview is unclamped, so one chapter's opening paragraph pushes the next nine cards off the screen");
+  assert.match(report, /第 \$\{at \+ 1\} 章/, "the card lost its ordinal, which is how a reader refers to a chapter at all");
+  // AND THE TWO FIGURES SURVIVE THE REDRAW. They are the section's own columns
+  // and the only per-chapter numbers this screen has ever carried.
+  assert.ok(report.includes("section.wordCount"), "the word-count chip is gone, and it is the one figure that says what a chapter costs to read");
+  assert.ok(report.includes("section.citationCount"), "the chapter list drops the citation count, which is why a reader picks one");
+});
+
+test("the mark on a chapter card is a measurement, not a tick on every row", () => {
+  // The reference draws a green tick on every chapter in the list. On our data
+  // that mark would say nothing: a chapter that reached the artefact was
+  // assembled by definition, so a tick on all of them is decoration a reader
+  // reads as a verdict — the same clean bill the empty-scorecard branch in this
+  // very component refuses to give a report nobody checked.
+  //
+  // WHAT WE DO HOLD PER CHAPTER is the citation join. `assemble` stamps every
+  // citation with the `dimensionId`/`chapterIndex` it came from, and the frozen
+  // evidence rows carry `verifyState`. So the mark counts how much of THIS
+  // chapter held up — which is also the one thing the scorecard above cannot
+  // say. Its docblock splits by section TYPE precisely so that "chapter seven
+  // cites nothing" stays visible, and the card is where it becomes visible.
+  assert.ok(SOURCE.includes("function missionChapterVerified("), "the per-chapter verified count is gone, so the card's mark has nothing behind it");
+  const marks = code(body("function missionChapterVerified("));
+  assert.match(marks, /chapterIndex/, "the count no longer keys on the chapter a citation belongs to, so every chapter is drawn with the whole report's number");
+  assert.match(marks, /startsWith\("verified"\)/, "the count stopped reading the verify state, so a rate-limited fetch counts as a checked quote");
+
+  const report = code(body("function MissionReport("));
+  assert.match(
+    report,
+    /missionRateHue\(verified, section\.citationCount\)/,
+    "the chapter mark takes a fixed hue, so a chapter whose citations all failed is drawn exactly like one whose citations all held",
+  );
+  assert.match(
+    report,
+    /name: section\.citationCount === 0 \? "minus" :/,
+    "the glyph is unconditional, which is the reference's decorative tick reintroduced as a verdict",
+  );
+  assert.match(
+    report,
+    /section\.citationCount === 0 \? TONE\.neutral/,
+    "a chapter that cites nothing is graded, and 0/0 grades green: the one reading the scorecard exists to refuse",
+  );
+});
+
+test("the report's toolbar carries what we hold, and refuses the control we do not", () => {
+  // The reference's report toolbar is a segmented control on the left and FOUR
+  // controls on the right: 报告分析 (51), 版本历史 (v1), 导出报告, 原始数据.
+  //
+  // TWO OF THE FOUR ARE ONE FRAME UP AND STAY THERE. 导出报告 and 原始数据 are
+  // `report.md` and `report.json` in MissionDetail's 导出 menu, and MissionReport's
+  // own docblock records the reason: the version on screen has to ride in the
+  // query, and a second download control in the pane is a second place for a
+  // reader looking at v1 to be handed v3.
+  //
+  // ONE OF THE FOUR WE DO NOT HAVE AT ALL. 报告分析 counts 51 of something this
+  // pipeline does not produce — there is no analysis table among the fifteen in
+  // lib/mission-store.js and no artefact field with a count that means it.
+  // Pointing the control at `citations.length` or `evidence.length` would be a
+  // label attached to the nearest available number, and both of those are
+  // already printed in the meta line. An empty control is worse than none.
+  const report = code(body("function MissionReport("));
+  assert.ok(!report.includes("报告分析"), "报告分析 is back, and nothing in this pipeline produces the number it would carry");
+
+  // AND THE ONE WE DO HOLD MOVED INTO THE TOOLBAR. `listArtifactVersions` is
+  // 版本历史; its chips used to sit in a band of their own above the title, which
+  // that block's own comment already described as a pill parked at the far right.
+  assert.match(report, /versions\.length <= 1 \? null : jsxs\("div"/, "the version switcher is not in the toolbar");
+  assert.ok(
+    !report.includes("back === null && versions.length <= 1"),
+    "the version band above the title is back, so the report has two version controls or one three blocks from the prose it changes",
+  );
+  // AND THE STRIP IS NOT THE ROW'S ONLY REASON TO EXIST. A one-chapter report
+  // with three versions had nowhere at all to put its switcher.
+  assert.match(
+    report,
+    /readSections\.length < 2 && versions\.length <= 1 \? null/,
+    "the toolbar disappears on a single-chapter report, taking the version switcher with it",
+  );
+  // AND THE META LINE NAMES THE VERSION, ALWAYS. It printed the version only
+  // when there was exactly one, on the reasoning that the chips said it
+  // otherwise — and with the chips below the scorecard that left the top of a
+  // three-version report naming every fact about the artefact except which one.
+  assert.ok(
+    !report.includes('versions.length > 1 ? "" :'),
+    "the meta line drops the version whenever there is more than one, which is exactly when a reader needs it",
+  );
+});

@@ -3131,3 +3131,28 @@ test("a chapter left unwritten by a run that ended says so, and is never reporte
     "the chapter the projector had to sweep is repaired silently, so nothing on the screen says the write loop left without recording a decision",
   );
 });
+
+test("the frozen evidence keeps the host every later reader groups by", () => {
+  // THE HOP THAT FAILS SILENTLY. `mission_findings.source_host` is the
+  // independence key this whole pipeline is built on — `uniqueHosts` counts
+  // it and s7 divides it by two to cap the chapter count — and the report
+  // pane can only ever see it through the copy `freezeEvidence` writes into
+  // `mission_artifacts.evidence`. Drop it there and NOTHING THROWS: the
+  // artefact still writes, the bibliography still prints every row, and the
+  // report's host figure reports that every citation in the run came from
+  // nowhere. That is the defect shape this repo keeps finding — a field that
+  // survives four hops and not the fifth — and it is only checkable here,
+  // because the wire carries whatever this function put on it.
+  const back = readFileSync(new URL("../lib/mission-stages-back.js", import.meta.url), "utf8");
+  const at = back.indexOf("function freezeEvidence(");
+  assert.notEqual(at, -1, "freezeEvidence is gone, so the artefact carries no provenance at all");
+  const rows = back.slice(at, back.indexOf("\n}", at));
+  for (const [field, loss] of [
+    ["findingId: finding.id", "the key the citations are joined on, without which the bibliography is a column of bare urls"],
+    ["sourceHost: finding.sourceHost", "the host every later reader groups by, and the column the independence model is denominated in"],
+    ["sourceUrl: finding.sourceUrl", "the address a reader opens to check the quote"],
+    ["verifyState: finding.verifyState", "what checking this quote actually established"],
+  ]) {
+    assert.ok(rows.includes(field), `freezeEvidence no longer carries ${loss}`);
+  }
+});
