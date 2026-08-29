@@ -864,7 +864,7 @@ window.__ModuleLoader__.load({
 			// and nothing else, so the only place to put a form that is not a
 			// page was the page — which is how the create form came to sit
 			// permanently expanded above every mission in the list. The scrim's
-			// colour and blur are COPIED from `.swt-drawer`'s rather than chosen
+			// colour and blur are COPIED from `.swm-drawer-scrim`'s rather than chosen
 			// again: two overlays a shade apart read as two products, and a
 			// source test now holds the two alphas equal so they cannot drift.
 			//
@@ -886,7 +886,19 @@ window.__ModuleLoader__.load({
 			// box with the scroll on the body is what keeps the title and the way
 			// out reachable on a short window — a dialog that scrolls as a whole
 			// puts its close control off the bottom of a laptop screen.
-			`.swm-modalbody{min-height:0;overflow-y:auto;padding:${SPACE.lg}}`
+			`.swm-modalbody{min-height:0;overflow-y:auto;padding:${SPACE.lg}}`,
+			// THE DRAWER'S SHELL, moved here off TRACE_CSS. The three rules are
+			// unchanged from the ones they replace — this is a change of SHEET, not
+			// of geometry, and the alphas below are the ones the scrim test holds
+			// equal to the dialog's.
+			".swm-drawer-scrim{position:fixed;inset:0;z-index:40;display:flex;justify-content:flex-end;background:rgba(0,0,0,0.30);backdrop-filter:blur(2px)}",
+			`.swm-drawer{display:flex;height:100%;width:100%;max-width:672px;flex-direction:column;overflow:hidden;border-left:1px solid ${LINE.rule};background:var(--dsw-alias-bg-layer-0);box-shadow:var(--dsw-shadow-lv3)}`,
+			// The trajectory's own pane, when it is the drawer's whole contents
+			// rather than a third of the trace tab. It travels with the shell
+			// because it is a property of being INSIDE a drawer, not of being a
+			// pane, and the descendant selector outranks `.swt-pane`'s own width
+			// whichever sheet lands first.
+			".swm-drawer .swt-pane{width:100%;max-width:none;border-left:0;height:100%}"
 				].join("");
 
 		/**
@@ -9001,9 +9013,24 @@ window.__ModuleLoader__.load({
 			`.swt-code .k{color:rgb(${PALETTE.blue})}`,
 			`.swt-code .s{color:rgb(${PALETTE.green})}`,
 			`.swt-code .n{color:rgb(${PALETTE.amber})}`,
-			".swt-scrim{position:fixed;inset:0;z-index:40;display:flex;justify-content:flex-end;background:rgba(0,0,0,0.30);backdrop-filter:blur(2px)}",
-			`.swt-drawer{display:flex;height:100%;width:100%;max-width:672px;flex-direction:column;overflow:hidden;border-left:1px solid ${LINE.rule};background:var(--dsw-alias-bg-layer-0);box-shadow:var(--dsw-shadow-lv3)}`,
-			".swt-drawer .swt-pane{width:100%;max-width:none;border-left:0;height:100%}",
+			// THE DRAWER'S SHELL IS GONE FROM THIS SHEET and is `.swm-drawer` on
+			// SWM_RULES now. It is the third time this file has had to make this
+			// move and the first time the move was worth a whole screen.
+			//
+			// `.swt-scrim` and `.swt-drawer` carried position, ground, width cap,
+			// right edge and elevation for EVERY drawer in this tab — the
+			// trajectory's, the stage's and the dimension's — while shipping on the
+			// sheet `ensureTraceStyle` injects. Two call sites inject it:
+			// `MissionTrace` and `MissionStageDetail`. Neither is on the path from
+			// 信源 or from the task board to `MissionDimensionDrawer`, so a dimension
+			// opened before anybody had touched a trajectory or a stage got
+			// `position:static`, no ground, no max-width and no right edge: the
+			// drawer rendered as a bare block in the page flow — and then rendered
+			// correctly for the rest of the session the moment somebody opened a
+			// stage, which is the shape of bug nobody can reproduce on demand.
+			//
+			// That is the defect the tab strip recorded above and the one
+			// `.swm-modal-scrim` was written onto the other sheet to avoid.
 			// `currentColor`, WHERE THIS HARD-CODED THE SUCCESS GREEN. One rule
 			// with one colour served two opposite things: the verbatim quote
 			// behind a finding — which may be REFUTED — and the sentence a stage
@@ -10282,12 +10309,12 @@ window.__ModuleLoader__.load({
 
 			if (open !== true) return null;
 			return jsx("div", {
-				className: "swt-scrim",
+				className: "swm-drawer-scrim",
 				role: "dialog",
 				"aria-modal": "true",
 				onClick: () => { onClose?.(); },
 				children: jsx("div", {
-					className: "swt-drawer",
+					className: "swm-drawer",
 					onClick: (event) => { event.stopPropagation(); },
 					children
 				})
@@ -11014,6 +11041,13 @@ window.__ModuleLoader__.load({
 				return () => { alive = false; };
 			}, [missionId, stage.stepId]);
 			const face = missionFace(MISSION_STAGE_STATUS_FACES, stage.status, zh);
+			// WHETHER THIS STEP EVER RAN, which is the only fact that separates a 0
+			// that is a measurement from a 0 that is a seed. `projectStages` writes
+			// `tokens: 0` and `calls: 0` onto every stage and then ADDS the ledger's
+			// sums onto them, so neither is ever null and the guards below were dead
+			// code: a pending stage drew "令牌 0 · 模型调用 0". `started_at` is the
+			// row's own column and is null until the stage begins.
+			const started = stage.startedAt !== null && stage.startedAt !== undefined && stage.startedAt !== "";
 			const note = stage.degradeNote ?? "";
 			const line = (label, value) => (value === "" || value === null || value === undefined ? null : jsxs("div", {
 				children: [
@@ -11054,6 +11088,17 @@ window.__ModuleLoader__.load({
 									jsx("span", { className: "swt-dot" }, "dot"),
 									jsx("span", { className: "swt-panename", children: missionFace(MISSION_STAGE_FACES, stage.stepId, zh) }, "name"),
 									StageModeChip({ mode: stage.mode ?? null, stepId: stage.stepId, zh }, "mode"),
+									// THE STATE, IN THE HEADER, as a chip. It was a `dd` four
+									// elements down the panel in the same grey as 开始 and 结束, so
+									// the one thing a person opens this drawer to check was the
+									// least visible thing in it. Both other drawers on this screen
+									// already state their subject's state as a chip in their header;
+									// this one now agrees with them.
+									Chip({
+										tone: missionHue(MISSION_STAGE_STATUS_FACES, stage.status),
+										icon: missionIcon(MISSION_STAGE_STATUS_FACES, stage.status),
+										label: face
+									}, "status"),
 									jsx("span", { className: "swt-paneref", children: stage.stepId }, "ref")
 								]
 							}, "title"),
@@ -11068,48 +11113,59 @@ window.__ModuleLoader__.load({
 					jsxs("div", {
 						className: "swt-panebody",
 						children: [
-							// THE THREE FIGURES THIS STEP COST, out of the property list
-							// and above it. `calls` is the one that was nowhere: the
-							// projector has attached it to every stage since the ledger
-							// was wired up and no screen in this file read it, so "this
-							// step took four minutes" was on the page and "it took
-							// eleven model calls to do it" was not.
+							// THE FOUR FIGURES THIS STEP COST, as the reference draws a fact:
+							// a small label over a value, in a box, on a grey ground, four
+							// across. They were three CHIPS — the shape this file reserves for
+							// a STATE — so "11 model calls" and "degraded" were the same
+							// object, and 用时 was drawn twice, once as a chip and once as a
+							// `dd` two elements below it.
 							//
-							// Padded to 14px, which is `.swt-kv>div`'s own horizontal
-							// padding, so the chips start at the same x as the labels
-							// under them instead of at a second margin nobody chose.
-							jsxs("div", {
-								style: { display: "flex", flexWrap: "wrap", gap: SPACE.sm, padding: `${SPACE.sm} 14px 0` },
-								children: [
-									// SHORT ON THE CHIP, EXACT ON THE HOVER — the same
-									// split the roster makes, so one quantity has one
-									// shape wherever it is drawn.
-									stage.tokens === null || stage.tokens === undefined ? null : Chip({
-										tone: TONE.accent, icon: "sparkles",
-										label: zh ? "令牌" : "Tokens",
-										count: missionCompact(stage.tokens),
-										title: String(stage.tokens)
-									}, "tokens"),
-									// EXACT, because 11 calls and 12 calls is a comparison
-									// a person makes between two stages of one run.
-									stage.calls === null || stage.calls === undefined ? null : Chip({
-										tone: TONE.info, icon: "refresh",
-										label: zh ? "模型调用" : "Calls",
-										count: String(stage.calls)
-									}, "calls"),
-									stage.durationMs === null || stage.durationMs === undefined ? null : Chip({
-										tone: TONE.neutral, icon: "clock",
-										label: zh ? "用时" : "Took",
-										count: missionDuration(stage.durationMs, zh)
-									}, "took")
-								]
+							// `calls` IS mission_spend.calls: MODEL calls, not tool calls. The
+							// reference's fourth cell counts tool calls and ours cannot yet —
+							// `mission_tool_calls` carries `step_id` and nothing groups by it —
+							// so the label says which of the two this is rather than borrowing
+							// the reference's word for a different number.
+							//
+							// Padded to 14px, which is `.swt-kv>div`'s own horizontal padding,
+							// so the tiles start at the same x as the labels under them instead
+							// of at a second margin nobody chose.
+							jsx("div", {
+								style: { padding: `${SPACE.sm} 14px 0` },
+								children: MissionStatTiles({ tiles: [
+									// `missionDuration` ANSWERS "" WHEN THERE IS NO NUMBER, and
+									// MetricStat reads "" as the absence — so a stage with no
+									// recorded duration prints the em dash, never `0s`.
+									// THE ONE GENUINELY NULLABLE FIGURE OF THE FOUR. `duration_ms` is
+									// projected as `r.duration_ms == null ? null : ...`, so the absence is
+									// real and arrives here; the other three are counts that start at zero
+									// and mean it. `missionDuration` answers "" for a null of its own now,
+									// and the test stays anyway, at the place that CHOOSES the value —
+									// a tile that depends on a helper three files away to notice its own
+									// hole is a tile that lies the moment the helper changes.
+									{ label: zh ? "用时" : "Took", value: stage.durationMs === null || stage.durationMs === undefined ? null : missionDuration(stage.durationMs, zh) },
+									// AN UNSTARTED STAGE HAS NO SPEND AND ITS 0 IS NOT A
+									// MEASUREMENT. This is the header's `score ?? 0` again, which
+									// handed an unfinished run a failing grade it was never given:
+									// the em dash is this file's word for "not measured", and a
+									// seeded 0 is exactly that.
+									{ label: zh ? "令牌" : "Tokens", value: started ? missionCompact(stage.tokens) : null },
+									// EXACT, not compacted, because 11 calls against 12 is a
+									// comparison a person makes between two stages of one run.
+									{ label: zh ? "模型调用" : "Model calls", value: started ? String(stage.calls) : null },
+									// ATTEMPTS IS NOT SPEND. `mission_stages.attempts` is written by
+									// the runtime whether or not a ledger row followed, so a 0 here
+									// means "not attempted" and must survive as a 0.
+									{ label: zh ? "尝试" : "Attempts", value: String(stage.attempts ?? 0) }
+								] }, "tiles")
 							}, "stats"),
 							jsxs("dl", {
 								className: "swt-kv",
 								children: [
-									line(zh ? "状态" : "Status", face),
-									line(zh ? "尝试" : "Attempts", stage.attempts),
-									line(zh ? "用时" : "Took", stage.durationMs === null || stage.durationMs === undefined ? null : missionDuration(stage.durationMs, zh)),
+									// NO STATUS, ATTEMPTS OR 用时 ROW. All three are stated above
+									// now — the status as a chip in the header, the other two as
+									// tiles — and the same figure twice in one panel is the reader
+									// checking whether they are the same figure, which is the note
+									// the tokens row already carries four lines down.
 									// The owner is the only value in this panel that is a person
 									// rather than a figure, and it was drawn as the same grey
 									// string as 令牌 and 尝试.

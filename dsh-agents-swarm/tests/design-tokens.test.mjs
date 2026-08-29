@@ -1828,8 +1828,11 @@ test("the stage drawer shows what the step did, not only what it is", () => {
   // IN VALUE POSITION. `drawer.includes("stage.calls")` passed with the chip
   // switched off at its own condition — the field survived in a branch that
   // never renders, which is indistinguishable from not reading it at all.
+  // IT IS A TILE NOW, NOT A CHIP, and the assertion moved with it rather than
+  // being deleted: what it was guarding — that `calls` reaches a pixel in VALUE
+  // position and not inside a branch that never renders — is unchanged.
   assert.ok(
-    drawer.includes("count: String(stage.calls)"),
+    drawer.includes("value: started ? String(stage.calls) : null"),
     "`calls` is attached to every stage by the projector and reaches no pixel again: the drawer says a step took four minutes and not that it took eleven model calls to do it",
   );
   assert.ok(
@@ -2737,7 +2740,11 @@ test("the second overlay is the first one's depth, on the sheet the page injects
   };
   const alphaOf = (line) => /rgba\(0,0,0,([\d.]+)\)/.exec(line)?.[1] ?? null;
   const blurOf = (line) => /backdrop-filter:blur\((\d+px)\)/.exec(line)?.[1] ?? null;
-  const drawer = ruleFor(TRACE_RULES, ".swt-scrim{");
+  // ON SHEET_RULES NOW, LIKE THE DIALOG'S. The drawer's shell lived on
+  // TRACE_CSS, which only the trajectory pane and the stage drawer inject —
+  // so the dimension drawer, which is opened from 信源 and from the task
+  // board, drew an unstyled div until somebody happened to open one of them.
+  const drawer = ruleFor(SHEET_RULES, ".swm-drawer-scrim{");
   const dialog = ruleFor(SHEET_RULES, ".swm-modal-scrim{");
   assert.ok(alphaOf(drawer), "the drawer's scrim lost its colour, so there is nothing left to match");
   assert.equal(alphaOf(dialog), alphaOf(drawer), "the dialog's scrim and the drawer's scrim are two different blacks; one product, one overlay depth");
@@ -4417,4 +4424,102 @@ test("an absent duration is an absence, not nought seconds", () => {
     code(body("function MissionTraceRow(")).includes('const took = row.kind === "tool" ? missionLatency(row.ms, zh) : missionDuration(row.ms, zh);'),
     "the trajectory row stopped reading these two functions' own empty answer, so it now carries its own copy of the null test",
   );
+});
+
+test("the drawer's own shell ships on the sheet the page injects", () => {
+  // THE SCREEN THAT RENDERED AS A BLOCK IN THE PAGE FLOW. `.swt-scrim` and
+  // `.swt-drawer` carried position, ground, width cap, right edge and
+  // elevation for EVERY drawer in this tab, and they shipped on TRACE_CSS —
+  // injected by `ensureTraceStyle`, which is called from exactly two places:
+  // MissionTrace and MissionStageDetail. Neither is on the path from 信源 or
+  // from the task board to MissionDimensionDrawer, so a dimension opened
+  // before anybody had touched a trajectory or a stage got an unstyled div,
+  // and then got the real drawer for the rest of the session the moment they
+  // did. A bug that fixes itself after one unrelated click is a bug nobody
+  // can reproduce, which is why this is a source guard and not a bug report.
+  for (const rule of [".swm-drawer-scrim{", ".swm-drawer{"]) {
+    assert.ok(
+      SHEET_RULES.includes(rule),
+      `${rule} is not on the sheet the page injects before first paint, so a drawer opened from a screen that never touches the trajectory renders as a block in the page flow`,
+    );
+    assert.ok(
+      !TRACE_RULES.includes(rule),
+      `${rule} is back on the trajectory sheet, which two of the three drawer mount sites never inject`,
+    );
+  }
+  // AND THE SHELL WEARS THEM. A rule on the right sheet with nothing wearing
+  // it is the same blank screen with a passing test over it.
+  const shell = code(body("function MissionDrawer("));
+  assert.match(shell, /className: "swm-drawer-scrim"/, "the backdrop no longer wears the rule that fixes it over the page and pushes it right");
+  assert.match(shell, /className: "swm-drawer"/, "the sheet no longer wears the rule that gives it a width, a ground, an edge and its elevation");
+  assert.ok(
+    !/swt-/.test(shell),
+    "the drawer shell reaches back into the trajectory's namespace, which is the sheet it is the one component in this file that cannot count on",
+  );
+  // The two call sites that inject TRACE_CSS are still the only two, which is
+  // the fact the move was made against — if a third ever appears the guard
+  // above stops being about anything.
+  assert.equal(
+    code(SOURCE).split("ensureTraceStyle()").length - 1,
+    3,
+    "the number of ensureTraceStyle callers moved; the drawer shell was taken off that sheet precisely because two callers could not cover three mount sites",
+  );
+});
+
+test("the stage drawer's figures are tiles, and an unstarted stage has none", () => {
+  const drawer = code(body("function MissionStageDetail("));
+  // CHIPS ARE FOR STATES. Three of the four figures were chips, so "11 model
+  // calls" and "degraded" were the same object on one panel — and 用时 was
+  // drawn twice, once as a chip and once as a `dd` two elements below it.
+  assert.ok(drawer.includes("MissionStatTiles({ tiles: ["), "the step's figures are chips again, which is the shape this file reserves for a state");
+  assert.ok(!drawer.includes('icon: "sparkles"'), "the tokens chip is back beside the tokens tile, which is the same figure twice on one panel");
+  // THE EM DASH, AND THE FACT IT IS DERIVED FROM. `projectStages` seeds
+  // `tokens: 0` and `calls: 0` on every stage and only ever ADDS the ledger's
+  // sums, so neither is ever null and the old `=== null` guards were dead: a
+  // pending stage drew "令牌 0 · 模型调用 0". This is the header's `score ?? 0`
+  // again — a figure nobody measured, printed as a measurement.
+  assert.match(
+    drawer,
+    /const started = stage\.startedAt !== null/,
+    "nothing separates a 0 that is a measurement from the 0 projectStages seeds, so a stage that has not run reports having spent nothing",
+  );
+  for (const field of ["missionCompact(stage.tokens) : null", "String(stage.calls) : null"]) {
+    assert.ok(drawer.includes(field), `${field} is drawn unconditionally, so an unstarted stage prints a seeded 0 where the file's own word for "not measured" is the em dash`);
+  }
+  // AND THE FIGURES ARE NOT RESTATED BELOW. The property list carried status,
+  // attempts and 用时 as well; the same figure twice in one panel is the reader
+  // checking whether they are the same figure.
+  for (const row of ['line(zh ? "状态"', 'line(zh ? "尝试"', 'line(zh ? "用时"']) {
+    assert.ok(!drawer.includes(row), `${row} is back in the property list beside the tile that replaced it`);
+  }
+  // THE STATE IS IN THE HEADER, where both other drawers on this screen put
+  // theirs. It was a `dd` four elements down in the same grey as 开始 and 结束.
+  assert.ok(
+    drawer.includes('missionHue(MISSION_STAGE_STATUS_FACES, stage.status)'),
+    "the drawer states the stage's status as grey text again, so the one thing a reader opens it to check is the least visible thing in it",
+  );
+});
+
+test("the drawer's 用时 tile tests its own hole", () => {
+  // THE OTHER THREE FIGURES ARE COUNTS THAT START AT ZERO AND MEAN IT.
+  // `duration_ms` is the one that is genuinely nullable — `projectStages`
+  // writes `r.duration_ms == null ? null : ...` — so the absence is real and
+  // it arrives here.
+  //
+  // `missionDuration` answers "" for a null of its own since the em-dash
+  // patch, and this test is at the tile anyway, deliberately: the tile is
+  // where the VALUE IS CHOSEN, and one that depends on a helper three
+  // thousand lines away to notice its own hole is a tile that starts lying
+  // the moment that helper changes. It has changed once already.
+  const drawer = code(body("function MissionStageDetail("));
+  assert.ok(
+    drawer.includes('value: stage.durationMs === null || stage.durationMs === undefined ? null : missionDuration(stage.durationMs, zh)'),
+    "the 用时 tile hands a null straight to missionDuration, so its em dash is somebody else's promise",
+  );
+  // AND THE TINT IS FOR AN EXCEPTION, NOT FOR A ROW. Two of four tiles tinted
+  // is not an exception, it is a pattern with two members — MetricStat's
+  // docblock says the hue is for the figure that is the odd one.
+  const strip = drawer.slice(drawer.indexOf("MissionStatTiles({ tiles: ["));
+  const tinted = strip.slice(0, strip.indexOf("]")).split("tone: TONE.").length - 1;
+  assert.equal(tinted, 0, `${tinted} of the four figure tiles are tinted; the hue is for the exception, and a row where two are exceptional has none`);
 });
