@@ -1177,7 +1177,14 @@ window.__ModuleLoader__.load({
 			const shape = pill === true ? pillStyle(hue, wide ? "md" : "sm") : {
 				font: wide ? FONT.smallStrong : FONT.microStrong,
 				display: "inline-flex", alignItems: "center", boxSizing: "border-box",
-				gap: SPACE.xs, padding: wide ? "2px 8px" : "1px 6px",
+				// ONE PIXEL OF AIR AT BOTH STEPS, SO THE CORNER IS THE ONLY DIFFERENCE
+				// LEFT. `pillStyle` pads its 12px step `1px ${SPACE.sm}` and this padded
+				// the same step `2px 8px` over the same `600 12px/16px`, so a category
+				// chip stood 20px tall beside an 18px state pill. The docblock above says
+				// the shape carries the meaning and names the corner as the shape; a
+				// second, undecided difference in height says it twice and disagrees once.
+				// The narrow step already agreed at `1px 6px`; this is the half that did not.
+				gap: SPACE.xs, padding: wide ? `1px ${SPACE.sm}` : "1px 6px",
 				borderRadius: RADIUS.sm,
 				background: `rgba(${hue},${TINT.soft})`,
 				color: `rgb(${hue})`,
@@ -5058,7 +5065,7 @@ window.__ModuleLoader__.load({
 												style: { marginBottom: "24px" },
 												children: [
 													jsx("h1", {
-														style: { font: FONT.displayStrong,
+														style: { font: FONT.display,
 															margin: "0 0 12px",
 															letterSpacing: "-0.025em", color: INK.primary
 														},
@@ -6145,6 +6152,45 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		* HOW MUCH OF THIS DIMENSION HELD UP, drawn once for the two screens that draw it.
+		*
+		* TWO SHAPES FOR ONE MEANING. The task board's status cell and this
+		* drawer's header report the same fact from the same two numbers, and they
+		* reported it in two shapes: identical three-rung ladder, identical pair of
+		* bilingual labels, and only one of them drew the mark. TONE.success and
+		* TONE.warn are exactly the pair a reader who cannot separate two tints has
+		* nothing else to go on for, which is why `every state carries a mark as
+		* well as a colour` is a guard in this file at all — and the board's copy
+		* was the one without it.
+		*
+		* THE FLOOR ARRIVES ALREADY DECIDED, and that is deliberate. The board's
+		* floor is absent when it is `null` or `undefined`; the drawer's is absent
+		* unless it is finite and above nought. Two different tests for "there is no
+		* bar yet", both correct for their own source, so this takes the answer and
+		* does not derive a third one. A null floor is NEUTRAL and carries NO mark:
+		* `?? 0` here would be the same defect as printing `/0`, a dimension drawn
+		* green for having beaten nothing.
+		* @param props - `{verified, floor, zh}` — `floor` null when s3 has not derived one.
+		* @param key - React's key, so it can be called straight into a list.
+		* @returns the chip, or null when nothing has been counted yet.
+		*/
+		function VerifiedChip({ verified, floor, zh }, key) {
+			if (verified === undefined || verified === null) return null;
+			const hasFloor = floor !== undefined && floor !== null;
+			const over = hasFloor && verified >= floor;
+			return Chip({
+				tone: !hasFloor ? TONE.neutral : over ? TONE.success : TONE.warn,
+				icon: !hasFloor ? undefined : over ? "check" : "alert",
+				// The WORD stays beside the figure rather than being replaced by the
+				// tick: the glyph is aria-hidden, so a chip reading only "1/3" is a
+				// fraction of nothing to anyone not looking at it.
+				label: hasFloor
+					? (zh ? `已核验 ${verified}/${floor}` : `${verified}/${floor} verified`)
+					: (zh ? `已核验 ${verified}` : `${verified} verified`)
+			}, key);
+		}
+
+		/**
 		* One tool door as a chip: its word, its mark, its colour and its tally.
 		*
 		* An unlisted id keeps its slug and takes the wrench, which is the same
@@ -7185,11 +7231,20 @@ window.__ModuleLoader__.load({
 					// second time twelve pixels below it, with the tab's count beside it
 					// twice as well. Passing no title now costs no row rather than an empty
 					// one, and the tab stays the only place the pane is named.
-					title === undefined || title === null || title === ""
-						? (action === undefined || action === null ? null : jsxs("div", {
-							style: { display: "flex", alignItems: "center", gap: SPACE.sm, justifyContent: "flex-end" },
-							children: [action]
-						}, "head"))
+					// AND A COUNT AND AN ACTION ARE SOMETHING. The title-less branch
+					// used to render `action` alone, in a flex row with no rule under it
+					// and nowhere for `count` to go, which cost the task board both: its
+					// tally floated over the top edge of its own table with nothing
+					// joining the two, and `display.length` — the number the board's
+					// closing note calls the entire reason it mounts its own panel —
+					// reached the screen nowhere at all. ONE header row now, drawn when
+					// any of the three exists and skipped when none does. `title` gates
+					// the `h3` and nothing else, so a pane is still named once, by its
+					// tab, and the bar it does not name still belongs to its table.
+					(title === undefined || title === null || title === "")
+						&& !Number.isFinite(count)
+						&& (action === undefined || action === null)
+						? null
 						:
 					jsxs("div", {
 						// NO `flexWrap`, and `center` rather than `baseline`. Wrapping
@@ -7201,7 +7256,10 @@ window.__ModuleLoader__.load({
 							borderBottom: `1px solid ${LINE.rule}`
 						},
 						children: [
-							jsx("h3", {
+							// THE `h3` IS WHAT `title` GATES, and it is the only thing that
+							// does. A panel with a count and no heading is a bar with a
+							// number in it, which is what the reference draws over a table.
+							title === undefined || title === null || title === "" ? null : jsx("h3", {
 								style: {
 									// A CARD TITLE, NOT A FORM LABEL. 12px uppercase tracked grey is what
 									// a field caption looks like, and these name panels — the reference
@@ -8704,7 +8762,16 @@ window.__ModuleLoader__.load({
 			// into the name column — and the mark is fixed-width, so it is the tag
 			// that has to give. EVIDENCE is the long one and it fits; a longer role
 			// word added later clips instead of breaking the row.
-			`.swt-tag{display:inline-flex;align-items:center;box-sizing:border-box;height:22px;min-width:0;max-width:100%;padding:0 6px;border-radius:${RADIUS.sm};font:${FONT.microStrong};white-space:nowrap;overflow:hidden;text-overflow:ellipsis}`,
+			// AND ITS HEIGHT IS THE CHIP'S TOO. `height:22px` was the last thing left
+			// over from the tag having been drawn by hand: `Chip`'s default step is
+			// 16px of line — `--dsw-font-xxxs-strong-11` is `600 11px/16px` — plus a
+			// pixel of padding top and bottom, so it stands 18px. The RoleChip beside
+			// this tag is in the SAME 96px slot on every one of a hundred rows, and
+			// four pixels between two boxes that touch reads as one of them being
+			// misaligned rather than as two facts. Padding and not a height, for the
+			// reason `TD`'s docblock gives one region over: a box is as tall as what it
+			// has to say plus its air, and the air here is the chip's.
+			`.swt-tag{display:inline-flex;align-items:center;box-sizing:border-box;min-width:0;max-width:100%;padding:1px 6px;border-radius:${RADIUS.sm};font:${FONT.microStrong};white-space:nowrap;overflow:hidden;text-overflow:ellipsis}`,
 			".swt-title{flex:none;width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 12px/16px var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-primary)}",
 			".swt-text{flex:2 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}",
 			".swt-arrow{flex:none;color:var(--dsw-alias-label-caption)}",
@@ -10486,23 +10553,12 @@ window.__ModuleLoader__.load({
 													// the way past. The cell it sits in carries the figures
 													// setting now, from `TD`, where it applies once.
 													style: { marginLeft: SPACE.xs },
-													children: Chip({
-														// A null floor is NEUTRAL, not a bar cleared.
-														// `?? 0` here would be the same defect as
-														// printing `/0`: a dimension whose bar s3 has
-														// not derived yet would be drawn green for
-														// having beaten nothing.
-														tone: node.counts.floor === null || node.counts.floor === undefined
-															? TONE.neutral
-															: node.counts.verified >= node.counts.floor ? TONE.success : TONE.warn,
-														// The WORD stays in the label rather than being
-														// replaced by a tick: the glyph is aria-hidden,
-														// so a chip reading only "1/3" is a fraction of
-														// nothing to anyone not looking at it.
-														label: node.counts.floor === null || node.counts.floor === undefined
-															? (zh ? `已核验 ${node.counts.verified}` : `${node.counts.verified} verified`)
-															: (zh ? `已核验 ${node.counts.verified}/${node.counts.floor}` : `${node.counts.verified}/${node.counts.floor} verified`)
-													})
+													// THE SAME CHIP THE DRAWER DRAWS, and it now draws the same
+													// way. This copy computed the identical ladder and printed it
+													// with no glyph, so success and warn were separated here by
+													// tint alone. The floor is handed over already resolved: null
+													// is what "s3 has not derived a bar" means on this screen.
+													children: VerifiedChip({ verified: node.counts.verified, floor: node.counts.floor ?? null, zh }, "chip")
 												}, "verified")
 											]
 										}, "status"),
@@ -11583,13 +11639,10 @@ window.__ModuleLoader__.load({
 								icon: missionIcon(MISSION_DIMENSION_FACES, detail.state),
 								label: missionFace(MISSION_DIMENSION_FACES, detail.state, zh)
 							}, "state"),
-							verified === null ? null : Chip({
-								tone: !hasFloor ? TONE.neutral : verified >= floor ? TONE.success : TONE.warn,
-								icon: !hasFloor ? undefined : verified >= floor ? "check" : "alert",
-								label: hasFloor
-									? (zh ? `已核验 ${verified}/${floor}` : `${verified}/${floor} verified`)
-									: (zh ? `已核验 ${verified}` : `${verified} verified`)
-							}, "verified"),
+							// `hasFloor` is this screen's own test — finite and above nought —
+							// and it stays here: the board's is a different one and both are
+							// right about their own source. The chip is handed the answer.
+							VerifiedChip({ verified, floor: hasFloor ? floor : null, zh }, "verified"),
 							// IN THE HEADER, NOT AT THE FOOT OF THE BODY. MissionStageDetail
 							// puts its own jump under the rows it summarises, which works
 							// there because that list always has rows. This drawer is at its
@@ -14012,7 +14065,7 @@ window.__ModuleLoader__.load({
 							style: { display: "flex", alignItems: "baseline", gap: SPACE.lg, margin: "0 0 6px" },
 							children: [
 								jsx("h2", {
-									style: { font: FONT.titleStrong, margin: 0, color: INK.primary, flex: 1, minWidth: 0 },
+									style: { font: FONT.title, margin: 0, color: INK.primary, flex: 1, minWidth: 0 },
 									children: artifact.title
 								}, "text"),
 								headline === null ? null : jsxs("div", {

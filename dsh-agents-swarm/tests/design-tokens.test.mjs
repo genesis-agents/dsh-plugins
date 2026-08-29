@@ -1598,16 +1598,34 @@ test("a null floor is refused a number wherever it is drawn", () => {
   // The sentence 门槛还没算出来 and the progress bar went with the card. Both
   // were the card's own prose; the chip states the same refusal by dropping
   // the denominator instead of printing a zero for it.
-  const board = code(body("function MissionTaskBoard("));
+  // AND IT SURVIVED ITS COMPONENT A SECOND TIME. The board and the dimension
+  // drawer drew this chip twice — same three tones, same two labels, one of
+  // them without the glyph — so the refusal is asserted where it is now
+  // written instead of at one of the two call sites.
+  const chip = code(body("function VerifiedChip("));
   assert.match(
-    board,
-    /tone: node\.counts\.floor === null \|\| node\.counts\.floor === undefined\s*\?\s*TONE\.neutral/,
+    chip,
+    /tone: !hasFloor \? TONE\.neutral/,
     "a null floor is graded again. `?? 0` here draws a dimension green for having beaten nothing",
   );
   assert.match(
-    board,
-    /label: node\.counts\.floor === null \|\| node\.counts\.floor === undefined/,
+    chip,
+    /label: hasFloor/,
     "the chip prints a denominator for a floor that has not been derived, which is `/0` in words",
+  );
+  // AND BOTH CALLERS STILL HAND IT A NULL RATHER THAN A NOUGHT. The board's
+  // absent floor is `null`/`undefined`; the drawer's is anything not finite
+  // and above nought. Two tests for "there is no bar yet", both right about
+  // their own source, so the component takes the answer and derives no third.
+  assert.match(
+    code(body("function MissionTaskBoard(")),
+    /floor: node\.counts\.floor \?\? null/,
+    "the board hands the chip a raw floor, so an undefined one comes back as a denominator",
+  );
+  assert.match(
+    code(body("function MissionDimensionDrawer(")),
+    /floor: hasFloor \? floor : null/,
+    "the drawer hands the chip a floor of 0, which is the `/0` this guard exists to refuse",
   );
 });
 
@@ -3852,4 +3870,150 @@ test("a table cell has room for two lines", () => {
   const td = SOURCE.slice(SOURCE.indexOf("const TD = {"), SOURCE.indexOf("};", SOURCE.indexOf("const TD = {")));
   assert.ok(!/height: "30px"/.test(td), "TD pins a fixed 30px height again, which crushes the two-line name cell");
   assert.ok(td.includes("padding: `10px ${SPACE.sm}`"), "TD has no vertical padding, so its rows hug their content the way a log does");
+});
+
+test("a category and a state differ in the corner and in nothing else", () => {
+  // The shape IS the meaning here: a CATEGORY takes RADIUS.sm, a STATE takes
+  // RADIUS.pill, and both docblocks say so. What neither said, and what was
+  // true, is that the two also differed in height. Over the same
+  // `600 12px/16px`, `pillStyle`'s wide step padded `1px ${SPACE.sm}` for 18px
+  // and `Chip`'s wide step padded `2px 8px` for 20px — a second difference on
+  // top of the one that was decided, and the narrow step had agreed at
+  // `1px 6px` all along.
+  const chip = code(body("function Chip("));
+  const pill = code(body("function pillStyle("));
+  assert.ok(
+    chip.includes("padding: wide ? `1px ${SPACE.sm}`"),
+    "the chip pads its wide step by hand again, so a category stands two pixels taller than the state pill beside it",
+  );
+  assert.ok(
+    pill.includes("padding: `1px ${SPACE.sm}`"),
+    "pillStyle's wide step moved and the chip that was matched to it did not",
+  );
+  assert.ok(chip.includes('"1px 6px"'), "the chip's narrow step no longer matches the pill's, which is the half that was never wrong");
+  assert.ok(pill.includes('padding: "1px 6px"'), "pillStyle's narrow step no longer matches the chip's");
+  assert.equal(
+    [...chip.matchAll(/"2px 8px"/g)].length,
+    0,
+    "`2px 8px` is back in the chip: it is one of the five paddings that drew one chip, and it is a pixel from the next one",
+  );
+});
+
+test("the panel header is one bar, and a count with no title still sits in it", () => {
+  // ONE HEADER SHAPE, not two. The title-less branch was a second flex row —
+  // `action` alone, no rule under it, and nowhere for `count` to go — so the
+  // task board's tally floated over the top edge of its own table with nothing
+  // joining the two, and `display.length`, the number the board's closing note
+  // calls the entire reason it mounts its own panel, reached the screen
+  // nowhere at all: MissionPanel took the prop and then dropped it whenever
+  // the title was absent, which is exactly when the board passes it.
+  const panel = code(body("function MissionPanel("));
+  const heads = panel.split('}, "head")').length - 1;
+  assert.equal(
+    heads,
+    1,
+    `the panel draws ${heads} header rows; a count and an action must land in the same bar as a title, under the same rule`,
+  );
+  // AND THE BAR IS SKIPPED ONLY WHEN ALL THREE ARE ABSENT. Gating the row on
+  // the title alone is what dropped the count, and it is the one-character
+  // regression: the title may gate the `h3` and nothing else.
+  assert.match(
+    panel,
+    /!Number\.isFinite\(count\)\s+&& \(action === undefined \|\| action === null\)/,
+    "the header row is gated on the title again, so a panel with a count and no heading prints neither the number nor the rule that joins the bar to its table",
+  );
+  assert.match(
+    panel,
+    /title === undefined \|\| title === null \|\| title === "" \? null : jsx\("h3"/,
+    "the `h3` renders unconditionally, so a title-less panel prints an empty heading where the reference prints nothing",
+  );
+  // THE DIVIDER IS `LINE.rule` AND IS DRAWN ONCE. The bar and the table are
+  // siblings inside one card, which is what `rule` is for; `hair` is the
+  // card's own outer edge and drawing it here would be the outer edge twice.
+  const rules = panel.split("borderBottom: `1px solid ${LINE.rule}`").length - 1;
+  assert.equal(rules, 1, `the header's divider is drawn ${rules} times, and there is one header`);
+  assert.ok(
+    !panel.includes("borderBottom: `1px solid ${LINE.hair}`"),
+    "the bar is divided from its table with the container's outer edge weight, which is a frame drawn inside a frame",
+  );
+});
+
+test("the trajectory's kind tag is the chip its own comment says it is", () => {
+  // The rule's docblock reads "THE GEOMETRY IS THE CHIP'S; THE COLOUR NOW IS
+  // TOO". The colour was; the geometry was not. `.swt-tag` pinned
+  // `height:22px` while a Chip at the same font sizes itself: 16px of line
+  // (`--dsw-font-xxxs-strong-11` is `600 11px/16px`) plus 1px of padding top
+  // and bottom, which is 18px. Both live in the SAME 96px `.swt-tagslot` — the
+  // kind tag and the role mark, side by side on every row of the densest
+  // screen in the tab — so the four pixels are not a difference anyone has to
+  // hunt for.
+  const tag = TRACE_RULES.split(String.fromCharCode(10)).find((line) => line.includes(".swt-tag{"));
+  assert.ok(tag !== undefined, "the trajectory's kind tag rule is gone");
+  assert.ok(
+    !/height:\d/.test(tag),
+    "the kind tag pins a height of its own again, so it stands four pixels taller than the role chip it touches",
+  );
+  assert.ok(
+    tag.includes("padding:1px 6px"),
+    "the kind tag no longer takes the chip's own padding, which is the only thing left deciding how tall it is",
+  );
+  // AND THE CHIP IT IS MATCHED TO HAS NOT MOVED UNDER IT. The two numbers
+  // agree by being written twice, four thousand lines apart, so a guard that
+  // holds only one end holds neither.
+  assert.ok(
+    code(body("function Chip(")).includes('"1px 6px"'),
+    "Chip's narrow step moved and the tag rule that was matched to it did not",
+  );
+});
+
+test("one verified count, and it carries its mark on both screens", () => {
+  // THE PUREST TWO-SHAPES-FOR-ONE-MEANING left on the board. The task board's
+  // status cell and the dimension drawer's header answer the same question
+  // from the same two numbers — how much of this dimension held up, against
+  // the floor s3 derived for it — and they answered it twice: the identical
+  // three-rung ladder, the identical pair of bilingual labels, written out in
+  // full 1,100 lines apart. The one difference was the glyph, and the copy
+  // that had it was the drawer. TONE.success against TONE.warn is exactly the
+  // pair "every state carries a mark as well as a colour" exists for, so on
+  // the board a dimension over its floor and one under it were two tints and
+  // nothing else.
+  assert.ok(SOURCE.includes("function VerifiedChip("), "the verified chip is written out at each of its call sites again");
+  const chip = code(body("function VerifiedChip("));
+  assert.match(
+    chip,
+    /icon: !hasFloor \? undefined : over \? "check" : "alert"/,
+    "the verified chip drops its mark, which is what the board's copy had already done: success and warn separated by tint alone",
+  );
+  // COUNTED, NOT MERELY PRESENT. A component beside one surviving copy is a
+  // third drawing of the same three tones, and a mutation proved an
+  // `includes` on the component alone passes with either call site reverted.
+  const ladders = [...SOURCE.matchAll(/verified >= (?:node\.counts\.)?floor \? TONE\.success : TONE\.warn/g)].length;
+  assert.equal(
+    ladders,
+    0,
+    `${ladders} call sites still grade a verified count themselves, which is the copy VerifiedChip was extracted to be instead of`,
+  );
+  for (const caller of ["function MissionTaskBoard(", "function MissionDimensionDrawer("]) {
+    assert.ok(code(body(caller)).includes("VerifiedChip({"), `${caller} draws its own verified chip again`);
+  }
+});
+
+test("every FONT step named at a call site is one FONT declares", () => {
+  // `FONT.titleStrong` and `FONT.displayStrong` were both written and neither
+  // exists: FONT.title is already 600 and FONT.display is already 700, so a
+  // `Strong` suffix on either names a member that could never have been there.
+  // Nothing threw — React drops a style key whose value is `undefined` — so the
+  // report's <h2> and the article reader's <h1> rendered with no `font` at all
+  // and fell back to the UA's `1.5em` and `2em bold`: a multiple of a size the
+  // harness sets and this file does not control. Two of the twelve steps had a
+  // typo standing in for them, on the two largest headings in the tab, and the
+  // point of a scale is that its members can be checked.
+  const declared = new Set([...scale("FONT").matchAll(/(\w+): "/g)].map(([, name]) => name));
+  const unknown = [...new Set([...SOURCE.matchAll(/\bFONT\.(\w+)/g)].map(([, name]) => name))]
+    .filter((name) => !declared.has(name));
+  assert.deepEqual(
+    unknown,
+    [],
+    `FONT.${unknown.join(", FONT.")} is not a step FONT declares, so it renders as \`font: undefined\` and the element takes the browser's default heading size instead of the scale's`,
+  );
 });
