@@ -3171,8 +3171,14 @@ test("the surface paints in the reference's values, not the harness's", () => {
   // 600 (92), 400 (82), 900 (67); border-gray-200 outside and 100 inside;
   // bg-gray-50; violet for the accent where ours was the harness blue.
   assert.match(SOURCE, /const SWM_THEME = \[/, "the reference's own values are gone from the sheet");
-  const theme = SOURCE.slice(SOURCE.indexOf("const SWM_THEME = ["));
-  const block = theme.slice(0, theme.indexOf("\n"));
+  const theme = SOURCE.slice(SOURCE.indexOf("const SWM_THEME = ["), SOURCE.indexOf("const SWM_SHEET"));
+  // THE LIGHT BLOCK ONLY. The dark block redeclares the same names with the
+  // dark corrections, so a search across both finds whichever came last —
+  // which is how a "did it drift?" guard becomes a coin toss. This read was
+  // one line long because the constant was one line; it is bounded now
+  // because the constant is not.
+  const darkAt = theme.indexOf("body[data-ds-dark-theme] .swm-page{");
+  const block = darkAt < 0 ? theme : theme.slice(0, darkAt);
 
   for (const [name, value] of [
     ["--dsw-alias-label-primary", "#111827"],   // gray-900
@@ -3738,5 +3744,42 @@ test("every onOpenSource call passes the keys the reader reads", () => {
       assert.ok(READS.includes(key), `onOpenSource is passed \`${key}\`, which MissionSourceReader never reads: ${call[0]}`);
     }
     assert.ok(keys.includes("sourceUrl"), `onOpenSource call omits sourceUrl, so the reader's header and live link are undefined: ${call[0]}`);
+  }
+});
+
+test("the page declares every variable it reads, in both themes", () => {
+  // WHY THIS IS "ALL OF THEM" AND NOT "THE BROKEN ONES".
+  //
+  // Counted off the running build: the served app reads 60 distinct `--dsw-*`
+  // variables and defines exactly ONE. The token sheet that would define the
+  // rest is not shipped, and the harness's own boot screen only survives that
+  // by writing a fallback into every single reference. So this block is not an
+  // override layer, it is the palette — and `SURFACE.card`, which is
+  // `var(--dsw-specific-menu)`, had no value at all: unresolved with no
+  // fallback makes the declaration invalid at computed-value time, so every
+  // card took `transparent` and showed the grey behind it. Twelve more names
+  // were in that state, silently, because a missing variable does not
+  // complain — it just takes the initial value.
+  const theme = SOURCE.slice(SOURCE.indexOf("const SWM_THEME"), SOURCE.indexOf("const SWM_SHEET"));
+  const darkAt = theme.indexOf("body[data-ds-dark-theme] .swm-page{");
+  assert.ok(darkAt > 0, "SWM_THEME has no dark block: a light-only override on .swm-page paints near-black text on a dark ground");
+
+  const declared = (text) => new Set([...text.matchAll(/(--dsw-[a-z0-9-]+):/g)].map((m) => m[1]));
+  const light = declared(theme.slice(0, darkAt));
+  const dark = declared(theme.slice(darkAt));
+
+  // Every variable read without a fallback must be declared. A fallback is the
+  // other honest answer, so a `var(--x, #fff)` is allowed to be undeclared.
+  for (const match of SOURCE.matchAll(/var\((--dsw-[a-z0-9-]+)([^)]*)\)/g)) {
+    if (match[2].trim() !== "") continue;
+    assert.ok(light.has(match[1]),
+      `${match[1]} is read with no fallback and never declared: the declaration using it is invalid at computed-value time, and its property silently takes the initial value`);
+  }
+
+  // Every COLOUR the light block sets, the dark block must reset. Sizes,
+  // radii and font shorthands are theme-independent and stay in light only.
+  for (const match of theme.slice(0, darkAt).matchAll(/(--dsw-[a-z0-9-]+):(#[0-9a-f]{3,8})/g)) {
+    if (match[1] === "--dsw-static-neutral-00") continue; // white is white in both.
+    assert.ok(dark.has(match[1]), `${match[1]} is a colour set for light only, so dark mode keeps the light value`);
   }
 });

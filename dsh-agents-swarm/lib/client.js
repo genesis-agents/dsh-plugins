@@ -916,7 +916,102 @@ window.__ModuleLoader__.load({
 		* SCOPED TO THIS PAGE, not to `body`. The harness's other tabs are not
 		* this product and must not be repainted by it.
 		*/
-		const SWM_THEME = [".swm-page{", "--dsw-alias-label-primary:#111827;", "--dsw-alias-label-secondary:#4b5563;", "--dsw-alias-label-tertiary:#9ca3af;", "--dsw-alias-bg-layer-0:#ffffff;", "--dsw-alias-bg-layer-1:#ffffff;", "--dsw-alias-bg-layer-2:#f9fafb;", "--dsw-alias-bg-layer-3:#f3f4f6;", "--dsw-alias-interactive-bg-hover:#f9fafb;", "--dsw-alias-border-l1:#f3f4f6;", "--dsw-alias-border-l2:#e5e7eb;", "--dsw-radius-sm:6px;--dsw-radius-md:8px;--dsw-radius-lg:12px;", "--dsw-font-xxxs-11:11px/16px var(--dsw-font-family);", "--dsw-font-xxxs-strong-11:600 11px/16px var(--dsw-font-family);", "--dsw-font-xxs-12:12px/16px var(--dsw-font-family);", "--dsw-font-xxs-strong-12:600 12px/16px var(--dsw-font-family);", "--dsw-font-xs-13:13px/18px var(--dsw-font-family);", "--dsw-font-xs-strong-13:600 13px/18px var(--dsw-font-family);", "--dsw-font-s-14:14px/20px var(--dsw-font-family);", "--dsw-font-s-strong-14:600 14px/20px var(--dsw-font-family);", "--dsw-font-base-16:16px/28px var(--dsw-font-family);", "--dsw-font-base-strong-16:600 16px/28px var(--dsw-font-family);", "--dsw-font-l-20:600 20px/28px var(--dsw-font-family);", "--dsw-font-xl-24:700 24px/32px var(--dsw-font-family);", "--dsw-shadow-lv1:0 1px 2px 0 rgba(0,0,0,0.05);", "--dsw-shadow-lv3:0 4px 6px -1px rgba(0,0,0,0.1),0 2px 4px -2px rgba(0,0,0,0.1);", "}"].join("");
+		/**
+		* THE PAGE'S OWN VALUES FOR EVERY VARIABLE IT READS.
+		*
+		* Not a tweak layer over the host's theme — a complete one. The rule is
+		* the whole point and a test enforces it: EVERY `var(--dsw-...)` this file
+		* reads without a fallback is declared here, in both themes.
+		*
+		* Because the half-measure was visible, and the reason is bigger than it
+		* looked. COUNTED off the running build: the served app READS 60 distinct
+		* `--dsw-*` variables and DEFINES exactly one. The design-token sheet that
+		* would define the rest is not shipped here — the harness's own boot screen
+		* survives only because it writes every one of them with a fallback
+		* (`var(--dsw-alias-bg-base, var(--dsh-boot-bg))`).
+		*
+		* So this block is not overriding a palette. It IS the palette, and the
+		* thirteen names it used to leave out had no value at all. `SURFACE.card`
+		* is `var(--dsw-specific-menu)`: unresolved, no fallback, which makes the
+		* whole declaration invalid at computed-value time — so `background` took
+		* `transparent` and every card on the page, the trajectory rows above all,
+		* showed the grey of whatever sat behind it.
+		*
+		* Which is why the guard is "all of them", not "the ones that looked
+		* wrong": a missing variable does not announce itself, it just quietly
+		* takes the initial value, and `transparent` over grey is a colour scheme
+		* nobody chose.
+		*/
+		const SWM_THEME = [
+			".swm-page{",
+			"--dsw-font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei','Noto Sans',sans-serif;",
+			"--dsw-alias-label-primary:#111827;",
+			"--dsw-alias-label-secondary:#4b5563;",
+			"--dsw-alias-label-tertiary:#9ca3af;",
+			"--dsw-alias-label-caption:#9ca3af;",
+			"--dsw-alias-label-link:#1d4ed8;",
+			"--dsw-alias-label-primary-inverted:#ffffff;",
+			"--dsw-alias-bg-base:#ffffff;",
+			"--dsw-alias-bg-layer-0:#ffffff;",
+			"--dsw-alias-bg-layer-1:#ffffff;",
+			"--dsw-alias-bg-layer-2:#f9fafb;",
+			"--dsw-alias-bg-layer-3:#f3f4f6;",
+			"--dsw-alias-bg-module-platform:#f9fafb;",
+			"--dsw-alias-interactive-bg-hover:#f9fafb;",
+			"--dsw-specific-menu:#ffffff;",
+			"--dsw-alias-markdown-code-block:#f9fafb;",
+			"--dsw-alias-fill-tertiary:#e5e7eb;",
+			"--dsw-static-neutral-00:#ffffff;",
+			"--dsw-alias-border-l1:#f3f4f6;",
+			"--dsw-alias-border-l2:#e5e7eb;",
+			"--dsw-alias-state-success-primary:#047857;",
+			"--dsw-alias-state-warn-label:#b45309;",
+			"--dsw-alias-state-error-primary:#b91c1c;",
+			"--dsw-alias-state-business-primary:#1d4ed8;",
+			"--dsw-radius-sm:6px;--dsw-radius-md:8px;--dsw-radius-lg:12px;",
+			"--dsw-font-xxxs-11:11px/16px var(--dsw-font-family);",
+			"--dsw-font-xxxs-strong-11:600 11px/16px var(--dsw-font-family);",
+			"--dsw-font-xxs-12:12px/16px var(--dsw-font-family);",
+			"--dsw-font-xxs-strong-12:600 12px/16px var(--dsw-font-family);",
+			"--dsw-font-xs-13:13px/18px var(--dsw-font-family);",
+			"--dsw-font-xs-strong-13:600 13px/18px var(--dsw-font-family);",
+			"--dsw-font-s-14:14px/20px var(--dsw-font-family);",
+			"--dsw-font-s-strong-14:600 14px/20px var(--dsw-font-family);",
+			"--dsw-font-base-16:16px/28px var(--dsw-font-family);",
+			"--dsw-font-base-strong-16:600 16px/28px var(--dsw-font-family);",
+			"--dsw-font-l-20:600 20px/28px var(--dsw-font-family);",
+			"--dsw-font-xl-24:700 24px/32px var(--dsw-font-family);",
+			"--dsw-shadow-lv1:0 1px 2px 0 rgba(0,0,0,0.05);",
+			"--dsw-shadow-lv3:0 4px 6px -1px rgba(0,0,0,0.1),0 2px 4px -2px rgba(0,0,0,0.1);",
+			"}",
+			"body[data-ds-dark-theme] .swm-page{",
+			"--dsw-alias-label-primary:#f9fafb;",
+			"--dsw-alias-label-secondary:#d1d5db;",
+			"--dsw-alias-label-tertiary:#6b7280;",
+			"--dsw-alias-label-caption:#6b7280;",
+			"--dsw-alias-label-link:#60a5fa;",
+			"--dsw-alias-label-primary-inverted:#111827;",
+			"--dsw-alias-bg-base:#111827;",
+			"--dsw-alias-bg-layer-0:#111827;",
+			"--dsw-alias-bg-layer-1:#111827;",
+			"--dsw-alias-bg-layer-2:#1f2937;",
+			"--dsw-alias-bg-layer-3:#374151;",
+			"--dsw-alias-bg-module-platform:#1f2937;",
+			"--dsw-alias-interactive-bg-hover:#1f2937;",
+			"--dsw-specific-menu:#111827;",
+			"--dsw-alias-markdown-code-block:#1f2937;",
+			"--dsw-alias-fill-tertiary:#374151;",
+			"--dsw-static-neutral-00:#ffffff;",
+			"--dsw-alias-border-l1:#1f2937;",
+			"--dsw-alias-border-l2:#374151;",
+			"--dsw-alias-state-success-primary:#34d399;",
+			"--dsw-alias-state-warn-label:#fbbf24;",
+			"--dsw-alias-state-error-primary:#f87171;",
+			"--dsw-alias-state-business-primary:#60a5fa;",
+			"--dsw-shadow-lv1:0 1px 2px 0 rgba(0,0,0,0.4);",
+			"--dsw-shadow-lv3:0 4px 6px -1px rgba(0,0,0,0.5),0 2px 4px -2px rgba(0,0,0,0.5);",
+			"}"
+		].join("");
 
 		const SWM_SHEET = SWM_CSS + SWM_THEME + SWM_RULES;
 		//#endregion
