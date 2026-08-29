@@ -3512,3 +3512,100 @@ test("the reader says which absence it is, and colours only the exceptional ones
     "an unknown state falls back to a reassuring sentence, which tells a reader their evidence has no page behind it when the truth is that this screen could not fetch one",
   );
 });
+
+
+test("a dimension's own grade is drawn, and drawn with the two halves it is made of", () => {
+  // THE FIGURE THAT WAS SERVED AND NEVER SHOWN. `mission_dimensions.grade` is
+  // written twice per dimension — by s3 as collection settles and by s4 against
+  // the mission's derived floor — and the drawer opened `gradeAxes` twice, for
+  // the floor and for the page count, while stepping over the score sitting
+  // between them. The one number the pipeline computes per dimension, and the
+  // one the Leader argues a recollect from, was legible nowhere.
+  const drawer = code(body("function MissionDimensionDrawer("));
+  assert.ok(
+    drawer.includes("detail?.grade"),
+    "the drawer reads gradeAxes and not the grade beside it, so the figure s3 and s4 each compute for this dimension is on the wire and on no screen",
+  );
+  assert.ok(
+    !/grade\s*\?\?\s*0/.test(drawer),
+    "an ungraded dimension is handed a nought, which is a failing mark for work nobody has marked — the same `?? 0` the floor two lines above refuses",
+  );
+  // THE HALVES, OR THE NUMBER IS UNARGUABLE. 74 alone tells a reader nothing
+  // they can act on; "5 verified against a floor of 6, from 2 hosts" tells them
+  // whether to re-collect and what to change about it.
+  for (const axis of ["gradedVerified", "gradedHosts", "seedTarget"]) {
+    assert.ok(
+      drawer.includes(axis),
+      `the drawer prints a grade without ${axis}, so a reader is handed a verdict and none of the evidence it was reached on`,
+    );
+  }
+  assert.ok(
+    drawer.includes("MISSION_GRADE.hostsForFull") && drawer.includes("MISSION_GRADE.evidence"),
+    "the weights are typed into the drawer's own sentences instead of read from MISSION_GRADE, which is where the client's account of the formula starts drifting from the formula",
+  );
+  assert.ok(
+    drawer.includes("missionRateHue(grade, 100)"),
+    "the drawer grades its score on rungs of its own instead of the one ladder this tab reads, which is the third copy of a decision already extracted twice",
+  );
+  assert.match(
+    drawer,
+    /gradeTone === TONE\.success \? INK\.primary/,
+    "a grade at par is painted rather than left in ink, which spends the tab's loudest colour on the ordinary case and leaves nothing louder for the dimension that came in under the floor",
+  );
+  assert.ok(
+    !drawer.includes("MISSION_RATE_"),
+    "the drawer reads the 0.8/0.5 rungs directly instead of asking missionRateHue, which is the second reader that function exists to be instead of",
+  );
+  // THE BOX'S EDGE IS A HAIR AND THE SPLIT INSIDE IT IS A RULE. LINE's docblock
+  // is the only guard on that distinction, so the one new container in the file
+  // is held to it here.
+  assert.match(
+    drawer,
+    /border: `1px solid \$\{LINE\.hair\}`/,
+    "the grade block's outer edge is not LINE.hair, so a container edge is drawn at the weight reserved for dividers between siblings",
+  );
+  assert.match(
+    drawer,
+    /borderTop: `1px solid \$\{LINE\.rule\}`/,
+    "the split between the evidence half and the independence half is drawn at hairline weight, where there is no shadow to make it read at all",
+  );
+});
+
+test("the drawer's account of a grade is the stage's arithmetic, not a second opinion", () => {
+  // TWO FILES, ONE OF WHICH COMPUTES. gradeOf() in lib/mission-stages-front.js
+  // decides a dimension's grade; MISSION_GRADE is the client's label for the
+  // same weights, so a reader can be told 70/30 without the client ever doing
+  // the sum. The two drifting apart is silent — the drawer would go on
+  // explaining a formula the pipeline had stopped using, and the explanation is
+  // the entire reason the number is worth putting on screen.
+  const stage = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "lib", "mission-stages-front.js"),
+    "utf8",
+  );
+  const formula = /function gradeOf\(row, floor\) \{[\s\S]*?\n\}/.exec(stage);
+  assert.ok(formula, "gradeOf is gone from lib/mission-stages-front.js, and the drawer is now explaining a formula that lives nowhere");
+
+  const declared = /const MISSION_GRADE = \{([^}]+)\}/.exec(SOURCE);
+  assert.ok(declared, "MISSION_GRADE is gone, so the weights the drawer states are read from nothing");
+  const weights = Object.fromEntries(
+    [...declared[1].matchAll(/(\w+): ([\d.]+)/g)].map((match) => [match[1], Number(match[2])]),
+  );
+
+  assert.ok(
+    formula[0].includes(`* ${weights.evidence}`),
+    `the drawer tells a reader evidence is ${weights.evidence} of the grade and gradeOf no longer weighs it there`,
+  );
+  assert.ok(
+    formula[0].includes(`* ${weights.independence}`),
+    `the drawer tells a reader independence is ${weights.independence} of the grade and gradeOf no longer weighs it there`,
+  );
+  assert.ok(
+    formula[0].includes(`/ ${weights.hostsForFull})`),
+    `the drawer says ${weights.hostsForFull} hosts is full independence and gradeOf divides by a different number, so a dimension reads as short of a bar it has already cleared`,
+  );
+  assert.equal(
+    weights.evidence + weights.independence,
+    1,
+    "the two shares the drawer prints do not add up to the whole grade, which leaves a reader to conclude the rest of it came from somewhere nobody named",
+  );
+});

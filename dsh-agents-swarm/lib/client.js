@@ -6132,6 +6132,23 @@ window.__ModuleLoader__.load({
 		const MISSION_RATE_FAIR = 0.5;
 
 		/**
+		* WHAT A DIMENSION'S GRADE IS MADE OF, named on the side that only reads it.
+		*
+		* `gradeOf()` in lib/mission-stages-front.js weighs verified evidence at
+		* 0.7 and independent hosts at 0.3, and counts two hosts as full
+		* independence; s3 writes the same sum inline as a dimension settles. These
+		* names are a LABEL for those weights and never a third computation — the
+		* drawer prints the score the stage recorded and uses these only to say
+		* which share of it each axis could have contributed.
+		*
+		* A number typed here that drifts from the stage's is the copy nobody
+		* edits, and the drift is silent: the drawer would go on explaining a
+		* formula the pipeline had stopped using. The two are asserted equal in
+		* tests/design-tokens.test.mjs rather than trusted to stay in step.
+		*/
+		const MISSION_GRADE = { evidence: 0.7, independence: 0.3, hostsForFull: 2 };
+
+		/**
 		* How much of a population held up, as a share.
 		*
 		* `null` FOR AN EMPTY POPULATION, never 0 and never 1. `verified / total`
@@ -11077,6 +11094,40 @@ window.__ModuleLoader__.load({
 			const verified = counts?.verified ?? null;
 			const hasFloor = Number.isFinite(floor) && floor > 0;
 
+			// THE GRADE ITSELF, which was on the wire and on no screen. This
+			// component already opened `gradeAxes` twice — for the floor above and
+			// for the page count in the empty state — and stepped over the score
+			// sitting beside them, so the one figure s3 computes for a dimension as
+			// it settles, s4 recomputes against the derived floor, and the Leader
+			// argues a recollect from, was readable nowhere.
+			//
+			// Everything below LABELS the number the stage recorded. The score is
+			// never recomputed here: a second copy of gradeOf() in the client is the
+			// copy nobody edits, and it would disagree with the row it sits beside
+			// the first time the weights move.
+			const axes = detail?.gradeAxes ?? null;
+			const grade = (detail?.grade ?? null) === null || !Number.isFinite(Number(detail.grade))
+				? null
+				: Number(detail.grade);
+			// WHICH BAR THE EVIDENCE HALF WAS DIVIDED BY, said out loud. s3 divides
+			// by its own collection target and s4 by the floor this mission derived
+			// from measured supply; they are different numbers, and a sentence that
+			// names neither lets a reader take an s3 grade for an assessment it has
+			// not had yet.
+			const bar = floor ?? axes?.seedTarget ?? null;
+			const gradedVerified = axes?.verified ?? null;
+			const gradedHosts = axes?.uniqueHosts ?? null;
+			// AT PAR IS INK, and the rungs stay behind their one reader.
+			// `missionRateHue` is the only site in this file allowed to spell 0.8 and
+			// 0.5 — a second one re-implementing the ladder from the constants is the
+			// copy nobody edits — so the exception is found by ASKING it: what it
+			// grades a success has cleared the bar and is drawn in ink, and colour is
+			// spent only on the two rungs below it.
+			const gradeTone = grade === null ? null : missionRateHue(grade, 100);
+			const gradeInk = gradeTone === null || gradeTone === TONE.success ? INK.primary : `rgb(${gradeTone})`;
+			const evidenceShare = Math.round(MISSION_GRADE.evidence * 100);
+			const independenceShare = Math.round(MISSION_GRADE.independence * 100);
+
 			const finding = (row) => jsxs("div", {
 				style: {
 					display: "flex", flexDirection: "column", gap: SPACE.xs,
@@ -11198,6 +11249,93 @@ window.__ModuleLoader__.load({
 								: jsxs("div", {
 									style: { display: "flex", flexDirection: "column", gap: SPACE.md },
 									children: [
+										// THE GRADE, AND WHAT IT IS MADE OF. A bare 74 is a figure a
+										// reader can neither trust nor argue with; the two axes under
+										// it are the argument, and between them they are the whole
+										// formula — verified evidence against a bar, and how many
+										// independent hosts carried it.
+										jsxs("div", {
+											style: {
+												display: "flex", flexDirection: "column", gap: SPACE.xs,
+												padding: SPACE.sm, background: SURFACE.subtle,
+												borderRadius: RADIUS.md, border: `1px solid ${LINE.hair}`
+											},
+											children: [
+												jsxs("div", {
+													style: { display: "flex", alignItems: "baseline", gap: SPACE.sm },
+													children: [
+														jsx("div", {
+															style: { font: FONT.small, color: INK.secondary, flex: 1, minWidth: 0 },
+															children: zh ? "这个维度的评分" : "This dimension's grade"
+														}, "label"),
+														// A GRADE THAT CLEARED THE BAR IS INK. A screen that paints the
+														// ordinary case green has no louder colour left for the dimension
+														// that came in under the floor, which is the only one on this
+														// drawer worth finding.
+														jsx("div", {
+															style: { font: FONT.smallStrong, color: gradeInk },
+															children: grade === null ? (zh ? "未评分" : "not graded") : `${grade}/100`
+														}, "score")
+													]
+												}, "head"),
+												grade === null
+													// WHICH EMPTY, again. A dimension is graded once as collection
+													// settles and again when the assessment measures it against
+													// the derived floor; before either there is no number, and a
+													// 0 here is a failing mark this dimension was never given —
+													// the same refusal the header's score tile and the verified
+													// chip each already make.
+													? jsx("div", {
+														style: { font: FONT.small, color: INK.secondary },
+														children: zh
+															? "还没有评分 —— 采集收尾时会打一次分，评估阶段再按本次任务推出的下限打一次。"
+															: "Not graded yet: a dimension is graded as collection settles, and graded again when the assessment measures it against this mission's derived floor."
+													}, "ungraded")
+													: axes === null
+														// A GRADE WHOSE WORKING WAS NOT KEPT. The row carries a
+														// score and no axes at all, which is what a row written
+														// before the axes were stored looks like. Say that; do
+														// not draw two lines of noughts underneath a 78.
+														? jsx("div", {
+															style: { font: FONT.small, color: INK.secondary },
+															children: zh
+																? `分数由证据（占 ${evidenceShare}%）和独立来源（占 ${independenceShare}%）两部分构成，但这一次的两项计数没有跟分数一起存下来。`
+																: `The grade is evidence (${evidenceShare}% of it) and independent hosts (${independenceShare}%), but the counts behind this one were not stored with the score.`
+														}, "noAxes")
+														: jsxs("div", {
+															style: { display: "flex", flexDirection: "column", font: FONT.small, color: INK.secondary },
+															children: [
+																jsx("div", {
+																	style: { padding: `${SPACE.xs} 0` },
+																	children: gradedVerified === null
+																		? (zh
+																			? `证据（占 ${evidenceShare}%）：这次评分用的已验证条数没有记下来。`
+																			: `Evidence (${evidenceShare}%): the verified count this grade was computed from was not recorded.`)
+																		: bar === null
+																			? (zh
+																				? `证据（占 ${evidenceShare}%）：已验证 ${gradedVerified} 条，但对的是哪个下限没有一起记下来。`
+																				: `Evidence (${evidenceShare}%): ${gradedVerified} verified, and the bar it was measured against was not recorded with the score.`)
+																			: (zh
+																				? `证据（占 ${evidenceShare}%）：已验证 ${gradedVerified} 条，对的是${floor === null ? "采集阶段的目标" : "评估阶段推出的下限"} ${bar} 条。`
+																				: `Evidence (${evidenceShare}%): ${gradedVerified} verified against ${floor === null ? "collection's own target" : "the assessment's derived floor"} of ${bar}.`)
+																}, "evidence"),
+																// A RULE, NOT A HAIR. The box's outer edge is drawn
+																// above; this is the divider between two siblings
+																// inside it, with no shadow to help it read.
+																jsx("div", {
+																	style: { padding: `${SPACE.xs} 0`, borderTop: `1px solid ${LINE.rule}` },
+																	children: gradedHosts === null
+																		? (zh
+																			? `独立来源（占 ${independenceShare}%）：这次评分用的站点数没有记下来。`
+																			: `Independence (${independenceShare}%): the host count this grade was computed from was not recorded.`)
+																		: (zh
+																			? `独立来源（占 ${independenceShare}%）：${gradedHosts} 个独立站点，满分要 ${MISSION_GRADE.hostsForFull} 个。`
+																			: `Independence (${independenceShare}%): ${gradedHosts} independent host(s); ${MISSION_GRADE.hostsForFull} counts full.`)
+																}, "independence")
+															]
+														}, "axes")
+											]
+										}, "grade"),
 										// WHY THIS DIMENSION EXISTS, which is the one thing about it
 										// that no count can say and that no other screen carries.
 										(detail?.rationale ?? "") === "" ? null : jsx("div", {

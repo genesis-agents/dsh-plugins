@@ -3416,3 +3416,89 @@ test("a jump into a dimension the trajectory never recorded still names it", asy
     "an empty list under this filter does not say which empty it is — nothing recorded here, against a mission that recorded nothing",
   );
 });
+
+
+test("a graded dimension says what its grade is made of, and which bar it was measured on", async () => {
+  // A NUMBER A READER CANNOT ARGUE WITH IS A NUMBER THEY CANNOT USE. The grade
+  // is 0.7 of the evidence share and 0.3 of the independence share, and the two
+  // ask for opposite responses: a dimension short on verified findings wants
+  // another collection round, one short on hosts wants a different query. "74"
+  // on its own asks for neither.
+  //
+  // The bar is asserted BY NAME because there are two of them. s3 divides by
+  // its own collection target and s4 by the floor this mission derived from
+  // measured supply; a sentence that names neither lets a reader take an s3
+  // grade for an assessment that has not happened.
+  const graded = (axes) => {
+    globalThis.fetch = async () => ({
+      ok: true, status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          findings: [],
+          dimension: {
+            dimensionId: "d7", name: "评过分的维度", rationale: null, facet: "technical",
+            state: "collected", attempt: 1, grade: 74, gradeAxes: axes,
+            summary: null, failureCode: null,
+          },
+          counts: { verified: 5 },
+        },
+      }),
+    });
+    return render("MissionDimensionDrawer", {
+      missionId: "m1", dimension: { id: "d7", name: "评过分的维度" }, runCount: 1, zh: true,
+      onClose: () => {},
+    });
+  };
+
+  const assessed = textOf((await graded({ verified: 5, floor: 6, uniqueHosts: 2, unchecked: 1 })).tree).join(" ");
+  assert.ok(assessed.includes("74/100"), "a dimension's own grade is still nowhere on its own drawer");
+  assert.ok(assessed.includes("已验证 5 条"), "the verified count the grade was computed from is missing, so the score cannot be checked against anything");
+  assert.ok(assessed.includes("下限 6 条"), "the bar the evidence half was divided by is unstated, which makes the share unreadable");
+  assert.ok(assessed.includes("2 个独立站点"), "the independence half is invisible, so a well-verified dimension sourced from one site looks like a well-sourced one");
+  assert.ok(assessed.includes("占 70%") && assessed.includes("占 30%"), "the two halves are printed without their weights, so a reader cannot tell which one is holding the grade down");
+
+  const collected = textOf((await graded({ verified: 5, uniqueHosts: 2, pagesFetched: 6, seedTarget: 5 })).tree).join(" ");
+  assert.ok(
+    collected.includes("采集阶段的目标 5 条"),
+    "a grade s3 wrote is described against a floor the assessment has not derived yet, so the reader is told this dimension was judged when it was only counted",
+  );
+  assert.ok(
+    !collected.includes("评估阶段推出的下限"),
+    "an s3 grade claims the assessment's floor, which is the one bar it was not measured against",
+  );
+});
+
+test("an ungraded dimension says so rather than being handed a nought", async () => {
+  // `grade ?? 0` IS A FAILING MARK NOBODY GAVE. A dimension s3 has not reached
+  // has no grade at all, and 0/100 beside its name reads as one that was
+  // measured and found worthless — the reading the header's score tile and the
+  // verified chip each already refuse, and the drawer would have been the third
+  // place to give it.
+  globalThis.fetch = async () => ({
+    ok: true, status: 200,
+    json: async () => ({
+      success: true,
+      data: {
+        findings: [],
+        dimension: {
+          dimensionId: "d8", name: "还没评分的维度", rationale: null, facet: "technical",
+          state: "collecting", attempt: 1, grade: null, gradeAxes: { pagesFetched: 4, uniqueHosts: 2 },
+          summary: null, failureCode: null,
+        },
+        counts: { verified: 0 },
+      },
+    }),
+  });
+  const drawer = await render("MissionDimensionDrawer", {
+    missionId: "m1", dimension: { id: "d8", name: "还没评分的维度" }, runCount: 1, zh: true,
+    onClose: () => {},
+  });
+  const text = textOf(drawer.tree).join(" ");
+  assert.ok(!text.includes("0/100"), "an ungraded dimension is drawn with a nought, which is a mark for work that has not been marked");
+  assert.ok(text.includes("未评分"), "the drawer is silent about the missing grade, which leaves a reader to assume the pipeline judged this dimension and said nothing");
+  assert.ok(
+    text.includes("采集收尾时会打一次分"),
+    "the drawer says there is no grade without saying when there will be one, which is the difference between a gap and a fault",
+  );
+});
