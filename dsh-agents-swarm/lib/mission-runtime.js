@@ -1750,8 +1750,13 @@ export function canResume({ store, mission, now, stages = STAGES, resumeWindowMs
   if (!RESUMABLE_FROM_STATUSES.includes(mission.status)) {
     return refuse("wrong-status", `${mission.status} missions are not resumable; only ${RESUMABLE_FROM_STATUSES.join(", ")} are. Re-run fresh instead.`);
   }
-  if (mission.runCount >= RECLAIM_LIMIT && mission.failureCode === "runtime_crashed") {
-    return refuse("reclaim-limit", `the process has crashed ${mission.runCount} times at ${mission.lastStage ?? "an unnamed stage"}. Resuming again would crash again; re-run fresh or narrow the topic.`);
+  // THE COUNTER, NOT THE KEY. `run_count` scopes every read to one attempt;
+  // `reclaim_count` says how many times this mission has been picked back up.
+  // They were one column, so a resume that had to advance the limit also had
+  // to abandon the work it was resuming.
+  const reclaims = Number(mission.reclaimCount ?? mission.runCount);
+  if (reclaims >= RECLAIM_LIMIT && mission.failureCode === "runtime_crashed") {
+    return refuse("reclaim-limit", `the process has crashed ${reclaims} times at ${mission.lastStage ?? "an unnamed stage"}. Resuming again would crash again; re-run fresh or narrow the topic.`);
   }
 
   const checkpoint = store.getCheckpoint(mission.id);

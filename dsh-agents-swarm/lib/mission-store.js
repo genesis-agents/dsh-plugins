@@ -1136,6 +1136,32 @@ export const MISSION_MIGRATIONS = Object.freeze([
       if (!has) db.exec("ALTER TABLE mission_artifacts ADD COLUMN figures TEXT NOT NULL DEFAULT '[]'");
     },
   }),
+
+  // THE RECLAIM COUNTER, SPLIT OFF FROM THE GENERATION KEY.
+  //
+  // `run_count` was doing two jobs. It is the GENERATION KEY — every read
+  // that must see one attempt's work and not another's is scoped by it — and
+  // it was also the RECLAIM COUNTER that `canResume` refuses at.
+  //
+  // A fresh rerun wants both advanced. A RESUME wants only the counter: it
+  // continues an attempt, so the slate has to stay. It advanced both, which
+  // left every completed stage's rows one generation behind and invisible to
+  // the stages the resume re-ran.
+  //
+  // Measured on a real mission: eight chapters and 107 citations in
+  // generation 3, a continuation into generation 4, and s12 assembling a
+  // 413-word stub because it could see none of them.
+  //
+  // Backfilled from `run_count`, which is what the limit has been reading all
+  // along, so no mission's standing with the limit changes on migration.
+  Object.freeze({
+    id: "011-reclaim-count",
+    up: (db) => {
+      const has = db.prepare("PRAGMA table_info(missions)").all().some((column) => column.name === "reclaim_count");
+      if (!has) db.exec("ALTER TABLE missions ADD COLUMN reclaim_count INTEGER NOT NULL DEFAULT 0");
+      db.exec("UPDATE missions SET reclaim_count = run_count WHERE reclaim_count = 0");
+    },
+  }),
 ]);
 
 // ── small helpers ─────────────────────────────────────────────────────────
@@ -1409,7 +1435,13 @@ function shapeMission(row) {
     lastProgressAt: row.last_progress_at ?? null,
     lastStage: row.last_stage ?? null,
     patchRound: row.patch_round,
+    // THE GENERATION KEY. Every read scoped to one attempt uses this.
     runCount: row.run_count,
+    // AND THE TIMES IT HAS BEEN PICKED BACK UP, which is a different fact.
+    // Coalesced to `run_count` so a row written before 011 reads as it always
+    // did rather than as zero, which would hand a mission that has crashed
+    // three times a fresh set of attempts.
+    reclaimCount: row.reclaim_count ?? row.run_count,
     startedAt: row.started_at,
     lastReopenedAt: row.last_reopened_at ?? null,
     // The clock every wall-time decision measures from. Computed here, once, so
@@ -2132,6 +2164,13 @@ export class MissionStore {
           boot_id = ?,
           pid = ?,
           run_count = run_count + ?,
+          -- ALWAYS, and this is the half that is not the key. It says how
+          -- many times the mission has been picked back up, which is what
+          -- canResume's limit has always been about — its own message says
+          -- "the process has crashed N times". A continuation that keeps its
+          -- slate still has to advance it, or a mission that crashes in the
+          -- same place could be resumed for ever.
+          reclaim_count = reclaim_count + 1,
           last_reopened_at = ?,
           last_progress_at = ?,
           -- Cleared so a resumed mission is not displayed with the previous

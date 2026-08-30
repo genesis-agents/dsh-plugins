@@ -3789,3 +3789,42 @@ test("a report with no chapters is refused, not written as a stub", () => {
   assert.match(refusal.slice(0, 900), /findingRuns\(missionId\)/u, "the refusal does not look for the generation that holds the prose, so it cannot say where it is");
   assert.match(back, /"findingRuns"\]\) \{/u, "findingRuns is called without being declared a dependency, so a store that lacks it fails at the throw instead of at the door");
 });
+
+test("only a fresh rerun opens a new generation", () => {
+  // `run_count` WAS DOING TWO JOBS AND THEY PULL OPPOSITE WAYS.
+  //
+  // THE GENERATION KEY: `listChapters(missionId, runCount)`,
+  // `verifiedFindings`, `listDimensions`, `figuresForChapter`,
+  // `freezeEvidence` — every read that must see one attempt's work and not
+  // another's is scoped by it. Advancing it means "start with an empty slate".
+  //
+  // THE RECLAIM COUNTER: `canResume` refuses at `>= RECLAIM_LIMIT` with
+  // `runtime_crashed`. Advancing it means "picked back up once more".
+  //
+  // A fresh rerun wants both. A CONTINUATION — resume, or an incremental
+  // rerun — wants only the counter, and got both. Measured: eight chapters and
+  // 107 citations written in generation 3, an incremental rerun into
+  // generation 4, and s12 assembling a 413-word stub because it could see none
+  // of them.
+  const routes = readFileSync(new URL("../lib/mission-routes.js", import.meta.url), "utf8");
+  const handlers = readFileSync(new URL("../lib/mission-handlers.js", import.meta.url), "utf8");
+  const runtime = readFileSync(new URL("../lib/mission-runtime.js", import.meta.url), "utf8");
+
+  assert.match(routes, /newGeneration: mode === "fresh"/u, "the rerun route opens a new generation for both modes again, so an incremental rerun keeps nothing");
+  assert.ok(
+    !/claimForRun\(missionId, \{ bootId, pid: process\.pid, newGeneration: true/u.test(handlers),
+    "resume opens a new generation again, so every stage it does not re-run has its rows left behind",
+  );
+  // AND THE LIMIT STILL BITES, on the counter rather than the key. Without
+  // this, a mission that crashes in the same place could be resumed for ever.
+  assert.match(runtime, /const reclaims = Number\(mission\.reclaimCount \?\? mission\.runCount\);/u, "the reclaim limit reads the generation key again, which a continuation no longer advances");
+  assert.match(runtime, /if \(reclaims >= RECLAIM_LIMIT/u, "the limit is not read from the reclaim counter");
+
+  const store = readFileSync(new URL("../lib/mission-store.js", import.meta.url), "utf8");
+  assert.match(store, /reclaim_count = reclaim_count \+ 1,/u, "nothing advances the reclaim counter, so the limit never bites");
+  assert.match(store, /id: "011-reclaim-count"/u, "the column has no migration");
+  // BACKFILLED, so a mission that has already crashed three times does not get
+  // a fresh set of attempts the moment this ships.
+  assert.match(store, /UPDATE missions SET reclaim_count = run_count WHERE reclaim_count = 0/u, "the counter starts at zero for existing missions, handing every crashed one a new set of attempts");
+  assert.match(store, /reclaimCount: row\.reclaim_count \?\? row\.run_count,/u, "the mission shaper drops the counter, so canResume reads undefined and the limit never bites");
+});

@@ -498,7 +498,13 @@ export function createMissionRuntime({ store, missionStore, ctx, config = {}, sp
     // `status='running'`. Without it the wall clock runs from the ORIGINAL
     // start and a mission resumed an hour later dies in its first stage against
     // a cap it never had; `runMission` refuses the run for exactly that reason.
-    const claimed = missionStore.claimForRun(missionId, { bootId, pid: process.pid, newGeneration: true, at: clock() });
+    // THE SLATE STAYS. A resume CONTINUES an attempt — the stages already
+    // `done` keep their rows — so opening a new generation left every one of
+    // those rows behind, invisible to the stages the resume re-ran. The
+    // reclaim counter advances inside `claimForRun` either way, which is what
+    // the limit reads, so refusing a mission that has crashed too often is
+    // unaffected.
+    const claimed = missionStore.claimForRun(missionId, { bootId, pid: process.pid, newGeneration: false, at: clock() });
     if (!claimed.claimed) return { started: false, reason: claimed.reason, runCount: null };
     const dispatched = startOrPark(missionId);
     return { started: dispatched.started, reason: dispatched.reason, runCount: claimed.runCount };

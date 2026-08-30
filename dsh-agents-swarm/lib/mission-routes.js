@@ -1618,7 +1618,32 @@ if (req.method === "GET" && (action === "facts.csv" || action === "citations.csv
       // while its stages still say `done` is exactly the race this ordering
       // removes.
       if (mode === "fresh") missionStore.resetStagesForFreshRerun(id, runtime.clock());
-      const claimed = missionStore.claimForRun(id, { bootId: runtime.bootId, pid: process.pid, newGeneration: true, at: runtime.clock() });
+      // THE GENERATION IS THE SLATE, AND ONLY A FRESH RERUN WANTS A NEW ONE.
+      //
+      // `run_count` is this schema's generation key: `listChapters`,
+      // `verifiedFindings`, `listDimensions`, `figuresForChapter` and
+      // `freezeEvidence` are all scoped by it, so bumping it means "start over
+      // with nothing". A fresh rerun means exactly that, and
+      // `resetStagesForFreshRerun` above puts every stage back so they refill
+      // it.
+      //
+      // AN INCREMENTAL RERUN MEANS THE OPPOSITE. It keeps what was done and
+      // redoes what was not — stages are deliberately not reset — so bumping
+      // the generation left every `done` stage's rows one generation back,
+      // invisible to the stages that were redone.
+      //
+      // MEASURED: eight chapters and 107 citations written in generation 3; an
+      // incremental rerun opened generation 4, re-ran s12 alone, found no
+      // chapters, and wrote a 413-word stub as the report.
+      //
+      // The single-stage rerun route below already passes `false` for the same
+      // reason in one sentence: it re-runs a step INSIDE the mission that ran
+      // it.
+      //
+      // The crash limit is untouched: `canResume` refuses at `runCount >=
+      // RECLAIM_LIMIT && failureCode === "runtime_crashed"`, which counts
+      // crashes, and an operator pressing rerun is not a crash.
+      const claimed = missionStore.claimForRun(id, { bootId: runtime.bootId, pid: process.pid, newGeneration: mode === "fresh", at: runtime.clock() });
       if (!claimed.claimed) {
         sendJson(res, 409, { success: false, error: claimed.reason, data: { id } });
         return true;
