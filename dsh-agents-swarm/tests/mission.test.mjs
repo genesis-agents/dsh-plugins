@@ -3764,3 +3764,28 @@ test("an empty turn is asked again before it is believed", () => {
   // different facts about the provider, and only one of them is actionable.
   assert.match(agent, /重问 \$\{emptyRetries\} 次后仍然如此/, "the diagnostic does not say how many times the model was asked, so a reader cannot tell one silence from a persistent one");
 });
+
+test("a report with no chapters is refused, not written as a stub", () => {
+  // MEASURED, ON A REAL RUN, AND IT REPLACED THE READER'S REPORT WITH A STUB.
+  //
+  // An incremental rerun opened generation 4 and re-ran s12 alone.
+  // `listChapters(missionId, runCount)` is scoped to the generation — that
+  // scoping is right and is what stops one run's chapters appearing under
+  // another's — and generation 4 had none, because generation 3 wrote them.
+  //
+  // `assemble([])` produced a 413-word stub with one section and zero
+  // citations, and s12 wrote it as artefact version 1 with `degraded: true`.
+  // Eight real chapters and 107 citations sat untouched one generation back.
+  //
+  // REFUSED, NOT DEGRADED. `degraded` is for a report that fell short of its
+  // bar. There is no reading of nothing-at-all that makes a document, and
+  // writing one replaces the real thing with it.
+  const back = readFileSync(new URL("../lib/mission-stages-back.js", import.meta.url), "utf8");
+  assert.match(back, /if \(chapterRows\.length === 0\) \{/u, "s12 assembles a report from zero chapters again, and writes the stub over the real one");
+  const refusal = back.slice(back.indexOf("if (chapterRows.length === 0) {"));
+  assert.match(refusal.slice(0, 900), /throw fail\(/u, "the empty case is handled without refusing, so an empty document still reaches putArtifact");
+  // AND IT SAYS WHERE THE WORK WENT. A refusal that cannot name the generation
+  // holding the chapters leaves the reader to find that out themselves.
+  assert.match(refusal.slice(0, 900), /findingRuns\(missionId\)/u, "the refusal does not look for the generation that holds the prose, so it cannot say where it is");
+  assert.match(back, /"findingRuns"\]\) \{/u, "findingRuns is called without being declared a dependency, so a store that lacks it fails at the throw instead of at the door");
+});

@@ -435,7 +435,11 @@ function spendRecorder({ store, missionId, stage, now, logger }) {
 function requireDeps(deps, who) {
   const store = deps?.store;
   for (const method of ["listChapters", "verifiedFindings", "getDocument", "setFindingVerifyState",
-    "listDimensions", "listStages", "recordSignoff", "putArtifact", "latestConfig", "insertSpend", "withTx"]) {
+    "listDimensions", "listStages", "recordSignoff", "putArtifact", "latestConfig", "insertSpend", "withTx",
+    // Read only to tell a reader WHICH generation holds their chapters when
+    // this one holds none. A refusal that cannot say where the work went is a
+    // refusal the reader has to go and find the answer to themselves.
+    "findingRuns"]) {
     if (typeof store?.[method] !== "function") {
       throw new Error(`${who}: dependency "store" is not a MissionStore — it has no ${method}(). Every SQL statement in this feature lives in mission-store.js; read it before inventing a name.`);
     }
@@ -2045,6 +2049,36 @@ export function createS12Persist(deps) {
     // them measures. They differ only in a document nobody but this stage keeps,
     // and reproducing third-party pictures into three documents nobody displays
     // would cost three more store reads to change nothing.
+    // NO CHAPTERS IS NOT A DEGRADED REPORT — IT IS NOT A REPORT.
+    //
+    // `listChapters` is scoped to the generation, correctly: that scoping is
+    // what stops one run's chapters appearing under another's. But an
+    // incremental rerun opens a NEW generation and re-runs this stage alone,
+    // so every earlier stage is marked `done` in it while the rows those
+    // stages wrote stay under the old one — and this read answers empty.
+    //
+    // Measured: `assemble([])` produced a 413-word stub with one section and
+    // no citations, and it was written as artefact version 1 while eight real
+    // chapters and 107 citations sat untouched one generation back. A stub
+    // became the report the reader was shown.
+    //
+    // Refused, not degraded. `degraded` is for a report that fell short of
+    // its bar; there is no reading of nothing-at-all that makes a document.
+    // The stage says which generation holds the work, because that is the one
+    // fact needed to get it back.
+    if (chapterRows.length === 0) {
+      const elsewhere = store.findingRuns(missionId)
+        .filter((row) => Number(row?.runCount) !== Number(runCount))
+        .map((row) => Number(row.runCount))
+        .sort((x, y) => y - x);
+      throw fail(
+        "input_invalid",
+        zh
+          ? `第 ${runCount} 次运行没有任何章节，无法产出报告${elsewhere.length === 0 ? "" : `；正文在第 ${elsewhere[0]} 次运行里`}。写入一份空文档会顶掉真正的那一份，所以这里拒绝写入。`
+          : `generation ${runCount} holds no chapters, so there is no report to write${elsewhere.length === 0 ? "" : `; the prose is in generation ${elsewhere[0]}`}. Writing an empty document would replace the real one, so nothing was written.`,
+      );
+    }
+
     const report = assemble(chapterRows, { figures: freezeFigures(store, missionId, runCount, chapterRows) });
     const scorecard = crossState?.scorecard
       ?? { evidenced: emptyTally(), interpretive: emptyTally(), unplaced: emptyTally(), total: 0 };
