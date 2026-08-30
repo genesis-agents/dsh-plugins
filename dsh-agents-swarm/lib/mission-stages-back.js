@@ -2095,6 +2095,33 @@ export function createS12Persist(deps) {
     // the write genuinely did not happen.
     const degradedArtifact = violated || !signedOff;
 
+    // A FIGURE THAT CANNOT BE CREDITED IS DROPPED; THE REPORT IS NOT.
+    //
+    // `putArtifact` refuses a frozen figure with no page to credit, and it
+    // is right to — an image on a screen names where it came from or it is
+    // a fabricated figure. But the refusal is a THROW, and this is the one
+    // call in the pipeline where a throw discards the product: measured on a
+    // real run, one figure with a missing `pageUrl` cost twelve completed
+    // stages, eight written chapters and 107 citations, and the reader was
+    // shown the raw chapter rows with no report at all.
+    //
+    // Everything else here degrades rather than dies. A chapter that fails
+    // its content guard is marked and kept; a stage that fails is settled
+    // and the run goes on. An ILLUSTRATION taking down the DOCUMENT is the
+    // wrong shape, whatever is wrong with the illustration.
+    //
+    // Dropped, counted and NAMED — silence here would be worse than the
+    // throw, because a report quietly missing a picture it was written to
+    // carry is a report nobody knows to look at.
+    const creditable = [];
+    const uncreditable = [];
+    for (const figure of arrayOf(report.figures)) {
+      const page = typeof figure?.pageUrl === "string" ? figure.pageUrl.trim() : "";
+      const id = typeof figure?.figureId === "string" ? figure.figureId.trim() : "";
+      if (page === "" || id === "") uncreditable.push(figure);
+      else creditable.push(figure);
+    }
+
     let version = null;
     let writeError = null;
     try {
@@ -2109,7 +2136,7 @@ export function createS12Persist(deps) {
         // gives: a page re-fetched later can rewrite the `<figcaption>` under a
         // caption this version already printed. Both halves go in one call or
         // the artefact ships a document carrying a directive nothing can read.
-        figures: report.figures,
+        figures: creditable,
         sections: artifact.sections,
         citations: artifact.citations,
         evidence,
@@ -2186,6 +2213,11 @@ export function createS12Persist(deps) {
       notes.push(zh ? "crossState.signature 缺失，s11 从未写入签署。" : "crossState.signature is absent; s11 never wrote a signature.");
     } else if (signature.signed === false) {
       notes.push(zh ? `Leader 拒签：${signature.refusalReason ?? "未给出理由"}。` : `the Leader refused to sign: ${signature.refusalReason ?? "no reason given"}.`);
+    }
+    if (uncreditable.length > 0) {
+      notes.push(zh
+        ? `${uncreditable.length} 张图无法确定出处页面，已从这一版中去掉；正文其余部分未受影响。`
+        : `${uncreditable.length} figure(s) could not name the page they came from and were left out of this version; the rest of the report is unaffected.`);
     }
     if (writeError !== null) {
       notes.push(zh ? `产物写入失败：${writeError}` : `the artefact write failed: ${writeError}`);

@@ -760,6 +760,18 @@ export function assemble(chapterRows, { figures = new Map(), figureCap = MAX_CHA
           citationIndex,
           figureId,
           documentId: asText(held?.documentId),
+          // THE PAGE THIS MUST BE CREDITED TO, and it was dropped on the
+          // floor here. `shapeFigure` carries `page: {documentId, url,
+          // title, host}` — the three figure queries select `d.url AS
+          // page_url` for precisely this — and `putArtifact` refuses a
+          // frozen figure without it, correctly: an image on a screen names
+          // the page it came from, or it is a fabricated figure.
+          //
+          // Measured: that refusal threw at s12 and the whole report went
+          // with it. Twelve stages, eight chapters, 107 citations, no
+          // artefact.
+          pageUrl: asText(held?.page?.url),
+          pageTitle: asText(held?.page?.title),
           dimensionId: row.dimensionId,
           chapterIndex: row.chapterIndex,
           // THE PUBLISHER'S OWN SENTENCE, and `caption` before `alt` on purpose.

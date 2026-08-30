@@ -626,3 +626,37 @@ test("a figure stands after the paragraph that cites its page, not at the end of
     "a marker inside a code fence claimed a figure: `lookup[1]` is a string and not a citation, and the picture was hung on the code block instead of falling to the end of the chapter",
   );
 });
+
+test("a figure that cannot be credited is dropped, and the report is not", () => {
+  // MEASURED ON A REAL RUN, and it cost the whole report. Twelve stages done,
+  // 1.2M tokens, eight chapters written, 107 citations, s9 through s11 all
+  // green — and `putArtifact` threw at s12 because one frozen figure carried
+  // no `pageUrl`. No artefact was written at all, and the pane fell back to
+  // raw chapter rows.
+  //
+  // TWO DEFECTS, FIXED SEPARATELY, because either one alone leaves the other.
+  //
+  // ONE: the field existed and `assemble` dropped it. `shapeFigure` carries
+  // `page: {documentId, url, title, host}` and the three figure queries select
+  // `d.url AS page_url` for exactly this purpose. The store's refusal is
+  // RIGHT — Rule 2 says an image on a screen names the page it came from —
+  // and the row simply never carried the answer.
+  const mid = readFileSync(new URL("../lib/mission-stages-middle.js", import.meta.url), "utf8");
+  assert.match(
+    mid,
+    /pageUrl: asText\(held\?\.page\?\.url\)/u,
+    "a frozen figure row carries no page again, so `putArtifact` refuses it and the artefact write fails",
+  );
+
+  // TWO: AN ILLUSTRATION MAY NOT TAKE DOWN THE DOCUMENT. Even with the field
+  // carried, the shape of that failure was wrong. Everything else in this
+  // pipeline degrades — a chapter that fails its guard is marked and kept, a
+  // stage that fails is settled and the run goes on. The artefact write was
+  // the one place where a malformed accessory discarded the product.
+  const back = readFileSync(new URL("../lib/mission-stages-back.js", import.meta.url), "utf8");
+  assert.match(back, /const uncreditable = \[\];/u, "nothing separates a creditable figure from one that cannot name its page");
+  assert.match(back, /figures: creditable,/u, "the artefact is handed every figure again, so one that cannot be credited takes the whole report with it");
+  // AND IT IS NAMED. Silence would be worse than the throw: a report quietly
+  // missing a picture it was written to carry is one nobody knows to look at.
+  assert.match(back, /无法确定出处页面/u, "a dropped figure is not reported, so the report is short a picture and says nothing about it");
+});
