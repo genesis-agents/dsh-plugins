@@ -983,6 +983,11 @@ function shapeFigure(row) {
     lastSeenAt: row.last_seen_at,
     discoveredAt: row.discovered_at,
     fetchedAt: row.fetched_at ?? null,
+    // THE CHAPTER, WHERE THE READ ASKED FOR ONE. `figuresForMission` selects
+    // it because it serves a whole report and the byte URL needs a chapter;
+    // the two chapter-scoped reads already know theirs, so they do not, and
+    // this is null for them rather than absent.
+    dimensionId: row.dimension_id ?? null,
     page: { documentId: row.document_id, url: row.page_url, title: row.page_title ?? null, host: row.page_host },
   };
 }
@@ -4268,7 +4273,18 @@ export class MissionStore {
     const run = runCount ?? this.db.prepare("SELECT run_count FROM missions WHERE id = ?").get(id)?.run_count ?? 1;
     const holes = FETCH_BACKED_VERIFY_STATES.map(() => "?").join(",");
     return this.db.prepare(`
-      SELECT DISTINCT ${FIGURE_COLUMNS}
+      -- THE CHAPTER THAT LICENSED IT, SELECTED. The join to mission_findings
+      -- is what makes a figure showable at all, and this read threw away
+      -- which dimension it matched -- so the route serving a whole report
+      -- had no chapter to put in the byte URL and handed back a null path
+      -- for every picture. Nine held figures drew as not kept.
+      --
+      -- MIN with GROUP BY rather than DISTINCT: a page cited by two
+      -- dimensions would otherwise return the same figure twice, and the
+      -- byte route checks the figure against the chapter it is given, so
+      -- either is a correct answer. One row per figure, chosen the same way
+      -- every time.
+      SELECT ${FIGURE_COLUMNS}, MIN(f.dimension_id) AS dimension_id
       FROM mission_figures g
       JOIN mission_documents d ON d.id = g.document_id
       JOIN mission_findings  f ON f.document_id = g.document_id
@@ -4276,6 +4292,7 @@ export class MissionStore {
         AND f.verify_state IN (${holes})
         AND g.state = 'held' AND ${FIGURE_STILL_ON_PAGE}
         AND d.status >= 200 AND d.status < 300 AND d.byte_length >= ?
+      GROUP BY g.id
       ORDER BY g.score DESC, g.text_offset, g.id
       LIMIT ?
     `).all(id, assertCount(run, "runCount", 1), ...FETCH_BACKED_VERIFY_STATES, MIN_DOCUMENT_CHARS,

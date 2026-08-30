@@ -499,11 +499,37 @@ test("a figure is served only under the chapter that cites its page", async (t) 
   const loose = await callBytes(missions, `/missions/${id}/figure?figureId=${figures[0]}&runCount=1`);
   assert.equal(loose.status, 400, "the byte route served a figure without being told which chapter was asking");
 
-  // And the unscoped listing mints no byte URL at all, while still carrying the
-  // attribution a references pane exists to show.
+  // AND THE UNSCOPED LISTING MINTS A URL THAT NAMES A CHAPTER TOO.
+  //
+  // THIS REVERSES A DECISION, AND THE REASON IT WAS MADE NO LONGER HOLDS. It
+  // used to assert `path === null` here, on the argument that an unscoped
+  // listing would hand out "a URL that outlives the scope justifying it". That
+  // was true when the query could not say which chapter licensed a figure: the
+  // only URL it could have minted was one with no chapter in it, and the byte
+  // route refuses those — three lines above, still.
+  //
+  // `figuresForMission` selects the dimension its own join matched now, so the
+  // URL names a chapter that really does cite the page. The mintable set is
+  // IDENTICAL to what the per-chapter listing produces: same figure, same
+  // chapter, same refusal from the byte route if they do not match. Nothing
+  // widened.
+  //
+  // What it cost to keep the old rule: a report spans every chapter, so the
+  // reader asks for the whole mission — and nine figures whose bytes were
+  // fetched, paced and stored drew as 图片未能保存, because `path: null` is how
+  // the card is told we do not hold the picture.
   const inventory = await callBytes(missions, `/missions/${id}/figures`);
-  assert.equal(inventory.body.data.figures[0].path, null, "an unscoped listing handed out a byte URL, which is a URL that outlives the scope justifying it");
-  assert.equal(inventory.body.data.figures[0].page.url, "https://arxiv.org/abs/2401.00001", "the inventory dropped the attribution, which is the one thing it exists to carry");
+  const listed = inventory.body.data.figures[0];
+  assert.match(
+    String(listed.path),
+    /^\/missions\/[^/]+\/figure\?figureId=[^&]+&runCount=1&dimensionId=d1$/u,
+    "the unscoped listing mints no byte URL, so a report — which spans every chapter and must therefore ask unscoped — draws every held figure as one we did not keep",
+  );
+  // AND THE URL IT MINTS IS ONE THE BYTE ROUTE HONOURS. A path that reads
+  // correctly and 404s is the same defect wearing a URL.
+  const fromInventory = await callBytes(missions, listed.path);
+  assert.equal(fromInventory.status, 200, "the listing mints a path the byte route will not serve, which is a broken image with a plausible address");
+  assert.equal(listed.page.url, "https://arxiv.org/abs/2401.00001", "the inventory dropped the attribution, which is the one thing it exists to carry");
 
   assert.equal(
     ROUTES.split("missionStore.figuresForChapter(id, { runCount: runCount.value, dimensionId: dimensionId.value })").length - 1, 2,

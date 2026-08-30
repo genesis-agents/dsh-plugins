@@ -860,6 +860,11 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
         ? missionStore.figuresForMission(id, { runCount: runCount.value })
         : missionStore.figuresForChapter(id, { runCount: runCount.value, dimensionId: dimensionId.value });
 
+      // The caller's chapter, or the one the row's own join matched.
+      const chapterOf = (row) => {
+        const named = dimensionId.value ?? row.dimensionId ?? null;
+        return typeof named === "string" && named !== "" ? named : null;
+      };
       sendJson(res, 200, {
         success: true,
         data: {
@@ -873,9 +878,19 @@ export function createMissionRoutes({ missionStore, runtime, logger, sendJson, r
             // route. Composed here rather than at the far end so that no caller
             // ever assembles an image address itself, because the one address
             // that must never reach an `<img>` is `sourceUrl` ten lines down.
-            path: dimensionId.value === undefined
+            // THE CHAPTER COMES FROM THE ROW WHEN THE CALLER DID NOT NAME ONE.
+            //
+            // A report spans every chapter, so the reader asks for the whole
+            // mission and this branch had no `dimensionId` to put in the URL —
+            // it returned null, the card read that as "we did not keep this
+            // picture", and nine held figures drew as missing.
+            //
+            // Null is still the answer when neither the caller nor the row can
+            // name a chapter: the byte route is scoped to one, and a URL with
+            // no chapter in it is a URL that route will refuse.
+            path: chapterOf(row) === null
               ? null
-              : `/missions/${encodeURIComponent(id)}/figure?figureId=${encodeURIComponent(row.id)}&runCount=${runCount.value}&dimensionId=${encodeURIComponent(dimensionId.value)}`,
+              : `/missions/${encodeURIComponent(id)}/figure?figureId=${encodeURIComponent(row.id)}&runCount=${runCount.value}&dimensionId=${encodeURIComponent(chapterOf(row))}`,
             alt: row.alt,
             caption: row.caption,
             // 0 means UNKNOWN, not small: the page declared no intrinsic size.
