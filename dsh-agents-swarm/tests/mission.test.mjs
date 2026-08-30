@@ -3728,3 +3728,39 @@ test("a figure token the writer typed is stripped before the chapter is stored",
   assert.ok(rows.includes(":::"), "sanitizeBody no longer removes a `:::figure` the writer typed, so the one piece of markup that resolves to a publisher's picture is writable by a model");
   assert.ok(rows.includes("mission-citations"), "sanitizeBody no longer removes an echoed citation manifest either");
 });
+
+test("an empty turn is asked again before it is believed", () => {
+  // MEASURED ON A REAL RUN, today. A deep mission researched eight dimensions,
+  // verified 104 citations across 21 independent hosts, reached s8-write, and
+  // died on the FIRST turn of the first chapter because one turn came back
+  // with no text and no tool call. Three calls into that stage. Everything
+  // before it was discarded.
+  //
+  // THE LADDER WAS UPSIDE DOWN. A turn that answered in PROSE got two nudges,
+  // and the branch that handles it says why: "a model that writes the report
+  // as prose has made a recoverable mistake, and this ended the whole mission
+  // over it". A turn that answered with NOTHING got none — and prose is the
+  // model doing the wrong thing deliberately, while an empty turn is the model
+  // doing nothing at all, which is the more obviously transient of the two.
+  const agent = readFileSync(new URL("../lib/mission-agent.js", import.meta.url), "utf8");
+  // A LADDER OF ZERO IS NO LADDER. A digit pattern matched `0`, so setting the
+  // ceiling to zero — which restores the exact defect this test exists for,
+  // with the retry still in the file and unreachable — left it green.
+  const rungs = /const MAX_EMPTY_RETRIES = ([0-9]+);/.exec(agent);
+  assert.ok(rungs !== null, "an empty turn is terminal again, so one silent turn discards every stage before it");
+  assert.ok(Number(rungs[1]) >= 1, `the empty-turn ladder is ${rungs[1]} rungs, which is the terminal behaviour written as a constant`);
+  assert.match(
+    agent,
+    /if \(turn\.text\.trim\(\) === "" && emptyRetries < MAX_EMPTY_RETRIES\) \{/,
+    "nothing retries an empty turn",
+  );
+  // AND IT IS ASKED BEFORE IT IS BELIEVED. The retry has to come first; below
+  // the settle it is unreachable code that reads like a fix.
+  const retryAt = agent.indexOf("emptyRetries < MAX_EMPTY_RETRIES");
+  const settleAt = agent.indexOf('note("model:empty-turn", {');
+  assert.ok(retryAt !== -1 && settleAt !== -1 && retryAt < settleAt, "the retry sits below the terminal settle, where it can never run");
+  // AND THE FAILURE SAYS HOW MANY TIMES IT WAS ASKED. "the model returned an
+  // empty turn" and "the model returned an empty turn three times" are
+  // different facts about the provider, and only one of them is actionable.
+  assert.match(agent, /重问 \$\{emptyRetries\} 次后仍然如此/, "the diagnostic does not say how many times the model was asked, so a reader cannot tell one silence from a persistent one");
+});

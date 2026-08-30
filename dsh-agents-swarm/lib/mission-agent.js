@@ -207,6 +207,25 @@ export const oneHostRefusal = (hosts, needed) =>
  */
 const MAX_PROSE_RETRIES = 2;
 
+/**
+ * How many EMPTY turns to nudge through before giving up on the stage.
+ *
+ * An empty turn — no text, no tool call — used to be terminal, while a turn
+ * that answered in prose got MAX_PROSE_RETRIES. That asymmetry was backwards:
+ * prose is the model doing the wrong thing deliberately, and an empty turn is
+ * the model doing nothing at all, which is the more obviously transient of the
+ * two.
+ *
+ * MEASURED, ON A REAL RUN: eight dimensions researched, 104 citations verified
+ * across 21 independent hosts, and the mission died on the first turn of the
+ * first chapter because one turn came back empty. Nothing was retried and
+ * everything before it was discarded.
+ *
+ * Two, like the prose ladder, and for the same reason: told, then asked again,
+ * then believed.
+ */
+const MAX_EMPTY_RETRIES = 2;
+
 /** Estimated completion tokens accumulated before the pool is asked again. */
 const ESTIMATE_FLUSH_TOKENS = 200;
 
@@ -426,6 +445,7 @@ export function createMissionChat(ctx, { logger = null, turnCap = AGENT_TURN_CAP
     let rejects = 0;
     let iterations = 0;
     let proseRetries = 0;
+  let emptyRetries = 0;
     let truncations = 0;
     let reAskedAfterTruncation = false;
     let rung = Number.isInteger(shrinkFrom) ? shrinkFrom : 0;
@@ -693,14 +713,35 @@ ranOn = route?.model ?? ranOn;
           continue;
         }
 
+        // NOTHING AT ALL, AND IT IS WORTH ASKING AGAIN. The branch above
+        // handles a turn that said something and called nothing; this one is a
+        // turn that did neither. It was terminal and the one above was not,
+        // which had the ladder upside down — prose is a deliberate wrong
+        // answer, an empty turn is no answer, and no answer is the one more
+        // likely to be different the second time.
+        //
+        // The nudge is short and says what is missing rather than repeating
+        // the stage's instructions: a model that returned nothing did not fail
+        // to understand the brief, it failed to produce.
+        if (turn.text.trim() === "" && emptyRetries < MAX_EMPTY_RETRIES) {
+          emptyRetries += 1;
+          note("model:empty-turn-retry", { turn: iterations, attempt: emptyRetries });
+          messages.push(noticeMessage(iterations,
+            zh
+              ? `上一轮回复是空的，既没有文字也没有工具调用。请重新作答${finalizeName === null ? "" : `，并通过 ${finalizeName} 提交本阶段的产出`}。`
+              : `Your last turn came back empty — no text and no tool call. Answer again${finalizeName === null ? "" : `, and submit this stage's output through ${finalizeName}`}.`,
+          ));
+          continue;
+        }
+
         note("model:empty-turn", { turn: iterations, hadText: turn.text.trim() !== "" });
         return settle("empty_response", {
           output: candidate,
           stateOverride: "failed",
           diagnostic: turn.text.trim() === ""
             ? (zh
-              ? `第 ${iterations + 1} 轮既没有文字也没有工具调用：模型返回了空回合。`
-              : `Turn ${iterations + 1} produced neither text nor a tool call: the model returned an empty turn.`)
+              ? `第 ${iterations + 1} 轮既没有文字也没有工具调用：模型返回了空回合，重问 ${emptyRetries} 次后仍然如此。`
+              : `Turn ${iterations + 1} produced neither text nor a tool call: the model returned an empty turn, and still did after being asked again ${emptyRetries} time(s).`)
             : (zh
               ? `第 ${iterations + 1} 轮只有散文、没有工具调用，被要求改用 ${finalizeName} 提交 ${proseRetries} 次后仍然如此。`
               : `Turn ${iterations + 1} answered in prose with no tool call, and still did so after being asked ${proseRetries} time(s) to submit through ${finalizeName}.`),
