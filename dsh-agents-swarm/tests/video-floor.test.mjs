@@ -105,7 +105,7 @@ test("the gate only weighs YouTube rows, and Shorts still cost nothing", async (
   assert.equal(MIN_VIDEO_SECONDS, 1200);
 });
 
-test("every channel on the roster is a resolved id, and the two that would not resolve are absent", () => {
+test("every channel on the roster is a resolved id, and the one that would not resolve is absent", () => {
   // EVERY ID WAS RESOLVED AND VERIFIED TWICE, and that is not ceremony.
   // Reading the first `channelId` off a channel page returns whatever shelf
   // YouTube put at the top: Bessemer came back as a personal channel called
@@ -127,18 +127,23 @@ test("every channel on the roster is a resolved id, and the two that would not r
     assert.ok(feeds.some((row) => row.name === name), `${name} left the roster`);
   }
 
-  // AND THE TWO THAT WOULD NOT RESOLVE ARE NOT HERE. Neither 十字路口 nor
-  // 曲率区动 resolved to a channel whose own title matches; the nearest search
-  // results were a personal vlog and a data-centre company called Curvature. A
-  // wrong id collects somebody else's videos under a name a reader will trust,
-  // which is worse than a gap — so the gap is the answer until someone can
-  // supply the channel URL.
+  // AND THE ONE THAT WOULD NOT RESOLVE IS NOT HERE.
+  //
+  // This said TWO, and one of them was my mistake. I dropped 十字路口 because
+  // the search returned a channel called "Koji杨远骋" and I read that as a
+  // personal vlog. Koji (杨远骋) IS the host of 十字路口, the channel is under
+  // his own name, and every entry on it is titled 【十字路口】 — matching on
+  // the SHOW's title was the wrong test for a Chinese podcast, where
+  // publishing under the host's name is the normal shape.
+  //
+  // 曲率区动 stays out, and now for a reason rather than a failed guess:
+  // searching it returns a travel vlog, an audiobook channel and a series of
+  // cosmology videos, and none of them publishes anything under that name.
   const source = readFileSync(new URL("../lib/sources.js", import.meta.url), "utf8");
   const declared = source.slice(source.indexOf("const SOURCES"), source.indexOf("export function sourceFeeds"));
   const code = declared.split(String.fromCharCode(10)).filter((line) => !line.trim().startsWith("//")).join(String.fromCharCode(10));
-  for (const missing of ["十字路口", "曲率区动"]) {
-    assert.ok(!code.includes(missing), `${missing} is on the roster under an id nobody verified`);
-  }
+  assert.ok(code.includes("十字路口"), "十字路口 left the roster; its channel is Koji杨远骋's own, and every entry on it is a 【十字路口】 episode");
+  assert.ok(!code.includes("曲率区动"), "曲率区动 is on the roster under an id nobody verified");
 });
 
 test("each channel id is the one that was resolved against YouTube", () => {
@@ -179,6 +184,9 @@ test("each channel id is the one that was resolved against YouTube", () => {
     "Stanford Online": "UCBa5G_ESCn8Yd4vw5U-gIcg",
     "Stanford eCorner": "UCctkeBNtFIOn7Yl_9TTj_4w",
     "张小珺 商业访谈录": "UC3Sv1JuKpbOx3csUO8FAo5g",
+    // Verified by what it PUBLISHES, not by its title: the channel is the
+    // host's own name and every entry on it is titled 【十字路口】.
+    "十字路口 Crossing": "UCqoy3g7ZH24j2mLOq_nbKrQ",
   };
   const byName = new Map(sourceFeeds().filter((row) => row.type === "YOUTUBE_VIDEO").map((row) => [row.name, row.url]));
   for (const [name, id] of Object.entries(RESOLVED)) {

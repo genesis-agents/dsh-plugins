@@ -172,13 +172,26 @@ export const SOURCES = [
   { type: "YOUTUBE_VIDEO", name: "Stanford eCorner", url: channel("UCctkeBNtFIOn7Yl_9TTj_4w") },
 
   // ── Chinese-language long form ────────────────────────────────────────
-  // 硅谷101 is already above. 十字路口 and 曲率区动 are NOT here and their
-  // absence is deliberate: neither resolved to a channel whose own title
-  // matches, and the nearest search results were a personal vlog and a
-  // data-centre company called Curvature. A wrong id collects somebody
-  // else's videos under a name a reader will trust, which is worse than a
-  // gap. Add them when someone can supply the channel URL.
+  // 硅谷101 is already above.
+  //
+  // MATCHING ON THE SHOW'S TITLE WAS THE WRONG TEST, and it cost a real
+  // channel. I dropped 十字路口 because the search returned "Koji杨远骋" and
+  // I read that as a personal vlog. Koji (杨远骋) IS the host, the channel is
+  // his own name, and every video on it is titled 【十字路口】. A Chinese
+  // podcast published under its host's name is the normal shape, not the
+  // exception — so these were verified by what they PUBLISH.
+  //
+  // Same test applied to 张小珺: the channel calls itself "Zhang Xiaojun
+  // Podcast" and its entries are the numbered 商业访谈录 episodes, so the id
+  // stands.
   { type: "YOUTUBE_VIDEO", name: "张小珺 商业访谈录", url: channel("UC3Sv1JuKpbOx3csUO8FAo5g") },
+  { type: "YOUTUBE_VIDEO", name: "十字路口 Crossing", url: channel("UCqoy3g7ZH24j2mLOq_nbKrQ") },
+
+  // 曲率区动 IS STILL ABSENT, and now for a reason I can state rather than a
+  // failed guess: searching it returns a travel vlog, an audiobook channel
+  // and a channel of cosmology videos, and none of them publishes anything
+  // under that name. If it has a YouTube channel it is not findable this
+  // way — the URL would settle it in one step.
 ];
 
 /** The roster as collector jobs, ready to store as configuration. */
