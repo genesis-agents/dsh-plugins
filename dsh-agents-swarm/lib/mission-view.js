@@ -729,6 +729,10 @@ function projectAgents({ stages, dimensions, spendSums, sweepTo, swept }) {
       // model, which the board draws as an em dash. A blank string would
       // draw as a chip containing nothing.
       model: null,
+      // The tools this agent reached for, most-used first. Empty rather than
+      // null: an agent that called nothing is a real answer and a different
+      // one from an agent whose calls were not recorded.
+      tools: [],
       calls: 0,
       promptTok: 0,
       completionTok: 0,
@@ -761,6 +765,19 @@ function projectAgents({ stages, dimensions, spendSums, sweepTo, swept }) {
   // AFTER the spend loop, so every agent that spent already has a row, and
   // with `get` rather than `ensure` so a stale spend row cannot conjure an
   // agent that the roster does not have.
+  // AFTER the spend loop, for the same reason the model is: `get` and not
+  // `ensure`, so a tool call from an agent the roster does not have cannot
+  // conjure a row.
+  for (const r of asArray(spendSums.toolsByAgentTool)) {
+    if (r == null) continue;
+    const tool = String(r.tool ?? "");
+    if (tool === "") continue;
+    const key = r.agent_id == null ? `role:${String(r.role ?? "unknown")}` : String(r.agent_id);
+    const e = byAgent.get(key);
+    if (e === undefined) continue;
+    e.tools.push({ tool, calls: numberOr(r.calls, 0), failures: numberOr(r.failures, 0) });
+  }
+
   for (const r of asArray(spendSums.modelByAgent)) {
     if (r == null) continue;
     const model = String(r.model ?? "");
@@ -1803,6 +1820,25 @@ export function readMissionViewInput(db, missionId, opts = {}) {
   // rows arrive ordered by calls and the first one wins. `MAX(model)` beside
   // the sums in the query above would have returned whichever name sorts
   // last, which is not an answer to anything.
+  // WHICH TOOLS EACH AGENT REACHED FOR, AND HOW OFTEN.
+  //
+  // `byTool` beside this answers the same question for the whole mission,
+  // which is the wrong grain for the one screen that asks it: a dimension's
+  // drawer wants to say THIS researcher ran four searches and three fetches,
+  // and a mission-wide histogram cannot be narrowed to that after the fact.
+  //
+  // Grouped by agent because that is the column a dimension is recoverable
+  // from — `resolveDimensionId` reads the instance out of the agent id — and
+  // `mission_tool_calls` has no dimension of its own.
+  const toolsByAgentTool = query(db, `
+    SELECT agent_id, tool,
+           COUNT(*) AS calls,
+           SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failures
+      FROM mission_tool_calls
+     WHERE mission_id = ? AND run_count = ?
+     GROUP BY agent_id, tool
+     ORDER BY calls DESC`, [missionId, runCount]);
+
   const modelByAgent = query(db, `
     SELECT agent_id, role, COALESCE(model, '') AS model,
            COALESCE(SUM(calls),0) AS calls
@@ -1899,6 +1935,7 @@ export function readMissionViewInput(db, missionId, opts = {}) {
       byStage,
       byAgent,
       modelByAgent,
+      toolsByAgentTool,
       byModel,
       toolsByPaceKey,
       toolsByAgent,

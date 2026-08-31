@@ -5595,7 +5595,15 @@ test("a chip stands where the reference's chip stands, and the pill still agrees
   //
   // The intent survives as a boundary rather than a count: dense is asked
   // for by the two components whose rows are dense, and nowhere else.
-  const denseHomes = ["function MissionTaskBoard(", "function MissionTraceRow("];
+  // THREE HOMES NOW. The dimension drawer's 使用工具 histogram is a row of
+  // small badges — 网络搜索 ×4, 网页抓取 ×3 — which is the same geometry as a
+  // table row's chips and not a second one: a full-size chip there would
+  // stand a histogram of eight tools taller than the findings under it.
+  const denseHomes = [
+    "function MissionTaskBoard(",
+    "function MissionTraceRow(",
+    "function MissionDimensionDrawer(",
+  ];
   const inside = denseHomes.reduce((sum, site) => sum + (code(body(site)).split('size: "xs"').length - 1), 0);
   const total = SOURCE.split('size: "xs"').length - 1;
   assert.ok(total > 0, "the dense step has no caller at all, so it is a geometry nothing asks for");
@@ -6273,3 +6281,27 @@ test("the child connector is the reference's twelve pixels, in the reference's c
   );
 });
 
+test("a dimension's drawer says how it was researched, not only what it found", () => {
+  // IT HELD ONE THING: a list of findings, and a link out to the trajectory.
+  // The reference's drawer for the same row carries the figures, what the
+  // agent reached for, where it read, and what it wrote — and every one of
+  // those was already in this app, keyed to something this drawer was not
+  // being handed.
+  const drawer = code(body("function MissionDimensionDrawer("));
+  for (const [needle, why] of [
+    ["jsx(MissionChapterTable, { chapters, zh })", "what this dimension WROTE — the chapters were a flat table under the board instead"],
+    ["agent.tools.map", "what it REACHED FOR — four searches and no fetch is different work from one search and nine fetches, and the grade cannot say which"],
+    ["seen.set(url,", "where it READ — the 独立站点 tile gives the count of hosts without the shape of them"],
+    ["missionCompact(agent.tokens", "what it COST, which the roster has carried per agent all along"],
+  ]) {
+    assert.ok(drawer.includes(needle), `the dimension drawer does not say ${why}`);
+  }
+  // PER AGENT, AND THE AGENT IS THIS DIMENSION'S. `mission_tool_calls` has no
+  // dimension column; the roster resolves one out of the agent id. A drawer
+  // handed the mission-wide roster would print every tool the whole run used
+  // under one dimension's name.
+  assert.ok(
+    code(body("function MissionTaskBoard(")).includes('roster.find((a) => String(a.dimensionId ?? "") === String(chosenDim.id)'),
+    "the drawer is handed the whole roster rather than the agent that ran this dimension",
+  );
+});

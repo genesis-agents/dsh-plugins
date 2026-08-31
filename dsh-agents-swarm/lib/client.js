@@ -12541,6 +12541,12 @@ window.__ModuleLoader__.load({
 							// and the projection has been per-dimension all along: every chapter
 							// row carries its `dimensionId`.
 							chapters: (Array.isArray(chapters) ? chapters : []).filter((c) => String(c.dimensionId ?? "") === String(chosenDim.id).slice("dimension:".length)),
+							// AND THE AGENT THAT RAN IT. The roster already carries per-agent tokens,
+							// tool calls and — since the spend recorders stopped dropping it — the
+							// model, and it resolves its own dimension out of the agent id. The
+							// drawer was asking the findings endpoint for everything and that
+							// endpoint knows nothing about spend.
+							agent: roster.find((a) => String(a.dimensionId ?? "") === String(chosenDim.id).slice("dimension:".length)) ?? null,
 							runCount: mission?.runCount ?? null,
 							zh,
 							onClose: () => { onSelect?.(null); },
@@ -13469,7 +13475,7 @@ window.__ModuleLoader__.load({
 		* names the dimension and nothing else.
 		* @param props - `{missionId, dimension, runCount, zh, onClose, onOpenSource, onOpenTrace}`.
 		*/
-		function MissionDimensionDrawer({ missionId, dimension, runCount, zh, chapters, onClose, onOpenSource, onOpenTrace }) {
+		function MissionDimensionDrawer({ missionId, dimension, runCount, zh, chapters, agent, onClose, onOpenSource, onOpenTrace }) {
 			const [held, setHeld] = useState(null);
 			const [error, setError] = useState("");
 			const dimensionId = dimension === null || dimension === undefined ? null : dimension.id;
@@ -13694,6 +13700,13 @@ window.__ModuleLoader__.load({
 											axes === null || axes === undefined || axes.pagesFetched === null || axes.pagesFetched === undefined
 												? null
 												: { label: zh ? "抓取页数" : "Pages read", value: String(axes.pagesFetched) }
+											,
+											// TOKENS AND TOOL CALLS, which the reference puts in this drawer's
+											// first row of figures and which we had nowhere on the screen for a
+											// dimension. Both come off the roster, per agent, and the agent is
+											// this dimension's — a mission-wide total answers a different question.
+											agent === null || agent === undefined ? null : { label: zh ? "Tokens" : "Tokens", value: missionCompact(agent.tokens ?? 0) },
+											agent === null || agent === undefined ? null : { label: zh ? "工具调用" : "Tool calls", value: String(agent.toolCalls ?? 0) }
 										] }, "figures"),
 										// THE CHAPTERS THIS DIMENSION PRODUCED.
 										//
@@ -13714,6 +13727,92 @@ window.__ModuleLoader__.load({
 												: "each chapter this dimension wrote: how it was judged, its grade, how many rounds, and delivered words against the floor",
 											children: jsx(MissionChapterTable, { chapters, zh })
 										}, "chapters"),
+										// WHAT IT REACHED FOR, AND HOW OFTEN.
+										//
+										// The reference gives a dimension's drawer a 使用工具 histogram — 网络搜索
+										// ×4, 网页抓取 ×3 — and it is the fastest read of HOW a dimension was
+										// researched: four searches and no fetch is a different piece of work
+										// from one search and nine fetches, and the grade cannot say which.
+										//
+										// Per AGENT, because `mission_tool_calls` has no dimension column; the
+										// roster resolves one out of the agent id, which is the same route the
+										// tokens beside it take.
+										(agent?.tools ?? []).length === 0 ? null : MissionPanel({
+											bare: true,
+											title: zh ? "使用工具" : "Tools used",
+											count: (agent.tools ?? []).reduce((sum, t) => sum + (t.calls ?? 0), 0),
+											children: jsx("div", {
+												style: { display: "flex", flexWrap: "wrap", rowGap: SPACE.xs, columnGap: SPACE.sm },
+												children: agent.tools.map((t, i) => Chip({
+													tone: (t.failures ?? 0) > 0 ? TONE.warn : TONE.neutral,
+													size: "xs",
+													label: `${t.tool} ×${t.calls}`,
+													// A FAILURE COUNT ONLY WHEN THERE IS ONE. `×4 · 0 失败` on every
+													// chip is a column of zeroes that hides the one row that is not.
+													count: (t.failures ?? 0) === 0 ? undefined : (zh ? `${t.failures} 失败` : `${t.failures} failed`)
+												}, `t${i}`))
+											}, "tools")
+										}, "toolbox"),
+										// AND WHERE IT READ. The findings list below says what was found; this
+										// says which pages carried it and how much of the dimension leans on
+										// each — a dimension whose thirteen findings come from two hosts and
+										// one whose thirteen come from eleven are different pieces of work, and
+										// the 独立站点 tile gives the count without the shape.
+										((list) => (list.length === 0 ? null : MissionPanel({
+											bare: true,
+											title: zh ? "引用来源" : "Sources",
+											count: list.length,
+											children: jsx("div", {
+												style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
+												children: list.map((src, i) => jsxs("div", {
+													style: {
+														display: "flex", alignItems: "baseline", gap: SPACE.sm,
+														font: FONT.micro, color: INK.secondary, minWidth: 0
+													},
+													children: [
+														jsx("a", {
+															href: src.url, target: "_blank", rel: "noreferrer noopener",
+															className: "swm-prose-a",
+															style: {
+																flex: 1, minWidth: 0, font: FONT.small,
+																color: `rgb(${PALETTE.violet})`,
+																textDecoration: "none", whiteSpace: "nowrap",
+																overflow: "hidden", textOverflow: "ellipsis"
+															},
+															title: src.url,
+															children: src.title
+														}, "t"),
+														jsx("span", {
+															style: { flex: "none", fontFamily: MONO, color: INK.quiet },
+															children: src.host
+														}, "h"),
+														jsx("span", {
+															style: { flex: "none", color: INK.quiet },
+															children: zh ? `引用 ${src.hits} 次` : `cited ${src.hits}×`
+														}, "n")
+													]
+												}, `s${i}`))
+											}, "sources")
+										}, "sources")))(((seen) => {
+											// GROUPED HERE RATHER THAN QUERIED. The findings this drawer already
+											// holds carry the url, the host and the title; a second round trip to
+											// count them would be asking the server to do arithmetic the client
+											// has the inputs for.
+											for (const row of findings) {
+												const url = String(row.sourceUrl ?? "");
+												if (url === "") continue;
+												const had = seen.get(url);
+												if (had === undefined) {
+													seen.set(url, {
+														url,
+														host: String(row.sourceHost ?? ""),
+														title: sourceTitleOf(row.sourceTitle ?? "", "", url),
+														hits: 1
+													});
+												} else had.hits += 1;
+											}
+											return [...seen.values()].sort((a, b) => b.hits - a.hits);
+										})(new Map())),
 										// WHAT THE GRADE IS MADE OF. A bare 74 is a figure a reader can
 										// neither trust nor argue with; the two axes under this heading
 										// are the argument, and between them they are the whole formula —
