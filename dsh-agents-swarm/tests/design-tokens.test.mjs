@@ -4190,33 +4190,42 @@ test("a child whose parent fell out of the window is still drawn", () => {
 });
 
 test("a child row draws the connector its indent only implied", () => {
-  // The reference draws the relationship: an L-shaped glyph in the indent,
-  // then the child's own mark, then its title. Ours drew `paddingLeft: child
-  // ? "26px" : "10px"` and nothing else — 16px of blank cell, so the only
-  // thing saying a dimension belongs to s3-collect was that it started
-  // further right, which is a relationship the reader has to infer from a gap.
-  assert.ok(
-    declaration("const ICON_PATHS = {").includes("treeBranch:"),
-    "the connector is not in the glyph table. Every mark on this page is one stroked 24x24 path at one weight, and a tree drawn anywhere else is the second stroke width this table exists to prevent",
-  );
+  // WHAT THIS TEST REQUIRED WAS MY INVENTION, and on two counts it required
+  // the exact opposite of the reference.
+  //
+  // board/MissionTodoBoard.tsx indents a child with an inline
+  // `paddingLeft: depthOf(td) * 18px` and draws the elbow as `mt-1.5
+  // inline-block h-3 w-3 flex-shrink-0 border-b-2 border-l-2
+  // border-violet-200`. This test forbade `paddingLeft` BY NAME and demanded
+  // a glyph from the icon table. Both halves came from a screenshot I had
+  // transcribed into prose, and then guarded, so the transcription outranked
+  // the product for as long as the guard stood.
+  //
+  // What survives is the half that was never about the shape: whatever draws
+  // the corner must not be a box-drawing character and must not be a
+  // hand-typed <svg>.
   const board = code(body("function MissionTaskBoard("));
-  assert.match(board, /"treeBranch"/, "no child row draws the connector, so the tree is padding again");
-  // AND THE PADDING GOES WITH IT: a slot and a padding is the indent applied
-  // twice. The parent's 10px was also two pixels off the 8px `TH` sets, so
-  // the column header did not line up with its own column.
-  assert.ok(!/paddingLeft/.test(board), "the name cell writes its own padding-left again, which indents the row a second time");
-  // NOT A CHARACTER AND NOT AN INLINE <svg>. `└` is box-drawing: it falls
-  // back to whatever font the platform substitutes, at that font's weight,
-  // and it cannot take `currentColor`. An <svg> typed at the call site is how
-  // this file got a trash can and a close cross at two different weights.
-  assert.ok(!board.includes("└"), "the connector is a box-drawing character, which renders in a substituted font on most platforms");
-  assert.ok(!board.includes('jsx("svg"'), "the board draws its own <svg> again, beside a glyph table that exists so it does not");
-  // And an orphan gets the slot without the elbow: the glyph says "the row
-  // above me is my parent", which for an appended child is not true.
-  assert.match(
-    board,
-    /entry\.orphan === true \? undefined : "treeBranch"/,
-    "the elbow is drawn on every child, so a child appended after its parent fell out claims whatever row happens to be above it",
+  assert.ok(
+    board.includes('paddingLeft: child ? TASK_INDENT : undefined'),
+    'the depth is not a padding on the row, which is how the reference indents a child',
+  );
+  assert.ok(
+    board.includes('borderLeft: `2px solid rgba(${PALETTE.violet}')
+      && board.includes('borderBottom: `2px solid rgba(${PALETTE.violet}'),
+    'no child row draws the elbow, so the tree is a gap again and the relationship is left for the reader to infer from indentation alone',
+  );
+  // `└` is box-drawing: it falls back to whatever font the platform
+  // substitutes, at that font's weight, and it cannot take `currentColor`.
+  // An <svg> typed at the call site is how this file once got a trash can and
+  // a close cross at two different stroke widths.
+  assert.ok(!board.includes('└'), 'the connector is a box-drawing character, which renders in a substituted font on most platforms');
+  assert.ok(!board.includes('jsx("svg"'), 'the board draws its own <svg> again, beside a glyph table that exists so it does not');
+  // AND AN ORPHAN GETS THE INDENT WITHOUT THE CORNER. An elbow says "the row
+  // above me is my parent"; for a child appended after its parent fell out of
+  // the display that is a claim about whatever row happens to be there.
+  assert.ok(
+    board.includes('!child || entry.orphan === true ? null :'),
+    'the elbow is drawn on every child, so an appended orphan points at a row that is not its parent',
   );
 });
 
@@ -6066,11 +6075,34 @@ test("the child connector is the reference's twelve pixels, in the reference's c
   // times this session, and this is the first one that cost coverage rather
   // than a retry.
   const board = code(body("function MissionTaskBoard("));
-  assert.ok(board.includes('"treeBranch", size: ICON.xs'), "the connector is not the reference's 12px glyph");
+  // BOTH HALVES OF THIS USED TO ASSERT THE OPPOSITE, and the second one
+  // forbade by name the exact thing the reference does.
+  //
+  // board/MissionTodoBoard.tsx draws a child's marker as `mt-1.5
+  // inline-block h-3 w-3 flex-shrink-0 border-b-2 border-l-2
+  // border-violet-200` and indents the row with an inline
+  // `paddingLeft: depthOf(td) * 18px`. So: two borders on a 12px box, and a
+  // padding. Not a glyph, and not a reserved column — which is what I had
+  // written here, from a screenshot, and then guarded so it could not change.
   assert.ok(
-    board.includes("width: `calc(${SPACE.lg} + ${ICON.xs})`"),
-    "the connector's slot is not one glyph wide plus its indent",
+    board.includes('borderLeft: `2px solid rgba(${PALETTE.violet}'),
+    'the elbow is not drawn as a left border in the accent hue',
   );
-  assert.ok(!board.includes("paddingLeft"), "the indent is a padding again, so the elbow has nowhere of its own to sit");
+  assert.ok(
+    board.includes('borderBottom: `2px solid rgba(${PALETTE.violet}'),
+    'the elbow has no bottom edge, so it is a line rather than a corner',
+  );
+  assert.ok(
+    board.includes('paddingLeft: child ? TASK_INDENT : undefined'),
+    'the depth is not a padding on the row; the reference indents with one',
+  );
+  assert.ok(
+    !board.includes('treeBranch'),
+    'the glyph connector is back. It sits on the text baseline, which is why it floated clear of the stem it was meant to join',
+  );
+  assert.ok(
+    board.includes('alignItems: "flex-start"'),
+    'the row centres its cells again, which makes every row as tall as its tallest chip and moves the title baseline on each one',
+  );
 });
 

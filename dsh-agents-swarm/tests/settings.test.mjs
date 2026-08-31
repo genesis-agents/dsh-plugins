@@ -2290,9 +2290,15 @@ test("the panes are separate screens, not one scroll with headings", async () =>
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   const tasks = await open(view, RUNNING.topic);
-  // One row per stage, with the owner and the attempt count beside it —
-  // playground's column shape, not a strip with a paragraph under it.
-  for (const column of ["任务", "负责人", "状态", "用时"]) {
+  // One row per stage, with the owner, the model and the state beside it.
+  //
+  // THE REFERENCE'S COLUMNS, checked against board/MissionTodoBoard.tsx
+  // rather than against what we happened to ship: w-10 #, 任务名称,
+  // 负责人, 模型, 状态, 操作. It has no 用时 — a duration belongs to a
+  // stage and is already on that stage's row in the timeline — and this
+  // test used to require the one column the reference does not have while
+  // saying nothing about the one it does.
+  for (const column of ["任务名称", "负责人", "模型", "状态"]) {
     assert.ok(tasks.includes(column), `the task board has no ${column} column`);
   }
   assert.ok(tasks.includes("看轨迹 →"), "a stage row does not open onto its trajectory");

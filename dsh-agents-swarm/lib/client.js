@@ -349,6 +349,10 @@ window.__ModuleLoader__.load({
 			body: "var(--dsw-font-xs-13)",
 			bodyStrong: "var(--dsw-font-xs-strong-13)",
 			base: "var(--dsw-font-s-14)",
+			// 500, the step between `base` and `baseStrong`. The reference sets every
+			// task title in `text-sm font-medium` — not semibold, which is what its
+			// own `typography.h2` token is, and not 12px, which is what ours was.
+			baseMedium: "var(--dsw-font-s-medium-14)",
 			baseStrong: "var(--dsw-font-s-strong-14)",
 			large: "var(--dsw-font-base-16)",
 			largeStrong: "var(--dsw-font-base-strong-16)",
@@ -998,6 +1002,17 @@ window.__ModuleLoader__.load({
 		* Anything under 24 in this file is a badge or a dot, not a control, and
 		* is left alone.
 		*/
+		/**
+		 * A child task's indent, and how far its elbow sits below the row's top.
+		 *
+		 * Measured from the reference's board: `paddingLeft: depth * 18px` on the
+		 * row and `mt-1.5` on the elbow. 18 is not a SPACE step and should not be
+		 * forced into one — it is one glyph (12px) plus half a gap, chosen so the
+		 * child's title starts clear of the parent's icon rather than under it.
+		 */
+		const TASK_INDENT = "18px";
+		const ELBOW_DROP = "6px";
+
 		const CONTROL = { xs: "24px", sm: "28px", md: "34px" };
 
 		/** Variables and rules, in the order the cascade needs them. */
@@ -1134,6 +1149,7 @@ window.__ModuleLoader__.load({
 			"--dsw-font-xs-13:13px/18px var(--dsw-font-family);",
 			"--dsw-font-xs-strong-13:600 13px/18px var(--dsw-font-family);",
 			"--dsw-font-s-14:14px/20px var(--dsw-font-family);",
+			"--dsw-font-s-medium-14:500 14px/20px var(--dsw-font-family);",
 			"--dsw-font-s-strong-14:600 14px/20px var(--dsw-font-family);",
 			"--dsw-font-base-16:16px/24px var(--dsw-font-family);",
 			"--dsw-font-base-strong-16:600 16px/24px var(--dsw-font-family);",
@@ -1232,7 +1248,6 @@ window.__ModuleLoader__.load({
 			// middle of the chip beside it whatever height the row is, and the
 			// stem stops there: depth on that board is only ever one, so there is
 			// no rail from a grandparent for it to meet.
-			treeBranch: "M8 2v7a3 3 0 003 3h7",
 			// THE ROLE GLYPHS, and the reason there are eight of them. A role is
 			// a CATEGORY, and a category chip that carries only a word is read at
 			// the speed of reading; the mark is what makes a roster scannable at
@@ -11442,13 +11457,54 @@ window.__ModuleLoader__.load({
 					owner.set(agent.lastStepId, agent);
 				}
 			}
+			// WHICH MODEL RAN THIS ROW.
+			//
+			// Resolved from the AGENT and never from the stage, which is how the
+			// reference does it (`resolveModel` in board/MissionTodoBoard.tsx) and
+			// which is the only version that can be right: a stage delegates to
+			// whichever agents hold it, and two agents in one stage can be on
+			// different models.
+			//
+			// Four steps down, widening each time: the exact agent, an instance
+			// underneath it (`researcher` -> `researcher.2`), the researcher that
+			// owns this dimension, then anyone in the role. Null at the end rather
+			// than a guess — the row draws an em dash, and "not recorded" and "some
+			// model" are different answers.
+			const roster = Array.isArray(agents) ? agents : [];
+			const modelOf = (whoId, node) => {
+				const ref = String(whoId ?? "");
+				if (ref !== "") {
+					const exact = roster.find((a) => a.agentId === ref)
+						?? roster.find((a) => String(a.agentId ?? "").startsWith(`${ref}.`));
+					if (typeof exact?.model === "string" && exact.model !== "") return exact.model;
+				}
+				const dim = node?.dimensionId ?? null;
+				if (dim !== null && dim !== undefined) {
+					const byDim = roster.find((a) => a.role === "researcher" && a.dimensionId === dim);
+					if (typeof byDim?.model === "string" && byDim.model !== "") return byDim.model;
+				}
+				const role = ref.split(":")[0].trim().toLowerCase();
+				const byRole = roster.find((a) => a.role === role);
+				return typeof byRole?.model === "string" && byRole.model !== "" ? byRole.model : null;
+			};
+			// THE REFERENCE'S SIX COLUMNS, AT ITS WIDTHS.
+			//
+			// Measured from board/MissionTodoBoard.tsx: w-10, w-[36%], w-[16%],
+			// w-[12%], w-[14%] text-center, w-[18%]. Two of them are not ours:
+			//
+			//   - It has a 模型 column and we did not. Which model ran a task is the
+			//     first thing anybody asks of a row that went wrong, and it was
+			//     nowhere on this screen.
+			//   - It has no 用时 column and we did. A duration belongs to a stage,
+			//     and every stage's is already on its own row in the timeline; here
+			//     it was ten percent of the width spent on a repeat.
 			const columns = [
 				{ id: "idx", label: "#", width: "40px", align: "center" },
-				{ id: "name", label: zh ? "任务" : "Task", width: "42%" },
-				{ id: "owner", label: zh ? "负责人" : "Owner", width: "14%" },
-				{ id: "status", label: zh ? "状态" : "Status", width: "14%" },
-				{ id: "took", label: zh ? "用时" : "Took", width: "10%", align: "right" },
-				{ id: "action", label: zh ? "操作" : "", width: "12%", align: "right" }
+				{ id: "name", label: zh ? "任务名称" : "Task", width: "36%" },
+				{ id: "owner", label: zh ? "负责人" : "Owner", width: "16%" },
+				{ id: "model", label: zh ? "模型" : "Model", width: "12%" },
+				{ id: "status", label: zh ? "状态" : "Status", width: "14%", align: "center" },
+				{ id: "action", label: zh ? "操作" : "", width: "18%", align: "right" }
 			];
 			// Parents in pipeline order with their children directly under them,
 			// which is the order `buildWork` already returns; this only groups so a
@@ -11646,36 +11702,34 @@ window.__ModuleLoader__.load({
 											style: { ...TD, whiteSpace: "normal", minWidth: 0 },
 											children: [
 												jsxs("div", {
-													style: { display: "flex", alignItems: "center", gap: SPACE.sm, minWidth: 0 },
+													// ITEMS-START, AND THE DEPTH AS A PADDING ON THE ROW.
+													//
+													// Centring made every row as tall as its tallest chip and put the
+													// title's baseline in a different place on each one, which is most of
+													// what read as the list being loose. The reference is `flex
+													// items-start gap-2` with `paddingLeft: depth * 18px`.
+													style: {
+														display: "flex", alignItems: "flex-start", gap: SPACE.sm, minWidth: 0,
+														paddingLeft: child ? TASK_INDENT : undefined
+													},
 													children: [
-														// THE INDENT, DRAWN. A 16px slot before the chips rather than a
-														// background on the cell, and the cell is the reason: it is a title
-														// over an OPTIONAL sentence, so its height is one line on some rows
-														// and two on others. A background is positioned against the whole
-														// box, so one elbow would sit beside the title and the next beside
-														// the sentence under it. A flex child sits on the title's line by
-														// construction, at any row height.
+														// THE ELBOW IS A BORDER, NOT A GLYPH.
 														//
-														// A background could not take the colour either: it would be a data
-														// URI with the stroke baked in, which is the hand-mixed grey that
-														// does not follow the theme. `INK.quiet` here because a connector is
-														// decoration — the one thing INK's contrast note says that budget is
-														// for — and `flex: "none"` because the ellipsising title beside it
-														// would otherwise squeeze the indent away on a narrow column.
+														// The reference draws it as `h-3 w-3 border-b-2 border-l-2
+														// border-violet-200` — a 12px box showing only its left and bottom
+														// edges, so the corner lands where the parent's stem would. A font
+														// glyph sits on the text baseline instead, which is why mine floated.
 														//
-														// NO ELBOW ON AN ORPHAN. The glyph says "the row above me is my
-														// parent"; a child whose parent is not in `nodes` is appended after
-														// everything else, so the row above it is whichever row happened to
-														// be last. It keeps the slot, so it still reads as indented, and
-														// its origin chip still says what it is.
-														!child ? null : jsx("span", {
-															// TWELVE OF GLYPH IN TWENTY-EIGHT OF SLOT.
+														// An orphan gets the indent and no elbow: it IS nested, but the row
+														// it hangs from is not on screen, and drawing a stem to nothing is a
+														// worse lie than drawing none.
+														!child || entry.orphan === true ? null : jsx("span", {
+															"aria-hidden": "true",
 															style: {
-																flex: "none", display: "flex", justifyContent: "flex-end",
-																width: `calc(${SPACE.lg} + ${ICON.xs})`,
-																color: "var(--dsw-alias-state-business-primary)"
-															},
-															children: jsx(Icon, { name: entry.orphan === true ? undefined : "treeBranch", size: ICON.xs })
+																flex: "none", width: ICON.xs, height: ICON.xs, marginTop: ELBOW_DROP,
+																borderLeft: `2px solid rgba(${PALETTE.violet},${TINT.ring})`,
+																borderBottom: `2px solid rgba(${PALETTE.violet},${TINT.ring})`
+															}
 														}, "branch"),
 														// The origin, on the child only. "Why does this row exist" is
 														// the whole difference between a plan and a progress bar, and
@@ -11697,7 +11751,10 @@ window.__ModuleLoader__.load({
 															// NO `maxWidth` ANY MORE: it was 40% because the sentence
 															// shared the line, and nothing shares it now.
 															style: {
-																font: child ? FONT.small : FONT.smallStrong,
+																// 14px/500 AT BOTH DEPTHS. The reference sets every task title in
+																// `text-sm font-medium` regardless of nesting. Ours was 12px, and bold
+																// on parents only, so the list read as two tables stacked.
+																font: FONT.baseMedium,
 																color: INK.primary, minWidth: 0,
 																whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
 															},
@@ -11724,8 +11781,32 @@ window.__ModuleLoader__.load({
 											style: { ...TD, color: INK.secondary },
 											children: RoleChip({ agentId: who, zh }) ?? "—"
 										}, "owner"),
-										jsxs("td", {
+										jsx("td", {
 											style: TD,
+											children: ((model) => (model === null ? jsx("span", {
+												// AN EM DASH IN THE QUIETEST INK — the reference's
+												// `text-[10px] text-gray-300`. A task whose model was never
+												// recorded must not read like one that ran on nothing.
+												style: { font: FONT.micro, color: INK.quiet },
+												children: "—"
+											}, "none") : jsx("span", {
+												title: model,
+												style: {
+													// The reference's chip: mono, 10px, a subtle ground inside a
+													// hairline ring, and the NAME clipped at 96px rather than the
+													// chip stretched to hold whatever the provider called it.
+													display: "inline-flex", alignItems: "center", maxWidth: "96px",
+													font: FONT.micro, fontFamily: MONO, color: INK.secondary,
+													background: SURFACE.subtle, borderRadius: RADIUS.sm,
+													padding: `0 ${SPACE.xs}`,
+													boxShadow: `inset 0 0 0 1px ${LINE.rule}`,
+													whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+												},
+												children: model
+											}, "chip")))(modelOf(who, node))
+										}, "model"),
+										jsxs("td", {
+										style: { ...TD, textAlign: "center" },
 											children: [
 												// The row's STATE, so it takes the pill — and the
 												// attempt count rides INSIDE it. It used to hang off
@@ -11793,12 +11874,6 @@ window.__ModuleLoader__.load({
 												}, "verified")
 											]
 										}, "status"),
-										jsx("td", {
-											style: { ...TD, textAlign: "right", color: INK.secondary },
-											children: stage === null || stage.durationMs === null || stage.durationMs === undefined
-												? "—"
-												: missionDuration(stage.durationMs, zh)
-										}, "took"),
 										jsx("td", {
 											style: { ...TD, textAlign: "right" },
 											// TWO CONTROLS, WHICH IS WHAT THIS COLUMN IS FOR. The

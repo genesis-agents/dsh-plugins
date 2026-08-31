@@ -725,6 +725,10 @@ function projectAgents({ stages, dimensions, spendSums, sweepTo, swept }) {
       state: roleState.get(role) ?? "pending",
       lastStepId: roleStage.get(role) ?? null,
       dimensionId: resolveDimensionId(agentId, dimensionIds),
+      // null, never "" — an agent that has not spent yet has NO recorded
+      // model, which the board draws as an em dash. A blank string would
+      // draw as a chip containing nothing.
+      model: null,
       calls: 0,
       promptTok: 0,
       completionTok: 0,
@@ -752,6 +756,20 @@ function projectAgents({ stages, dimensions, spendSums, sweepTo, swept }) {
     e.cacheReadTok += numberOr(r.cache_read_tok, 0);
     e.tokens = e.promptTok + e.completionTok + e.cacheReadTok;
     if (r.step_id != null) e.lastStepId = String(r.step_id);
+  }
+
+  // AFTER the spend loop, so every agent that spent already has a row, and
+  // with `get` rather than `ensure` so a stale spend row cannot conjure an
+  // agent that the roster does not have.
+  for (const r of asArray(spendSums.modelByAgent)) {
+    if (r == null) continue;
+    const model = String(r.model ?? "");
+    if (model === "") continue;
+    const key = r.agent_id == null ? `role:${String(r.role ?? "unknown")}` : String(r.agent_id);
+    const e = byAgent.get(key);
+    // First row wins: they arrive ordered by calls, so that is the dominant
+    // model and every later row for the same agent is a minority one.
+    if (e !== undefined && e.model === null) e.model = model;
   }
 
   for (const r of asArray(spendSums.toolsByAgent)) {
@@ -1773,6 +1791,26 @@ export function readMissionViewInput(db, missionId, opts = {}) {
            COALESCE(SUM(calls),0)          AS calls
       FROM mission_spend WHERE mission_id = ? AND run_count = ? GROUP BY agent_id, role`, [missionId, runCount]);
 
+  // WHICH MODEL EACH AGENT RUNS ON — the task board's 模型 column.
+  //
+  // Resolved from the AGENT, not from the stage, because that is where the
+  // choice is actually made: a stage delegates to whichever agent holds it,
+  // and two agents inside one stage can be on different models.
+  //
+  // Grouped by model as well as by agent because an agent retried after a
+  // model switch has spend rows under both names. The honest answer to
+  // "which model ran this" is the one that did most of the calls, so the
+  // rows arrive ordered by calls and the first one wins. `MAX(model)` beside
+  // the sums in the query above would have returned whichever name sorts
+  // last, which is not an answer to anything.
+  const modelByAgent = query(db, `
+    SELECT agent_id, role, COALESCE(model, '') AS model,
+           COALESCE(SUM(calls),0) AS calls
+      FROM mission_spend
+     WHERE mission_id = ? AND run_count = ? AND model IS NOT NULL AND model <> ''
+     GROUP BY agent_id, role, COALESCE(model, '')
+     ORDER BY calls DESC`, [missionId, runCount]);
+
   // WHICH MODEL SPENT WHAT. One GROUP BY beside the two already here, and
   // scoped to the run like them: a mission that switched models mid-flight
   // is the case this exists to show, and a lifetime sum would blend two
@@ -1860,6 +1898,7 @@ export function readMissionViewInput(db, missionId, opts = {}) {
       totals,
       byStage,
       byAgent,
+      modelByAgent,
       byModel,
       toolsByPaceKey,
       toolsByAgent,
