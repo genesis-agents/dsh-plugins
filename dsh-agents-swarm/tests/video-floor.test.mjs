@@ -201,3 +201,24 @@ test("each channel id is the one that was resolved against YouTube", () => {
     );
   }
 });
+
+test("the roster version moves whenever the roster does", () => {
+  // THE EDIT WAS INERT AND NOTHING SAID SO. Twenty-one channels were added,
+  // pushed, deployed — and the collection run afterwards touched four video
+  // feeds, because `collectOnce` reads `config.feeds` from the STORE and the
+  // store is only written when `ROSTER_VERSION` moves. The library kept
+  // collecting the old thirteen and reported a healthy run.
+  //
+  // Pinned to the roster's own size so the two cannot drift again: adding a
+  // channel without bumping the version fails here rather than silently
+  // collecting nothing new.
+  const index = readFileSync(new URL("../lib/index.js", import.meta.url), "utf8");
+  const version = Number(/const ROSTER_VERSION = (\d+);/.exec(index)?.[1]);
+  assert.ok(Number.isInteger(version), "ROSTER_VERSION is gone, so the roster can never be reinstalled");
+  assert.ok(version >= 3, `ROSTER_VERSION is ${version}; the roster gained twenty-one channels at 3, and a stored roster below that is the old thirteen`);
+  assert.equal(
+    sourceFeeds().length,
+    94,
+    "the roster changed size. That is not a number to update here — bump ROSTER_VERSION in the same commit, or the new feeds are never installed and every collection run will look healthy while collecting the old set.",
+  );
+});

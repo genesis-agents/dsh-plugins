@@ -475,8 +475,18 @@ export function videoIdOf(url) {
 /**
  * Version stamp for the shipped roster. Bumping it re-installs the roster over
  * whatever is stored.
+ *
+ * BUMP IT IN THE SAME COMMIT THAT EDITS `sources.js`, or the edit is inert.
+ * Measured: twenty-one channels were added, pushed, deployed, and a collection
+ * run afterwards touched four video feeds — the stored roster was still the
+ * one installed at version 2, and nothing in the run said so. The feeds are
+ * read from the STORE, not from the module, and the store is only written
+ * when this number moves.
+ *
+ * 3 — the venture channels, the long-form interview shows, the Stanford
+ *     lecture series, 十字路口 and 张小珺.
  */
-const ROSTER_VERSION = 2;
+const ROSTER_VERSION = 3;
 
 /**
  * Install the shipped source roster the first time, and never again.
