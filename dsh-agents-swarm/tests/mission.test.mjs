@@ -3828,3 +3828,56 @@ test("only a fresh rerun opens a new generation", () => {
   assert.match(store, /UPDATE missions SET reclaim_count = run_count WHERE reclaim_count = 0/u, "the counter starts at zero for existing missions, handing every crashed one a new set of attempts");
   assert.match(store, /reclaimCount: row\.reclaim_count \?\? row\.run_count,/u, "the mission shaper drops the counter, so canResume reads undefined and the limit never bites");
 });
+
+test("each of the twelve stages says what it does", () => {
+  // TWELVE ROWS, TWELVE TIMES THE SAME SENTENCE. Every stage row on the board
+  // carried "one of the twelve stages the pipeline declares" — English, on a
+  // Chinese screen, identical on all twelve, filling the second line of a row
+  // that two rounds of work had made taller to hold it.
+  //
+  // That is what "任务列表呈现极其松散" was looking at. The reference's rows are
+  // tall because their second line says something: "Leader 派遣维度研究",
+  // "Reconciler 把所有维度的 finding 收齐做事实对账".
+  const view = readFileSync(new URL("../lib/mission-view.js", import.meta.url), "utf8");
+  const table = view.slice(view.indexOf("const STAGE_DOES = Object.freeze({"), view.indexOf("function buildWork("));
+  assert.ok(table.length > 0, "STAGE_DOES is gone, so every stage row says the same thing again");
+
+  // ALL TWELVE, IN BOTH LANGUAGES, AND EVERY SENTENCE ITS OWN.
+  //
+  // Parsed by splitting on the ids rather than by one regex per id: building a
+  // pattern from a string that contains `{`, `(` and `.` is how the first
+  // version of this test produced "Unterminated group" instead of an answer.
+  const entries = new Map();
+  for (const id of STAGES.map((stage) => stage.id)) {
+    const at = table.indexOf(`"${id}": Object.freeze({`);
+    assert.notEqual(at, -1, `${id} has no sentence, so its row falls back to the placeholder every other row used to carry`);
+    const block = table.slice(at, table.indexOf("}),", at));
+    const zh = /zh: "([^"]+)"/.exec(block)?.[1] ?? "";
+    const en = /en: "([^"]+)"/.exec(block)?.[1] ?? "";
+    assert.ok(zh.length >= 8, `${id}'s Chinese sentence is ${zh.length} characters, which is not a description`);
+    assert.ok(en.length >= 8, `${id}'s English sentence is ${en.length} characters, which is not a description`);
+    entries.set(id, zh);
+  }
+  assert.equal(entries.size, 12, `${entries.size} stages carry a sentence, and the pipeline declares twelve`);
+  assert.equal(
+    new Set(entries.values()).size,
+    12,
+    "two stages share a sentence, which is the placeholder returning under a better name",
+  );
+
+  // THE ROW READS THE TABLE, and in the run's own language: this file had no
+  // language in scope at all, which is how it came to write English on a
+  // AND AT THE CALL SITE, not merely somewhere in the file. `language:
+  // row.language ?? "zh"` also appears where a mission is shaped, so a
+  // pattern that only asks "does this string exist" passes while `buildWork`
+  // is called without it — which is the exact defect, and the mutation that
+  // removes the argument left the guard green.
+  assert.ok(
+    view.includes('buildWork({ stages, stageRows, dimensions, language: row.language ?? "zh" })'),
+    "buildWork is not handed the run's language at its call site, so its prose is whatever this file was written in",
+  );
+  assert.ok(
+    view.includes('STAGE_DOES[stage.stepId]?.[zh ? "zh" : "en"]'),
+    "the row no longer reads the table",
+  );
+});

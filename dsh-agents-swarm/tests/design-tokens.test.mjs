@@ -3161,11 +3161,25 @@ test("a long report can be read one chapter at a time", () => {
   // AND THE MODE IS WHAT DECIDES. Asserting the slice exists is not enough:
   // `false && …` leaves the expression in place and shows the whole document
   // in a view whose only job is to show one chapter.
+  // THROUGH `chosen`, NOT THROUGH THE MODE ALONE.
+  //
+  // This pinned the slice to `reading === "chapter"`, and that was the whole
+  // bug: being IN the chapter mode is not the same as having CHOSEN a chapter.
+  // `chapter` started at 0, 0 is a real chapter, so the list and the article
+  // always rendered together — 分章节 was an index sitting on top of the thing
+  // it indexes, and the two modes differed only in how much prose was below it.
   assert.match(
     report,
-    /const readSlice = reading === "chapter" && readSections\[readAt\] !== undefined/,
-    "the chapter view no longer keys off the reading mode, so it shows the whole report",
+    /const chosen = reading === "chapter" && chapter >= 0 && chapter < readSections\.length;/,
+    "nothing separates being in the chapter mode from having chosen a chapter, so the list and the article render together",
   );
+  assert.match(report, /const readSlice = chosen &&/, "the slice no longer waits for a chapter to be chosen");
+  // AND -1 IS WHAT MAKES UNCHOSEN POSSIBLE. Starting at 0 means a chapter is
+  // always chosen, which is how the list became permanent furniture.
+  assert.match(report, /const \[chapter, setChapter\] = useState\(-1\);/, "the chapter index starts at a real chapter, so the list can never be the whole screen");
+  // THE LIST HIDES WHEN ONE IS OPEN, AND THE ARTICLE HIDES UNTIL ONE IS.
+  assert.match(report, /reading !== "chapter" \|\| chosen \? null : jsx\("nav"/, "the chapter list draws over the chapter a reader opened");
+  assert.match(report, /reading === "chapter" && !chosen \? null : jsx\("div"/, "the article draws under the chapter list again");
   // CLAMPED. A version switch can land on an artefact with fewer chapters than
   // the one that was open, and `sections[7]` of a five-chapter report is
   // undefined — a blank pane with no way back to the prose.
@@ -5749,4 +5763,17 @@ test("the figure index is 1-based, and the parser is as narrow as the mint", () 
   // wrong, and the thing being asserted is one literal.
   assert.ok(pattern[1].includes("{1,3}"), "the token accepts more than an index, so the writer could name something it was never handed");
   assert.ok(!/A-Za-z/.test(pattern[1]), "the token accepts letters; the writer mints an integer chosen from a list it was handed");
+});
+
+test("an open chapter offers the way back to the list", () => {
+  // A reader who opens chapter 7 and wants the index again must not have to
+  // re-choose the mode they are already in. Without this the only route back
+  // was 通读 and then 分章节 — two clicks to undo one, through a mode that is
+  // not where they wanted to be.
+  const report = code(body("function MissionReport("));
+  assert.match(report, /onClick: \(\) => \{ setChapter\(-1\); \}/, "nothing returns to the chapter list, so opening a chapter is a one-way door");
+  // AND IT NAMES WHERE IT GOES. A back control that does not say is one a
+  // reader has to press to find out.
+  assert.match(report, /全部 \$\{readSections\.length\} 章/, "the back control says only 返回, so it does not say what it returns to");
+  assert.match(report, /!chosen \? null : jsxs\("button"/, "the back control draws when no chapter is open, where it points at nothing");
 });

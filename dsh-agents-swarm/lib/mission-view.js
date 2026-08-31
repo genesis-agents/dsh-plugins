@@ -234,7 +234,10 @@ export function projectMissionView(input) {
   const timeline = projectTimeline({ eventTail, stages, evidence, artifact, input });
   const resume = projectResume({ row, policy, terminal });
   const todo = buildTodo({ stages, dimensions, chapters, terminal, resume });
-  const work = buildWork({ stages, stageRows, dimensions });
+  // THE RUN'S OWN LANGUAGE. `buildWork` writes the only prose in this file a
+  // reader sees on the board, and nothing was handing it the language — so
+  // it wrote English on a Chinese screen.
+  const work = buildWork({ stages, stageRows, dimensions, language: row.language ?? "zh" });
 
   const mission = projectMission({
     row, policy, now, terminal, runCount, stages, dimensions, chapters,
@@ -1299,7 +1302,76 @@ const WORK_ASSESS_STAGE = "s4-assess";
  * @param {object} args - `{stages, stageRows, dimensions}`.
  * @returns {object[]} parents first, each child directly after its parent.
  */
-function buildWork({ stages, stageRows, dimensions }) {
+/**
+ * What each stage DOES, in one line, in the run's own language.
+ *
+ * The board draws a title over a sentence, and that sentence was the same
+ * for all twelve rows: "one of the twelve stages the pipeline declares".
+ * English on a Chinese screen, repeated down the whole table, filling the
+ * second line of a row two rounds of work had made taller to hold it.
+ *
+ * HERE AND NOT IN THE CATALOGUE. This file has no imports, by design — its
+ * header calls it a pure fold, no db, no clock, no writes — and reaching
+ * into mission-runtime for a string would be the first one. The catalogue
+ * declares what a stage IS; this is what its ROW SAYS, which is a fact
+ * about the read model and belongs with it.
+ *
+ * EACH NAMES THE AGENT AND THE ARTEFACT, because who did it and what came
+ * out is what makes a row worth its height.
+ */
+const STAGE_DOES = Object.freeze({
+  "s1-brief": Object.freeze({
+    zh: "按档位与预算算出这次运行的上限，并校验余额",
+    en: "Sizes this run against its tier and budget, and checks the balance",
+  }),
+  "s2-plan": Object.freeze({
+    zh: "领队读题，拆成若干研究维度，说明每一维要回答什么",
+    en: "The leader reads the topic and breaks it into research dimensions",
+  }),
+  "s3-collect": Object.freeze({
+    zh: "按维度并行派遣研究员：检索、抓取原文、逐条核验引语",
+    en: "Researchers run per dimension: search, fetch, verify each quote",
+  }),
+  "s4-assess": Object.freeze({
+    zh: "领队看每一维的发现数量与证据质量，决定哪些要重采",
+    en: "The leader grades each dimension and decides what to re-collect",
+  }),
+  "s5-reconcile": Object.freeze({
+    zh: "把各维度的发现收齐做事实对账，消掉重复与互相矛盾的说法",
+    en: "Reconciles every dimension's findings into one set of facts",
+  }),
+  "s6-synthesize": Object.freeze({
+    zh: "分析员在对账后的事实上归纳主题，形成报告的论点骨架",
+    en: "The analyst turns reconciled facts into the report's argument",
+  }),
+  "s7-outline": Object.freeze({
+    zh: "撰稿人定章节：每章写什么、用哪些事实、要多少字",
+    en: "The writer plans the chapters, their facts and their length",
+  }),
+  "s8-write": Object.freeze({
+    zh: "逐章撰写正文，每条主张都要带上可追溯的引用",
+    en: "Writes each chapter, every claim carrying a traceable citation",
+  }),
+  "s9-verify": Object.freeze({
+    zh: "核验员把每条引语放回原文比对，对不上的降级或删除",
+    en: "The verifier checks every quote back against the page it names",
+  }),
+  "s10-critique": Object.freeze({
+    zh: "评审员复盘全文，指出盲点、偏见与证据不足之处",
+    en: "The reviewer reads the whole report for blindspots and thin evidence",
+  }),
+  "s11-signoff": Object.freeze({
+    zh: "领队对照成功标准决定签署或拒签，并写下理由",
+    en: "The leader signs the report against its success criteria, or refuses",
+  }),
+  "s12-persist": Object.freeze({
+    zh: "过内容守卫，把这一版报告连同证据与引用一起冻结归档",
+    en: "Freezes this version of the report with its evidence and citations",
+  }),
+});
+
+function buildWork({ stages, stageRows, dimensions, language = "zh" }) {
+  const zh = String(language ?? "zh").toLowerCase().startsWith("zh");
   const items = [];
   const stageKey = (stepId) => `stage:${stepId}`;
 
@@ -1321,7 +1393,12 @@ function buildWork({ stages, stageRows, dimensions }) {
           ? "the catalogue declares this stage and mission_stages has no row for it — s1 did not finish its own bookkeeping"
           : stage.unknownToCatalogue === true
             ? "this step id is in mission_stages and not in the stage catalogue: pipeline drift"
-            : "one of the twelve stages the pipeline declares",
+            // WHAT THIS STAGE DOES, not what every stage is. The three
+            // branches above are exceptions worth a sentence each; the
+            // ordinary case was one sentence repeated twelve times, which is
+            // a row's second line spent saying nothing.
+            : (STAGE_DOES[stage.stepId]?.[zh ? "zh" : "en"]
+              ?? "one of the twelve stages the pipeline declares"),
       attempts: stage.attempts,
       counts: {
         attempts: stage.attempts,

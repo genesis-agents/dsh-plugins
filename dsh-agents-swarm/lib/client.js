@@ -15622,7 +15622,16 @@ window.__ModuleLoader__.load({
 			// early return with the rest of the hooks, which is where this file's own
 			// note beside them says hooks go.
 			const [reading, setReading] = useState("continuous");
-			const [chapter, setChapter] = useState(0);
+			// -1 IS "NO CHAPTER CHOSEN", and it is the whole drill-in.
+			//
+			// 分章节 used to draw the card list AND the article under it, always,
+			// because `chapter` started at 0 and 0 is a chapter. The list was
+			// therefore an index sitting on top of the thing it indexes, and the
+			// two reading modes differed only in how much prose was below it.
+			//
+			// Nothing else is new: `readAt` already clamps this, and `readSlice`
+			// already cuts one chapter out by the offsets s12 stored.
+			const [chapter, setChapter] = useState(-1);
 			const [showEvidence, setShowEvidence] = useState(true);
 			// The retry counter behind the failed-read screen. The pane had no
 			// way at all to re-issue its own GET: the only route back to this
@@ -15825,11 +15834,14 @@ window.__ModuleLoader__.load({
 			// open, and `sections[7]` of a five-chapter report is undefined — a blank
 			// pane with no way back to the prose.
 			const readSections = artifact === null ? [] : (artifact.sections ?? []);
+			// CHOSEN, or not. `chapter` is -1 until a card is clicked, and the
+			// clamp below is only meaningful once one has been.
+			const chosen = reading === "chapter" && chapter >= 0 && chapter < readSections.length;
 			const readAt = Math.min(Math.max(0, chapter), Math.max(0, readSections.length - 1));
 			// The slice is one substring of the string already in hand. `start` and
 			// `end` are offsets into it, written by s12 and checked by contentGuard's
 			// section-offset test, so nothing is re-parsed, re-fetched or stored twice.
-			const readSlice = reading === "chapter" && readSections[readAt] !== undefined
+			const readSlice = chosen && readSections[readAt] !== undefined
 				? String(artifact?.markdown ?? "").slice(
 					Number(readSections[readAt].start ?? 0),
 					Number(readSections[readAt].end ?? 0)
@@ -16013,7 +16025,10 @@ window.__ModuleLoader__.load({
 								}, "versions")
 							]
 						}, "reading"),
-						reading !== "chapter" ? null : jsx("nav", {
+						// THE LIST, AND ONLY WHILE NOTHING IS CHOSEN. It used to draw above
+						// the article on every render, which made it an index sitting on top
+						// of the thing it indexes.
+						reading !== "chapter" || chosen ? null : jsx("nav", {
 							// A LIST OF CARDS, not a sidebar: the pane is already inside a two-pane
 							// frame and a third column would be a scroller inside a scroller inside
 							// a scroller. What changed is what a row SAYS. A heading and two figures
@@ -16121,7 +16136,34 @@ window.__ModuleLoader__.load({
 								}, `ch-${at}`);
 							})
 						}, "toc"),
-						jsx("div", {
+						// THE ARTICLE: the whole of it in 通读, one chapter in 分章节, and
+						// NOTHING while the chapter list is up. The list and the prose used
+						// to render together, which is why 分章节 read as a decoration above
+						// the article rather than as a way into it.
+						// THE WAY BACK. A reader who opened chapter 7 and wants the list
+						// again must not have to re-choose the mode they are already in —
+						// and without this the only route back to the index was 通读 and
+						// then 分章节, which is two clicks to undo one.
+						//
+						// It names the chapter it is leaving rather than saying "返回",
+						// because a back control that does not say where it goes is one a
+						// reader has to press to find out.
+						!chosen ? null : jsxs("button", {
+							type: "button",
+							className: "swm-back swm-focus",
+							style: {
+								display: "inline-flex", alignItems: "center", gap: SPACE.xs,
+								font: FONT.small, color: INK.secondary,
+								appearance: "none", border: "none", background: "transparent",
+								padding: 0, margin: `0 0 ${SPACE.md}`, cursor: "pointer"
+							},
+							onClick: () => { setChapter(-1); },
+							children: [
+								jsx(Icon, { name: "arrowLeft", size: ICON.sm }, "back"),
+								jsx("span", { children: zh ? `全部 ${readSections.length} 章` : `All ${readSections.length} chapters` }, "label")
+							]
+						}, "tolist"),
+						reading === "chapter" && !chosen ? null : jsx("div", {
 							// NO MEASURE CAP. `WIDE_STYLE` exists two thousand lines up
 							// because "the detail view is a two-pane reader and must use the
 							// whole frame — capping it left a band of dead space down the
