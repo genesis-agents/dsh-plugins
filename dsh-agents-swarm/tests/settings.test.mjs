@@ -2335,6 +2335,25 @@ test("a board on a host that has not shipped work yet is still a board", async (
   assert.ok(tasks.includes("规划") && tasks.includes("采集"), "the board fell back to nothing");
 });
 
+test("the report opens and closes with the leader's own words", async () => {
+  // THE ONE PIECE OF WRITING ABOUT THE REPORT WAS NOT ON THE REPORT. s11
+  // writes the foreword against the mission's own criteria — what was
+  // answered, what is still open, how to read this, what to do next — and it
+  // was reachable only by opening one stage's drawer. panels/ReportPanel.tsx
+  // opens with 执行摘要 and closes with 结论与建议, and that is the same text.
+  stubFetch();
+  const view = await render("MissionReport", { missionId: SIGNED.id, zh: true, onBack: null });
+  const text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("执行摘要"), "the report does not open with the summary band");
+  assert.ok(text.includes("结论与建议"), "the report does not close with the conclusions band");
+  assert.ok(text.includes("这是一份证据审计后的阶段性底稿"), "the summary band is empty of the leader's reading guidance");
+  assert.ok(text.includes("向规划局"), "the closing band drops the follow-up, which is the half a reader acts on");
+  // AND THE VERDICT PER CRITERION KEEPS ITS MIDDLE VALUE. `partial` is not a
+  // pass and not a failure; a report that renders it as either is lying about
+  // what the leader signed.
+  assert.ok(text.includes("部分回答"), "a partially answered criterion is not shown as partial");
+});
+
 test("the leader's foreword renders its parts, not the object it arrives in", async () => {
   // s11 WRITES A STRUCTURED FOREWORD. FOREWORD_SCHEMA requires
   // `whatWeAnswered`, `whatRemainsUnclear` and `howToRead`, and shapeSignoff

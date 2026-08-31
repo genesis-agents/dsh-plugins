@@ -15815,6 +15815,10 @@ window.__ModuleLoader__.load({
 					host: (backing?.sourceHost ?? "") === "" ? hostOf(url) : backing.sourceHost,
 					quote: backing?.quote ?? citation?.inlineQuote ?? "",
 					verifyState: backing?.verifyState ?? null,
+					// WHEN THE SOURCE WAS PUBLISHED, which is not when we fetched it. The
+					// pair sat one line apart in the finding and only one of them ever
+					// reached this list.
+					publishedAt: backing?.publishedAt ?? null,
 					fetchedAt: backing?.fetchedAt ?? null,
 					status: backing?.status ?? null,
 					joined: backing !== null,
@@ -16199,6 +16203,11 @@ window.__ModuleLoader__.load({
 			const hosts = new Set(references.map((entry) => entry.host).filter((host) => host !== ""));
 			const verified = references.filter((entry) => String(entry.verifyState ?? "").startsWith("verified")).length;
 			const quoted = references.filter((entry) => entry.quote !== "").length;
+			// HOW MANY SOURCES SAY WHEN THEY WERE PUBLISHED — the reference's fourth
+			// tile. Undated is not a fault, but a bibliography that is mostly undated
+			// is a different object from one that is not, and until now this pane
+			// could not tell you which it had: the date was dropped at the freeze.
+			const dated = references.filter((entry) => formatDate(entry.publishedAt) !== "").length;
 			const missing = references.filter((entry) => !entry.joined).length;
 			return jsxs("div", {
 				// Same frame as the article above it: the reference list is part of the
@@ -16249,6 +16258,13 @@ window.__ModuleLoader__.load({
 							meter: missionRate(verified, references.length)
 						},
 						{ label: zh ? "有引语" : "Quoted", value: String(quoted) },
+						{
+							label: zh ? "有日期" : "Dated",
+							value: String(dated),
+							hint: references.length === 0
+								? ""
+								: `${Math.round((dated / references.length) * 100)}%`
+						},
 						// OMITTED WHEN ZERO, like the scorecard's residuals. A tile
 						// reading 元数据缺失 0 is the same defect one size up as the
 						// chip that printed 未通过 0，未检查 0，被反驳 0 on a clean
@@ -16369,6 +16385,10 @@ window.__ModuleLoader__.load({
 														// reference puts here holds a publication date.
 														entry.fetchedAt === null || entry.fetchedAt === undefined
 															? null : fact(`${zh ? "取回" : "fetched"} ${formatStamp(entry.fetchedAt)}`, "fetched"),
+															// THE PUBLICATION DATE, ahead of the fetch stamp, because it is the one
+															// a reader judges a source by. `formatDate` and not `formatStamp`: a
+															// publication date has no useful clock time on it.
+															formatDate(entry.publishedAt) === "" ? null : fact(`${zh ? "发表" : "pub"} ${formatDate(entry.publishedAt)}`, "published"),
 														jsx("span", {
 															style: { flex: "none", color: INK.quiet },
 															children: zh ? `引用 ${entry.inText} 处` : `cited ${entry.inText}× in the text`
@@ -16428,6 +16448,15 @@ window.__ModuleLoader__.load({
 			// img is pointed at. A token naming a figure this run never held resolves
 			// to nothing here, and nothing is what the renderer draws for it.
 			const [figures, setFigures] = useState(null);
+			// THE LEADER'S FOREWORD, which is not on the artefact.
+			//
+			// s11 writes it against the mission's own criteria — what was answered,
+			// what is still open, how to read this, what to do next — and it lands on
+			// the stage-output projection rather than in the frozen report. So the one
+			// piece of writing ABOUT the report was reachable only by opening one
+			// stage's drawer, while the reference opens and closes its report with
+			// exactly this text (执行摘要 / 结论与建议 in panels/ReportPanel.tsx).
+			const [foreword, setForeword] = useState(null);
 			const [state, setState] = useState("loading");
 			const [error, setError] = useState("");
 
@@ -16436,6 +16465,23 @@ window.__ModuleLoader__.load({
 			// a picture index answered 500 would be the tail wagging the dog. An
 			// empty index draws prose with no pictures — which is exactly what every
 			// mission finished before this feature existed will draw, for ever.
+			useEffect(() => {
+				if ((missionId ?? "") === "") return undefined;
+				let alive = true;
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/insights`)
+					.then((response) => response.json())
+					.then((payload) => {
+						if (!alive) return;
+						setForeword(payload?.data?.signoff?.foreword ?? null);
+					})
+					// A REPORT WITHOUT ITS FOREWORD IS STILL A REPORT. This is the only
+					// one of the three fetches on this screen whose failure must not
+					// show an error: the artefact is the page, and the foreword is a
+					// band on it.
+					.catch(() => { if (alive) setForeword(null); });
+				return () => { alive = false; };
+			}, [missionId]);
+
 			useEffect(() => {
 				if ((missionId ?? "") === "") return undefined;
 				let alive = true;
@@ -16850,6 +16896,36 @@ window.__ModuleLoader__.load({
 						//
 						// 版本历史 IS THE ONE WE HOLD, and it is `listArtifactVersions` — the same
 						// chips that used to sit in a band of their own above the title.
+						// 执行摘要 — the band the reference opens its report with.
+						//
+						// `border-b border-violet-100 bg-gradient-to-br from-violet-50/60 to-
+						// purple-50/40 px-5 py-4` with an uppercase violet caption. Flat rather
+						// than a gradient, for the reason the header tile is flat: the reference
+						// keeps its gradients in a design-layer list so feature code cannot
+						// hand-mix one, and we have no such list.
+						MissionForeword({ foreword, zh, part: "summary" }) === null ? null : jsxs("section", {
+							style: {
+								padding: CARD_PAD, borderRadius: RADIUS.lg,
+								background: `rgba(${PALETTE.violet},${TINT.wash})`,
+								border: `1px solid rgba(${PALETTE.violet},${TINT.ring})`,
+								margin: `0 0 ${SPACE.lg}`
+							},
+							children: [
+								jsxs("div", {
+									style: {
+										display: "flex", alignItems: "center", gap: SPACE.xs,
+										font: FONT.microStrong, letterSpacing: TRACK_WIDE,
+										textTransform: "uppercase", color: `rgb(${PALETTE.violet})`,
+										margin: `0 0 ${SPACE.sm}`
+									},
+									children: [
+										jsx(Icon, { name: "sparkles", size: ICON.xs }, "glyph"),
+										jsx("span", { children: zh ? "执行摘要" : "Executive summary" }, "label")
+									]
+								}, "head"),
+								MissionForeword({ foreword, zh, part: "summary" }, "body")
+							]
+						}, "summary"),
 						readSections.length < 2 && versions.length <= 1 ? null : jsxs("div", {
 							style: { display: "flex", alignItems: "center", gap: SPACE.md, flexWrap: "wrap", margin: `0 0 ${SPACE.md}` },
 							children: [
@@ -17123,6 +17199,27 @@ window.__ModuleLoader__.load({
 						// listing what they rest on is the honest place for it, and it
 						// is drawn from the same `references` array as the list, so the
 						// two cannot disagree about how many citations there are.
+						// 结论与建议 — the band the reference closes its report with, and the
+						// half a reader acts on: what is still open, and what to do next.
+						MissionForeword({ foreword, zh, part: "closing" }) === null ? null : jsxs("section", {
+							style: {
+								padding: CARD_PAD, borderRadius: RADIUS.lg,
+								background: `rgba(${PALETTE.violet},${TINT.wash})`,
+								border: `1px solid rgba(${PALETTE.violet},${TINT.ring})`,
+								margin: `0 0 ${SPACE.lg}`
+							},
+							children: [
+								jsx("div", {
+									style: {
+										font: FONT.microStrong, letterSpacing: TRACK_WIDE,
+										textTransform: "uppercase", color: `rgb(${PALETTE.violet})`,
+										margin: `0 0 ${SPACE.sm}`
+									},
+									children: zh ? "结论与建议" : "Conclusions and next steps"
+								}, "head"),
+								MissionForeword({ foreword, zh, part: "closing" }, "body")
+							]
+						}, "closing"),
 						references.length === 0 ? null : jsx(MissionEvidenceSpread, { references, zh }, "spread"),
 						references.length === 0 ? null : jsx(MissionReferenceList, { references, zh }, "references"),
 						jsxs("div", {

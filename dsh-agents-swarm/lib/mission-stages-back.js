@@ -1948,6 +1948,17 @@ function freezeEvidence(store, missionId, runCount) {
       sourceUrl: finding.sourceUrl,
       sourceHost: finding.sourceHost,
       sourceTitle: finding.sourceTitle,
+      // THE PUBLICATION DATE, WHICH THIS FREEZE USED TO DROP.
+      //
+      // `mission_findings.published_at` is written by s3 from the page's own
+      // metadata and selected by FINDING_COLUMNS, so it reached this function
+      // on every finding — and stopped here. The references pane could
+      // therefore only ever print `fetchedAt`, which is when WE pulled the
+      // page and is a different fact about a different actor.
+      //
+      // Null for an artefact frozen before this line existed, and the pane
+      // draws nothing rather than guessing.
+      publishedAt: finding.publishedAt ?? null,
       verifyState: finding.verifyState,
       documentId: finding.documentId,
       spanIndex: finding.spanIndex,
