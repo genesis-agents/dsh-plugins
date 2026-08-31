@@ -410,6 +410,20 @@ function spendRecorder({ store, missionId, stage, now, logger }) {
         stepId: stage.id,
         role: stage.agent ?? "code",
         agentId: stage.agent,
+        // THE MODEL, WHICH THIS HOOK WAS ALREADY BEING HANDED.
+        //
+        // mission-agent.js writes `model: route?.model ?? null` into the very
+        // record passed here, with a note beside it saying why: the route is
+        // resolved per call, so a mission that switched models mid-run can say
+        // so per row. This recorder read the token counts out of that record
+        // and dropped the model on the floor, so every stage settled through
+        // the front and back modules wrote NULL — and the board's 模型 column
+        // was empty for all of them while the middle module's rows, which
+        // record from the finished run instead, showed theirs.
+        //
+        // The same six lines exist in the other module. They are byte-identical
+        // and were byte-identical while both were wrong.
+        model: typeof usage?.model === "string" && usage.model !== "" ? usage.model : null,
         promptTok: counts.prompt,
         completionTok: counts.completion,
         cacheReadTok: counts.cacheRead,

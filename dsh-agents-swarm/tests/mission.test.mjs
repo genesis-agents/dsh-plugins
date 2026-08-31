@@ -3881,3 +3881,31 @@ test("each of the twelve stages says what it does", () => {
     "the row no longer reads the table",
   );
 });
+
+test("every spend row records the model that produced it", () => {
+  // THREE WRITERS, AND TWO OF THEM DROPPED IT. mission-agent.js puts
+  // `model: route?.model ?? null` into the record it hands `onUsage`, with a
+  // note beside it explaining that the route is resolved per call so a
+  // mission that switched models mid-run can say so per row.
+  //
+  // `spendRecorder` — which exists byte-identically in mission-stages-front
+  // and mission-stages-back — read the token counts out of that record and
+  // never passed the model on. So every stage settled through those two
+  // modules wrote NULL, the task board's 模型 column was empty for all of
+  // them, and the one column that did fill came from the middle module,
+  // which records from the finished run instead.
+  //
+  // Asserted at every writer rather than at one: the defect was that two of
+  // three agreed with each other and not with the schema.
+  const files = ["mission-stages-front.js", "mission-stages-middle.js", "mission-stages-back.js"];
+  for (const name of files) {
+    const source = readFileSync(new URL(`../lib/${name}`, import.meta.url), "utf8");
+    const writes = source.split("insertSpend({").length - 1;
+    if (writes === 0) continue;
+    const models = source.split("model:").length - 1;
+    assert.ok(
+      models >= writes,
+      `${name} writes ${writes} spend row(s) and names a model ${models} time(s) — a row with no model is a row the 模型 column cannot fill, and nothing else in the ledger carries it`,
+    );
+  }
+});
