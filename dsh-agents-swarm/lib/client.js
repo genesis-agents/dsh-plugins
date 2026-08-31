@@ -311,6 +311,31 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * A hue's GROUND or RING: an alpha of its fill step, never of its ink.
+		 *
+		 * ALPHA OVER WHITE DESATURATES. Mixing a -700 with white walks toward grey,
+		 * not toward the palette's own -50/-100/-200, which are saturated tints in
+		 * their own right. A chip grounded `rgba(green-700, 0.10)` came out #e7f2ec
+		 * where the reference's `bg-green-100` is #dcfce7 — the same lightness,
+		 * visibly less colour — and that is why the status column read as drab even
+		 * after the hue itself was corrected.
+		 *
+		 * From the FILL step the arithmetic lands where the reference already is:
+		 *
+		 *   FILL.green at 0.10 -> (233,249,239)   green-100 is (220,252,231)
+		 *   FILL.green at 0.28 -> (193,239,210)   green-200 is (187,247,208)
+		 *
+		 * So no third and fourth ladder: the -500 already declared carries both the
+		 * solid fills and every tint derived from them.
+		 * @param hue - a PALETTE or TONE value.
+		 * @param alpha - a TINT step.
+		 * @returns the colour, as an `rgba()` string.
+		 */
+		function tint(hue, alpha) {
+			return `rgba(${fillOf(hue)},${alpha})`;
+		}
+
+		/**
 		* What a STATE looks like. Six, and every status vocabulary in this file
 		* resolves into these rather than choosing a hue of its own.
 		*
@@ -555,9 +580,9 @@ window.__ModuleLoader__.load({
 				...step,
 				display: "inline-flex", alignItems: "center", boxSizing: "border-box",
 				borderRadius: RADIUS.pill,
-				background: `rgba(${tone ?? TONE.neutral},${TINT.soft})`,
+				background: tint(tone ?? TONE.neutral, TINT.soft),
 				color: `rgb(${tone ?? TONE.neutral})`,
-				boxShadow: `inset 0 0 0 1px rgba(${tone ?? TONE.neutral},${TINT.ring})`,
+				boxShadow: `inset 0 0 0 1px ${tint(tone ?? TONE.neutral, TINT.ring)}`,
 				whiteSpace: "nowrap"
 			};
 		}
@@ -1009,14 +1034,14 @@ window.__ModuleLoader__.load({
 			// hover:bg-violet-50/30` — the same gesture on the same kind of card, and
 			// a source card hovering grey beside a citation card hovering violet was
 			// two answers to one question.
-			`.swm-source:hover{border-color:rgba(${PALETTE.violet},${TINT.ring});background:rgba(${PALETTE.violet},${TINT.wash})}`,
+			`.swm-source:hover{border-color:${tint(PALETTE.violet, TINT.ring)};background:${tint(PALETTE.violet, TINT.wash)}}`,
 			`.swm-source:hover .swm-source-title{text-decoration:underline}`,
 			// A CITATION IS A CARD, not a line in a list. The reference gives each one
 			// `rounded-md border border-gray-200 bg-white px-3 py-2` and hovers it to
 			// `hover:border-violet-200 hover:bg-violet-50/30`: the border carries the
 			// signal and the ground barely moves.
 			`.swm-ref{border:1px solid ${LINE.hair};background:${SURFACE.card};border-radius:${RADIUS.sm};padding:${SPACE.sm} ${SPACE.md};transition:border-color ${MOTION.fast},background ${MOTION.fast}}`,
-			`.swm-ref:hover{border-color:rgba(${PALETTE.violet},${TINT.ring});background:rgba(${PALETTE.violet},${TINT.wash})}`,
+			`.swm-ref:hover{border-color:${tint(PALETTE.violet, TINT.ring)};background:${tint(PALETTE.violet, TINT.wash)}}`,
 			`.swm-ref:hover .swm-ref-title{text-decoration:underline}`,
 			`.swm-prose-a:hover{text-decoration:underline}`,
 
@@ -1609,7 +1634,7 @@ window.__ModuleLoader__.load({
 				// and in nothing else.
 				gap: SPACE.xs, padding: dense ? "1px 6px" : `4px ${SPACE.sm}`,
 				borderRadius: RADIUS.sm,
-				background: `rgba(${hue},${TINT.soft})`,
+				background: tint(hue, TINT.soft),
 				color: `rgb(${hue})`,
 				// NO RING. A category is tinted and nothing else, which is what the two
 				// hand-drawn tags in the trajectory have always been — and being tinted
@@ -1655,10 +1680,10 @@ window.__ModuleLoader__.load({
 					// Callout's header chip sits on a surface of its own tone and has to
 					// stay solid whatever else is asked for.
 					...(outline === true
-						? { background: "transparent", boxShadow: `inset 0 0 0 1px rgba(${hue},${TINT.ring})` }
+						? { background: "transparent", boxShadow: `inset 0 0 0 1px ${tint(hue, TINT.ring)}` }
 						: {}),
 					...(solid === true
-						? { background: `rgba(${hue},${TINT.fill})`, color: SURFACE.base, boxShadow: "none" }
+						? { background: tint(hue, TINT.fill), color: SURFACE.base, boxShadow: "none" }
 						: {}),
 					// AFTER the shorthand, never before it. `font` resets
 					// font-variant, so a chip that declared this first lost it
@@ -1687,7 +1712,7 @@ window.__ModuleLoader__.load({
 							marginLeft: "2px", padding: "0 4px", borderRadius: RADIUS.pill,
 							// A stronger step of the SAME hue, not white: white is
 							// a colour in one theme and a hole in the other.
-							background: `rgba(${hue},${TINT.ring})`
+							background: tint(hue, TINT.ring)
 						},
 						children: count
 					}, "count")
@@ -1813,8 +1838,8 @@ window.__ModuleLoader__.load({
 					display: "flex", alignItems: "flex-start", gap: SPACE.sm,
 					margin: `0 0 ${SPACE.md}`, padding: `${SPACE.sm} ${SPACE.md}`,
 					borderRadius: RADIUS.md,
-					background: `rgba(${hue},${TINT.soft})`,
-					boxShadow: `inset 0 0 0 1px rgba(${hue},${TINT.ring})`,
+					background: tint(hue, TINT.soft),
+					boxShadow: `inset 0 0 0 1px ${tint(hue, TINT.ring)}`,
 					color: INK.primary
 				},
 				children: [
@@ -3184,7 +3209,7 @@ window.__ModuleLoader__.load({
 						style: {
 							flex: "none", width: "40px", height: "40px", borderRadius: RADIUS.lg,
 							display: "flex", alignItems: "center", justifyContent: "center",
-							background: `rgba(${hue},${TINT.soft})`, color: `rgb(${hue})`
+							background: tint(hue, TINT.soft), color: `rgb(${hue})`
 						},
 						children: jsx(Icon, { name: mark, size: ICON.md }, "glyph")
 					}, "mark"),
@@ -4205,7 +4230,7 @@ window.__ModuleLoader__.load({
 							font: FONT.small,
 							padding: `0 ${SPACE.xs}`, borderRadius: RADIUS.sm,
 							color: `rgb(${PALETTE.violet})`,
-							background: `rgba(${PALETTE.violet},${TINT.soft})`,
+							background: tint(PALETTE.violet, TINT.soft),
 							fontFamily: "var(--ds-font-family-code)"
 						},
 						children: token.slice(1, -1)
@@ -8100,8 +8125,8 @@ window.__ModuleLoader__.load({
 									style: {
 										...controlStyle(),
 										display: "inline-flex", alignItems: "center", gap: SPACE.xs,
-										border: `1px solid rgba(${TONE.accent},${TINT.ring})`,
-										background: `rgba(${TONE.accent},${TINT.soft})`,
+										border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
+										background: tint(TONE.accent, TINT.soft),
 										color: `rgb(${TONE.accent})`
 									},
 									onClick: () => { setStartOpen(true); },
@@ -9519,9 +9544,9 @@ window.__ModuleLoader__.load({
 					display: "flex", alignItems: "center", gap: SPACE.md,
 					padding: quiet ? `${SPACE.sm} 0 0` : "10px 12px",
 					borderRadius: quiet ? 0 : RADIUS.lg,
-					border: quiet ? "none" : `1px solid rgba(${hue},${TINT.ring})`,
+					border: quiet ? "none" : `1px solid ${tint(hue, TINT.ring)}`,
 					borderTop: quiet ? `1px solid ${LINE.rule}` : "none",
-					background: quiet ? "transparent" : `rgba(${hue},${TINT.soft})`,
+					background: quiet ? "transparent" : tint(hue, TINT.soft),
 					margin: `0 0 ${SPACE.md}`
 				},
 				children: [
@@ -9734,7 +9759,7 @@ window.__ModuleLoader__.load({
 							const detail = missionEventDetail(event, zh);
 							return jsxs("div", {
 								className: "swm-ev",
-								style: { font: FONT.small, background: `rgba(${hue},${TINT.soft})`, color: INK.secondary },
+								style: { font: FONT.small, background: tint(hue, TINT.soft), color: INK.secondary },
 								children: [
 									jsx("span", {
 										style: {
@@ -10370,7 +10395,7 @@ window.__ModuleLoader__.load({
 							children: [
 								jsx("span", {
 									className: "swt-evkind",
-									style: { color: `rgb(${kindHue})`, background: `rgba(${kindHue},${TINT.soft})` },
+									style: { color: `rgb(${kindHue})`, background: tint(kindHue, TINT.soft) },
 									children: missionFace(MISSION_ROLE_FACES, row.role, zh)
 								}, "kind"),
 								RoleChip({ agentId: row.agentId, zh, iconOnly: true }, "who"),
@@ -10453,7 +10478,7 @@ window.__ModuleLoader__.load({
 						children: [
 							jsx("span", {
 								className: "swt-tag",
-								style: { color: `rgb(${kindHue})`, background: `rgba(${kindHue},${TINT.soft})` },
+								style: { color: `rgb(${kindHue})`, background: tint(kindHue, TINT.soft) },
 								children: missionFace(MISSION_ROLE_FACES, row.role, zh)
 							}, "tag"),
 							// WHO, at last, and only as a mark. The agent id reached the
@@ -12141,8 +12166,8 @@ window.__ModuleLoader__.load({
 															"aria-hidden": "true",
 															style: {
 																flex: "none", width: ICON.xs, height: ICON.xs, marginTop: ELBOW_DROP,
-																borderLeft: `2px solid rgba(${PALETTE.violet},${TINT.ring})`,
-																borderBottom: `2px solid rgba(${PALETTE.violet},${TINT.ring})`
+																borderLeft: `2px solid ${tint(PALETTE.violet, TINT.ring)}`,
+																borderBottom: `2px solid ${tint(PALETTE.violet, TINT.ring)}`
 															}
 														}, "branch"),
 														// The origin, on the child only. "Why does this row exist" is
@@ -13505,7 +13530,7 @@ window.__ModuleLoader__.load({
 						style: {
 							font: FONT.small, color: INK.secondary,
 							padding: `${SPACE.xs} ${SPACE.sm}`,
-							borderLeft: `2px solid rgba(${missionHue(MISSION_VERIFY_FACES, row.verifyState)},${TINT.ring})`,
+							borderLeft: `2px solid ${tint(missionHue(MISSION_VERIFY_FACES, row.verifyState), TINT.ring)}`,
 							background: SURFACE.subtle
 						},
 						children: jsx(MissionClamp, { text: row.quote, lines: 3, zh })
@@ -15316,7 +15341,7 @@ window.__ModuleLoader__.load({
 									style: {
 										flex: "none", width: CONTROL.sm, height: CONTROL.sm, borderRadius: RADIUS.md,
 										display: "flex", alignItems: "center", justifyContent: "center",
-										background: `rgba(${roleTone("leader")},${TINT.soft})`, color: `rgb(${roleTone("leader")})`
+										background: tint(roleTone("leader"), TINT.soft), color: `rgb(${roleTone("leader")})`
 									},
 									children: jsx(Icon, { name: ROLE_ICON.leader, size: ICON.md }, "glyph")
 								}, "mark"),
@@ -15781,7 +15806,7 @@ window.__ModuleLoader__.load({
 			return jsxs("div", {
 				style: {
 					display: "flex", alignItems: "flex-start", gap: SPACE.sm,
-					padding: "8px 10px", borderRadius: RADIUS.md, background: `rgba(${accent},${TINT.soft})`
+					padding: "8px 10px", borderRadius: RADIUS.md, background: tint(accent, TINT.soft)
 				},
 				children: [
 					jsx("span", {
@@ -16381,7 +16406,7 @@ window.__ModuleLoader__.load({
 												font: FONT.microStrong, fontFamily: MONO,
 												borderRadius: RADIUS.sm, padding: `0 ${SPACE.xs}`,
 												color: `rgb(${PALETTE.violet})`,
-												background: `rgba(${PALETTE.violet},${TINT.soft})`
+												background: tint(PALETTE.violet, TINT.soft)
 											},
 											children: `[${entry.index}]`
 										}, "n"),
@@ -16397,7 +16422,7 @@ window.__ModuleLoader__.load({
 																font: FONT.nano, borderRadius: RADIUS.sm,
 																padding: `0 ${SPACE.xs}`,
 																color: `rgb(${kind.hue})`,
-																background: `rgba(${kind.hue},${TINT.soft})`
+																background: tint(kind.hue, TINT.soft)
 															},
 															children: zh ? kind.zh : kind.en
 														}, "kind"),
@@ -16959,8 +16984,8 @@ window.__ModuleLoader__.load({
 						MissionForeword({ foreword, zh, part: "summary" }) === null ? null : jsxs("section", {
 							style: {
 								padding: CARD_PAD, borderRadius: RADIUS.lg,
-								background: `rgba(${PALETTE.violet},${TINT.wash})`,
-								border: `1px solid rgba(${PALETTE.violet},${TINT.ring})`,
+								background: tint(PALETTE.violet, TINT.wash),
+								border: `1px solid ${tint(PALETTE.violet, TINT.ring)}`,
 								margin: `0 0 ${SPACE.lg}`
 							},
 							children: [
@@ -17095,7 +17120,7 @@ window.__ModuleLoader__.load({
 												// and the dash inside it are the same grey smudge.
 												width: CONTROL.md, height: CONTROL.md, borderRadius: RADIUS.circle,
 												display: "inline-flex", alignItems: "center", justifyContent: "center",
-												background: `rgba(${hue},${TINT.soft})`, color: `rgb(${hue})`
+												background: tint(hue, TINT.soft), color: `rgb(${hue})`
 											},
 											title: section.citationCount === 0
 												? (zh ? "这一章没有引用，所以没有可核验的东西。" : "This chapter cites nothing, so there was nothing here to verify.")
@@ -17257,8 +17282,8 @@ window.__ModuleLoader__.load({
 						MissionForeword({ foreword, zh, part: "closing" }) === null ? null : jsxs("section", {
 							style: {
 								padding: CARD_PAD, borderRadius: RADIUS.lg,
-								background: `rgba(${PALETTE.violet},${TINT.wash})`,
-								border: `1px solid rgba(${PALETTE.violet},${TINT.ring})`,
+								background: tint(PALETTE.violet, TINT.wash),
+								border: `1px solid ${tint(PALETTE.violet, TINT.ring)}`,
 								margin: `0 0 ${SPACE.lg}`
 							},
 							children: [
@@ -17382,7 +17407,7 @@ window.__ModuleLoader__.load({
 						style: { font: FONT.microStrong,
 							flex: "none", width: "19px", height: "19px", borderRadius: RADIUS.circle,
 							display: "inline-flex", alignItems: "center", justifyContent: "center", fontVariantNumeric: "tabular-nums",
-							background: accent === undefined ? SURFACE.hover : `rgba(${accent},${TINT.soft})`,
+							background: accent === undefined ? SURFACE.hover : tint(accent, TINT.soft),
 							color: accent === undefined ? INK.secondary : `rgb(${accent})`
 						},
 						children: String(step)
@@ -17478,7 +17503,7 @@ window.__ModuleLoader__.load({
 			return jsxs("div", {
 				style: {
 					borderBottom: last ? "none" : `1px solid ${LINE.hair}`,
-					background: open ? `rgba(${accent},${TINT.soft})` : "transparent",
+					background: open ? tint(accent, TINT.soft) : "transparent",
 					transition: `background ${MOTION.fast}`
 				},
 				children: [
@@ -17510,7 +17535,7 @@ window.__ModuleLoader__.load({
 									flex: "none", width: "30px", height: CONTROL.sm, borderRadius: RADIUS.circle,
 									border: "none", cursor: failed ? "not-allowed" : "pointer", padding: 0, lineHeight: 0,
 									display: "inline-flex", alignItems: "center", justifyContent: "center",
-									background: open ? `rgb(${accent})` : `rgba(${accent},${TINT.soft})`,
+									background: open ? `rgb(${accent})` : tint(accent, TINT.soft),
 									color: open ? "var(--dsw-alias-label-primary-inverted)" : `rgb(${accent})`,
 									transition: `background ${MOTION.fast}`
 								},
@@ -17957,7 +17982,7 @@ window.__ModuleLoader__.load({
 										className: "swm-ctl swm-focus", style: {
 											...controlStyle(busy || chosen === 0), height: CONTROL.md,
 											opacity: chosen === 0 ? 0.5 : 1,
-											color: `rgb(${accent})`, borderColor: `rgba(${accent},${TINT.ring})`
+											color: `rgb(${accent})`, borderColor: tint(accent, TINT.ring)
 										},
 										onClick: () => { void write(); },
 										children: busy
@@ -18004,7 +18029,7 @@ window.__ModuleLoader__.load({
 										return jsxs("div", {
 											style: {
 												borderBottom: at === documents.length - 1 ? "none" : `1px solid ${LINE.hair}`,
-												background: open ? `rgba(${accent},${TINT.soft})` : "transparent"
+												background: open ? tint(accent, TINT.soft) : "transparent"
 											},
 											children: [
 												jsxs("div", {
@@ -18535,8 +18560,8 @@ window.__ModuleLoader__.load({
 															font: on ? FONT.smallStrong : FONT.small,
 															appearance: "none", cursor: "pointer",
 															height: CONTROL.sm, padding: "0 11px", borderRadius: RADIUS.pill,
-															border: `1px solid ${on ? `rgba(${accent},${TINT.ring})` : LINE.rule}`,
-															background: on ? `rgba(${accent},${TINT.soft})` : "transparent",
+															border: `1px solid ${on ? tint(accent, TINT.ring) : LINE.rule}`,
+															background: on ? tint(accent, TINT.soft) : "transparent",
 															color: on ? `rgb(${accent})` : INK.secondary,
 															transition: `background ${MOTION.fast}, color ${MOTION.fast}`
 														},
@@ -18574,7 +18599,7 @@ window.__ModuleLoader__.load({
 								className: "swm-ctl swm-focus", style: {
 									...controlStyle(), font: FONT.small, height: CONTROL.sm,
 									color: making ? INK.secondary : `rgb(${accent})`,
-									borderColor: making ? undefined : `rgba(${accent},${TINT.ring})`
+									borderColor: making ? undefined : tint(accent, TINT.ring)
 								},
 								onClick: () => { setMaking((previous) => !previous); },
 								children: making ? (zh ? "取消" : "Cancel") : (zh ? "＋ 新建一集" : "＋ New episode")
@@ -18589,7 +18614,7 @@ window.__ModuleLoader__.load({
 					!making ? null : jsxs("div", {
 						style: {
 							...PANEL_STYLE, padding: "16px", marginBottom: "20px",
-							borderColor: `rgba(${accent},${TINT.ring})`
+							borderColor: tint(accent, TINT.ring)
 						},
 						children: [
 							jsx(StepHeading, {
@@ -18611,7 +18636,7 @@ window.__ModuleLoader__.load({
 										style: {
 											display: "flex", alignItems: "center", gap: SPACE.md,
 											padding: "9px 13px", borderBottom: `1px solid ${LINE.hair}`,
-											background: `rgba(${accent},${TINT.soft})`
+											background: tint(accent, TINT.soft)
 										},
 										children: [
 											jsx("span", {
@@ -18725,7 +18750,7 @@ window.__ModuleLoader__.load({
 										className: "swm-ctl swm-focus", style: {
 											...controlStyle(busy || running || chosen === 0), height: CONTROL.sm,
 											opacity: chosen === 0 ? 0.5 : 1,
-											color: `rgb(${accent})`, borderColor: `rgba(${accent},${TINT.ring})`
+											color: `rgb(${accent})`, borderColor: tint(accent, TINT.ring)
 										},
 										onClick: () => { void writeScript(); },
 										children: busy && script === null ? (zh ? "写稿中…" : "Writing…") : (zh ? "生成对话稿" : "Write the script")
@@ -18769,7 +18794,7 @@ window.__ModuleLoader__.load({
 											jsx("button", {
 												type: "button",
 												disabled: busy || running,
-												className: "swm-ctl swm-focus", style: { ...controlStyle(busy || running), font: FONT.small, height: CONTROL.sm, color: `rgb(${accent})`, borderColor: `rgba(${accent},${TINT.ring})` },
+												className: "swm-ctl swm-focus", style: { ...controlStyle(busy || running), font: FONT.small, height: CONTROL.sm, color: `rgb(${accent})`, borderColor: tint(accent, TINT.ring) },
 												onClick: () => { void render(); },
 												children: running
 													? (zh ? `合成中 ${job.done}/${job.total}` : `Rendering ${job.done}/${job.total}`)
@@ -18795,7 +18820,7 @@ window.__ModuleLoader__.load({
 													style: { font: FONT.microStrong,
 														flex: "none", width: "18px", height: "18px", borderRadius: RADIUS.circle,
 														display: "inline-flex", alignItems: "center", justifyContent: "center",
-														background: turn.speaker === "a" ? `rgba(${accent},${TINT.soft})` : SURFACE.hover,
+														background: turn.speaker === "a" ? tint(accent, TINT.soft) : SURFACE.hover,
 														color: turn.speaker === "a" ? `rgb(${accent})` : INK.secondary
 													},
 													children: turn.speaker.toUpperCase()
@@ -19194,8 +19219,8 @@ window.__ModuleLoader__.load({
 								style: {
 									flex: "none", display: "flex", alignItems: "center", justifyContent: "center",
 									width: CONTROL.md, height: CONTROL.md, borderRadius: RADIUS.lg,
-									background: `rgba(${PALETTE.violet},${TINT.soft})`,
-									border: `1px solid rgba(${PALETTE.violet},${TINT.ring})`,
+									background: tint(PALETTE.violet, TINT.soft),
+									border: `1px solid ${tint(PALETTE.violet, TINT.ring)}`,
 									color: `rgb(${PALETTE.violet})`
 								},
 								children: jsx(SwarmMark, { size: 18 })

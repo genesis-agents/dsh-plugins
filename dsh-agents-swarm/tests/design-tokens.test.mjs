@@ -914,7 +914,7 @@ test("the trajectory tag is coloured by what it says, not by whether the row fai
   // caught exactly that: deleting the tag's style left the `missionHue` call
   // above intact and the assertion above still passed.
   assert.ok(
-    SOURCE.includes("style: { color: `rgb(${kindHue})`, background: `rgba(${kindHue},${TINT.soft})` }"),
+    SOURCE.includes("style: { color: `rgb(${kindHue})`, background: tint(kindHue, TINT.soft) }"),
     "the kind hue is computed and not spent — the tag is back to being uncoloured or coloured by something else",
   );
   // The agent reached the DOM only inside a `title` attribute, so the densest
@@ -2516,7 +2516,7 @@ test("the page opens with a header rather than a label row", () => {
   // ringed tile reads as the product's mark at any size that fits the tile.
   // This used to assert `size: 22`, which pinned the wrong half — the band was
   // later compacted to one row and the literal failed while the decision held.
-  const tile = /background: `rgba\(\$\{PALETTE\.violet\},\$\{TINT\.soft\}\)`[\s\S]{0,240}?jsx\(SwarmMark, \{ size: (\d+) \}\)/.exec(page);
+  const tile = /background: tint\(PALETTE\.violet, TINT\.soft\)[\s\S]{0,240}?jsx\(SwarmMark, \{ size: (\d+) \}\)/.exec(page);
   assert.ok(tile, "the mark lost its tile, so it is a glyph in front of a word again");
   assert.ok(Number(tile[1]) <= 22, "the mark outgrew its tile");
   assert.ok(page.includes("borderRadius: RADIUS.lg"), "the mark's tile lost its corner radius, so it is a square behind a glyph");
@@ -3073,7 +3073,7 @@ test("a figure's ground is neutral and its reading size is declared", () => {
   // which is a white `<Card ... bordered>` per cell with `shadow-sm`. What
   // must never come back is a ground built from the HUE.
   assert.ok(
-    !stat.includes("background: `rgba(${hue}"),
+    !stat.includes("background: tint(hue"),
     "the tile ground is tinted by its tone again, so colour marks every figure instead of the exception",
   );
   assert.ok(
@@ -4323,8 +4323,8 @@ test("a child row draws the connector its indent only implied", () => {
     'the depth is not a padding on the row, which is how the reference indents a child',
   );
   assert.ok(
-    board.includes('borderLeft: `2px solid rgba(${PALETTE.violet}')
-      && board.includes('borderBottom: `2px solid rgba(${PALETTE.violet}'),
+    board.includes('borderLeft: `2px solid ${tint(PALETTE.violet')
+      && board.includes('borderBottom: `2px solid ${tint(PALETTE.violet'),
     'no child row draws the elbow, so the tree is a gap again and the relationship is left for the reader to infer from indentation alone',
   );
   // `└` is box-drawing: it falls back to whatever font the platform
@@ -5654,7 +5654,7 @@ test("three kinds of chip, three treatments, and the treatment is what separates
   );
   assert.match(
     chip,
-    /background: "transparent", boxShadow: `inset 0 0 0 1px rgba\(\$\{hue\},\$\{TINT\.ring\}\)`/,
+    /background: "transparent", boxShadow: `inset 0 0 0 1px \$\{tint\(hue, TINT\.ring\)\}`/,
     "the outlined chip either paints a ground of its own or draws no ring; the reference's role chip is a hue-coloured border over whatever is behind it",
   );
   // WITH EXACTLY ONE CALLER, which is the rule this file writes down four times.
@@ -6216,11 +6216,11 @@ test("the child connector is the reference's twelve pixels, in the reference's c
   // padding. Not a glyph, and not a reserved column — which is what I had
   // written here, from a screenshot, and then guarded so it could not change.
   assert.ok(
-    board.includes('borderLeft: `2px solid rgba(${PALETTE.violet}'),
+    board.includes('borderLeft: `2px solid ${tint(PALETTE.violet'),
     'the elbow is not drawn as a left border in the accent hue',
   );
   assert.ok(
-    board.includes('borderBottom: `2px solid rgba(${PALETTE.violet}'),
+    board.includes('borderBottom: `2px solid ${tint(PALETTE.violet'),
     'the elbow has no bottom edge, so it is a line rather than a corner',
   );
   assert.ok(
