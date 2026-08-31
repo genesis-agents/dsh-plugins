@@ -3685,3 +3685,73 @@ test("the library miss is a sentence about the run, not five characters on every
   assert.ok(en.includes("None of these 2 pages is in the library"), "the once-said library miss has no English arm");
   assert.equal(times(en, "not in the library"), 0, "the English rows still repeat the miss under the sentence that already said it");
 });
+
+test("a dimension row's status chip carries the score that dimension was given", async () => {
+  // THE REFERENCE'S 状态 IS A CHIP WITH A SCORE IN IT — 已完成 · 78/100 — and
+  // ours was a chip with a word. The number was three hops away and drawn
+  // nowhere: mission_dimensions.grade → projectDimensions → buildWork's
+  // `counts.grade` → no reader. More information in the same 26px pill, which
+  // is the only kind of density this round accepts.
+  const board = await render("MissionTaskBoard", {
+    zh: true, agents: [],
+    stages: stagesUpTo("s3-collect"),
+    work: [
+      { id: "stage:s3-collect", parentId: null, origin: "pipeline", title: "s3-collect", state: "running", assignee: "researcher", reason: null, counts: { attempts: 1 } },
+      { id: "dimension:d1", parentId: "stage:s3-collect", origin: "s2-plan", title: "推理时序扩展的复现情况", state: "collected", assignee: "researcher:d1", reason: "", counts: { verified: 5, floor: 3, attempts: 1, grade: 78 } },
+      { id: "dimension:d2", parentId: "stage:s3-collect", origin: "s2-plan", title: "许可证与再分发条款", state: "degraded", assignee: "researcher:d2", reason: "", counts: { verified: 1, floor: 3, attempts: 2, grade: 41 } },
+      { id: "dimension:d3", parentId: "stage:s3-collect", origin: "s2-plan", title: "尚未开始的维度", state: "pending", assignee: "researcher:d3", reason: "", counts: { verified: 0, floor: 3, attempts: 1, grade: null } },
+    ],
+  });
+  const text = textOf(board.tree).join(" ");
+  assert.ok(text.includes("78"), "the dimension's grade is stored, projected, carried through buildWork and drawn nowhere; the reference's status column reads 已完成 · 78/100");
+
+  // A RETRY OUTRANKS A SCORE, AND ONLY ONE OF THEM IS PRINTED. Both in one
+  // pill is two figures in a 26px box in a 14% column.
+  assert.ok(text.includes("第 2 次"), "the retried row lost its attempt count to the score");
+  assert.ok(!text.includes("41"), "the retried row prints its attempt count AND its score into one pill");
+
+  // NULL IS NOT NOUGHT. A dimension s3 has not settled has no score, and a 0
+  // here is a mark the pipeline never gave — the `/0` defect, one column over.
+  const chips = findAll(board.tree, (node) => node.props?.children === "0");
+  assert.deepEqual(chips, [], "an ungraded dimension renders a score of 0, which is a verdict nothing issued");
+});
+
+test("every row on the board offers something, and never a control the route would refuse", async () => {
+  // 操作 WAS THE ONLY COLUMN THAT WAS BLANK ON A WHOLE CLASS OF ROW. `stage` is
+  // null on every child, so the cell rendered null under its own header on
+  // exactly the rows a real run's board is mostly made of.
+  const picked = [];
+  const pressed = [];
+  const board = await render("MissionTaskBoard", {
+    zh: true, agents: [],
+    stages: [
+      { stepId: "s1-brief", status: "done", attempts: 1, durationMs: 900, agent: null, rerunable: false, rerunReason: "a budget gate cannot be re-run — the caps it froze are what this mission is graded against" },
+      { stepId: "s3-collect", status: "done", attempts: 1, durationMs: 41000, agent: "researcher", rerunable: true, rerunReason: null },
+    ],
+    work: [
+      { id: "stage:s1-brief", parentId: null, origin: "pipeline", title: "s1-brief", state: "done", assignee: null, reason: null, counts: { attempts: 1 } },
+      { id: "stage:s3-collect", parentId: null, origin: "pipeline", title: "s3-collect", state: "done", assignee: "researcher", reason: null, counts: { attempts: 1 } },
+      { id: "dimension:d1", parentId: "stage:s3-collect", origin: "s2-plan", title: "推理时序扩展的复现情况", state: "collected", assignee: "researcher:d1", reason: "", counts: { verified: 5, floor: 3, attempts: 1, grade: 78 } },
+    ],
+    onSelect: (key) => { picked.push(key); },
+    onRerunStage: (stepId) => { pressed.push(stepId); },
+  });
+
+  const details = findAll(board.tree, (node) => node.type === "button" && textOf(node).some((piece) => piece.includes("详情")));
+  assert.equal(details.length, 1, `${details.length} rows offer 详情; the one dimension row's 操作 cell was the only blank cell on the board and there is exactly one child here`);
+  let stopped = false;
+  await board.act(() => { details[0].props.onClick({ stopPropagation: () => { stopped = true; } }); });
+  assert.deepEqual(picked, ["dimension:d1"], "详情 does not open the dimension it sits on");
+  assert.ok(stopped, "详情 let the row's own click through, so pressing it opens and then closes the drawer");
+
+  // THE REFUSED CONTROL IS SHOWN AND IS NOT PRESSABLE. A span, so it is not in
+  // the tab order and cannot reach a route that would answer 409.
+  const reruns = findAll(board.tree, (node) => node.type === "button" && textOf(node).some((piece) => piece.includes("重跑")));
+  assert.equal(reruns.length, 1, `${reruns.length} rows offer a pressable rerun; s1-brief declares rerunable:false and a button there is a click the route refuses`);
+  await board.act(() => { reruns[0].props.onClick({ stopPropagation: () => {} }); });
+  assert.deepEqual(pressed, ["s3-collect"], "the pressable rerun is not the one on the rerunable stage");
+
+  const text = textOf(board.tree).join(" ");
+  assert.ok(text.includes("原因写在详情里"), "the un-rerunable stage's 操作 cell is empty, so the column has one shape on ten rows and another on two, for a reason nothing on screen gives");
+  assert.ok(!text.includes("caps it froze"), "the pipeline's rerun refusal is printed on the row; a full sentence down a 12% column is not a table, which is why the drawer owns it");
+});

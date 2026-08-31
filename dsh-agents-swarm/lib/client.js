@@ -636,19 +636,39 @@ window.__ModuleLoader__.load({
 			// was real: 32px of padding alone clears it on an empty cell. It read as
 			// a decision and was not one, and it was the last raw pixel in this pair.
 			//
-			// SPACE.lg VERTICAL, COUNTED OFF THE SCREEN. `10px ${SPACE.sm}` stood a
-			// one-line cell at 36px (16px of line plus 20 of air) and the task
-			// board's two-line name cell at 54 (16 + 2 + 16 + 20). The reference's
-			// rows are ~72px with two lines in them. Sixteen takes the two-line row
-			// to 66 and the one-line row to 48; the six pixels still short are in the
-			// reference's larger type, which is a different change from this one.
+			// SPACE.md VERTICAL, AND THE FOURTH PASS'S ARITHMETIC MEASURED A ROW THAT
+			// WAS NOT ON THE SCREEN. What stood here read: "`10px ${SPACE.sm}` stood a
+			// one-line cell at 36px (16px of line plus 20 of air)... Sixteen takes the
+			// two-line row to 66 and the one-line row to 48." Both figures measure a
+			// 16px TEXT line — and the same round put a 26px chip in every row of the
+			// task board. The 状态 cell draws `Chip({ ..., pill: true })` with no
+			// `size`, which is `pillStyle(hue, "md")`: an 18px line box plus four
+			// pixels top and bottom, unconditional, on every row. So SPACE.lg did not
+			// stand the rows at 48 and 66. It stood them at 58 and 76 — and 76 is PAST
+			// the reference's 72, on a row that says LESS than the reference's does.
+			//
+			// TWELVE, COUNTED THE SAME WAY: 26 + 24 = 50 for a one-line row, and
+			// 26 + 2 + 16 + 24 = 68 for the two-line name cell, which lands just under
+			// the reference's 72 with the remainder still in its larger type — the one
+			// half of the old note that was right. MissionModelTable one pane over,
+			// whose five cells hold a model name and four numbers and nothing else,
+			// drops from 48 to 40; at SPACE.lg it was 16px of ink in a 48px box, which
+			// is two thirds air and the worst ratio on the tab.
+			//
+			// THE REFERENCE IS ROOMY BECAUSE ITS ROWS SAY MORE, NOT BECAUSE IT PADS
+			// MORE. Its 72px row carries a category chip, a title, a real description,
+			// a bordered owner chip, a model chip and a scored status. Ours carries a
+			// title and — when `note` is non-empty, which is a minority of rows — one
+			// grey sentence. Buying the reference's HEIGHT without its CONTENT is what
+			// 任务列表呈现极其松散 is the name of.
 			//
 			// AND THE HORIZONTAL STEP MOVES WITH `TH`'s, ALWAYS. The two agreed at 8
 			// and have to go on agreeing: the name cell one region below carries a
 			// paragraph about the two pixels that put 任务 out of line with its own
 			// column header, and an inset that moves alone is exactly that defect,
-			// four pixels wide, on all six tables at once.
-			padding: `${SPACE.lg} ${SPACE.md}`,
+			// four pixels wide, on all six tables at once. Only the FIRST value moves
+			// here; the inset stays SPACE.md and the guard below still pairs them.
+			padding: `${SPACE.md} ${SPACE.md}`,
 			color: INK.primary,
 			overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
 			borderBottom: `1px solid ${LINE.rule}`
@@ -11657,7 +11677,34 @@ window.__ModuleLoader__.load({
 													// and "not here".
 													icon: iconOf(status),
 													label: face,
-													count: attempts <= 1 ? undefined : (zh ? `第 ${attempts} 次` : `×${attempts}`)
+													// THE SCORE RIDES IN THE CHIP, which is what the reference's
+													// 状态 column does — 已完成 · 78/100 — and what this board had
+													// a field for and never drew. `counts.grade` is `gradeOf()`'s
+													// 0–100 (verified evidence at 0.7, independent hosts at 0.3),
+													// written by s3 as a dimension settles, stored on
+													// mission_dimensions.grade, projected as `dimension.grade` and
+													// copied into `work[].counts.grade` by `buildWork`. Four hops,
+													// all of them already built, and no reader at the end of them:
+													// this file's signature failure, and the cheapest information
+													// on the board because it costs no space at all.
+													//
+													// ONE SLOT, TWO FACTS, AND A PRECEDENCE. A retried row says
+													// 第 N 次 — the reference prints 撰写失败 1/4 in the same slot
+													// — because "this had to be done more than once" is the more
+													// urgent of the two; a row that ran once shows what it scored.
+													// Never both: two figures in one 26px pill is a pill that
+													// widens past its column, and the attempt count is already
+													// spelled out in the drawer this row opens.
+													//
+													// NOT `?? 0`. A dimension s3 has not settled carries
+													// `grade: null`, and a zero here would be a score the pipeline
+													// never gave — the same fabrication `floor: null` is refused
+													// four lines down for.
+													count: attempts > 1
+														? (zh ? `第 ${attempts} 次` : `×${attempts}`)
+														: (Number.isFinite(Number(node.counts?.grade)) && node.counts?.grade !== null
+															? String(node.counts.grade)
+															: undefined)
 												}, "pill"),
 												// A dimension's own arithmetic, where it is the row's
 												// point: 已核验 N/下限 is what says whether this piece
@@ -11701,7 +11748,40 @@ window.__ModuleLoader__.load({
 											// COPIED, NOT MOVED. The drawer keeps its own control: it is
 											// where the un-rerunable stage's REASON is printed, and that
 											// sentence has nowhere to go in a cell this wide.
-											children: !ran || stage === null ? null : jsxs("div", {
+											// A DIMENSION ROW'S CELL WAS THE ONE EMPTY CELL ON THE BOARD.
+											// `stage` is null on every child — a dimension and a re-collect
+											// are not stage rows — so this whole cell rendered null under a
+											// header reading 操作, on the rows that are the most of what a
+											// real run's board holds.
+											//
+											// ONE CONTROL, NOT THE REFERENCE'S TWO, AND THE SECOND WOULD BE
+											// A LIE. There is no per-dimension re-collect anywhere in this
+											// API: the only rerun route is
+											// POST /missions/:id/stages/:stepId/rerun and `rerunable` is
+											// declared per STAGE, so a 重跑 on this row would fire
+											// s3-collect and re-collect every dimension at once. A control
+											// that does five times what its row says is worse than a missing
+											// one, so this cell holds 详情 › and stops there.
+											children: child
+												? jsx("button", {
+													type: "button",
+													// THE SAME LINK THE STAGE ROW DRAWS, deliberately: two
+													// shapes for "open this row" in one column is a column with
+													// two vocabularies, which is what the rerun chip's own note
+													// three regions down was written about.
+													style: { font: FONT.micro,
+														appearance: "none", border: "none", background: "transparent",
+														padding: 0, cursor: "pointer",
+														color: "var(--dsw-alias-state-business-primary)"
+													},
+													// OPEN, NEVER TOGGLE. The row's own click toggles the
+													// selection; a control labelled 详情 that CLOSES the drawer
+													// when its row is already the selected one is a button that
+													// does the opposite of the word on it.
+													onClick: (event) => { event.stopPropagation(); onSelect?.(key); },
+													children: zh ? "详情 ›" : "Details ›"
+												}, "detail")
+												: !ran || stage === null ? null : jsxs("div", {
 												// `inline-flex`, so the cell's own `textAlign: "right"` is
 												// still what places it, and `flexWrap` so a narrow window
 												// stacks the pair instead of pushing one past the edge.
@@ -11716,6 +11796,37 @@ window.__ModuleLoader__.load({
 													// not carry it is offered nothing — the budget gate is
 													// `rerunable: false` for a reason, and a button that earns a
 													// 409 teaches that this screen's controls are a guess.
+													// TWO SLOTS ON EVERY STAGE ROW, AND THE REFUSED ONE IS DRAWN.
+													// s1-brief and s12-persist declare `rerunable: false`, so ten
+													// rows carried two controls and two carried one: the column
+													// changed shape partway down the table for a reason nothing on
+													// screen gave, and the reader's only way to learn that the
+													// budget gate cannot be re-run was to open it and read to the
+													// bottom of the drawer.
+													//
+													// A SPAN AND NOT A DISABLED BUTTON. It is not in the tab order
+													// and has no handler, so it cannot earn the 409 the note below
+													// refuses; `OPACITY.disabled` is the file's own single answer to
+													// "refused and therefore visibly not pressable", which twenty-
+													// five controls set and seven showed.
+													//
+													// AND IT DOES NOT PRINT `rerunReason`. That sentence is the
+													// pipeline's own and it is a full line long — thirty of those
+													// down a 12% column is not a table, which is exactly why the
+													// drawer owns it. The title says WHERE it is rather than
+													// paraphrasing it into a second, shorter, drifting copy.
+													stage.rerunable === true ? null : jsxs("span", {
+														style: {
+															font: FONT.micro, color: INK.quiet, opacity: OPACITY.disabled,
+															display: "inline-flex", alignItems: "center", gap: SPACE.xs,
+															whiteSpace: "nowrap", flex: "none"
+														},
+														title: zh ? "这一步不能单独重跑，原因写在详情里" : "This step cannot be re-run on its own; the detail panel says why",
+														children: [
+															jsx(Icon, { name: "refresh", size: ICON.xs }, "glyph"),
+															jsx("span", { children: zh ? "重跑" : "Re-run" }, "word")
+														]
+													}, "norerun"),
 													stage.rerunable !== true ? null : Chip({
 														// TINTED HERE, NEUTRAL IN THE DRAWER, and the difference
 														// is the surface rather than the act. The drawer spends

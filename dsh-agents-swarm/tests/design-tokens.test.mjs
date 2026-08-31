@@ -3956,7 +3956,7 @@ test("a table cell has room for two lines", () => {
   // reads as one line again. A row is as tall as what it has to say.
   const td = SOURCE.slice(SOURCE.indexOf("const TD = {"), SOURCE.indexOf("};", SOURCE.indexOf("const TD = {")));
   assert.ok(!/height: "30px"/.test(td), "TD pins a fixed 30px height again, which crushes the two-line name cell");
-  assert.ok(td.includes("padding: `${SPACE.lg} ${SPACE.md}`"), "TD is back to 10px of vertical air — a log line's rhythm, and 18px short of the reference's two-line row");
+  assert.ok(td.includes("padding: `${SPACE.md} ${SPACE.md}`"), "TD's vertical air moved. Sixteen is the value the fourth pass derived against a 16px text line while a 26px chip was already in the row; it stood the one-line row at 58 and the two-line row at 76, past the reference's 72");
 });
 
 test("a category and a state differ in the corner and in nothing else", () => {
@@ -5453,20 +5453,24 @@ test("a chip stands where the reference's chip stands, and the pill still agrees
 });
 
 test("the two table recipes indent to the same column, and neither pins a height", () => {
-  // COUNTED, NOT DESCRIBED. TD padded `10px ${SPACE.sm}`, so a one-line cell
-  // stood 36px and the task board's two-line name cell stood 54. The
-  // reference's rows are ~72px with two lines in them, which is most of what
-  // is left of "it is still visibly not the reference" on a screen made of
-  // tables. SPACE.lg vertical takes those to 48 and 66.
+  // COUNTED, AND COUNTED AGAINST THE WRONG ROW THE FIRST TIME. This comment
+  // used to read "SPACE.lg vertical takes those to 48 and 66". It did not: the
+  // figure 48 is a 16px text line plus 32px of air, and the task board has not
+  // had a 16px line in it since the chip round — `pillStyle(hue, "md")` is 26px
+  // and the 状态 cell draws one on every row. The real heights were 58 and 76,
+  // and 76 is past the reference's own 72 on a row carrying half what the
+  // reference's carries. SPACE.md puts them at 50 and 68. The test below this
+  // one derives all of that from the file rather than restating it here.
   //
   // THE INSET IS THE HALF THAT CANNOT DRIFT. TH and TD agreed at 8px by
   // accident rather than by rule — nothing held them together — and the task
   // board's name cell has a whole paragraph about the two pixels that put 任务
   // out of line with its own column header. Moving one alone reproduces that
-  // defect on all six tables at four times the width.
+  // defect on all six tables at four times the width. Only the vertical value
+  // moved; the pair below still has to agree.
   const cell = scale("TD");
   const head = scale("TH");
-  assert.match(cell, /padding: `\$\{SPACE\.lg\} \$\{SPACE\.md\}`/, "the data cell lost the vertical air that makes its two-line row a row rather than a log line");
+  assert.match(cell, /padding: `\$\{SPACE\.md\} \$\{SPACE\.md\}`/, "the data cell's vertical air moved. Sixteen is what the fourth pass derived against a text line that a 26px chip had already replaced");
   assert.match(head, /padding: `\$\{SPACE\.sm\} \$\{SPACE\.md\}`/, "the header cell lost its own air, or went back to being a pinned box");
   // The LAST SPACE step in a two-value padding is the horizontal one. Taken
   // that way rather than by position, so a three-value padding written later
@@ -5925,5 +5929,83 @@ test("the references list's rows touch, so the line between them is the line", (
   assert.ok(
     !/flexDirection: "column", gap: SPACE\.sm \},\s*children: (ordered|entry\.rows)\.map\(row\)/u.test(pane),
     "a list of source rows separates them with a gap again, which puts each row's own hairline in the middle of a gutter",
+  );
+});
+
+test("a table row is measured with the chip that is actually in it", () => {
+  // WHAT THE FOURTH PASS GOT WRONG, AND IT IS ARITHMETIC RATHER THAN TASTE.
+  // TD's own note argued that SPACE.lg vertical "takes the two-line row to 66
+  // and the one-line row to 48". Both figures measure a 16px TEXT line — and
+  // the SAME round put a 26px chip in every row of the task board: the 状态
+  // cell draws `Chip({ ..., pill: true })` with no `size`, which resolves to
+  // `pillStyle(hue, "md")`, an 18px line box plus four pixels top and bottom.
+  // The rows stood at 58 and 76. Seventy-six is PAST the reference's ~72, on a
+  // row that carries one line where the reference carries two.
+  //
+  // DERIVED, NOT TYPED. Every number below is read out of the file, so the day
+  // the chip step or the spacing step moves, this guard moves with it instead
+  // of asserting a constant nobody can re-check. That is the whole difference
+  // between this and the sentence it replaces.
+  const steps = Object.fromEntries(
+    [...scale("SPACE").matchAll(/(\w+): "(\d+)px"/g)].map((match) => [match[1], Number(match[2])]),
+  );
+  const pad = /padding: `\$\{SPACE\.(\w+)\} \$\{SPACE\.(\w+)\}`/.exec(scale("TD"));
+  assert.ok(pad, "TD's padding is no longer a pair of SPACE steps, so a row's height can no longer be derived here");
+  const vertical = steps[pad[1]];
+  assert.ok(Number.isFinite(vertical), `TD's vertical step SPACE.${pad[1]} is not on the spacing scale`);
+
+  // THE CHIP'S OWN HEIGHT, off `pillStyle`'s md step. FONT.bodyStrong is
+  // `600 13px/18px`, which is the only number here the type scale owns and the
+  // one `pillStyle`'s own docblock does the same sum with.
+  const chipPad = /font: FONT\.bodyStrong, padding: `(\d+)px \$\{SPACE\.sm\}`/.exec(declaration("function pillStyle("));
+  assert.ok(chipPad, "the pill's md step no longer pads in pixels, so the tallest thing in a row cannot be derived");
+  const chip = 18 + Number(chipPad[1]) * 2;
+  assert.equal(chip, 26, "the reference's chip is 26px, and a table row is measured against it rather than against a line of text");
+
+  // AND IT IS REALLY IN THE ROW. Without this the guard measures a chip the
+  // board has stopped drawing, and then passes on a row that got shorter for
+  // some entirely different reason.
+  assert.match(
+    code(body("function MissionTaskBoard(")),
+    /pill: true,/,
+    "the task board's status cell stopped drawing a pill, so the tallest element in its rows is no longer what this guard measures",
+  );
+
+  // A ONE-LINE ROW MAY NOT COST WHAT A TWO-LINE ROW COSTS. The reference
+  // spends ~72px on two lines that BOTH carry information — a title over a
+  // real description, beside an owner, a model and a scored status. Ours has
+  // one line on every row whose `note` is empty, which is most of them. Fifty-
+  // two is 26 of chip plus SPACE.md top and bottom, with two pixels of slack so
+  // that tripping this is a decision about the scale rather than an off-by-one.
+  assert.ok(
+    chip + vertical * 2 <= 52,
+    `a one-line task row stands ${chip + vertical * 2}px, of which ${vertical * 2}px is air around a ${chip}px chip. More padding is not what makes the reference's rows tall — more information is`,
+  );
+});
+
+test("every row's action cell offers something, and a refusal says why", () => {
+  // TWO MUTATIONS SURVIVED THE PATCH'S OWN GUARD and both are visible.
+  //
+  // ONE: `children: child ? … : …`. Flipping that to `false` sends every
+  // dimension row down the STAGE branch, where `stage` is null and the cell
+  // draws nothing. Sixteen rows of the board would have an empty 操作 column
+  // and no test would say so — the guard asserted the two branches exist, not
+  // that the right rows reach them.
+  const board = code(body("function MissionTaskBoard("));
+  assert.match(
+    board,
+    /children: child\s*\n?\s*\? jsx\("button", \{/u,
+    "the action cell no longer branches on whether the row is a dimension, so one of the two kinds gets an empty cell",
+  );
+  assert.match(board, /children: zh \? "详情 ›" : "Details ›"/u, "a dimension row has no way into its own detail");
+
+  // TWO: the refusal's title. The reference's un-rerunable steps say why they
+  // cannot be re-run; `stage.rerunReason ?? ""` renders an EMPTY tooltip on
+  // every stage whose reason the projection did not carry, which is a control
+  // that refuses and will not say what refused it.
+  assert.match(
+    board,
+    /title: zh \? "这一步不能单独重跑，原因写在详情里"/u,
+    "the un-rerunable hint falls back to an empty string, so a step that cannot be re-run gives no reason at all",
   );
 });
