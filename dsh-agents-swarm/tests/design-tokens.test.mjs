@@ -237,7 +237,10 @@ test("radii and icon sizes stay countable", () => {
 test("raw style values only ever decrease", () => {
   // Measured 2026-08-26, the day FONT/SPACE/RADIUS/ICON landed. Lower these in
   // the commit that migrates a batch; never raise one.
-  const ceiling = { fontSize: 0, fontWeight: 9, lineHeight: 5, borderRadius: 0, gap: 5, padding: 128, height: 19 };
+  const ceiling = { fontSize: 0, fontWeight: 9, lineHeight: 5, borderRadius: 0, gap: 5, padding: 126, height: 19 };
+  // 128 -> 126 with the prose batch: inline code took `0 ${SPACE.xs}` in
+  // place of a hand-typed `1px 5px`, and the list's indent became a named
+  // 20px — the reference's `ml-5` — instead of a literal at the call site.
   const counted = {
     fontSize: [...SOURCE.matchAll(/fontSize: "\d+px"/g)].length,
     fontWeight: [...SOURCE.matchAll(/fontWeight: \d+/g)].length,

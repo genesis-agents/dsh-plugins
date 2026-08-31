@@ -897,6 +897,7 @@ window.__ModuleLoader__.load({
 			`.swm-ref{border:1px solid ${LINE.hair};background:${SURFACE.card};border-radius:${RADIUS.sm};padding:${SPACE.sm} ${SPACE.md};transition:border-color ${MOTION.fast},background ${MOTION.fast}}`,
 			`.swm-ref:hover{border-color:rgba(${PALETTE.violet},${TINT.ring});background:rgba(${PALETTE.violet},${TINT.wash})}`,
 			`.swm-ref:hover .swm-ref-title{text-decoration:underline}`,
+			`.swm-prose-a:hover{text-decoration:underline}`,
 
 			// A LIST IS ROWS SEPARATED BY A LINE. LINE's own docblock states the
 			// rule and the trajectory proved it: deleting a 2px gap between 120
@@ -4031,16 +4032,38 @@ window.__ModuleLoader__.load({
 				const key = `${keyPrefix}-i${index++}`;
 				if (token.startsWith("`")) {
 					nodes.push(jsx("code", {
-						style: { font: FONT.small,
-							padding: "1px 5px", borderRadius: RADIUS.sm,
-							background: SURFACE.code,
+						// `prose-code:text-purple-600 prose-code:bg-purple-50 prose-code:px-1
+						// prose-code:rounded`. Ours had the ground and the corner and no COLOUR,
+						// so an identifier inside a sentence was a slightly greyer box. Violet is
+						// this file's one purple; a second one would be the second ramp the hue
+						// guard exists to prevent.
+						style: {
+							font: FONT.small,
+							padding: `0 ${SPACE.xs}`, borderRadius: RADIUS.sm,
+							color: `rgb(${PALETTE.violet})`,
+							background: `rgba(${PALETTE.violet},${TINT.soft})`,
 							fontFamily: "var(--ds-font-family-code)"
 						},
 						children: token.slice(1, -1)
 					}, key));
 				} else if (token.startsWith("**")) {
 					nodes.push(jsx("strong", {
-						style: { fontWeight: 500, color: INK.primary },
+						// 500, AND THE REFERENCE DOES NOT GET THIS ONE.
+						//
+						// `prose-headings:font-semibold` leaves `strong` at prose's own
+						// 600, so 600 is what gens.team renders. But gens.team is its own
+						// application and this tab is a guest in DeepSeek's, which draws
+						// emphasis at 500 at every step below 24px. Matching the reference
+						// here would make one tab heavier than every screen around it,
+						// which is a worse mismatch than the one it fixes.
+						//
+						// THE COLOUR IS TAKEN. `prose-strong:text-blue-600` — the reading
+						// view tints its emphasis so a term being defined is findable in a
+						// wall of prose, and nothing about the host forbids that. One
+						// declaration and not a ternary of two: the weight ratchet counts
+						// `fontWeight:` sites, and splitting one across two arms spends a
+						// slot to say the same number twice.
+						style: { fontWeight: 500, color: article ? `rgb(${PALETTE.blue})` : INK.primary },
 						children: token.slice(2, -2)
 					}, key));
 				} else if (token.startsWith("[")) {
@@ -4055,7 +4078,12 @@ window.__ModuleLoader__.load({
 						href: token.slice(split + 2, -1),
 						target: "_blank",
 						rel: "noreferrer noopener",
-						style: { color: "var(--dsw-alias-state-business-primary)" },
+						// `prose-a:text-blue-600 prose-a:no-underline hover:prose-a:underline`.
+						// The reference's two markdown renderers disagree — the report PANEL
+						// underlines in violet, the reading view is a bare blue that underlines
+						// on hover — and this is the reading view.
+						className: "swm-prose-a",
+						style: { color: article ? `rgb(${PALETTE.blue})` : "var(--dsw-alias-state-business-primary)", textDecoration: "none" },
 						children: token.slice(1, split)
 					}, key));
 				} else {
@@ -4097,7 +4125,22 @@ window.__ModuleLoader__.load({
 		// tower. `FONT.large` is 16px, the step this scale actually has and the
 		// one the reference reads at; there is no 18 in the ladder and inventing a
 		// raw one would be the first size in this file spelled outside it.
-		const ARTICLE_BLOCK = { font: FONT.large, lineHeight: "1.75", margin: "0 0 20px" };
+		// MEASURED AGAINST artifact/ArtifactMarkdown.tsx, which is what a reader
+		// actually looks at:
+		//
+		//   prose prose-gray prose-h1:text-2xl prose-h2:text-xl prose-h3:text-lg
+		//   prose-h4:text-base prose-p:my-2 prose-ul:my-2 prose-ol:my-2
+		//   prose-li:my-1 ...
+		//
+		// 16px over 1.75 and headings at 24/20/18/16 are Tailwind `prose`'s own
+		// defaults, so those two lines were already exactly right and stay as
+		// they are. What was wrong is the AIR: `prose-p:my-2` overrides prose's
+		// default 1.25em down to 8px, and we had 20px. The reference is tighter
+		// than us — which is the opposite of what I spent a week assuming, and
+		// the reason every screen read as loose.
+		/** 20px, which is `ml-5` — the reference's list indent. Not a SPACE step. */
+		const PROSE_INDENT = "20px";
+		const ARTICLE_BLOCK = { font: FONT.large, lineHeight: "1.75", margin: `${SPACE.sm} 0` };
 		const ARTICLE_HEADING_SIZES = { 1: "24px", 2: "20px", 3: "18px", 4: "16px" };
 
 		/**
@@ -4317,11 +4360,13 @@ window.__ModuleLoader__.load({
 			const flushList = () => {
 				if (list === null) return;
 				const items = list.items.map((item, at) => jsx("li", {
-					style: article ? { margin: "0 0 8px", lineHeight: "1.7" } : { margin: "0 0 5px" },
+					// `prose-li:my-1` is 4px, and the line height comes from the body rather
+					// than being set a notch under it here.
+					style: article ? { margin: `${SPACE.xs} 0`, lineHeight: "1.75" } : { margin: "0 0 5px" },
 					children: renderInline(item, `l${key}-${at}`, refs)
 				}, `l${key}-${at}`));
 				blocks.push(jsx(list.ordered ? "ol" : "ul", {
-					style: { ...block, paddingLeft: "24px", color: article ? INK.primary : INK.secondary },
+					style: { ...block, paddingLeft: PROSE_INDENT, color: article ? INK.primary : INK.secondary },
 					children: items
 				}, `list${key++}`));
 				list = null;
