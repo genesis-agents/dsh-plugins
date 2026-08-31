@@ -5892,9 +5892,18 @@ test("a references row is two informative lines, not seven things on one", () =>
     /function SourceLink\(\{ title, url, host, verifyState, mark, lead, tail, meta, zh \}/u,
     "the card lost the three layout slots its first line is built from, so the row is a title with everything else beneath it",
   );
+  // HEAVIER THAN WHAT SURROUNDS IT — that is the rule, and 600 was one way
+  // to satisfy it rather than the rule itself. ui/SourceLink.tsx sets a
+  // title `text-[12.5px] font-medium`, and the card around it is regular:
+  // 500 over 400 is the distinction, and 600 made a source title heavier
+  // than the panel heading above it.
   assert.ok(
-    link.includes("font: FONT.bodyStrong, flex: 1"),
+    link.includes("font: FONT.bodyMedium, flex: 1"),
     "the title is back at the weight of the sentence under it and the host beside it, which is no title at all",
+  );
+  assert.ok(
+    link.includes("font: FONT.body,"),
+    "nothing on the card is set at the regular step any more, so the title has nothing to be heavier than",
   );
 });
 

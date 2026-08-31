@@ -921,7 +921,11 @@ window.__ModuleLoader__.load({
 			// that checks this rule's declaration could not see it: the rule was
 			// there, on the right sheet, on the right element, and dead.
 			`.swm-source{border:1px solid ${LINE.hair};background:${SURFACE.card};transition:border-color ${MOTION.fast},background ${MOTION.fast}}`,
-			`.swm-source:hover{border-color:${LINE.rule};background:${SURFACE.hover}}`,
+			// VIOLET, as `.swm-ref` already is. `hover:border-violet-300
+			// hover:bg-violet-50/30` — the same gesture on the same kind of card, and
+			// a source card hovering grey beside a citation card hovering violet was
+			// two answers to one question.
+			`.swm-source:hover{border-color:rgba(${PALETTE.violet},${TINT.ring});background:rgba(${PALETTE.violet},${TINT.wash})}`,
 			`.swm-source:hover .swm-source-title{text-decoration:underline}`,
 			// A CITATION IS A CARD, not a line in a list. The reference gives each one
 			// `rounded-md border border-gray-200 bg-white px-3 py-2` and hovers it to
@@ -2381,7 +2385,9 @@ window.__ModuleLoader__.load({
 					// NO `border` AND NO `background` HERE: `.swm-source` carries both, so
 					// that `.swm-source:hover` has something it can outrank. Written here
 					// they are inline declarations, which beat every rule on the sheet.
-					borderRadius: RADIUS.md,
+					// `rounded-md` is 6px. Ours was the 8px step — a source card and a
+					// citation card sit in the same list and had different corners.
+					borderRadius: RADIUS.sm,
 					color: INK.primary,
 					textDecoration: "none"
 				},
@@ -2420,7 +2426,7 @@ window.__ModuleLoader__.load({
 								// beside it — on the one line of the row that names the
 								// thing. "A title over a sentence" is not two lines; it is
 								// two weights.
-								style: { font: FONT.bodyStrong, flex: 1, minWidth: 0, color: INK.primary, wordBreak: "break-word", ...clampBox(2) },
+								style: { font: FONT.bodyMedium, flex: 1, minWidth: 0, color: INK.primary, wordBreak: "break-word", ...clampBox(2) },
 								children: title
 							}, "title"),
 							// THE STATUS COLUMN. Right-aligned, therefore at a fixed x
@@ -2443,7 +2449,9 @@ window.__ModuleLoader__.load({
 					}, "head"),
 					jsxs("div", {
 						style: {
-							font: FONT.micro,
+							// `text-[10px] text-gray-400` — the host, the stamp and the state are
+							// the small-facts layer, not a sentence.
+							font: FONT.nano,
 							display: "flex", alignItems: "center", flexWrap: "wrap",
 							gap: SPACE.xs, margin: `${SPACE.xs} 0 0`, color: INK.quiet
 						},
