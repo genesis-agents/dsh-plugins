@@ -9255,6 +9255,124 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * The leader's foreword, rendered as the four things it is.
+		 *
+		 * IT WAS PASSED WHOLE AS `children` AND REACT THREW. `Objects are not valid
+		 * as a React child` unmounts the pane; every mission whose leader signed off
+		 * crashed its own s11 drawer, and no test caught it because none had ever
+		 * mounted that block and the harness built its tree without React's check.
+		 *
+		 * FOREWORD_SCHEMA (mission-stages-back.js) is the shape:
+		 *
+		 *   whatWeAnswered      [{criterion, addressed: yes|partial|no, evidence}]
+		 *   whatRemainsUnclear  [string]
+		 *   howToRead           string
+		 *   recommendedFollowUp [string]
+		 *
+		 * `part` SPLITS IT THE WAY THE REFERENCE SPLITS ITS REPORT. panels/
+		 * ReportPanel.tsx opens with a 执行摘要 band and closes with 结论与建议;
+		 * this text is both, and it was reachable only by opening one stage's
+		 * drawer. `summary` is what was answered and how to read it; `closing` is
+		 * what is still open and what to do next.
+		 *
+		 * @param foreword - s11's foreword object, or null.
+		 * @param zh - whether to write Chinese.
+		 * @param part - "summary", "closing", or undefined for both.
+		 * @returns the block, or null when this part of it is empty.
+		 */
+		function MissionForeword({ foreword, zh, part }, key) {
+			if (foreword === null || foreword === undefined || typeof foreword !== "object") return null;
+			const answered = Array.isArray(foreword.whatWeAnswered) ? foreword.whatWeAnswered : [];
+			const unclear = Array.isArray(foreword.whatRemainsUnclear) ? foreword.whatRemainsUnclear : [];
+			const next = Array.isArray(foreword.recommendedFollowUp) ? foreword.recommendedFollowUp : [];
+			const howToRead = typeof foreword.howToRead === "string" ? foreword.howToRead : "";
+			const wants = (name) => part === undefined || part === null || part === name;
+
+			// THE VERDICT PER CRITERION, in the tone it deserves. `partial` is not a
+			// pass and not a failure, and flattening the three into two is the one
+			// thing this list exists to refuse.
+			const FACE = {
+				yes: { zh: "已回答", en: "answered", hue: TONE.success },
+				partial: { zh: "部分回答", en: "partly", hue: TONE.warn },
+				no: { zh: "未回答", en: "not answered", hue: TONE.danger }
+			};
+
+			const lines = (items, tone) => items.length === 0 ? null : jsx("ul", {
+				style: {
+					margin: `${SPACE.xs} 0 0`, paddingLeft: PROSE_INDENT,
+					font: FONT.body, color: tone ?? INK.secondary,
+					display: "flex", flexDirection: "column", gap: SPACE.xs
+				},
+				children: items.map((item, at) => jsx("li", { children: String(item) }, `i${at}`))
+			}, "lines");
+
+			const summary = !wants("summary") ? null : [
+				howToRead === "" ? null : jsx("p", {
+					style: { ...ARTICLE_BLOCK, margin: 0, color: INK.primary },
+					children: howToRead
+				}, "how"),
+				answered.length === 0 ? null : jsx("div", {
+					style: {
+						display: "flex", flexDirection: "column", gap: SPACE.sm,
+						margin: `${SPACE.md} 0 0`
+					},
+					children: answered.map((row, at) => jsxs("div", {
+						style: { display: "flex", alignItems: "flex-start", gap: SPACE.sm, minWidth: 0 },
+						children: [
+							Chip({
+								tone: (FACE[String(row?.addressed)] ?? FACE.no).hue,
+								pill: true,
+								label: zh ? (FACE[String(row?.addressed)] ?? FACE.no).zh : (FACE[String(row?.addressed)] ?? FACE.no).en
+							}, "state"),
+							jsxs("div", {
+								style: { flex: 1, minWidth: 0 },
+								children: [
+									jsx("div", {
+										style: { font: FONT.bodyMedium, color: INK.primary },
+										children: String(row?.criterion ?? "")
+									}, "criterion"),
+									typeof row?.evidence !== "string" || row.evidence === "" ? null : jsx("div", {
+										style: { font: FONT.micro, color: INK.secondary, marginTop: "2px" },
+										children: row.evidence
+									}, "evidence")
+								]
+							}, "body")
+						]
+					}, `a${at}`))
+				}, "answered")
+			];
+
+			const closing = !wants("closing") ? null : [
+				unclear.length === 0 ? null : jsxs("div", {
+					children: [
+						jsx("div", {
+							style: { font: FONT.smallStrong, letterSpacing: TRACK_WIDE, textTransform: "uppercase", color: `rgb(${TONE.warn})` },
+							children: zh ? "仍不清楚" : "Still unclear"
+						}, "h"),
+						lines(unclear)
+					]
+				}, "unclear"),
+				next.length === 0 ? null : jsxs("div", {
+					style: { margin: `${SPACE.md} 0 0` },
+					children: [
+						jsx("div", {
+							style: { font: FONT.smallStrong, letterSpacing: TRACK_WIDE, textTransform: "uppercase", color: `rgb(${TONE.accent})` },
+							children: zh ? "建议接下来" : "Recommended next"
+						}, "h"),
+						lines(next, INK.primary)
+					]
+				}, "next")
+			];
+
+			const body = [...(summary ?? []), ...(closing ?? [])].filter((node) => node !== null);
+			if (body.length === 0) return null;
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: SPACE.md },
+				children: body
+			}, key);
+		}
+
+		/**
 		* Whether anybody put their name to this.
 		*
 		* THE MOST CONSEQUENTIAL LINE ON THE SCREEN WAS THE SAME GREY SENTENCE AS
@@ -13651,8 +13769,8 @@ window.__ModuleLoader__.load({
 							jsx("div", { style: { font: FONT.bodyStrong, color: INK.primary }, children: String(row.label ?? row.id ?? "") }, "h"),
 							jsx("div", { style: { font: FONT.small, color: INK.secondary, marginTop: "2px" }, children: String(row.detail ?? "") }, "d")
 						]), "signoff"),
-					!mine("s11-signoff") || (signoff?.foreword ?? "") === "" ? null : block(zh ? "领队的话" : "The leader's foreword", null,
-						jsx("div", { style: { ...ARTICLE_BLOCK, marginBottom: 0, color: INK.primary }, children: signoff.foreword }, "fw"), "signoff")
+					!mine("s11-signoff") || signoff?.foreword === null || signoff?.foreword === undefined ? null : block(zh ? "领队的话" : "The leader's foreword", null,
+						MissionForeword({ foreword: signoff.foreword, zh }, "fw"), "signoff")
 				]
 			});
 		}
@@ -19746,6 +19864,10 @@ window.__ModuleLoader__.load({
 			MissionTimeline, MissionReport, MissionEvidenceRow,
 			MissionTrace, MissionTraceRow, MissionTraceDetail, MissionRail,
 			MissionSourceReader, MissionClamp, MissionDimensionDrawer, MissionRework, MissionGoals, MissionSignoffCard,
+			// EXPORTED BECAUSE NOTHING COULD MOUNT IT. It is the block the s11
+			// drawer renders, it fetches its own payload, and no test had ever
+			// reached it — which is how it shipped rendering an object as a child.
+			MissionJudgement,
 			VersionLine, libraryLine
 		};
 		return module.exports;

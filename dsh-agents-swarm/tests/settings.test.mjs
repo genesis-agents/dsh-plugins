@@ -50,7 +50,38 @@ async function render(Component, props = {}) {
   const cleanups = [];
   let dirty = false;
 
-  const plain = (type, props2, key) => ({ type, props: props2 ?? {}, key });
+  // REACT REFUSES A PLAIN OBJECT AS A CHILD, AND THIS SHIM DID NOT.
+  //
+  // `Objects are not valid as a React child` is a THROW in the browser: the
+  // pane unmounts and the user sees an error boundary, not a missing line.
+  // This harness built the tree by hand and put whatever it was given into
+  // it, so a component that renders `children: someObject` passed every
+  // test here and crashed on the page.
+  //
+  // MEASURED: `signoff.foreword` is an object — `{whatWeAnswered,
+  // whatRemainsUnclear, howToRead, recommendedFollowUp}`, enforced by
+  // FOREWORD_SCHEMA and by shapeSignoff's own `typeof === "object"` check —
+  // and MissionStageDetail passed it whole as `children`. Every mission
+  // whose leader wrote a foreword crashed its own s11 drawer.
+  //
+  // Arrays and elements pass, as they do in React; a Date or a plain object
+  // does not.
+  const childOk = (child) => {
+    if (child === null || child === undefined || child === false || child === true) return true;
+    if (Array.isArray(child)) return child.every(childOk);
+    if (typeof child !== "object") return true;
+    return Object.hasOwn(child, "type") && Object.hasOwn(child, "props");
+  };
+  const plain = (type, props2, key) => {
+    const child = props2?.children;
+    if (child !== undefined && !childOk(child)) {
+      const keys = Array.isArray(child) ? "an array holding one" : Object.keys(child ?? {}).join(", ");
+      throw new Error(
+        `<${String(type)}> was given a plain object as its children (${keys}). React throws on this — "Objects are not valid as a React child" — and the pane unmounts. Render the object's fields, or format it to a string first.`,
+      );
+    }
+    return { type, props: props2 ?? {}, key };
+  };
   element = (type, props2, key) => {
     if (typeof type !== "function") return plain(type, props2, key);
     if (seq > 5000) throw new Error("render did not terminate");
@@ -1349,6 +1380,28 @@ function stubFetch(overrides = {}) {
     // 信源's own reader, which an evidence row opens: the Host half re-fetches
     // the page and extracts it, so what comes back is the article rather than
     // the five fields the evidence row already had.
+    // THE s11 DRAWER'S OWN ENDPOINT. Nothing stubbed it, so no test had ever
+    // rendered MissionJudgement, and the foreword — a STRUCTURED object by
+    // FOREWORD_SCHEMA — went out as a React child unchallenged.
+    if (address.includes("/insights")) {
+      return ok({
+        reconcile: null,
+        critique: null,
+        assess: null,
+        signoff: {
+          signature: { signed: true, score: 82, verdict: null, refusalReason: null, accountabilityNote: null },
+          foreword: {
+            whatWeAnswered: [{ criterion: "园区的法定边界是否成立", addressed: "partial", evidence: "两份规划文件互相矛盾。" }],
+            whatRemainsUnclear: ["园区的法定边界"],
+            howToRead: "这是一份证据审计后的阶段性底稿。",
+            recommendedFollowUp: ["向规划局申请边界图的正式副本。"],
+          },
+          corrections: [],
+          leaderScore: 82,
+        },
+        sources: { "s11-signoff": "ok" },
+      });
+    }
     if (address.includes("/proxy/reader")) {
       return ok({ title: "Scaling test-time compute", markdown: "An abstract of the paper the quote came from.", text: "An abstract." });
     }
@@ -2280,6 +2333,27 @@ test("a board on a host that has not shipped work yet is still a board", async (
   const view = await render("MissionsTab", { zh: true });
   const tasks = await open(view, RUNNING.topic);
   assert.ok(tasks.includes("规划") && tasks.includes("采集"), "the board fell back to nothing");
+});
+
+test("the leader's foreword renders its parts, not the object it arrives in", async () => {
+  // s11 WRITES A STRUCTURED FOREWORD. FOREWORD_SCHEMA requires
+  // `whatWeAnswered`, `whatRemainsUnclear` and `howToRead`, and shapeSignoff
+  // keeps the field only when `typeof === "object"`. MissionJudgement passed
+  // it WHOLE as `children`.
+  //
+  // React refuses that: "Objects are not valid as a React child" is a THROW,
+  // not a warning. Every mission whose leader signed off crashed its own s11
+  // drawer — and nothing here noticed, because no test had ever mounted this
+  // block and the harness built its tree by hand without React's check.
+  //
+  // Both halves are fixed: the shim refuses what React refuses, and this
+  // mounts the block that was never mounted.
+  stubFetch();
+  const view = await render("MissionJudgement", { missionId: SIGNED.id, zh: true, only: "s11-signoff" });
+  const text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("这是一份证据审计后的阶段性底稿"), "the foreword's reading guidance is not on the page");
+  assert.ok(text.includes("园区的法定边界"), "the foreword does not say what remains unclear");
+  assert.ok(text.includes("向规划局"), "the foreword does not carry its recommended follow-up, which is the half a reader acts on");
 });
 
 test("the panes are separate screens, not one scroll with headings", async () => {
