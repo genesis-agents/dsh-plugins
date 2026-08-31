@@ -151,7 +151,12 @@ export const SOURCES = [
   { type: "YOUTUBE_VIDEO", name: "Index Ventures", url: channel("UCFMxDWNYefVV3XmCdCBCFjQ") },
   { type: "YOUTUBE_VIDEO", name: "First Round Capital", url: channel("UC_oji6l_-xwhmZqCxRGuAXw") },
   { type: "YOUTUBE_VIDEO", name: "NFX", url: channel("UC2ZCl6UC4FYlvsUEtK4ZaOg") },
-  { type: "YOUTUBE_VIDEO", name: "General Catalyst", url: channel("UC92DK_oxZFRuAbT4lU2iTlA") },
+  // ANOTHER ONE THE TITLE TEST LET THROUGH. `UC92DK_oxZFRuAbT4lU2iTlA` calls
+  // itself "GeneralCatalyst" and its three videos are "T-Brew Simulator 2021
+  // (School Video Project)" and a Trump campaign ad — somebody's namesake
+  // channel, not the firm. Caught only by reading what it publishes, which is
+  // the same test that recovered 十字路口.
+  { type: "YOUTUBE_VIDEO", name: "General Catalyst", url: channel("UCRuWcJZWsga67HTE0fcCvbA") },
   { type: "YOUTUBE_VIDEO", name: "Kleiner Perkins", url: channel("UCkNsANayKfsdXFXHpBm8LQg") },
 
   // ── the long-form interview shows ─────────────────────────────────────

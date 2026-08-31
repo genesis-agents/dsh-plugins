@@ -172,7 +172,9 @@ test("each channel id is the one that was resolved against YouTube", () => {
     "Index Ventures": "UCFMxDWNYefVV3XmCdCBCFjQ",
     "First Round Capital": "UC_oji6l_-xwhmZqCxRGuAXw",
     "NFX": "UC2ZCl6UC4FYlvsUEtK4ZaOg",
-    "General Catalyst": "UC92DK_oxZFRuAbT4lU2iTlA",
+    // Its namesake — three videos, a school project and a campaign ad — passed
+    // the title test as "GeneralCatalyst". Only reading its entries caught it.
+    "General Catalyst": "UCRuWcJZWsga67HTE0fcCvbA",
     "Kleiner Perkins": "UCkNsANayKfsdXFXHpBm8LQg",
     "No Priors": "UCSI7h9hydQ40K5MJHnCrQvw",
     "The Logan Bartlett Show": "UCugS0jD5IAdoqzjaNYzns7w",
