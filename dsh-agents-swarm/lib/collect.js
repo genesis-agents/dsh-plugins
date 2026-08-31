@@ -18,6 +18,10 @@
 
 import { createHash } from "node:crypto";
 import { normalizeUrl } from "./store.js";
+// The watch page is the only place a video's length is available: the Atom
+// feed carries `media:group`, `media:community`, a star rating and a
+// thumbnail, and no duration in any form.
+import { fetchVideoDetails } from "./transcript.js";
 
 /** Identifier for a collected row: stable across runs for the same URL. */
 export function stableId(url) {
@@ -115,6 +119,70 @@ function itemLink(block) {
  */
 export function isShortFormVideo(url) {
   return /^https?:\/\/(?:www\.)?youtube\.com\/shorts\//i.test(String(url));
+}
+
+/** Below this a video is a clip, a trailer or an announcement. */
+export const MIN_VIDEO_SECONDS = 20 * 60;
+
+/**
+ * The video id in a YouTube watch URL, or an empty string.
+ * @param url - the item's link.
+ * @returns the eleven-character id.
+ */
+export function youtubeVideoId(url) {
+  return /[?&]v=([\w-]{11})\b/.exec(String(url))?.[1]
+    ?? /youtu\.be\/([\w-]{11})\b/.exec(String(url))?.[1]
+    ?? "";
+}
+
+/**
+ * Drop the videos that are shorter than the floor.
+ *
+ * THE FEED DOES NOT CARRY A DURATION. Measured on four channels' Atom: it
+ * has `media:group`, `media:community`, `media:starRating` and a thumbnail,
+ * and no length in any form. So the only way to know is the watch page,
+ * which is one request per video — the cost `isShortFormVideo`'s note says
+ * the reference pays, and it is why the URL-shape check exists beside this
+ * rather than being replaced by it. Shorts are still dropped for free.
+ *
+ * ONLY FOR VIDEOS THE LIBRARY DOES NOT ALREADY HOLD. A feed answers with
+ * its most recent fifteen every poll, so looking each of them up every time
+ * would be fifteen requests per channel per tick, forever, to re-learn a
+ * number that cannot change. `seen` is what makes the cost proportional to
+ * NEW videos.
+ *
+ * A LOOKUP THAT FAILS KEEPS THE VIDEO. A network error is not evidence that
+ * something is short, and silently discarding a source because a request
+ * failed is how a library loses material it would have to be told twice to
+ * lose.
+ * @param rows - parsed feed rows.
+ * @param options - `{ seen, details, minSeconds }`; `seen(id)` answers
+ *   whether the library already holds a row, `details(videoId)` resolves
+ *   `{lengthSeconds}`.
+ * @returns the rows to keep, and what was dropped.
+ */
+export async function dropShortVideos(rows, { seen, details, minSeconds = MIN_VIDEO_SECONDS } = {}) {
+  if (typeof details !== "function") return { rows, dropped: [], looked: 0 };
+  const kept = [];
+  const dropped = [];
+  let looked = 0;
+  for (const row of rows) {
+    const videoId = row?.type === "YOUTUBE_VIDEO" ? youtubeVideoId(row.sourceUrl) : "";
+    if (videoId === "") { kept.push(row); continue; }
+    if (typeof seen === "function" && seen(row.id) === true) { kept.push(row); continue; }
+    try {
+      looked += 1;
+      const seconds = Number((await details(videoId))?.lengthSeconds ?? 0);
+      if (Number.isFinite(seconds) && seconds > 0 && seconds < minSeconds) {
+        dropped.push({ url: row.sourceUrl, title: row.title, seconds });
+        continue;
+      }
+      kept.push(row);
+    } catch {
+      kept.push(row);
+    }
+  }
+  return { rows: kept, dropped, looked };
 }
 
 /**
@@ -350,6 +418,26 @@ export async function runCollector(store, name, options = {}) {
   const collector = COLLECTORS[name];
   if (collector === undefined) throw new Error(`unknown collector: ${name}`);
   const rows = await collector(options);
-  const result = store.putMany(rows);
-  return { collector: name, fetched: rows.length, ...result };
+  // THE LENGTH FLOOR, APPLIED WHERE THE STORE IS IN HAND. It has to be here
+  // and not in `parseFeed`: knowing a video's length costs a request, and the
+  // only way to make that proportional to NEW videos rather than to every
+  // poll is to ask the library what it already holds. `parseFeed` is pure and
+  // has no library.
+  //
+  // Injected rather than imported so a test can drive it without a network,
+  // and defaulted so the live collector needs no wiring.
+  const gate = await dropShortVideos(rows, {
+    seen: (id) => store.get(id) !== undefined,
+    details: options.videoDetails ?? fetchVideoDetails,
+  });
+  const result = store.putMany(gate.rows);
+  return {
+    collector: name,
+    fetched: rows.length,
+    ...result,
+    // NAMED, NOT SILENT. A collector that quietly discards half a feed is one
+    // nobody can tell from a channel that stopped publishing.
+    tooShort: gate.dropped.length,
+    lookedUp: gate.looked,
+  };
 }

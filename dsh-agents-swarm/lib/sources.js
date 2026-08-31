@@ -127,6 +127,58 @@ export const SOURCES = [
   { type: "YOUTUBE_VIDEO", name: "Yannic Kilcher", url: channel("UCZHmQk67mSJgfCCTn7xBfew") },
   { type: "YOUTUBE_VIDEO", name: "Two Minute Papers", url: channel("UCbfYPyITQ-7l4upoX8nvctg") },
   { type: "YOUTUBE_VIDEO", name: "AI Explained", url: channel("UCNJ1Ymd5yFuUPtn21xtRbbw") },
+
+  // ── the venture channels ──────────────────────────────────────────────
+  //
+  // EVERY ID BELOW WAS RESOLVED AND VERIFIED, twice, and that is not
+  // ceremony. Reading the first `channelId` off a channel page returns
+  // whatever shelf YouTube put at the top: Bessemer came back as a personal
+  // channel called Ashley Gagnier, 20VC as Business of Sport, and one id
+  // that reads like Sequoia is Talks at Google. So each is taken from the
+  // page's own `channelMetadataRenderer.externalId`, cross-checked against
+  // its canonical link, and then its feed is fetched and its title compared
+  // to the channel's own. A roster of ids nobody checked is a library that
+  // collects the wrong thing and reports itself healthy.
+  //
+  // Sequoia is here because it was the shape everything else was chosen
+  // against and it was missing.
+  { type: "YOUTUBE_VIDEO", name: "Sequoia Capital", url: channel("UCWrF0oN6unbXrWsTN7RctTw") },
+  { type: "YOUTUBE_VIDEO", name: "a16z", url: channel("UC9cn0TuPq4dnbTY-CBsm8XA") },
+  { type: "YOUTUBE_VIDEO", name: "Greylock", url: channel("UCZ7x7yDBbEFCGztD8BYvRhA") },
+  { type: "YOUTUBE_VIDEO", name: "Lightspeed Venture Partners", url: channel("UCwBTFE_6Bsb_EtmXlW2aTlg") },
+  { type: "YOUTUBE_VIDEO", name: "Bessemer Venture Partners", url: channel("UCKuHAxZoh99t8uyPQhoDR3A") },
+  { type: "YOUTUBE_VIDEO", name: "Khosla Ventures", url: channel("UCF92qR15QflJFGO7c_PeT-g") },
+  { type: "YOUTUBE_VIDEO", name: "Index Ventures", url: channel("UCFMxDWNYefVV3XmCdCBCFjQ") },
+  { type: "YOUTUBE_VIDEO", name: "First Round Capital", url: channel("UC_oji6l_-xwhmZqCxRGuAXw") },
+  { type: "YOUTUBE_VIDEO", name: "NFX", url: channel("UC2ZCl6UC4FYlvsUEtK4ZaOg") },
+  { type: "YOUTUBE_VIDEO", name: "General Catalyst", url: channel("UC92DK_oxZFRuAbT4lU2iTlA") },
+  { type: "YOUTUBE_VIDEO", name: "Kleiner Perkins", url: channel("UCkNsANayKfsdXFXHpBm8LQg") },
+
+  // ── the long-form interview shows ─────────────────────────────────────
+  // The nearest thing to Training Data: one guest, one subject, an hour or
+  // more. This is the tier the twenty-minute floor below is really for.
+  { type: "YOUTUBE_VIDEO", name: "No Priors", url: channel("UCSI7h9hydQ40K5MJHnCrQvw") },
+  { type: "YOUTUBE_VIDEO", name: "The Logan Bartlett Show", url: channel("UCugS0jD5IAdoqzjaNYzns7w") },
+  { type: "YOUTUBE_VIDEO", name: "20VC with Harry Stebbings", url: channel("UCf0PBRjhf0rF8fWBIxTuoWA") },
+  { type: "YOUTUBE_VIDEO", name: "Acquired", url: channel("UCyFqFYfTW2VoIQKylJ04Rtw") },
+  { type: "YOUTUBE_VIDEO", name: "Latent Space", url: channel("UCxBcwypKK-W3GHd_RZ9FZrQ") },
+  { type: "YOUTUBE_VIDEO", name: "The Cognitive Revolution", url: channel("UCjNRVMBVI30Sak_p6HRWhIA") },
+
+  // ── the lecture series ────────────────────────────────────────────────
+  // Long-horizon argument rather than news, which is what a claim about
+  // where something is GOING needs underneath it.
+  { type: "YOUTUBE_VIDEO", name: "Stanford Graduate School of Business", url: channel("UCGwuxdEeCf0TIA2RbPOj-8g") },
+  { type: "YOUTUBE_VIDEO", name: "Stanford Online", url: channel("UCBa5G_ESCn8Yd4vw5U-gIcg") },
+  { type: "YOUTUBE_VIDEO", name: "Stanford eCorner", url: channel("UCctkeBNtFIOn7Yl_9TTj_4w") },
+
+  // ── Chinese-language long form ────────────────────────────────────────
+  // 硅谷101 is already above. 十字路口 and 曲率区动 are NOT here and their
+  // absence is deliberate: neither resolved to a channel whose own title
+  // matches, and the nearest search results were a personal vlog and a
+  // data-centre company called Curvature. A wrong id collects somebody
+  // else's videos under a name a reader will trust, which is worse than a
+  // gap. Add them when someone can supply the channel URL.
+  { type: "YOUTUBE_VIDEO", name: "张小珺 商业访谈录", url: channel("UC3Sv1JuKpbOx3csUO8FAo5g") },
 ];
 
 /** The roster as collector jobs, ready to store as configuration. */
