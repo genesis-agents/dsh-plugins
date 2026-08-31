@@ -6009,3 +6009,68 @@ test("every row's action cell offers something, and a refusal says why", () => {
     "the un-rerunable hint falls back to an empty string, so a step that cannot be re-run gives no reason at all",
   );
 });
+
+test("the citation card flips at the top of the pane and clamps at its sides", () => {
+  const peek = code(body("function MissionCitationPeek("));
+  // components/common/citations/CitationBadge.tsx portals its card into
+  // document.body as `fixed z-[9999] w-96 rounded-lg border border-gray-200
+  // bg-white shadow-xl` and places it in handleMouseEnter:
+  //   showBelow = rect.top < 200
+  //   top       = showBelow ? rect.bottom + 8 : rect.top - 8
+  //   left      = Math.min(Math.max(rect.left + rect.width / 2, 200), window.innerWidth - 200)
+  // Every number asserted below is one of those four.
+  //
+  // Ours was `position: absolute; bottom: calc(100% + 6px); left: 50%`,
+  // unclamped in both axes, inside a pane whose one scroller is
+  // `overflowY: "auto"` — and an inline axis left `visible` beside an `auto`
+  // block axis computes to `auto` too, so that box clips on BOTH sides. A
+  // marker in the first visible line opened a card with its top cut off; one
+  // near the right edge opened a card that clipped or pushed a horizontal
+  // scrollbar under the whole report.
+  assert.match(peek, /position: "fixed"/, "the card is positioned inside the scroller again, and that box clips it on both axes");
+  assert.ok(!peek.includes('bottom: "calc(100% + 6px)"'), "the old unclamped placement is back beside the new one, so two rules place one card");
+  assert.match(peek, /rect\.top < 200/, "the card never flips below the marker, so one opened on the first visible line goes off the top of the screen");
+  assert.match(
+    peek,
+    /Math\.min\(Math\.max\(rect\.left \+ rect\.width \/ 2, 200\)/,
+    "the card is not clamped horizontally, so a marker near either edge opens one off the side of the window",
+  );
+  assert.match(peek, /width: "384px"/, "the card is narrower than the reference's `w-96`, so the same four rows each wrap a line earlier");
+  assert.match(peek, /ref: anchor,/, "nothing holds the marker's element, so there is no rect to place the card from and it lands at 0,0");
+  // AND NOTHING DRAWS BEFORE IT HAS A PLACE, which is the reference's own
+  // `isHovered && tooltipPos &&`: a card rendered before its rect is read
+  // flashes in the window's top-left corner on its way to the marker.
+  assert.match(peek, /!open \|\| spot === null \? null : jsxs\("span", \{/, "the card renders before it has been placed");
+});
+
+
+
+test("the child connector is the reference's twelve pixels, in the reference's colour", () => {
+  // THIS TEST TOOK THE WHOLE FILE DOWN FOR THREE COMMITS.
+  //
+  // It landed with its backslashes eaten passing through a quoting layer:
+  // `[\s\S]` became `[sS]`, `\s*` became `s*`, `\$\{` became `${`, and a `\n`
+  // became a real newline that split one literal across two lines. `${SPACE.lg}`
+  // inside a regex literal is a lone `{`, which is a PARSE error — so
+  // design-tokens.test.mjs never loaded at all, and every guard in it was dark:
+  // the declared-variable guard, the one-ramp hue guard, gray-100-is-never-a-
+  // ground, hair-versus-rule, the role palette, and all seven ratchets.
+  //
+  // 197 guards, silent, while `npm test` printed a number I read as a pass.
+  // The runner counts an unloadable file as ONE failing test, so the total fell
+  // from 588 to 392 and I reported the 392 as green three times.
+  //
+  // Written with `includes` rather than a pattern for exactly that reason: the
+  // strings this checks contain `{`, `$`, backticks and parentheses, and every
+  // attempt to express them as a regex through a shell has been eaten. Twelve
+  // times this session, and this is the first one that cost coverage rather
+  // than a retry.
+  const board = code(body("function MissionTaskBoard("));
+  assert.ok(board.includes('"treeBranch", size: ICON.xs'), "the connector is not the reference's 12px glyph");
+  assert.ok(
+    board.includes("width: `calc(${SPACE.lg} + ${ICON.xs})`"),
+    "the connector's slot is not one glyph wide plus its indent",
+  );
+  assert.ok(!board.includes("paddingLeft"), "the indent is a padding again, so the elbow has nowhere of its own to sit");
+});
+

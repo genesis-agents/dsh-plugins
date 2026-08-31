@@ -1135,8 +1135,8 @@ window.__ModuleLoader__.load({
 			"--dsw-font-xs-strong-13:600 13px/18px var(--dsw-font-family);",
 			"--dsw-font-s-14:14px/20px var(--dsw-font-family);",
 			"--dsw-font-s-strong-14:600 14px/20px var(--dsw-font-family);",
-			"--dsw-font-base-16:16px/28px var(--dsw-font-family);",
-			"--dsw-font-base-strong-16:600 16px/28px var(--dsw-font-family);",
+			"--dsw-font-base-16:16px/24px var(--dsw-font-family);",
+			"--dsw-font-base-strong-16:600 16px/24px var(--dsw-font-family);",
 			"--dsw-font-l-20:600 20px/28px var(--dsw-font-family);",
 			"--dsw-font-xl-24:700 24px/32px var(--dsw-font-family);",
 			"--dsw-shadow-lv1:0 1px 2px 0 rgba(0,0,0,0.05);",
@@ -3747,9 +3747,56 @@ window.__ModuleLoader__.load({
 				clearTimeout(timer.current);
 				timer.current = null;
 			};
-			const hold = () => { stop(); setOpen(true); };
+			// WHERE THE CARD GOES, DECIDED WHEN IT OPENS, off the marker's own rect.
+			// That is what components/common/citations/CitationBadge.tsx does in
+			// handleMouseEnter, and it is what this file did not do at all.
+			//
+			// IT WAS `position: absolute; bottom: calc(100% + 6px); left: 50%`,
+			// unclamped in BOTH axes, inside a pane whose one scroller is
+			// `overflowY: "auto"` — and an inline axis left `visible` beside an `auto`
+			// block axis computes to `auto` as well, so that box clips on both sides.
+			// A marker in the first visible line therefore opened a card whose top was
+			// cut off by the scroller, and a marker near the right edge opened one that
+			// clipped or pushed a horizontal scrollbar under the whole report. A long
+			// report draws two hundred of these, so no reader is a paragraph from one.
+			//
+			// THE FOUR NUMBERS ARE THE REFERENCE'S, read straight off that handler:
+			//   showBelow = rect.top < 200
+			//   top       = showBelow ? rect.bottom + 8 : rect.top - 8
+			//   left      = min(max(rect.left + rect.width / 2, 200), innerWidth - 200)
+			// 200 is half the card's own `w-96` — 384px — plus eight, so the clamp
+			// keeps the whole card on screen at either edge without ever letting it
+			// leave the marker it points at.
+			//
+			// `fixed` RATHER THAN A PORTAL. The reference reaches document.body to
+			// escape its own overflow; a fixed box takes the viewport as its containing
+			// block and escapes the same clip without this file growing a second render
+			// root. Like the reference's, it does not track a scroll — the card closes
+			// on the way out, and the position is recomputed on the way back in.
+			const [spot, setSpot] = useState(null);
+			const anchor = useRef(null);
+			const hold = () => {
+				stop();
+				const rect = anchor.current?.getBoundingClientRect?.() ?? null;
+				if (rect !== null) {
+					// A rect means there is a document, so there is a window to measure —
+					// but this module is also rendered in Node by tests/settings.test.mjs,
+					// and a 0 viewport would clamp every card to -200.
+					const viewport = Number(globalThis.innerWidth) || (rect.right + 200);
+					const below = rect.top < 200;
+					setSpot({
+						below,
+						top: below ? rect.bottom + 8 : rect.top - 8,
+						left: Math.min(Math.max(rect.left + rect.width / 2, 200), viewport - 200)
+					});
+				}
+				setOpen(true);
+			};
 			// A GRACE PERIOD ON THE WAY OUT, and it is not a flourish. The card
-			// floats six pixels above the marker, so a pointer travelling from the
+			// floats eight pixels clear of the marker — `rect.top - 8` above it or
+			// `rect.bottom + 8` below it, the reference's own gap — and when the
+			// horizontal clamp fires it is further off than that, so a pointer
+			// travelling from the
 			// number to the card crosses a strip where neither element is hovered;
 			// closing on the first `mouseleave` makes the card unreachable by the
 			// only input that can open it. Re-entering cancels the timer.
@@ -3782,6 +3829,9 @@ window.__ModuleLoader__.load({
 			const broken = source?.joined === false;
 			const mark = jsx("button", {
 				type: "button",
+				// THE RECT THE CARD IS PLACED FROM. The reference keeps the same handle
+				// on the same element — CitationBadge.tsx's `triggerRef` on its <sup>.
+				ref: anchor,
 				title: zh ? (broken ? `第 ${index} 条引用没有对上任何一条冻结证据，来源查不到` : `跳到参考文献第 ${index} 条`) : (broken ? `Reference ${index} matched no frozen evidence row, so its source cannot be shown` : `Jump to reference ${index}`),
 				// STILL A JUMP, in both states. The row exists either way and it is where
 				// the full sentence is; a marker that stopped being pressable would take
@@ -3811,12 +3861,21 @@ window.__ModuleLoader__.load({
 				onMouseLeave: release,
 				children: [
 					mark,
-					!open ? null : jsxs("span", {
+					// NO PLACE, NO CARD — the reference's own `isHovered && tooltipPos &&`.
+					// A card drawn before its rect was read would flash at the top-left
+					// corner of the window on the way to where it belongs.
+					!open || spot === null ? null : jsxs("span", {
 						role: "note",
 						style: {
 							font: FONT.small,
-							position: "absolute", bottom: "calc(100% + 6px)", left: "50%", transform: "translateX(-50%)",
-							zIndex: 40, width: "320px", boxSizing: "border-box",
+							position: "fixed",
+							top: spot?.top ?? 0, left: spot?.left ?? 0,
+							transform: spot?.below === true ? "translate(-50%, 0)" : "translate(-50%, -100%)",
+							// 384px IS `w-96`, the reference's own card width. Ours was 320 and
+							// carried the same four rows its card does — title, host, quote, link —
+							// so every one of them wrapped a line earlier than in the card it was
+							// copied from, on a box that floats over the paragraph being checked.
+							zIndex: 40, width: "384px", boxSizing: "border-box",
 							display: "flex", flexDirection: "column", gap: SPACE.xs,
 							padding: "10px 12px", borderRadius: RADIUS.lg,
 							border: `1px solid ${LINE.hair}`, background: SURFACE.card, boxShadow: ELEVATION.floating,
@@ -11610,8 +11669,13 @@ window.__ModuleLoader__.load({
 														// be last. It keeps the slot, so it still reads as indented, and
 														// its origin chip still says what it is.
 														!child ? null : jsx("span", {
-															style: { flex: "none", display: "flex", width: ICON.md, color: INK.quiet },
-															children: jsx(Icon, { name: entry.orphan === true ? undefined : "treeBranch", size: ICON.md })
+															// TWELVE OF GLYPH IN TWENTY-EIGHT OF SLOT.
+															style: {
+																flex: "none", display: "flex", justifyContent: "flex-end",
+																width: `calc(${SPACE.lg} + ${ICON.xs})`,
+																color: "var(--dsw-alias-state-business-primary)"
+															},
+															children: jsx(Icon, { name: entry.orphan === true ? undefined : "treeBranch", size: ICON.xs })
 														}, "branch"),
 														// The origin, on the child only. "Why does this row exist" is
 														// the whole difference between a plan and a progress bar, and
