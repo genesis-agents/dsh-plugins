@@ -2712,7 +2712,13 @@ test("the mission list is a grid, and its placeholder is laid out in the same on
   // The card's own margin is cancelled AT THE SITE. Stripping it from
   // CARD_STYLE would re-flow the 信源 feed, the starter and MissionPanel, none
   // of which this batch looked at.
-  assert.match(declaration("const CARD_STYLE = {"), /marginBottom: SPACE\.xl/, "CARD_STYLE lost the margin its four consumers are laid out on, or dropped back to the 16px gutter — the reference's sections stand 24 apart");
+  // THE MARGIN MUST EXIST; the number was mine. This said "the reference's
+  // sections stand 24 apart" — they stand at `space-y-4`, which is 16, in
+  // both ReportPanel and ReferencesPanel. What the guard is actually for is
+  // that the margin does not VANISH: four consumers lay themselves out on
+  // it, and stripping it from CARD_STYLE would re-flow the 信源 feed, the
+  // starter and MissionPanel, none of which this batch looked at.
+  assert.match(declaration("const CARD_STYLE = {"), /marginBottom: SPACE\.lg/, "CARD_STYLE lost the margin its four consumers are laid out on");
   assert.match(
     code(MISSIONS_LIST),
     /\.\.\.\(hover \? CARD_HOVER_STYLE : CARD_STYLE\), marginBottom: 0, height: "100%"/,
@@ -5366,18 +5372,22 @@ test("the trajectory's rows touch, so the line between them is the line", () => 
 });
 
 test("a card carries the reference's air, and the panel stops taking it back", () => {
-  // MEASURED, NOT FELT. The reference's cards carry 20-24px of interior
-  // padding and its sections stand ~24px apart. Ours carried SPACE.lg for
-  // both — and MissionPanel, which draws seventeen of the cards on the mission
-  // screens, then overrode the interior down to SPACE.md. The component that
-  // owns most of this product's surface was the tightest thing on it, at half
-  // the reference's air.
+  // MEASURED FROM THE FILES THIS TIME. What stood here — "the reference's
+  // cards carry 20-24px of interior padding and its sections stand ~24px
+  // apart" — was a range I had transcribed, and the test then pinned the
+  // TOP of it because SPACE had no 20. Every card in the tab came out a
+  // step looser than the product.
   //
-  // SPACE IS PINNED AT FIVE STEPS OF FOUR by the test above, so the reference's
-  // 20 is not a step this file may have and 24 is the step it has.
+  //   CostBreakdownPanel  p-5         20      ReferencesPanel  p-4   16
+  //   ReportPanel header  p-5         20      ChapterReader    p-4   16
+  //   ReportPanel section px-5 py-4   20/16   between cards    space-y-4  16
+  //
+  // Not one 24. `CARD_PAD` is a named 20 rather than a sixth SPACE step:
+  // the five-step guard above is right, and a card's interior is a recipe's
+  // measurement rather than a rung on the spacing ladder.
   const card = declaration("const CARD_STYLE = {");
-  assert.match(card, /padding: SPACE\.xl/, "a card is back to 16px inside, which is where it measured tighter than the reference on every screen in the tab");
-  assert.match(card, /marginBottom: SPACE\.xl/, "two stacked cards are back to a 16px gutter");
+  assert.match(card, /padding: CARD_PAD/, "a card's interior is a SPACE step again — 16 is tighter than the reference and 24 is looser, and the number it actually uses is 20");
+  assert.match(card, /marginBottom: SPACE\.lg/, "two stacked cards no longer stand at the reference's `space-y-4`");
   // AND THE GAP IS NOT THE MARGIN. `gap` is the space between a card's own
   // columns — the thumbnail and the text in the 信源 feed — and widening it
   // with the padding would push a 340px grid card's text off its own image.

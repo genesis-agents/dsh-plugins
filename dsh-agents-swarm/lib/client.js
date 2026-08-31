@@ -3260,6 +3260,9 @@ window.__ModuleLoader__.load({
 		* `l1` (`#0000000a`) keeps the top edge defined where a downward shadow
 		* cannot reach, without asserting itself as a frame.
 		*/
+		/** A card's interior: the reference's `p-5`. Not a SPACE step — see CARD_STYLE. */
+		const CARD_PAD = "20px";
+
 		/**
 		* The panel recipe, in one place.
 		*
@@ -3278,27 +3281,32 @@ window.__ModuleLoader__.load({
 
 		const CARD_STYLE = {
 			...PANEL_STYLE,
-			// TWENTY-FOUR INSIDE, AND THE SAME TWENTY-FOUR BETWEEN TWO OF THEM.
-			// Measured off the reference rather than felt: its cards carry 20-24px
-			// of interior padding and its sections stand ~24px apart. Ours carried
-			// SPACE.lg for both — and `MissionPanel`, which draws SEVENTEEN of the
-			// cards on the mission screens, then OVERRODE the interior down to
-			// SPACE.md. So the surface a reader spends the most time on was the
-			// tightest thing in the tab: twelve pixels against the reference's
-			// twenty-four, on a screen whose whole complaint is that it reads as a
-			// denser tool than the thing it is copying.
+			// TWENTY INSIDE, SIXTEEN BETWEEN — and the note here used to say
+			// twenty-four for both, on my own admission that I had rounded.
 			//
-			// `xl` AND NOT A NEW STEP. SPACE is pinned at five steps of four by its
-			// own test, so the reference's 20 is not available and 24 is the step
-			// that is. One value moves six CARD_STYLE style sites, CARD_HOVER_STYLE
-			// and seventeen panels together — which is the whole argument for the
-			// interior being a token rather than a call site.
+			// It read: "its cards carry 20-24px of interior padding... SPACE is
+			// pinned at five steps of four by its own test, so the reference's 20 is
+			// NOT AVAILABLE and 24 is the step that is." I knew the number and took
+			// the next one up because the scale did not hold it, which made every
+			// card in this tab a step looser than the product it copies.
+			//
+			// Measured now, from the files:
+			//
+			//   CostBreakdownPanel  <Card className="p-5">        20
+			//   ReportPanel header  p-5                            20
+			//   ReportPanel section px-5 py-4                      20 / 16
+			//   ReferencesPanel     p-4                            16
+			//   ChapterReader card  p-4                            16
+			//   between cards       space-y-4                      16
+			//
+			// Not one 24 anywhere. A named constant rather than a sixth SPACE step:
+			// the five-step guard is right, and a card's interior is a recipe's
+			// measurement, not a rung on the spacing ladder.
 			//
 			// `gap` STAYS AT `lg`, and that is not an oversight: it is the space
 			// between a card's OWN COLUMNS — the thumbnail and the text in the 信源
-			// feed — not the space between two cards, and the reference does not
-			// open that one up.
-			display: "flex", gap: SPACE.lg, padding: SPACE.xl, marginBottom: SPACE.xl,
+			// feed — not the space between two cards.
+			display: "flex", gap: SPACE.lg, padding: CARD_PAD, marginBottom: SPACE.lg,
 			transition: `box-shadow ${MOTION.base}, transform ${MOTION.base}`
 		};
 
