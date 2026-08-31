@@ -11841,7 +11841,7 @@ window.__ModuleLoader__.load({
 		* @param onRerunStage - called with a stepId; re-runs it and its successors.
 		* @param onOpenTrace - called with a dimensionId; opens the trajectory on it.
 		*/
-		function MissionTaskBoard({ stages, agents, zh, onOpenStage, onRerunStage, selected, onSelect, mission, work, onOpenSource, onOpenTrace }) {
+		function MissionTaskBoard({ stages, agents, zh, onOpenStage, onRerunStage, selected, onSelect, mission, work, chapters, goals, onOpenSource, onOpenTrace }) {
 			// WHAT A TASK IS HERE, and it took a rebuild to get right. playground's
 			// board deliberately does NOT show system-stage rows: a todo there is a
 			// piece of work somebody decided on — a dimension to research, a gap the
@@ -12534,6 +12534,13 @@ window.__ModuleLoader__.load({
 						children: chosenDim === null ? null : jsx(MissionDimensionDrawer, {
 							missionId: mission?.id ?? null,
 							dimension: { id: String(chosenDim.id).slice("dimension:".length), name: chosenDim.title },
+							// THE CHAPTERS THIS DIMENSION PRODUCED, which were being listed at the
+							// bottom of the task LIST instead — one flat table of every chapter in
+							// the mission, under a board whose rows are the dimensions that wrote
+							// them. The reference puts 章节进度 inside the dimension's own drawer,
+							// and the projection has been per-dimension all along: every chapter
+							// row carries its `dimensionId`.
+							chapters: (Array.isArray(chapters) ? chapters : []).filter((c) => String(c.dimensionId ?? "") === String(chosenDim.id).slice("dimension:".length)),
 							runCount: mission?.runCount ?? null,
 							zh,
 							onClose: () => { onSelect?.(null); },
@@ -12546,6 +12553,11 @@ window.__ModuleLoader__.load({
 						onClose: () => { onSelect?.(null); },
 						children: chosen === null ? null : jsx(MissionStageDetail, {
 							stage: chosen, owner: owner.get(chosen.stepId) ?? null, zh,
+							// THE BRIEF THE LEADER WROTE, on the step that wrote it. 立项目标 was a
+							// panel at the bottom of the task list — success criteria and a quality
+							// bar, hanging under a table of twenty rows, belonging to none of them.
+							// It is s2's output; it belongs in s2's drawer.
+							goals,
 							missionId: mission?.id ?? null,
 							// EFFECTIVE START, not `startedAt`. A mission that was
 							// resumed carries both, and measuring this run's stages
@@ -12579,7 +12591,7 @@ window.__ModuleLoader__.load({
 		* @param missionId - the mission, for the step's own trajectory.
 		* @param anchor - the run's zero, so the timings read as offsets too.
 		*/
-		function MissionStageDetail({ stage, owner, zh, onClose, onOpenStage, onRerunStage, missionId, anchor }) {
+		function MissionStageDetail({ stage, owner, zh, onClose, onOpenStage, onRerunStage, missionId, anchor, goals }) {
 			ensureTraceStyle();
 			// WHAT THIS STEP DID, which the drawer could not say. It listed seven
 			// properties OF the stage — status, attempts, took, owner, tokens,
@@ -12799,6 +12811,20 @@ window.__ModuleLoader__.load({
 								!["s4-assess", "s5-reconcile", "s10-critique", "s11-signoff"].includes(stage.stepId)
 									? null
 									: jsx(MissionJudgement, { missionId, zh, only: stage.stepId }, "judgement"),
+							// THE BRIEF, ON THE STEP THAT WROTE IT. Success criteria and a quality
+							// bar are s2's output. They were a panel at the foot of the task LIST,
+							// under twenty rows they belong to none of — which is where a reader
+							// looking for "what was this run asked to achieve" would never look,
+							// and where a reader scrolling the board hits them by accident.
+							stage.stepId !== "s2-plan" || goals === null || goals === undefined ? null : jsx("div", {
+								style: { padding: "0 14px" },
+								children: jsx(MissionPanel, {
+									bare: true,
+									title: zh ? "立项目标" : "Mission goals",
+									note: zh ? "领队立项时写下的，原样呈现" : "as the leader wrote it",
+									children: jsx(MissionGoals, { goals, zh })
+								}, "goals")
+							}, "brief"),
 							missionId === null || missionId === undefined || missionId === "" ? null : jsx("div", {
 								// 14px, which is `.swt-kv>div`'s own inset, so the section's
 								// rule starts at the same x as the labels above it rather
@@ -13443,7 +13469,7 @@ window.__ModuleLoader__.load({
 		* names the dimension and nothing else.
 		* @param props - `{missionId, dimension, runCount, zh, onClose, onOpenSource, onOpenTrace}`.
 		*/
-		function MissionDimensionDrawer({ missionId, dimension, runCount, zh, onClose, onOpenSource, onOpenTrace }) {
+		function MissionDimensionDrawer({ missionId, dimension, runCount, zh, chapters, onClose, onOpenSource, onOpenTrace }) {
 			const [held, setHeld] = useState(null);
 			const [error, setError] = useState("");
 			const dimensionId = dimension === null || dimension === undefined ? null : dimension.id;
@@ -13669,6 +13695,25 @@ window.__ModuleLoader__.load({
 												? null
 												: { label: zh ? "抓取页数" : "Pages read", value: String(axes.pagesFetched) }
 										] }, "figures"),
+										// THE CHAPTERS THIS DIMENSION PRODUCED.
+										//
+										// They were one flat table at the foot of the task LIST — every chapter
+										// in the mission, under a board whose rows are the dimensions that wrote
+										// them, so answering "how did THIS dimension's writing go" meant reading
+										// a table of eight and matching titles by eye.
+										//
+										// The reference puts 章节进度 inside the dimension's own drawer, and the
+										// projection has been per-dimension all along: every chapter row carries
+										// its `dimensionId` and this drawer is handed only its own.
+										(Array.isArray(chapters) ? chapters : []).length === 0 ? null : MissionPanel({
+											bare: true,
+											title: zh ? "成章记录" : "Chapter delivery",
+											count: chapters.length,
+											note: zh
+												? "这个维度写出的每一章：怎么判的、评了多少分、写了几轮、交付字数对下限"
+												: "each chapter this dimension wrote: how it was judged, its grade, how many rounds, and delivered words against the floor",
+											children: jsx(MissionChapterTable, { chapters, zh })
+										}, "chapters"),
 										// WHAT THE GRADE IS MADE OF. A bare 74 is a figure a reader can
 										// neither trust nor argue with; the two axes under this heading
 										// are the argument, and between them they are the whole formula —
@@ -15578,6 +15623,8 @@ window.__ModuleLoader__.load({
 											mission,
 											stages: view.stages ?? [],
 											work: view.work ?? [],
+											chapters: view.chapters ?? [],
+											goals: mission.goals ?? null,
 											agents: view.agents ?? [],
 											zh,
 											selected: task,
@@ -15590,29 +15637,15 @@ window.__ModuleLoader__.load({
 											onOpenTrace: (id) => { setFocusDimension(id); setPane("trace"); },
 											onOpenSource: (entry) => { setSource(entry); }
 										}, "board"),
-										// THE BRIEF, ABOVE THE JUDGING. Every row on the board is being
-										// measured against this and it was on the wire and on no screen.
-										mission.goals === null || mission.goals === undefined ? null : jsx(MissionPanel, {
-											title: zh ? "立项目标" : "Mission goals",
-											note: zh
-												? "领队立项时写下的，原样呈现"
-												: "written by the leader when the mission was opened, verbatim",
-											children: jsx(MissionGoals, { goals: mission.goals, zh })
-										}, "goals"),
-										// THE WRITER'S OWN LEDGER, under the brief it was written
-										// against. Every column of it — the decision, the reviewer's
-										// score, the rounds, the delivered words against the floor —
-										// has been projected per row since projectChapters was
-										// written, and the view dropped the whole array one line
-										// before the route sent it.
-										(view.chapters ?? []).length === 0 ? null : jsx(MissionPanel, {
-											title: zh ? "成章记录" : "Chapter delivery",
-											count: view.chapters.length,
-											note: zh
-												? "本次生成的每一章：怎么判的、评了多少分、写了几轮、交付字数对下限"
-												: "one row per chapter of this generation: how it landed, what it scored, how many rounds it took, and what it delivered against its floor",
-											children: jsx(MissionChapterTable, { chapters: view.chapters, zh })
-										}, "chapters"),
+										// 立项目标 AND 成章记录 ARE NOT PANE FURNITURE. They were rendered here,
+										// under the board, as two full-width panels: a brief that belongs to the
+										// planning step, and one flat table of every chapter in the mission
+										// sitting under a board whose rows are the dimensions that wrote them.
+										//
+										// The reference keeps neither on its 任务列表. The brief is s2's output
+										// and now opens with s2's drawer; the chapters are per dimension and now
+										// open with the dimension's, filtered by the `dimensionId` every chapter
+										// row has carried all along.
 										preflight === null || (preflight.messages ?? []).length === 0 ? null : jsx(MissionPanel, {
 											title: zh ? "核验风险" : "Verification risk",
 											count: preflight.messages.length,

@@ -3859,10 +3859,22 @@ test("the per-chapter record is on a screen, with the reviewer's score on it", (
   }
   // MOUNTED, and on the pane that holds the rest of the work: a run whose
   // chapters came back empty is a run with no report pane to read.
-  assert.match(
-    code(DETAIL),
-    /jsx\(MissionChapterTable, \{ chapters: view\.chapters, zh \}\)/,
-    "the table exists and nothing mounts it, which is the state the projector's own `chapters` key was in",
+  // IN THE DIMENSION'S DRAWER, NOT UNDER THE BOARD. It was one flat table of
+  // every chapter in the mission, rendered at the foot of the task LIST —
+  // under rows that ARE the dimensions that wrote them — so "how did this
+  // dimension's writing go" meant matching titles by eye. The reference puts
+  // 章节进度 inside the dimension's own drawer.
+  //
+  // The filter is the half worth guarding: every chapter row has carried a
+  // `dimensionId` all along, and a drawer handed the whole list would look
+  // right on a one-dimension mission and be wrong on every other.
+  assert.ok(
+    code(body("function MissionDimensionDrawer(")).includes("jsx(MissionChapterTable, { chapters, zh })"),
+    "the chapter table is not mounted in the dimension drawer, so it exists and nothing draws it",
+  );
+  assert.ok(
+    code(body("function MissionTaskBoard(")).includes('String(c.dimensionId ?? "") === String(chosenDim.id)'),
+    "the drawer is handed every chapter in the mission rather than its own — right on a one-dimension run, wrong on all the others",
   );
 });
 

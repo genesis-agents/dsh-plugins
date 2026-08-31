@@ -3237,12 +3237,16 @@ test("the leader's brief is on the screen the work is judged on", async () => {
   stubFetch();
   const view = await render("MissionDetail", { missionId: SIGNED.id, zh: true, onBack: () => {} });
   const text = textOf(view.tree).join(" ");
-  assert.ok(text.includes("立项目标"), "the goals panel is not mounted; `goals` is projected onto every mission and read by nothing");
-  // Both value shapes, because the block iterates rather than naming keys: an
-  // array is a list and a sentence is a sentence.
-  assert.ok(text.includes("许可证会不会收紧"), "an array-valued goal renders as `a,b` or not at all");
-  assert.ok(text.includes("一份可引用的报告"), "a string-valued goal is dropped");
-  assert.ok(text.includes("核心问题"), "the Leader's own key is translated away or hidden, so a key it adds tomorrow appears as nothing");
+  // 立项目标 LEFT THIS PANE. It is s2's output — success criteria and a
+  // quality bar — and it was a full-width panel under a table of twenty rows
+  // it belongs to none of. It opens with the planning step's own drawer now,
+  // which is where a reader asking "what was this run asked to achieve" would
+  // look, and where scrolling the board no longer runs into it.
+  assert.ok(!text.includes("立项目标"), "the brief is back on the task pane, under rows it belongs to none of");
+  assert.ok(
+    readFileSync(CLIENT, "utf8").includes('stage.stepId !== "s2-plan" || goals === null'),
+    "nothing mounts the brief on the planning step, so `goals` is projected onto every mission and read by nothing",
+  );
 });
 
 test("a run with no rework says so, and a cache hit is not a failure", async () => {
