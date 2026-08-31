@@ -134,7 +134,15 @@ window.__ModuleLoader__.load({
 		const SWM_STYLE_ID = "dsw-swarm-tokens";
 		const SWM_CSS = [
 			"body{",
-			"--swm-h-green:4,120,87;",       // = --dsw-static-green-500
+			// GREEN, NOT EMERALD. This was 4,120,87 — emerald-700, hue 162°, which is a
+			// dark teal and reads as 墨绿 on every status chip in the tab. The comment
+			// beside it claimed `= --dsw-static-green-500`; no such variable is declared
+			// here or anywhere in the harness, so there was no host palette being
+			// matched — just a number nobody had checked.
+			//
+			// 21,128,61 is green-700, hue 142°: the hue the reference's own status
+			// pills use (`bg-green-100 text-green-700` in artifact/ChapterReader.tsx).
+			"--swm-h-green:21,128,61;",
 			"--swm-h-amber:180,83,9;",      // = --dsw-static-amber-600
 			"--swm-h-red:185,28,28;",         // = --dsw-static-red-600
 			"--swm-h-blue:29,78,216;",       // = --dsw-static-deepseek-500
@@ -144,6 +152,30 @@ window.__ModuleLoader__.load({
 			"--swm-h-indigo:67,56,202;",
 			"--swm-h-cyan:14,116,144;",
 			"--swm-h-rose:190,18,60;",
+			// A SECOND STEP PER HUE, FOR FILLS — and it is why every meter and dot on
+			// this tab read as 墨绿.
+			//
+			// The ramp above is Tailwind's -700: the step you set TEXT in. We filled
+			// solid bars and dots with it too, so a verified meter drew #047857 —
+			// emerald SEVEN HUNDRED, at full opacity, across a whole panel.
+			//
+			// Measured in the reference: `bg-emerald-500` ×11, `bg-amber-500` ×12,
+			// `bg-red-500` ×9, `bg-violet-500` ×2 against `text-emerald-700` ×35.
+			// Two steps, two jobs. Fills are -500 and text is -700, everywhere.
+			//
+			// This is not a second ramp in the sense the hue guard forbids: it is the
+			// same ten hues, declared in both themes, read through PALETTE-shaped
+			// names, with no literal at any call site.
+			"--swm-h-green-fill:34,197,94;",   // = green-500
+			"--swm-h-amber-fill:245,158,11;",   // = amber-500
+			"--swm-h-red-fill:239,68,68;",   // = red-500
+			"--swm-h-blue-fill:59,130,246;",   // = blue-500
+			"--swm-h-slate-fill:156,163,175;",   // = gray-400
+			"--swm-h-slate-dim-fill:209,213,219;",   // = gray-300
+			"--swm-h-violet-fill:139,92,246;",   // = violet-500
+			"--swm-h-indigo-fill:99,102,241;",   // = indigo-500
+			"--swm-h-cyan-fill:6,182,212;",   // = cyan-500
+			"--swm-h-rose-fill:244,63,94;",   // = rose-500
 			"--swm-a-soft:0.10;",
 			"--swm-a-ring:0.28;",
 			"--swm-a-fill:0.90;",
@@ -154,7 +186,7 @@ window.__ModuleLoader__.load({
 			"--swm-a-wash:0.04;",
 			"}",
 			"body[data-ds-dark-theme]{",
-			"--swm-h-green:52,211,153;",      // = --dsw-static-green-400
+			"--swm-h-green:74,222,128;",      // = --dsw-static-green-400
 			"--swm-h-amber:251,191,36;",      // = --dsw-static-amber-400
 			"--swm-h-red:248,113,113;",         // = --dsw-static-red-400
 			"--swm-h-blue:96,165,250;",      // = --dsw-static-deepseek-400
@@ -164,6 +196,16 @@ window.__ModuleLoader__.load({
 			"--swm-h-indigo:129,140,248;",
 			"--swm-h-cyan:34,211,238;",
 			"--swm-h-rose:251,113,133;",
+			"--swm-h-green-fill:134,239,172;",
+			"--swm-h-amber-fill:252,211,77;",
+			"--swm-h-red-fill:252,165,165;",
+			"--swm-h-blue-fill:147,197,253;",
+			"--swm-h-slate-fill:209,213,219;",
+			"--swm-h-slate-dim-fill:107,114,128;",
+			"--swm-h-violet-fill:196,181,253;",
+			"--swm-h-indigo-fill:165,180,252;",
+			"--swm-h-cyan-fill:103,232,249;",
+			"--swm-h-rose-fill:253,164,175;",
 			// THE ALPHAS ARE THEME-AWARE TOO, and this is the half that is easy
 			// to miss: a tint is a hue AND an alpha, so making only the hue flip
 			// leaves the tint half-corrected. 8% of a mid-tone over white is a
@@ -214,7 +256,7 @@ window.__ModuleLoader__.load({
 		* argument — which is a chip with no text on a background of nothing.
 		*/
 		const PALETTE = {
-			green: "var(--swm-h-green,4,120,87)",
+			green: "var(--swm-h-green,21,128,61)",
 			amber: "var(--swm-h-amber,180,83,9)",
 			red: "var(--swm-h-red,185,28,28)",
 			blue: "var(--swm-h-blue,29,78,216)",
@@ -225,6 +267,48 @@ window.__ModuleLoader__.load({
 			cyan: "var(--swm-h-cyan,14,116,144)",
 			rose: "var(--swm-h-rose,190,18,60)"
 		};
+
+		/**
+		 * The same ten hues at the step a SOLID FILL wants.
+		 *
+		 * PALETTE is -700, which is right for text on white and much too dark for a
+		 * bar: a meter filled `rgb(4,120,87)` is a slab of near-black green. The
+		 * reference sets text at -700 and fills at -500, and this is the -500.
+		 */
+		const FILL = {
+			green: "var(--swm-h-green-fill,34,197,94)",
+			amber: "var(--swm-h-amber-fill,245,158,11)",
+			red: "var(--swm-h-red-fill,239,68,68)",
+			blue: "var(--swm-h-blue-fill,59,130,246)",
+			slate: "var(--swm-h-slate-fill,156,163,175)",
+			slateDim: "var(--swm-h-slate-dim-fill,209,213,219)",
+			violet: "var(--swm-h-violet-fill,139,92,246)",
+			indigo: "var(--swm-h-indigo-fill,99,102,241)",
+			cyan: "var(--swm-h-cyan-fill,6,182,212)",
+			rose: "var(--swm-h-rose-fill,244,63,94)",
+		};
+
+		/**
+		 * The fill for a hue that arrives as an opaque value.
+		 *
+		 * A face table stores `hue: TONE.success`, and by the time that reaches a
+		 * dot or a meter it is the STRING `var(--swm-h-green,4,120,87)` — there is
+		 * no name left to look up. It is a shared constant though, so the reverse
+		 * map works on identity, and a hue with no fill (a caller that mixed its
+		 * own) is returned unchanged rather than dropped.
+		 * @param hue - a PALETTE or TONE value.
+		 * @returns the fill step for it, or the hue itself.
+		 */
+		const FILL_OF = new Map([
+			[PALETTE.green, FILL.green], [PALETTE.amber, FILL.amber],
+			[PALETTE.red, FILL.red], [PALETTE.blue, FILL.blue],
+			[PALETTE.slate, FILL.slate], [PALETTE.slateDim, FILL.slateDim],
+			[PALETTE.violet, FILL.violet], [PALETTE.indigo, FILL.indigo],
+			[PALETTE.cyan, FILL.cyan], [PALETTE.rose, FILL.rose]
+		]);
+		function fillOf(hue) {
+			return FILL_OF.get(hue) ?? hue;
+		}
 
 		/**
 		* What a STATE looks like. Six, and every status vocabulary in this file
@@ -1808,7 +1892,7 @@ window.__ModuleLoader__.load({
 					style: {
 						width: `${share}%`, height: "100%",
 						borderRadius: RADIUS.pill,
-						background: `rgb(${tone ?? TONE.info})`,
+						background: `rgb(${fillOf(tone ?? TONE.info)})`,
 						transition: `width ${MOTION.base}`
 					}
 				})
@@ -3270,6 +3354,19 @@ window.__ModuleLoader__.load({
 		*/
 		/** A card's interior: the reference's `p-5`. Not a SPACE step — see CARD_STYLE. */
 		const CARD_PAD = "20px";
+		
+		/**
+		 * The mission frame's side gutter, and the width the pane scroller must
+		 * borrow back to put its scrollbar on the frame's edge.
+		 *
+		 * IT WAS TYPED TWICE AND THE TWO DRIFTED. The scroller widens itself with a
+		 * negative right margin and puts the content back with an equal padding —
+		 * the standard trick — but it was written when the gutter was 24px and the
+		 * gutter later became 16. Eight pixels of overshoot put the scrollbar
+		 * outside the frame, where it is clipped: the report pane had no visible
+		 * scrollbar at all.
+		 */
+		const FRAME_GUTTER = "16px";
 
 		/**
 		* The panel recipe, in one place.
@@ -6882,28 +6979,36 @@ window.__ModuleLoader__.load({
 		* undo that at the last step, on the one screen where it matters.
 		*/
 		const MISSION_VERIFY_FACES = {
+			// AND EVERY ONE CARRIES A GLYPH. The table had nine hues and no icons,
+			// so `missionIcon` answered undefined for all of them — and the round
+			// state badge on a citation drew an EMPTY circle, nine times out of
+			// nine, on a screen whose whole job is to say which quotes hold up.
+			//
+			// `exchange` for 出处不符 and `close` for 查无此文, because they are
+			// different failures: one found the words somewhere else, the other
+			// found them nowhere. A shared cross would have said one thing twice.
 			// AND THE HUES SAY THE SAME SPLIT. This was the one vocabulary in the
 			// file with no colour at all, so `missionHue` answered TONE.neutral for
 			// all nine and 已核验 and 查无此文 were drawn as the same grey chip —
 			// which undoes the whole reason the column has nine values, on the one
 			// screen where it matters.
-			"verified-source-text": { zh: "已核验", en: "Verified", hue: TONE.success },
-			"verified-adjacent-spans": { zh: "跨段核验", en: "Verified across spans", hue: TONE.success },
+			"verified-source-text": { zh: "已核验", en: "Verified", icon: "check", hue: TONE.success },
+			"verified-adjacent-spans": { zh: "跨段核验", en: "Verified across spans", icon: "check", hue: TONE.success },
 			// Verified against an ABSTRACT is not verified against the paper. Amber
 			// rather than green: it is a real check with a named limit, and drawing
 			// it green is the claim the limit exists to refuse.
-			"verified-abstract": { zh: "仅摘要核验", en: "Verified against an abstract", hue: TONE.warn },
-			misattributed: { zh: "出处不符", en: "Found in another source", hue: TONE.danger },
-			unverifiable: { zh: "查无此文", en: "Found nowhere we hold", hue: TONE.danger },
-			"too-short": { zh: "引语过短", en: "Below the quote floor", hue: TONE.warn },
+			"verified-abstract": { zh: "仅摘要核验", en: "Verified against an abstract", icon: "alert", hue: TONE.warn },
+			misattributed: { zh: "出处不符", en: "Found in another source", icon: "exchange", hue: TONE.danger },
+			unverifiable: { zh: "查无此文", en: "Found nowhere we hold", icon: "close", hue: TONE.danger },
+			"too-short": { zh: "引语过短", en: "Below the quote floor", icon: "minus", hue: TONE.warn },
 			// MUTED, NOT DANGER, and this is the half a colour ramp gets wrong. A
 			// fetch that 429'd is a quote NOBODY CHECKED; an unverifiable one is a
 			// quote that was checked and found nowhere. Drawing them alike says
 			// four invented citations and four rate-limited ones are the same
 			// result, which is exactly what the split above exists to prevent.
-			"unchecked-fetch-failed": { zh: "抓取失败", en: "Fetch failed", hue: TONE.muted },
-			"unchecked-rate-limited": { zh: "被限流", en: "Rate limited", hue: TONE.muted },
-			"unchecked-stale": { zh: "页面过期", en: "Page too old", hue: TONE.muted }
+			"unchecked-fetch-failed": { zh: "抓取失败", en: "Fetch failed", icon: "alert", hue: TONE.muted },
+			"unchecked-rate-limited": { zh: "被限流", en: "Rate limited", icon: "pause", hue: TONE.muted },
+			"unchecked-stale": { zh: "页面过期", en: "Page too old", icon: "clock", hue: TONE.muted }
 		};
 
 		/**
@@ -9232,7 +9337,7 @@ window.__ModuleLoader__.load({
 										jsx("span", {
 											style: {
 												flex: "none", width: "4px", height: "4px", marginTop: "7px",
-												borderRadius: RADIUS.circle, background: `rgb(${TONE.accent})`
+												borderRadius: RADIUS.circle, background: `rgb(${fillOf(TONE.accent)})`
 											}
 										}, "dot"),
 										jsx("span", { style: { minWidth: 0 }, children: linkify(String(item), `g${at}-`) }, "text")
@@ -9635,7 +9740,7 @@ window.__ModuleLoader__.load({
 										style: {
 											position: "absolute", left: "-16px", top: "9px",
 											width: "7px", height: "7px", flex: "none",
-											borderRadius: RADIUS.circle, background: `rgb(${hue})`
+											borderRadius: RADIUS.circle, background: `rgb(${fillOf(hue)})`
 										}
 									}, "dot"),
 									// THE CLOCK, NOT THE STAMP. `formatStamp` prints to the
@@ -10259,7 +10364,7 @@ window.__ModuleLoader__.load({
 						// THE DOT CARRIES THE KIND, not the verdict, and the same hue
 						// the tag wears in the flex row: a run of blue dots with one
 						// amber in it is a handoff, read before a word of it is.
-						jsx("span", { className: "swt-evdot", style: { background: `rgb(${kindHue})` } }, "dot"),
+						jsx("span", { className: "swt-evdot", style: { background: `rgb(${fillOf(kindHue)})` } }, "dot"),
 						jsxs("span", {
 							className: "swt-evhead",
 							children: [
@@ -12349,7 +12454,7 @@ window.__ModuleLoader__.load({
 							className: id === "running" || id === "collecting" ? "swm-live" : undefined,
 							style: {
 								width: "6px", height: "6px", flex: "none",
-								borderRadius: RADIUS.circle, background: `rgb(${hueOf(id)})`
+								borderRadius: RADIUS.circle, background: `rgb(${fillOf(hueOf(id))})`
 							}
 						}, "dot"),
 						jsx("span", { children: faceOf(id) }, "word"),
@@ -15171,7 +15276,7 @@ window.__ModuleLoader__.load({
 						// and a two-pane reader. The report keeps its own measure on the
 						// paragraph itself, where a measure belongs.
 						...WIDE_STYLE,
-						padding: "0 16px", height: "100%", minHeight: 0, flex: "1 1 auto",
+						padding: `0 ${FRAME_GUTTER}`, height: "100%", minHeight: 0, flex: "1 1 auto",
 						display: "flex", flexDirection: "column"
 					},
 					children: [
@@ -15428,7 +15533,7 @@ window.__ModuleLoader__.load({
 										// puts the content back where it was.
 										style: {
 											flex: "1 1 auto", minHeight: 0, overflowY: "auto",
-											marginRight: "-24px", paddingRight: "24px", paddingBottom: "24px"
+											marginRight: `-${FRAME_GUTTER}`, paddingRight: FRAME_GUTTER, paddingBottom: SPACE.xl
 										},
 											children: [
 										...(activePane !== "tasks" ? [] : [
@@ -16184,223 +16289,172 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		* The report's 参考文献 list: one entry per citation index, with a real source
-		* behind it.
-		*
-		* Each entry carries the id the markers scroll to, so `[3]` in the prose and
-		* the third entry here are the same object as far as the reader is concerned.
-		* The verified quote is printed under the address because that — not the
-		* address — is what a person checks a citation against.
-		* @param references - `missionReferences`'s answer.
-		* @param zh - whether to write Chinese.
-		*/
+		 * The report's 参考文献 list — one compact entry per citation index.
+		 *
+		 * REBUILT FROM THE RIGHT COMPONENT. I had matched this to
+		 * `panels/ReferencesPanel.tsx`, which is the reference's 参考文献 TAB: a
+		 * pane with a four-figure strip, a round verify badge and a two-line
+		 * snippet on every row. This slot is not that pane. The list at the end of
+		 * a report is `artifact/ReferencePanel.tsx`, rendered by ContinuousReader,
+		 * and it is half the height:
+		 *
+		 *   <li className="rounded-md border border-gray-100 bg-gray-50/50 p-2.5">
+		 *     [N]   <- rounded bg-violet-100 text-[11px] font-bold text-violet-700
+		 *     学术  <- rounded px-1 text-[9px], one colour per source type
+		 *     title <- text-xs font-medium text-violet-700, line-clamp-2, ↗
+		 *     domain · date  文中 N 处  可信度 92
+		 *
+		 * WHAT CAME OUT, AND WHERE IT WENT. The strip, the badge and the quote are
+		 * not in this slot in the reference. The quote is still one hover away on
+		 * every `[N]` in the prose — MissionCitationPeek — which is where the
+		 * reference puts it too.
+		 *
+		 * WHAT WE DO NOT HAVE. `可信度` needs a scored host list and there is no
+		 * honest way to invent one. Its slot is not left empty: the verification
+		 * state goes there, coloured the same way, because that is the fact this
+		 * pipeline actually establishes about a citation.
+		 * @param references - the rows from {@link missionReferences}.
+		 * @param zh - whether to write Chinese.
+		 * @returns the section, or null when there is nothing to cite.
+		 */
 		function MissionReferenceList({ references, zh }) {
-			// FOUR FIGURES THE LIST ALREADY KNOWS AND NEVER SAID. The pane opened
-			// straight onto row [1] with no summary at all, so "how much of what
-			// this report cites was actually checked" — the one question a reader
-			// brings to a bibliography — could only be answered by counting the
-			// chips down the column by eye.
-			const hosts = new Set(references.map((entry) => entry.host).filter((host) => host !== ""));
-			const verified = references.filter((entry) => String(entry.verifyState ?? "").startsWith("verified")).length;
-			const quoted = references.filter((entry) => entry.quote !== "").length;
-			// HOW MANY SOURCES SAY WHEN THEY WERE PUBLISHED — the reference's fourth
-			// tile. Undated is not a fault, but a bibliography that is mostly undated
-			// is a different object from one that is not, and until now this pane
-			// could not tell you which it had: the date was dropped at the freeze.
-			const dated = references.filter((entry) => formatDate(entry.publishedAt) !== "").length;
-			const missing = references.filter((entry) => !entry.joined).length;
-			return jsxs("div", {
-				// Same frame as the article above it: the reference list is part of the
-				// report, and half of one pane capped while the other half is not is
-				// what makes a page look broken rather than typeset.
-				style: { margin: "0 0 18px" },
+			if (!Array.isArray(references) || references.length === 0) return null;
+
+			// ONLY WHAT THE HOST ITSELF DECLARES. The reference labels every citation
+			// 政府 / 学术 / 行业 / 新闻 / 博客 / 社区 / 其他 off a classifier we do not
+			// have. A top-level domain is not a classifier, but `.gov` and `.edu` are
+			// claims the registrar enforces, and arXiv is a preprint server by
+			// definition. Everything else gets NO chip rather than a guessed one — a
+			// row with no label reads as unclassified, which is true, and 其他 on
+			// nine rows in ten would read as a judgement nobody made.
+			const KIND = [
+				[/(^|\.)gov(\.[a-z]{2})?$/u, { zh: "政府", en: "Gov", hue: PALETTE.blue }],
+				[/(^|\.)mil$/u, { zh: "政府", en: "Gov", hue: PALETTE.blue }],
+				[/(^|\.)edu(\.[a-z]{2})?$/u, { zh: "学术", en: "Academic", hue: PALETTE.violet }],
+				[/(^|\.)ac\.[a-z]{2}$/u, { zh: "学术", en: "Academic", hue: PALETTE.violet }],
+				[/^arxiv\.org$/u, { zh: "学术", en: "Academic", hue: PALETTE.violet }]
+			];
+			const kindOf = (host) => {
+				const name = String(host ?? "").toLowerCase();
+				if (name === "") return null;
+				for (const [pattern, face] of KIND) if (pattern.test(name)) return face;
+				return null;
+			};
+
+			return jsxs("section", {
+				style: { ...PANEL_STYLE, padding: CARD_PAD, margin: `${SPACE.lg} 0 0` },
 				children: [
-					// THE HEADING LEADS WITH ITS MARK, and the four figures move onto the
-					// same line as the name.
-					//
-					// Every named panel in the reference opens `<Layers className="h-4 w-4
-					// text-violet-500" /><h3 className="text-sm font-semibold">` with a
-					// quiet figure pushed to the far end by `ml-auto`. Ours was a bare h3
-					// with a strip of four tiles under it, so the pane began with two
-					// full-width bands before the first citation.
-					jsxs("div", {
-						style: {
-							display: "flex", alignItems: "center", gap: SPACE.sm,
-							margin: `0 0 ${SPACE.md}`
-						},
-						children: [
-							jsx("span", {
-								style: { flex: "none", display: "inline-flex", color: `rgb(${TONE.accent})` },
-								children: jsx(Icon, { name: "layers", size: ICON.md })
-							}, "mark"),
-							jsx("h3", {
-								style: { font: FONT.baseStrong, margin: 0, color: INK.primary },
-								children: zh ? "参考文献" : "References"
-							}, "title"),
-							jsx("span", {
-								style: { marginLeft: "auto", font: FONT.micro, color: INK.quiet },
-								children: zh
-									? `${references.length} 条 · ${hosts.size} 个站点 · 已核验 ${verified}`
-									: `${references.length} · ${hosts.size} host(s) · ${verified} verified`
-							}, "tally")
-						]
+					jsx("h3", {
+						style: { font: FONT.baseStrong, margin: `0 0 ${SPACE.md}`, color: INK.primary },
+						children: zh ? `参考文献（${references.length}）` : `References (${references.length})`
 					}, "head"),
-					MissionStatTiles({ tiles: [
-						{
-							label: zh ? "引用" : "References",
-							value: String(references.length),
-							hint: zh ? `${hosts.size} 个站点` : `${hosts.size} host(s)`
+					jsx("ol", {
+						style: {
+							listStyle: "none", margin: 0, padding: 0,
+							display: "flex", flexDirection: "column", gap: SPACE.sm
 						},
-						{
-							label: zh ? "已核验" : "Verified",
-							value: String(verified),
-							tone: missionRateHue(verified, references.length),
-							meter: missionRate(verified, references.length)
-						},
-						{ label: zh ? "有引语" : "Quoted", value: String(quoted) },
-						{
-							label: zh ? "有日期" : "Dated",
-							value: String(dated),
-							hint: references.length === 0
-								? ""
-								: `${Math.round((dated / references.length) * 100)}%`
-						},
-						// OMITTED WHEN ZERO, like the scorecard's residuals. A tile
-						// reading 元数据缺失 0 is the same defect one size up as the
-						// chip that printed 未通过 0，未检查 0，被反驳 0 on a clean
-						// section: three zeros read, at a glance, as three problems.
-						missing === 0 ? null : {
-							label: zh ? "元数据缺失" : "Metadata missing",
-							value: String(missing),
-							tone: TONE.warn
-						}
-					] }, "totals"),
-					jsx("div", {
-						style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
-						// ONE CITATION IS A CARD, and the shape is the reference's
-						// (panels/ReferencesPanel.tsx): a round state badge, then the number on
-						// the TITLE'S OWN BASELINE, then the quote, then a wrapping row of small
-						// facts with the link pushed to the far end.
-						//
-						// It was a 26px mono gutter holding `[3]` beside a bare flex row: the
-						// number sat alone in a column of its own, the state was a word inside
-						// the link card, and nothing bounded one citation from the next. That is
-						// the whole of what read as a poor format.
-						//
-						// TWO FACTS THE REFERENCE PRINTS THAT WE DO NOT, and neither is an
-						// oversight to paper over:
-						//
-						//   - A credibility score. Theirs has a scored host list behind it; ours
-						//     would have to be invented, and a number with nothing under it is
-						//     worse than a gap.
-						//   - A published date. We hold `fetchedAt`, which is when WE pulled the
-						//     page. It goes in under its own name rather than into the slot a
-						//     reader reads as the date the source was published.
 						children: references.map((entry) => {
+							const kind = kindOf(entry.host);
 							const vhue = missionHue(MISSION_VERIFY_FACES, entry.verifyState);
 							const vface = missionFace(MISSION_VERIFY_FACES, entry.verifyState, zh);
 							const titled = entry.url === ""
 								? (zh ? "这条引用没有留下地址。" : "No address was stored for this citation.")
 								: sourceTitleOf(entry.title, "", entry.url);
-							const fact = (child, key) => jsx("span", {
-								style: { flex: "none", fontFamily: MONO, color: INK.quiet },
-								children: child
-							}, key);
-							return jsx("div", {
+							const date = formatDate(entry.publishedAt);
+							return jsx("li", {
 								id: `ref-${entry.index}`,
-								className: "swm-ref",
+								style: {
+									borderRadius: RADIUS.sm,
+									border: `1px solid ${LINE.rule}`,
+									background: SURFACE.subtle,
+									padding: SPACE.sm
+								},
 								children: jsxs("div", {
 									style: { display: "flex", alignItems: "flex-start", gap: SPACE.sm },
 									children: [
-										// THE STATE, AS A ROUND BADGE rather than a word inside the card.
-										// It leads the row because it is the question a reader brings to a
-										// citation, and it carries its own label on hover for anyone who
-										// cannot read the hue.
+										// THE NUMBER IS A CHIP, not bare mono. It is the handle a
+										// reader carries back from the prose, and on a grey ground
+										// bare violet text is not a target.
 										jsx("span", {
-											title: vface,
 											style: {
-												flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
-												width: CONTROL.dot, height: CONTROL.dot, borderRadius: RADIUS.circle,
-												color: `rgb(${vhue})`, background: `rgba(${vhue},${TINT.soft})`,
-												boxShadow: `inset 0 0 0 1px rgba(${vhue},${TINT.ring})`
+												flex: "none", whiteSpace: "nowrap",
+												font: FONT.microStrong, fontFamily: MONO,
+												borderRadius: RADIUS.sm, padding: `0 ${SPACE.xs}`,
+												color: `rgb(${PALETTE.violet})`,
+												background: `rgba(${PALETTE.violet},${TINT.soft})`
 											},
-											children: jsx(Icon, { name: missionIcon(MISSION_VERIFY_FACES, entry.verifyState), size: ICON.xs })
-										}, "state"),
+											children: `[${entry.index}]`
+										}, "n"),
 										jsxs("div", {
 											style: { flex: 1, minWidth: 0 },
 											children: [
-												// THE NUMBER ON THE TITLE'S BASELINE. `[12]` beside a title is
-												// a label; `[12]` in a 26px gutter is a second column the eye
-												// has to cross before it reaches the thing it wanted.
 												jsxs("div", {
-													style: { display: "flex", alignItems: "baseline", gap: SPACE.xs, minWidth: 0 },
+													style: { display: "flex", alignItems: "flex-start", gap: SPACE.xs, minWidth: 0 },
 													children: [
-														jsx("span", {
-															style: { flex: "none", font: FONT.microStrong, fontFamily: MONO, color: `rgb(${PALETTE.violet})` },
-															children: `[${entry.index}]`
-														}, "n"),
+														kind === null ? null : jsx("span", {
+															style: {
+																flex: "none", whiteSpace: "nowrap",
+																font: FONT.nano, borderRadius: RADIUS.sm,
+																padding: `0 ${SPACE.xs}`,
+																color: `rgb(${kind.hue})`,
+																background: `rgba(${kind.hue},${TINT.soft})`
+															},
+															children: zh ? kind.zh : kind.en
+														}, "kind"),
 														entry.url === "" ? jsx("span", {
-															style: { ...clampBox(2), font: FONT.bodyMedium, color: INK.primary, minWidth: 0 },
+															style: { ...clampBox(2), font: FONT.smallStrong, color: INK.secondary, minWidth: 0, flex: 1 },
 															children: titled
 														}, "title") : jsx("a", {
 															href: entry.url, target: "_blank", rel: "noreferrer noopener",
-															className: "swm-ref-title",
-															style: { ...clampBox(2), font: FONT.bodyMedium, color: INK.primary, minWidth: 0, textDecoration: "none" },
-															children: titled
+															className: "swm-prose-a",
+															style: {
+																...clampBox(2), minWidth: 0, flex: 1,
+																font: FONT.smallStrong, color: `rgb(${PALETTE.violet})`,
+																textDecoration: "none"
+															},
+															children: `${titled} ↗`
 														}, "title")
 													]
-												}, "head"),
-												// The verified quote, clamped to two lines as the reference
-												// clamps its snippet. It was unclamped, so one long quote
-												// pushed every citation under it off the first screen.
-												entry.quote === "" ? null : jsx("p", {
-													style: { ...clampBox(2), margin: `${SPACE.xs} 0 0`, font: FONT.micro, color: INK.secondary },
-													children: `“${entry.quote}”`
-												}, "quote"),
-												!entry.joined ? jsx("p", {
-													style: { margin: `${SPACE.xs} 0 0`, font: FONT.micro, color: `rgb(${TONE.warn})` },
-													children: zh
-														? "引用元数据缺失：这个编号没有对上任何一条冻结证据，所以引语和核验状态都查不到。"
-														: "Citation metadata missing: this index matched no frozen evidence row, so neither the quote nor the verification can be looked up."
-												}, "unjoined") : null,
-												// THE SMALL FACTS, WRAPPING. A host, a stamp, an HTTP code and
-												// a count do not fit beside each other on a narrow pane, and
-												// the reference wraps them with a tighter ROW gap than column
-												// gap so a wrapped line still reads as the same cluster.
+												}, "line"),
+												// ONE META LINE, WRAPPING. The reference's is
+												// `domain · date  文中 N 处  可信度 92`; ours ends in the
+												// verification state, in that slot and coloured the same
+												// way, because it is the fact we can actually establish.
 												jsxs("div", {
 													style: {
 														display: "flex", flexWrap: "wrap", alignItems: "center",
 														rowGap: SPACE.xs, columnGap: SPACE.sm,
-								// 10px: `mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1
-								// text-[10px]`. The quote above it stays at 11 — it is a sentence.
-								marginTop: SPACE.xs, font: FONT.nano
+														marginTop: "2px", font: FONT.micro, color: INK.quiet
 													},
 													children: [
-														Chip({ tone: vhue, pill: true, label: vface }, "verify"),
-														entry.host === "" ? null : fact(entry.host, "host"),
-														entry.status === null || entry.status === undefined
-															? null : fact(`HTTP ${entry.status}`, "status"),
-														// UNDER ITS OWN NAME. This is when the harness pulled the
-														// page, not when the page was published, and the slot the
-														// reference puts here holds a publication date.
-														entry.fetchedAt === null || entry.fetchedAt === undefined
-															? null : fact(`${zh ? "取回" : "fetched"} ${formatStamp(entry.fetchedAt)}`, "fetched"),
-															// THE PUBLICATION DATE, ahead of the fetch stamp, because it is the one
-															// a reader judges a source by. `formatDate` and not `formatStamp`: a
-															// publication date has no useful clock time on it.
-															formatDate(entry.publishedAt) === "" ? null : fact(`${zh ? "发表" : "pub"} ${formatDate(entry.publishedAt)}`, "published"),
+														entry.host === "" ? null : jsx("span", {
+															style: { flex: "none", fontFamily: MONO },
+															children: entry.host
+														}, "host"),
+														date === "" ? null : jsx("span", {
+															style: { flex: "none", fontFamily: MONO },
+															children: `· ${date}`
+														}, "date"),
 														jsx("span", {
-															style: { flex: "none", color: INK.quiet },
-															children: zh ? `引用 ${entry.inText} 处` : `cited ${entry.inText}× in the text`
-														}, "inText"),
-														entry.url === "" ? null : jsx("a", {
-															href: entry.url, target: "_blank", rel: "noreferrer noopener",
 															style: {
-																marginLeft: "auto", flex: "none",
-																color: "var(--dsw-alias-label-link)", textDecoration: "none"
+																flex: "none", whiteSpace: "nowrap",
+																font: FONT.nano, borderRadius: RADIUS.sm,
+																padding: `0 ${SPACE.xs}`,
+																background: "var(--dsw-alias-fill-tertiary)", color: INK.secondary
 															},
-															children: zh ? "打开原页 ↗" : "Open ↗"
-														}, "open")
+															children: zh ? `文中 ${entry.inText} 处` : `cited ${entry.inText}× in the text`
+														}, "inText"),
+														jsx("span", {
+															style: { flex: "none", whiteSpace: "nowrap", color: `rgb(${vhue})` },
+															children: vface
+														}, "verify"),
+														// A CITATION THAT MATCHED NO FROZEN EVIDENCE. Kept
+														// because it is the one row a reader must not read
+														// as ordinary: nothing about it can be checked.
+														entry.joined ? null : jsx("span", {
+															style: { flex: "none", color: `rgb(${TONE.warn})` },
+															children: zh ? "无冻结证据" : "no frozen evidence"
+														}, "unjoined")
 													]
 												}, "meta")
 											]
@@ -16509,7 +16563,6 @@ window.__ModuleLoader__.load({
 			// Nothing else is new: `readAt` already clamps this, and `readSlice`
 			// already cuts one chapter out by the offsets s12 stored.
 			const [chapter, setChapter] = useState(-1);
-			const [showEvidence, setShowEvidence] = useState(true);
 			// The retry counter behind the failed-read screen. The pane had no
 			// way at all to re-issue its own GET: the only route back to this
 			// artefact was to leave the mission and open it again.
@@ -16787,7 +16840,7 @@ window.__ModuleLoader__.load({
 									style: {
 										flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
 										width: CONTROL.md, height: CONTROL.md, borderRadius: RADIUS.lg,
-										background: `rgb(${PALETTE.violet})`, color: INK.inverse,
+										background: `rgb(${FILL.violet})`, color: INK.inverse,
 										boxShadow: ELEVATION.raised
 									},
 									children: jsx(Icon, { name: "sparkles", size: ICON.md })
@@ -17221,41 +17274,7 @@ window.__ModuleLoader__.load({
 							]
 						}, "closing"),
 						references.length === 0 ? null : jsx(MissionEvidenceSpread, { references, zh }, "spread"),
-						references.length === 0 ? null : jsx(MissionReferenceList, { references, zh }, "references"),
-						jsxs("div", {
-							style: { display: "flex", alignItems: "center", gap: SPACE.sm, margin: "0 0 10px" },
-							children: [
-								jsx("h3", {
-									style: { font: FONT.bodyStrong, margin: 0, color: INK.primary },
-									children: zh ? "证据" : "Evidence"
-								}, "title"),
-								jsx("button", {
-									type: "button",
-									className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.small, height: CONTROL.sm },
-									onClick: () => { setShowEvidence(!showEvidence); },
-									children: showEvidence
-										? (zh ? "收起" : "Hide")
-										: (zh ? `展开 ${evidence.length} 条` : `Show ${evidence.length}`)
-								}, "toggle")
-							]
-						}, "evidenceHead"),
-						!showEvidence ? null : (evidence.length === 0
-							? jsx("div", {
-								style: { font: FONT.small, color: INK.secondary },
-								// An empty blob is only legal on a degraded artefact,
-								// and "we looked and found nothing verifiable" is a
-								// real answer — as long as it is said rather than
-								// rendered as an empty list.
-								children: zh
-									? "这一版没有冻结任何证据 —— 也就是说这次运行没有产出一条通过核验的引语。"
-									: "No evidence was frozen with this version: the run produced no quote that verified."
-							}, "noEvidence")
-							: jsx("div", {
-								style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
-								children: evidence.map((row, at) => jsx(MissionEvidenceRow, {
-									row, zh, onOpen: (entry) => { setSource(entry); }
-								}, `${String(row.findingId ?? "row")}-${at}`))
-							}, "evidence"))
+						references.length === 0 ? null : jsx(MissionReferenceList, { references, zh }, "references")
 					]
 				})
 			});

@@ -44,10 +44,19 @@ function declared(theme) {
 
 /** The ramp as the JavaScript half declares it: name → `{ variable, fallback }`. */
 function ramp() {
-  const block = SOURCE.slice(SOURCE.indexOf("const PALETTE = {"), SOURCE.indexOf("};", SOURCE.indexOf("const PALETTE = {")));
+  // BOTH MAPS. PALETTE is the -700 step every hue is SET in; FILL is the
+  // -500 step a solid bar or dot is FILLED with. This read only the first,
+  // so the ten fill variables landed with no check that their fallbacks
+  // match their light values — which is the one failure mode that renders
+  // correctly everywhere except where style injection is refused.
   const found = new Map();
-  for (const match of block.matchAll(/(\w+): "var\(--swm-h-([a-z-]+),(\d{1,3},\d{1,3},\d{1,3})\)"/g)) {
-    found.set(match[1], { variable: match[2], fallback: match[3] });
+  for (const name of ["const PALETTE = {", "const FILL = {"]) {
+    const at = SOURCE.indexOf(name);
+    assert.ok(at >= 0, `${name} is gone, so half the ramp is unguarded`);
+    const block = SOURCE.slice(at, SOURCE.indexOf("};", at));
+    for (const match of block.matchAll(/(\w+): "var\(--swm-h-([a-z-]+),(\d{1,3},\d{1,3},\d{1,3})\)"/g)) {
+      found.set(`${name.includes("FILL") ? "FILL." : ""}${match[1]}`, { variable: match[2], fallback: match[3] });
+    }
   }
   return found;
 }
@@ -2010,7 +2019,7 @@ test("a source is a card with a name, not an address on a line", () => {
     ["`[${entry.index}]`", "the citation number"],
     ["MISSION_VERIFY_FACES", "the verification state"],
     ["entry.inText", "how often the prose leans on it"],
-    ["entry.fetchedAt", "when the page was pulled"],
+    ["entry.publishedAt", "when the source was published — which is the date artifact/ReferencePanel.tsx prints, and is a different fact from when we pulled the page"],
   ]) {
     assert.ok(
       cite.includes(needle),
@@ -2129,7 +2138,11 @@ test("one verification ladder, named once and read three times", () => {
   );
   const ladder = code(body("function missionRateHue("));
   assert.ok(ladder.includes("MISSION_RATE_GOOD") && ladder.includes("MISSION_RATE_FAIR"), "the ladder no longer reads its own rungs");
-  for (const site of ["function MissionSources(", "function MissionReferenceList(", "function MissionReport("]) {
+  // MissionReferenceList is off this list: the in-report bibliography no
+  // longer computes a verified/total ratio at all, because the strip that
+  // showed one is not in this slot in the reference. The two that still
+  // grade a ratio must still grade it in one place.
+  for (const site of ["function MissionSources(", "function MissionReport("]) {
     assert.ok(code(body(site)).includes("missionRateHue("), `${site} grades its own ratio again, which is the third copy of one decision`);
   }
   // NOT GREEN AT NOUGHT, and the `/0` lives in the function so that all three
@@ -2239,29 +2252,42 @@ test("the sources pane offers four arrangements and compares its hosts", () => {
 });
 
 test("the reference list opens with what it already knew about itself", () => {
+  // THE STRIP IS REAL AND IT IS IN ANOTHER PANE. I built this list from
+  // panels/ReferencesPanel.tsx — the reference's 参考文献 TAB, which does open
+  // with four figures — and this slot is not that tab. The list at the end
+  // of a report is artifact/ReferencePanel.tsx: a heading, then rows. No
+  // strip, no verify badge, no snippet.
+  //
+  // So the four figures are unreported for now. Our own 参考文献 tab is a
+  // source FEED, which is a different object from a bibliography, and
+  // stacking a bibliography's summary on top of a feed would be a third
+  // invention. Named here rather than quietly dropped.
   const list = code(body("function MissionReferenceList("));
   assert.ok(
-    list.includes("MissionStatTiles({"),
-    "the bibliography opens straight onto row [1] again, so 'how much of what this report cites was actually checked' can only be answered by counting chips down the column",
+    !list.includes("MissionStatTiles({"),
+    "the four-figure strip is back on the in-report list, where the reference has a heading and rows",
   );
   // IN VALUE POSITION for the same reason as the bar above: the four counts
   // are all computed from `references`, so their expressions survive a tile
   // being deleted.
+  // WHAT THE ROW ITSELF MUST STILL CARRY. The strip is gone; these are the
+  // four facts artifact/ReferencePanel.tsx puts on every line, and losing
+  // one of them is how a bibliography becomes a list of blue titles.
   for (const [expr, why] of [
-    ['label: zh ? "引用" : "References"', "the reference count has no tile"],
-    ['label: zh ? "已核验" : "Verified"', "the verified count has no tile, on the pane where it is the only figure that matters"],
-    ['label: zh ? "有引语" : "Quoted"', "how many citations carry a quote is computed and shown nowhere"],
+    ["`[${entry.index}]`", "the citation number is gone, and it is the handle a reader carries back from the prose"],
+    ["entry.host", "the row does not name the site it came from"],
+    ["entry.inText", "the row does not say how often the prose leans on it"],
+    ["MISSION_VERIFY_FACES", "the verification state is gone from the row — the reference puts 可信度 in that slot and this is the fact we can actually establish"],
   ]) {
     assert.ok(list.includes(expr), why);
   }
-  assert.match(
-    list,
-    /missing === 0 \? null : \{/,
-    "a clean bibliography prints 元数据缺失 0 — the same defect one size up as the chip that printed three zeros on a clean section",
-  );
+  // THE UNJOINED SIGNAL SURVIVED THE STRIP. 元数据缺失 was a tile that only
+  // appeared when the count was non-zero; the fact is now on the ROW it
+  // belongs to, which is stronger — a reader sees which citation cannot be
+  // checked rather than that some number of them cannot.
   assert.ok(
-    list.includes("meter: missionRate(verified, references.length)"),
-    "the verified tile lost its bar, so the share it reports has to be divided by eye from the two figures beside it",
+    list.includes("entry.joined ? null :"),
+    "a citation that matched no frozen evidence reads as an ordinary one, and nothing about it can be checked",
   );
 });
 
@@ -2757,8 +2783,27 @@ test("the mission header is a band, and the meta line is inside it", () => {
   // literal, so trimming the frame's gutter to give the panes their width back
   // failed a test whose subject — a band that reaches both edges — was still
   // true. Read both numbers and check they annul.
-  const gutter = /padding: "0 (\d+)px", height: "100%", minHeight: 0, flex: "1 1 auto"/.exec(SOURCE);
-  assert.ok(gutter, "the mission detail frame's gutter is not where this test thinks it is");
+  // ONE CONSTANT, AND THAT IS NOW THE INVARIANT. This read the frame's
+  // gutter as a LITERAL and compared it to the band's pull, which is the
+  // right idea checked the weak way: the two numbers were typed separately,
+  // and the pane scroller one level down had a THIRD copy that was never in
+  // this test at all. It was still 24 when the gutter became 16, so the
+  // scroller widened itself eight pixels past the frame and its scrollbar
+  // was clipped — the report pane had no visible scrollbar for as long as
+  // that drift stood.
+  //
+  // All three read FRAME_GUTTER now, so they cannot disagree.
+  const gutterDecl = /const FRAME_GUTTER = "(\d+)px";/.exec(SOURCE);
+  assert.ok(gutterDecl, "FRAME_GUTTER is gone, so the frame's gutter is typed at each site again");
+  assert.ok(
+    SOURCE.includes("padding: `0 ${FRAME_GUTTER}`, height: \"100%\", minHeight: 0, flex: \"1 1 auto\""),
+    "the mission detail frame types its own gutter again",
+  );
+  assert.ok(
+    SOURCE.includes("marginRight: `-${FRAME_GUTTER}`, paddingRight: FRAME_GUTTER"),
+    "the pane scroller no longer borrows exactly the frame's gutter back, so its scrollbar sits inside the content or outside the frame",
+  );
+  const gutter = [null, gutterDecl[1]];
   const escape = /margin: `0 -(\S+?) \$\{SPACE\.\w+\}`/.exec(bar[0]);
   assert.ok(escape, "the band no longer escapes the frame's gutter at all, so it is a card");
   const SPACE = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 };
@@ -3564,13 +3609,31 @@ test("every hue is the same step of one ramp", () => {
   //
   // The reference pairs `text-*-700` with `bg-*-50` almost everywhere. One
   // step for all of them, and the dark theme one step for all of them too.
+  // GREEN IS GREEN, NOT EMERALD. It sat at 4,120,87 — emerald-700, hue 162°,
+  // a dark teal — while the other seven were true -700s of their own hue. It
+  // was the one chip colour a reader called ugly by name, and the comment
+  // beside it claimed it matched `--dsw-static-green-500`, a variable that
+  // does not exist here or in the harness. 21,128,61 is green-700, which is
+  // what the reference sets its own status pills in.
   const LIGHT = {
-    green: "4,120,87", amber: "180,83,9", red: "185,28,28", blue: "29,78,216",
+    green: "21,128,61", amber: "180,83,9", red: "185,28,28", blue: "29,78,216",
     violet: "109,40,217", indigo: "67,56,202", cyan: "14,116,144", rose: "190,18,60",
   };
   const DARK = {
-    green: "52,211,153", amber: "251,191,36", red: "248,113,113", blue: "96,165,250",
+    green: "74,222,128", amber: "251,191,36", red: "248,113,113", blue: "96,165,250",
     violet: "167,139,250", indigo: "129,140,248", cyan: "34,211,238", rose: "251,113,133",
+  };
+  // AND THE FILL STEP IS ITS OWN LADDER, checked the same way. -500 in light,
+  // -300 in dark: the step a solid bar or dot is filled with, as against the
+  // -700 above, which is the step text is set in. Filling with the text step
+  // is what made every meter on this tab a slab of near-black colour.
+  const FILL_LIGHT = {
+    green: "34,197,94", amber: "245,158,11", red: "239,68,68", blue: "59,130,246",
+    violet: "139,92,246", indigo: "99,102,241", cyan: "6,182,212", rose: "244,63,94",
+  };
+  const FILL_DARK = {
+    green: "134,239,172", amber: "252,211,77", red: "252,165,165", blue: "147,197,253",
+    violet: "196,181,253", indigo: "165,180,252", cyan: "103,232,249", rose: "253,164,175",
   };
   const declaredIn = (theme) => {
     const found = new Map();
@@ -3586,6 +3649,10 @@ test("every hue is the same step of one ramp", () => {
   for (const [name, value] of Object.entries(LIGHT)) {
     assert.equal(light.get(name), value, `--swm-h-${name} is off the reference's 700 step, so it reads as a different palette beside the others`);
     assert.equal(dark.get(name), DARK[name], `--swm-h-${name}'s dark value is off the 400 step`);
+  }
+  for (const [name, value] of Object.entries(FILL_LIGHT)) {
+    assert.equal(light.get(`${name}-fill`), value, `--swm-h-${name}-fill is off the -500 step, so a bar filled with it is a different brightness from the rest`);
+    assert.equal(dark.get(`${name}-fill`), FILL_DARK[name], `--swm-h-${name}-fill's dark value is off the -300 step`);
   }
   // The two neutrals are the reference's greys, and they are the only hues that
   // are not a chip colour.

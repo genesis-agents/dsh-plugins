@@ -2081,14 +2081,28 @@ test("the report opens with its evidence, and every quote can be followed", asyn
   assert.ok(text.includes("已核验引用"), "the scorecard has no whole-report total");
   assert.ok(!text.includes("未检查 0"), "a remainder of zero is still printed as if it were a problem");
 
-  assert.ok(text.includes("we observe the same scaling behaviour at test time"), "the evidence quote is missing");
+  // THE QUOTE IS NOT IN THE REPORT ANY MORE, and that is the change rather
+  // than a regression. The report used to end with every frozen quote listed
+  // under a 证据 heading — a block the reference does not have, and which on
+  // a well-verified mission is a full screen of identically green cards.
+  // The quote is one hover away on each `[N]` in the prose, and the trace
+  // pane still lists every finding with its own.
+  assert.ok(!text.includes("证据") || !text.includes("收起"), "the 证据 block is back at the end of the report");
   const link = find(view.tree, (node) => node.type === "a" && node.props?.href === "https://deepmind.google/discover/scaling");
   assert.ok(link, "the quote does not link to the page it was verified against");
-  // A row whose address did not survive still shows its quote and says it
-  // cannot be opened. Dropping it would leave a report claiming two pieces of
-  // evidence and showing one.
-  assert.ok(text.includes("the replication holds across the two smaller model sizes"), "an unopenable row was dropped");
-  assert.ok(text.includes("没有带回可打开的地址"), "an unopenable row does not say why");
+  // A CITATION WHOSE ADDRESS DID NOT SURVIVE IS STILL A ROW, and still says
+  // so. The concern is unchanged and the place it is answered moved: it was
+  // an evidence row that showed its quote and said it could not be opened,
+  // and it is now the citation itself — plain text instead of a link, with
+  // 无冻结证据 beside it. Dropping it would leave a report that cites a
+  // number the bibliography does not list.
+  assert.ok(
+    text.includes("这条引用没有留下地址。") || text.includes("无冻结证据"),
+    "a citation with no address or no frozen evidence is not shown as one",
+  );
+  // The sentence that said WHY belonged to the evidence row. The citation
+  // row says it in its own words — the title stands as plain text where
+  // every other row is a link, and the line above already asserts that.
 });
 
 test("an evidence row opens the reader on the whole source", async () => {
@@ -2096,7 +2110,16 @@ test("an evidence row opens the reader on the whole source", async () => {
   const asked = [];
   const view = await render("MissionsTab", { zh: true });
   await open(view, SIGNED.topic);
-  await pane(view, "报告");
+  // FROM THE TRAJECTORY NOW. This drove the 证据 block at the end of the
+  // report, and that block is gone — the reference has no such section, and
+  // on a well-verified mission it was a screenful of identically green
+  // cards. `onOpenSource` still reaches the reader from the trace pane, the
+  // sources pane and the dimension drawer, and what this test is actually
+  // about is unchanged: the reader RE-FETCHES rather than re-rendering the
+  // five fields it already has, because only the page can answer whether it
+  // still says what the quote says.
+  await pane(view, "轨迹");
+  await view.act(() => { button(view.tree, "三家实验室同期收敛到同一种推理时序扩展做法").props.onClick(); });
 
   const inner = globalThis.fetch;
   globalThis.fetch = async (url, init) => { asked.push(String(url)); return inner(url, init); };
@@ -2112,7 +2135,9 @@ test("an evidence row opens the reader on the whole source", async () => {
   const text = textOf(view.tree).join(" ");
   assert.ok(text.includes("Scaling test-time compute"), "the reader opened onto nothing");
   assert.ok(text.includes("we observe the same scaling behaviour at test time"), "the reader lost the quote it was opened for");
-  assert.ok(text.includes("返回报告"), "there is no way back to the report");
+  // 返回任务, not 返回报告: the reader labels its way out by where it was
+  // opened FROM, and this path now starts on the trajectory.
+  assert.ok(text.includes("返回任务"), "there is no way back out of the reader");
 });
 
 test("a scorecard with nothing in it is not a clean bill", async () => {
@@ -2127,7 +2152,10 @@ test("a scorecard with nothing in it is not a clean bill", async () => {
   assert.ok(text.includes("一处引用都没有核验过"), "an empty scorecard is not called out");
   assert.ok(text.includes("这不是“没有发现问题”"), "an empty scorecard reads as a pass");
   assert.ok(text.includes("这一版是降级归档的"), "a degraded artefact does not say it is degraded");
-  assert.ok(text.includes("没有产出一条通过核验的引语"), "an empty evidence list is rendered as an empty list");
+  // THAT SENTENCE BELONGED TO THE 证据 BLOCK, which is gone. The thing it
+  // guarded against — a run that verified nothing presented as a run that
+  // found nothing wrong — is still guarded, twice, by the two assertions
+  // above it: the scorecard says 一处引用都没有核验过 in its own words.
 });
 
 // The trajectory.
@@ -2580,11 +2608,13 @@ test("a citation marker is a control, and the report ends in a reference list", 
   // A real title, a real quote and a real host — not the column of bare
   // addresses a list built from `citations` alone would be.
   assert.ok(text.includes("Scaling test-time compute"), "the reference names no source");
-  // THE REFERENCE'S WORDING. panels/ReferencesPanel.tsx prints `引用 {occ}
-  // 处`; ours said 文中, which is clearer on its own and is not what the
-  // product says. The English arm keeps "in the text" because "cited 1×"
-  // with nothing after it does not say cited WHERE.
-  assert.ok(text.includes("引用 1 处"), "the list does not say how often the prose leans on a source");
+  // 文中, AND I HAD IT RIGHT BEFORE I CHANGED IT. The two components word
+  // this differently: panels/ReferencesPanel.tsx (the 参考文献 tab) says
+  // `引用 N 处`, artifact/ReferencePanel.tsx (the list at the end of a
+  // report) says `文中 N 处`. This slot is the second one. I moved it to 引用
+  // citing the wrong file, which is the same error as building the whole
+  // row from that file.
+  assert.ok(text.includes("文中 1 处"), "the list does not say how often the prose leans on a source");
   // THE STRIP THE BIBLIOGRAPHY NEVER HAD. Four figures it already knew — how
   // many references, over how many hosts, how many verified, how many carry a
   // quote — and the pane opened straight onto row [1], so the one question a
@@ -2592,7 +2622,11 @@ test("a citation marker is a control, and the report ends in a reference list", 
   // down the column. `有引语` and `个站点` are asserted rather than `引用` and
   // `已核验`, which appear in the meta line above and would pass with the
   // whole strip deleted.
-  assert.ok(text.includes("有引语"), "the reference list does not say how many of its citations carry a quote");
+  // 有引语 WAS A TILE ON A STRIP THIS SLOT DOES NOT HAVE, and the quote it
+  // counted is not gone: it is one hover away on every `[N]` in the prose,
+  // which is where artifact/ReferencePanel.tsx leaves it too. What the row
+  // must still carry is the site and how often the prose leans on it.
+  assert.ok(text.includes("文中 1 处"), "the reference list does not say how often the prose leans on a source");
   assert.ok(text.includes("个站点"), "the reference list does not say how many distinct sites it rests on");
   assert.ok(text.includes("这条引用没有留下地址"), "a citation whose address did not survive is dropped");
 
