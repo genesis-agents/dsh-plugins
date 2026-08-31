@@ -7226,12 +7226,13 @@ window.__ModuleLoader__.load({
 		* @param key - React's key.
 		* @returns the badge, or null when it would only repeat the stage's name.
 		*/
-		function StageModeChip({ mode, stepId, zh }, key) {
+		function StageModeChip({ mode, stepId, zh, size }, key) {
 			const id = String(mode ?? "").trim();
 			if (id === "") return null;
 			const label = missionFace(MISSION_STAGE_MODE_FACES, id, zh);
 			if (label === missionFace(MISSION_STAGE_FACES, stepId, zh)) return null;
 			return Chip({
+			size,
 				tone: missionHue(MISSION_STAGE_MODE_FACES, id),
 				label,
 				title: label === id ? id : `${label} · ${id}`
@@ -7261,11 +7262,12 @@ window.__ModuleLoader__.load({
 		* @param key - React's key, so it can be called straight into a list.
 		* @returns the chip, or null when nothing has been counted yet.
 		*/
-		function VerifiedChip({ verified, floor, zh }, key) {
+		function VerifiedChip({ verified, floor, zh, size }, key) {
 			if (verified === undefined || verified === null) return null;
 			const hasFloor = floor !== undefined && floor !== null;
 			const over = hasFloor && verified >= floor;
 			return Chip({
+			size,
 				tone: !hasFloor ? TONE.neutral : over ? TONE.success : TONE.warn,
 				icon: !hasFloor ? undefined : over ? "check" : "alert",
 				// The WORD stays beside the figure rather than being replaced by the
@@ -12177,6 +12179,17 @@ window.__ModuleLoader__.load({
 														// takes a TONE like every other chip on the screen rather than
 														// reaching for the harness state tokens by hand.
 														!child ? null : Chip({
+											// EVERY CHIP IN A ROW IS DENSE, and this is where the row's height
+											// went. Without a size, `Chip` is `FONT.bodyStrong` — a 13/18 line —
+											// plus four pixels top and bottom: 26px, in a row whose TITLE is 20.
+											// The tallest thing in a row sets the row, so five chips at 26 stood
+											// every line six pixels over the reference's.
+											//
+											// board/MissionTodoBoard.tsx sets its own at `text-[10.5px] px-1.5
+											// py-0.5` and passes `size="xs"` to its RoleChip explicitly. `xs`
+											// here is `FONT.microStrong` over `1px 6px` — 18px, which is under
+											// the 20px title and so stops deciding the height at all.
+											size: "xs",
 															tone: node.origin === "leader-assess-recollect" ? TONE.warn : TONE.info,
 															label: node.origin === "leader-assess-recollect"
 																? (zh ? "领队要求重采" : "re-collect")
@@ -12185,7 +12198,7 @@ window.__ModuleLoader__.load({
 														// And WHAT KIND OF STEP, on the parent: the catalogue has
 														// declared gate / fan-out / draft all along, and it reached
 														// the projection and stopped there.
-														child ? null : StageModeChip({ mode: stage?.mode ?? null, stepId: stage?.stepId ?? null, zh }, "mode"),
+											child ? null : StageModeChip({ mode: stage?.mode ?? null, stepId: stage?.stepId ?? null, zh, size: "xs" }, "mode"),
 														jsx("span", {
 															// NO `maxWidth` ANY MORE: it was 40% because the sentence
 															// shared the line, and nothing shares it now.
@@ -12218,7 +12231,8 @@ window.__ModuleLoader__.load({
 										// half on its own.
 										jsx("td", {
 											style: { ...TD, color: INK.secondary },
-											children: RoleChip({ agentId: who, zh }) ?? "—"
+										// `size="xs"`, which the reference passes here by name.
+										children: RoleChip({ agentId: who, zh, size: "xs" }) ?? "—"
 										}, "owner"),
 										jsx("td", {
 											style: TD,
@@ -12254,6 +12268,7 @@ window.__ModuleLoader__.load({
 												Chip({
 													tone: hue,
 													pill: true,
+											size: "xs",
 													// The same mark the ruler above draws, from the
 													// same tables. 待运行 and 本档跳过 share
 													// TONE.muted deliberately, so on this column too
@@ -12309,7 +12324,7 @@ window.__ModuleLoader__.load({
 													// with no glyph, so success and warn were separated here by
 													// tint alone. The floor is handed over already resolved: null
 													// is what "s3 has not derived a bar" means on this screen.
-													children: VerifiedChip({ verified: node.counts.verified, floor: node.counts.floor ?? null, zh }, "chip")
+											children: VerifiedChip({ verified: node.counts.verified, floor: node.counts.floor ?? null, zh, size: "xs" }, "chip")
 												}, "verified")
 											]
 										}, "status"),
@@ -12417,6 +12432,7 @@ window.__ModuleLoader__.load({
 														// is ROLE_TONE.researcher and also blue — while the 看轨迹 link in
 														// the same cell read the accent. Two vocabularies in one cell.
 														tone: TONE.accent,
+											size: "xs",
 														icon: "refresh",
 														label: zh ? "重跑" : "Re-run",
 														// IT SAYS THE CASCADE, in the drawer's own words. Two

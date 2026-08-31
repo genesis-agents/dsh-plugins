@@ -5391,14 +5391,14 @@ test("the re-run is offered in the colour of an action, not the colour of runnin
   const board = code(body("function MissionTaskBoard("));
   assert.match(
     board,
-    /tone: TONE\.accent,\s*icon: "refresh",\s*label: zh \? "重跑"/,
+    /tone: TONE\.accent,\s*(?:size: "xs",\s*)?icon: "refresh",\s*label: zh \? "重跑"/,
     "the re-run chip is drawn in TONE.info again — the same tint as the 运行中 chip beside it, the same tint as the researcher chip beside that, and a different colour from the 看轨迹 link it shares a cell with",
   );
   // The DRAWER's re-run stays neutral on purpose: it spends its colour on the
   // stage that degraded, and the board's cell has no such budget. So this is
   // scoped to the board, not asserted file-wide.
   assert.equal(
-    [...board.matchAll(/tone: TONE\.accent,\s*icon: "refresh"/g)].length,
+    [...board.matchAll(/tone: TONE\.accent,\s*(?:size: "xs",\s*)?icon: "refresh"/g)].length,
     1,
     "the board draws more than one accent re-run chip, which means the row's action is being offered twice",
   );
@@ -5563,10 +5563,24 @@ test("a chip stands where the reference's chip stands, and the pill still agrees
     /const dense = size === "xs"/,
     "`size` no longer names the dense step, so the one row whose geometry is the host app's has no way to ask for it",
   );
+  // TWO ROWS NEED IT NOW, AND THE SECOND ONE IS THE REFERENCE'S OWN.
+  // This pinned the count at ONE — "an exception with a caller" — which was
+  // true while the trajectory row was the only 38px row in the file. The
+  // task board is the other: board/MissionTodoBoard.tsx sets its badges at
+  // `text-[10.5px] px-1.5 py-0.5` and passes `size="xs"` to its RoleChip BY
+  // NAME, and ours took the default — a 13/18 line plus 4px, so 26px of chip
+  // in a row whose title is 20px, and the chip decided the height.
+  //
+  // The intent survives as a boundary rather than a count: dense is asked
+  // for by the two components whose rows are dense, and nowhere else.
+  const denseHomes = ["function MissionTaskBoard(", "function MissionTraceRow("];
+  const inside = denseHomes.reduce((sum, site) => sum + (code(body(site)).split('size: "xs"').length - 1), 0);
+  const total = SOURCE.split('size: "xs"').length - 1;
+  assert.ok(total > 0, "the dense step has no caller at all, so it is a geometry nothing asks for");
   assert.equal(
-    SOURCE.split('size: "xs"').length - 1,
-    1,
-    "the dense step has no caller, or more than the one row that needs it — either way it is a second geometry rather than an exception",
+    total - inside,
+    0,
+    `${total - inside} call(s) ask for the dense step outside the two components whose rows are dense — that is a second geometry spreading rather than an exception`,
   );
   // AND THE TWO STEPS STILL AGREE, which is what the previous round bought: a
   // chip and a pill on the same row differ in the corner and in nothing else.
