@@ -2541,8 +2541,13 @@ test("参考文献 is one row per page read, not one per finding", async () => {
     "the six-times-cited page is listed more than once",
   );
   assert.ok(text.includes("About the Kanata North business association"), "a source is listed as a bare address");
-  assert.ok(text.includes("6 条发现"), "a source does not say how much rests on it");
-  assert.ok(text.includes("已核验 4 条"), "a source does not say how much of what rests on it verified");
+  // ONE CHIP, ONE RATIO. The two chips this replaces — `6 条发现` and
+  // `已核验 4 条` — were a denominator and a numerator drawn as separate
+  // objects, and the assertion could pass with the reader still doing the
+  // division. The reference's own status cell carries its score inside the
+  // chip (已完成 · 78/100) and so does this one.
+  assert.ok(text.includes("已核验 4/6"), "a source does not say how much of what rests on it held up, as a ratio");
+  assert.ok(!text.includes("6 条发现"), "the denominator is drawn a second time as a chip of its own");
   assert.ok(text.includes("推理时序扩展的训练侧做法"), "a source does not say which dimension it fed");
 
   // FOUR ARRANGEMENTS, ALL NAMED AT ONCE. The old control was a two-state
@@ -2853,7 +2858,7 @@ test("everything added here reads in English too", async () => {
   for (const arrangement of ["By citations", "By host", "By verified rate", "By first read"]) {
     assert.ok(references.includes(arrangement), `the grouping control has no English arm for ${arrangement}`);
   }
-  assert.ok(references.includes("5 verified"), "the verified count has no English arm");
+  assert.ok(references.includes("verified 5/5"), "the verified ratio has no English arm");
 
   const report = await at("Report");
   assert.ok(report.includes("References"), "the reference list has no English heading");
@@ -3620,4 +3625,63 @@ test("a stage row re-runs itself, and only the rows the pipeline lets re-run", a
   // drawer, where one row is being asked about.
   const text = textOf(board.tree).join(" ");
   assert.ok(!text.includes("re-resolve caps"), "the un-rerunable reason is printed on the row; thirty of those down a 16% column is not a table");
+});
+
+test("a references row says its ratio once, and only the arrangement that sorts by a key prints it", async () => {
+  const times = (haystack, needle) => haystack.split(needle).length - 1;
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, SIGNED.topic);
+  const text = await pane(view, "参考文献");
+
+  assert.ok(text.includes("已核验 4/6"), "the row does not carry its verdict as a ratio");
+  // FOLDED, NOT JOINED. The page that fed two dimensions names the first and
+  // counts the rest, the way the run picker folds its history.
+  assert.ok(text.includes("推理时序扩展的训练侧做法 +1"), "a page that fed two dimensions prints both names in full again");
+  // ONE occurrence: the arrangement's own label in the strip, and no stamp on
+  // any row. Counted rather than matched on the clock itself, because
+  // `formatStamp` renders in the runner's zone and the digits move with it.
+  assert.equal(
+    times(text, "首次读到"),
+    1,
+    "the first-read stamp is on every row under 按引用, where nothing is sorted by it",
+  );
+  await view.act(() => { button(view.tree, "按首次读到").props.onClick(); });
+  assert.ok(
+    times(textOf(view.tree).join(" "), "首次读到") > 1,
+    "按首次读到 orders the list by a key that appears nowhere on the rows it ordered",
+  );
+});
+
+test("the library miss is a sentence about the run, not five characters on every row", async () => {
+  const times = (haystack, needle) => haystack.split(needle).length - 1;
+  stubFetch();
+  const inner = globalThis.fetch;
+  // Every page a library miss — the shape of a real mission, where the join
+  // finds almost nothing.
+  const payload = {
+    missionId: SIGNED.id, runCount: 1, scope: { dimensionId: null },
+    sources: [
+      { url: "https://a.example/one", host: "a.example", title: "第一页", findings: 2, verified: 2, dimensionIds: ["d1"], firstSeenAt: "2026-08-22T09:20:00.000Z", library: null },
+      { url: "https://b.example/two", host: "b.example", title: "第二页", findings: 1, verified: 0, dimensionIds: ["d1"], firstSeenAt: "2026-08-22T09:21:00.000Z", library: null },
+    ],
+    totals: { sources: 2, hosts: 2, findings: 3, verified: 2, dated: 0 },
+    runs: [{ runCount: 1, total: 3, verified: 2, dimensions: 1 }],
+    dimensions: [{ dimensionId: "d1", name: "推理时序扩展的训练侧做法" }],
+  };
+  globalThis.fetch = async (url, init) => (String(url).includes("/sources")
+    ? { ok: true, status: 200, json: async () => ({ success: true, data: payload }) }
+    : inner(url, init));
+
+  const zh = textOf((await render("MissionSources", { missionId: SIGNED.id, zh: true })).tree).join(" ");
+  assert.equal(
+    times(zh, "不在信源库"),
+    1,
+    "a run whose library holds none of its pages says so once per row instead of once — the same five characters repeated, carrying nought bits each",
+  );
+  assert.ok(zh.includes("这 2 页都不在信源库"), "the sentence does not say how many pages it is speaking for");
+
+  const en = textOf((await render("MissionSources", { missionId: SIGNED.id, zh: false })).tree).join(" ");
+  assert.ok(en.includes("None of these 2 pages is in the library"), "the once-said library miss has no English arm");
+  assert.equal(times(en, "not in the library"), 0, "the English rows still repeat the miss under the sentence that already said it");
 });

@@ -119,8 +119,21 @@ const FIGURE = Object.freeze({
   /** Both declared dimensions at or over these and it is a plate, not a badge. A 728x90 banner fails on height. */
   keepWidth: 300,
   keepHeight: 150,
-  /** An alt this long is a description somebody wrote for a figure. "", "logo" and "icon" never reach it. */
+  /**
+   * An alt this long is a description somebody wrote for a figure. "", "logo"
+   * and "icon" never reach it.
+   *
+   * LENGTH ALONE IS NOT AUTHORSHIP, which is what let two site badges into a
+   * report. A publisher who uploads Badge.png without writing an alt leaves
+   * the CMS filename in the attribute, and
+   * "Influencers By State Badge-white background.jpg" is forty-six
+   * characters. `looksWritten` is the other half of this rule.
+   */
   keepAltChars: 25,
+  /** Under this, a near-square image is a badge, an avatar or an icon. */
+  badgeEdge: 220,
+  /** Within this of 1:1 is square enough to be one. */
+  badgeRatio: 1.35,
   /** A `srcset` candidate this wide is art direction, which publishers buy for photographs and never for chrome. */
   keepSrcsetWidth: 600,
   /** A declared aspect this extreme is a sprite sheet or a rule, whatever else it scores. */
@@ -272,6 +285,28 @@ function bestSource(image, pageUrl) {
  * @param pageUrl - the document's own URL.
  * @returns `[{ url, pageUrl, alt, caption, width, height, srcsetWidth, textOffset, anchorText, score }]`, at most `FIGURE.max`, in article order.
  */
+/**
+ * Whether an alt attribute is a sentence somebody wrote, or a filename.
+ *
+ * MEASURED: two site badges reached a published report because their alt
+ * attributes are longer than the twenty-five characters the rule treats as
+ * authorship — they are filenames, and filenames are long.
+ *
+ * A written alt has spaces and does not end in an image extension. Both
+ * halves are needed: "Influencer Project Badge.png" has a space, and
+ * "reid-hoffman-2013-portrait" has none but is still not a sentence.
+ * @param alt - the attribute's text, already collapsed and trimmed.
+ * @returns true when it reads as prose rather than as a file.
+ */
+export function looksWritten(alt) {
+  const text = String(alt ?? "").trim();
+  if (text.length < FIGURE.keepAltChars) return false;
+  if (/\.(?:jpe?g|png|gif|webp|avif|svgz?|bmp|tiff?)$/iu.test(text)) return false;
+  // A run of words, not a slug. Two spaces is the floor because a two-word
+  // alt is a label and a description is a phrase.
+  return (text.match(/\s/gu) ?? []).length >= 2;
+}
+
 export function articleFigures(root, pageUrl) {
   const kept = [];
   const seen = new Set();
@@ -336,8 +371,19 @@ export function articleFigures(root, pageUrl) {
       }
     }
 
+    // A NEAR-SQUARE IMAGE UNDER 220px IS A BADGE, whatever else it scores.
+    // Refused before the three positive signals rather than weighed against
+    // them, because the signal that admitted these is exactly the one a badge
+    // fakes: 150x154 with a filename for an alt.
+    if (width > 0 && height > 0 && width < FIGURE.badgeEdge && height < FIGURE.badgeEdge) {
+      const square = width / height;
+      if (square <= FIGURE.badgeRatio && square >= 1 / FIGURE.badgeRatio) return;
+    }
+
     const plate = width >= FIGURE.keepWidth && (height === 0 || height >= FIGURE.keepHeight);
-    const written = alt.length >= FIGURE.keepAltChars;
+    // WRITTEN, NOT MERELY LONG. `alt.length >= 25` counted a filename as a
+    // description and put two ballotpedia badges into a report about PayPal.
+    const written = looksWritten(alt);
     const art = source.widest >= FIGURE.keepSrcsetWidth;
     // A caption outranks the offsite rule: a syndicated figure credited to
     // another outlet is still a figure, and the caption is the publisher saying

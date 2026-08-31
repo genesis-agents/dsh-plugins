@@ -5777,3 +5777,153 @@ test("an open chapter offers the way back to the list", () => {
   assert.match(report, /全部 \$\{readSections\.length\} 章/, "the back control says only 返回, so it does not say what it returns to");
   assert.match(report, /!chosen \? null : jsxs\("button"/, "the back control draws when no chapter is open, where it points at nothing");
 });
+
+test("a references row is two informative lines, not seven things on one", () => {
+  const pane = code(body("function MissionSources("));
+  // ONE CHIP CARRYING A RATIO, which is what the reference's status cell does.
+  // Two chips holding a numerator and a denominator with a gap between them
+  // made the reader do the division on every one of a hundred and seven rows.
+  assert.match(
+    pane,
+    /label: zh \? `已核验 \$\{source\.verified\}\/\$\{source\.findings\}`/u,
+    "the row is back to a bare verified count, so the number it is out of is a separate object again",
+  );
+  assert.ok(
+    !pane.includes("${source.findings} 条发现"),
+    "the standalone finding-count chip is back on the row — the denominator drawn as its own object",
+  );
+  // THE VERDICT'S GLYPH IS IN THE LEFT MARGIN, ONCE. A list row is separated by
+  // a line and marked in the margin; the mark is the one signal a reader of a
+  // hundred rows takes in without reading.
+  assert.match(pane, /mark: jsx\("span", \{/u, "the row lost its left-margin mark, so the only verdict left is a word inside a chip");
+  assert.equal(
+    (pane.match(/icon: source\.verified === 0/gu) ?? []).length,
+    0,
+    "the glyph is inside the chip as well as in the margin, so one verdict is drawn twice on one row",
+  );
+  // A SORT KEY MUST BE ON THE ROW; A GROUP KEY MUST NOT BE. The pane has made
+  // the second half of that argument about the host since it was written, and
+  // printed every dimension name under its own 按维度 heading anyway.
+  assert.match(
+    pane,
+    /order !== "seen" \|\| source\.firstSeenAt === null/u,
+    "the first-read stamp is back under every arrangement — a monospace clock on every row of a finished bibliography",
+  );
+  assert.match(pane, /const byDim = order === "dim";/u, "the dimension names print on every row under the heading that already names them");
+  assert.match(pane, /`\$\{names_\[0\]\} \+\$\{names_\.length - 1\}`/u, "the dimension list is unfolded again, so a page that fed four prints all four");
+  // AND THE LIBRARY MISS ONLY WHERE SAYING IT SEPARATES ONE ROW FROM ANOTHER.
+  assert.match(
+    pane,
+    /const libraryDiscriminates = libraryHeld > 0 && libraryMissed > 0;/u,
+    "不在信源库 is back on every row of a run whose library holds none of them — the same five characters a hundred times, nought bits each",
+  );
+  // THE SLOTS ARE POSITIONS ON THE CARD, and the card has them.
+  const link = code(body("function SourceLink("));
+  assert.match(
+    link,
+    /function SourceLink\(\{ title, url, host, verifyState, mark, lead, tail, meta, zh \}/u,
+    "the card lost the three layout slots its first line is built from, so the row is a title with everything else beneath it",
+  );
+  assert.ok(
+    link.includes("font: FONT.bodyStrong, flex: 1"),
+    "the title is back at the weight of the sentence under it and the host beside it, which is no title at all",
+  );
+});
+
+test("a fact that is the same on every row is not a fact worth 107 repeats", () => {
+  // 不在信源库 was printed on all 107 reference rows of a run whose library
+  // matched nothing. A line that is identical on every row carries no
+  // information and costs the width that a row's real facts need — which is
+  // most of why that pane read as a jumble.
+  //
+  // THE MUTATION THAT SURVIVED. Removing the discriminating check left
+  // `libraryDiscriminates` declared and unused, so a source-text guard that
+  // only looked for the NAME stayed green while the badge came back on every
+  // row. The name has to be checked where it is USED.
+  const pane = code(body("function MissionSources("));
+  assert.match(
+    pane,
+    /source\.library === null && !libraryDiscriminates \? \[\] : missionLibraryMeta\(/,
+    "the library badge is drawn without asking whether it separates anything, so it prints on every row of a run whose library matched nothing",
+  );
+  assert.match(pane, /const libraryDiscriminates =/, "nothing computes whether the library badge discriminates");
+});
+
+test("the references bar carries the clauses that were three grey paragraphs", () => {
+  const pane = code(body("function MissionSources("));
+  // The bar is the row that already held the two segmented strips. Its left
+  // half was empty and the three sentences each took a full-width line under
+  // it — on a run with no publish dates, which is most runs, two of the three
+  // drew on every visit.
+  assert.match(pane, /marginRight: "auto"/u, "the bar's sentence no longer holds the strips against the right edge, so the clauses and the controls are one undifferentiated row");
+  // THE HEAD THAT CLOSES THE BAR, not the first one in the pane. `}, "head")`
+  // occurs earlier in this component for a different block, so slicing to the
+  // FIRST one ran backwards and produced an empty string — every clause
+  // assertion below then failed against nothing at all.
+  const barAt = pane.indexOf('marginRight: "auto"');
+  const bar = pane.slice(barAt, pane.indexOf('}, "head")', barAt));
+  assert.ok(bar.length > 0, "the bar slice is empty, so the clause assertions below are reading nothing");
+  for (const [clause, why] of [
+    ['!narrowed ? null : jsx("div", {', "the narrowing sentence is back outside the bar, on a line of its own"],
+    ['totals.dated > 0 ? null : jsx("div", {', "the missing year facet is explained on a full-width line again — a permanent explanation of an absent control, at paragraph weight"],
+    ["libraryHeld > 0 || libraryMissed === 0 ? null", "the library miss is not said once here, which is what lets it be said on every row"],
+  ]) {
+    assert.ok(bar.includes(clause), why);
+  }
+  // AND NOTHING IS DRAWN BETWEEN THE BAR AND THE FIRST ROW. This is the
+  // assertion that actually buys the space back: the clauses can be inside the
+  // bar AND copied below it, and the pane would look exactly as it did.
+  // FROM THE BAR'S OWN CLOSE, for the same reason as the slice above: the
+  // first `}, "head")` in this component belongs to an earlier block, so this
+  // measured from there to the list and reported the whole bar as sitting
+  // between the bar and the list.
+  const between = pane.slice(pane.indexOf('}, "head")', barAt), pane.indexOf('order === "dim" ?'));
+  assert.ok(
+    !between.includes('jsx("div"'),
+    "a paragraph is back between the bar and the first row, which is the fixed chrome this pane keeps regrowing",
+  );
+});
+
+test("the references list's rows touch, so the line between them is the line", () => {
+  // THE SAME MOVE THE TRAJECTORY ALREADY MADE, on the pane that still had not.
+  // 107 rows, each with its own border, its own radius and 8px of page under
+  // it: 9px per row of separation that a single rule does for nothing, and a
+  // hover fill that lights a card rather than a row.
+  const line = (needle) => SOURCE.split(String.fromCharCode(10)).find((row) => row.includes(needle));
+  const list = line(".swm-sourcelist{");
+  assert.ok(list !== undefined, "the references list is a stack of bordered cards with gaps between them again");
+  assert.ok(
+    list.includes("border:1px solid ${LINE.hair}"),
+    "the list container has no outer edge, so a hundred ruled rows float on the pane with nothing round them — or it took LINE.rule, which is the inner divider",
+  );
+  const row = line(".swm-sourcelist .swm-source{");
+  assert.ok(row !== undefined, "the rows inside the list keep the card's own edge, radius and ground");
+  assert.ok(
+    row.includes("border-bottom-color:${LINE.rule}"),
+    "the row lost the inner divider that is now the only thing separating it from the next one",
+  );
+  assert.ok(
+    SOURCE.includes(".swm-sourcelist .swm-source:last-child{border-bottom-color:transparent}"),
+    "the bottom row draws a divider one pixel inside the container's own edge — the hair-outside/rule-inside rule broken where both are visible at once",
+  );
+  // THE HOVER HAS TO OUTRANK THE RESTING RULE, which is (0,2,0) exactly as
+  // `.swm-source:hover` is. Without the three-class selector the row goes inert
+  // under the pointer and every assertion above still passes.
+  assert.ok(
+    SOURCE.includes(".swm-sourcelist .swm-source:hover{"),
+    "the list's resting rule outranks the card's hover, so a row inside a list stops answering the pointer",
+  );
+  // ALL THREE ARRANGEMENTS, NOT ONE. The pane draws its rows from three
+  // containers — flat, by host, by dimension — and a file-wide match passes
+  // with two of them still stacking cards.
+  const pane = code(body("function MissionSources("));
+  assert.equal(
+    (pane.match(/className: "swm-sourcelist"/gu) ?? []).length,
+    3,
+    "one of the pane's three lists is still a stack of cards, so the same rows read two ways a click apart",
+  );
+  assert.ok(
+    !/flexDirection: "column", gap: SPACE\.sm \},\s*children: (ordered|entry\.rows)\.map\(row\)/u.test(pane),
+    "a list of source rows separates them with a gap again, which puts each row's own hairline in the middle of a gutter",
+  );
+});

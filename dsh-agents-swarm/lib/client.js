@@ -849,6 +849,37 @@ window.__ModuleLoader__.load({
 			`.swm-source:hover{border-color:${LINE.rule};background:${SURFACE.hover}}`,
 			`.swm-source:hover .swm-source-title{text-decoration:underline}`,
 
+			// A LIST IS ROWS SEPARATED BY A LINE. LINE's own docblock states the
+			// rule and the trajectory proved it: deleting a 2px gap between 120
+			// rows gave back 238px of scroll and stopped the hover fill reading as
+			// a stripe with page above and below it. The references pane is the
+			// last stack of cards in the product — 107 rows, each with its own
+			// edge, its own 8px corner and 8px of ground between it and the next,
+			// which is 9px per row of nothing, about 960px of scroll on one
+			// mission, spent separating rows a line already separates.
+			//
+			// THE CARD IS NOT DELETED, AND THIS IS NOT A `bare` PROP ON IT. The
+			// report's bibliography still wants the card: a dozen entries, each
+			// carrying a quote block underneath, where every row genuinely is an
+			// object you point at. This is the LIST's treatment of the same row,
+			// applied by the container rather than by a prop, so `SourceLink` does
+			// not grow a variant and the two callers that want a card get one by
+			// not asking for anything.
+			//
+			// HAIR OUTSIDE, RULE INSIDE, which is the whole of LINE's rule: the
+			// container's edge is an outer edge and the row's is an inner divider,
+			// and they were the same weight when every row drew its own box.
+			`.swm-sourcelist{display:flex;flex-direction:column;border:1px solid ${LINE.hair};border-radius:${RADIUS.md};overflow:hidden;background:${SURFACE.card}}`,
+			`.swm-sourcelist .swm-source{border-color:transparent;border-bottom-color:${LINE.rule};border-radius:0;background:transparent}`,
+			".swm-sourcelist .swm-source:last-child{border-bottom-color:transparent}",
+			// THREE CLASSES DEEP, AND IT HAS TO BE. `.swm-source:hover` is (0,2,0)
+			// and so is `.swm-sourcelist .swm-source` — a pseudo-class weighs what
+			// a class weighs — so the resting rule above would win on source order
+			// alone and every row in a list would stop answering the pointer. This
+			// is the same trap the inline-beats-stylesheet notes on `.swm-source`
+			// record one layer up: the rule existed, on the right element, dead.
+			`.swm-sourcelist .swm-source:hover{background:${SURFACE.hover};border-bottom-color:${LINE.rule}}`,
+
 			// ── the ONE tab vocabulary ───────────────────────────────────
 			// THREE STRIPS DID THIS JOB THREE WAYS: the page strip underlined
 			// in `label-primary` with no hover at all, the mission detail strip
@@ -2213,7 +2244,7 @@ window.__ModuleLoader__.load({
 		* @param props - `{title, url, host, verifyState, meta, zh}`; `meta` is extra children for the bottom row.
 		* @param key - React's key, so a card can be called straight into a list.
 		*/
-		function SourceLink({ title, url, host, verifyState, meta, zh }, key) {
+		function SourceLink({ title, url, host, verifyState, mark, lead, tail, meta, zh }, key) {
 			const address = String(url ?? "").trim();
 			const openable = address !== "";
 			return jsxs(openable ? "a" : "div", {
@@ -2242,11 +2273,45 @@ window.__ModuleLoader__.load({
 					jsxs("div", {
 						style: { display: "flex", alignItems: "flex-start", gap: SPACE.sm },
 						children: [
+							// THE LEFT MARGIN. One glyph, and it sits in the title's own
+							// 18px line box because `font: FONT.body` puts it there —
+							// the same device MissionEvidenceRow's mark uses, and the
+							// only one available: the raw-`height` ratchet stands at zero
+							// headroom and a pinned box is what TD's docblock refuses
+							// anyway. A reader running down a hundred rows finds the
+							// pages that carried nothing without reading a word.
+							mark === undefined || mark === null ? null : jsx("span", {
+								style: { font: FONT.body, flex: "none" },
+								children: mark
+							}, "mark"),
+							// WHAT THIS IS, BEFORE WHAT IT IS CALLED. The reference's
+							// first cell is a category chip, a glyph and then the title
+							// in bold; ours was the title and nothing else, with the
+							// category two lines down among five other things.
+							//
+							// THESE THREE ARE POSITIONS, NOT FACTS ABOUT SOURCES. The
+							// paragraphs above refuse a `kind` prop and a `hits` prop
+							// because each is a semantic slot every caller has to fill
+							// and the callers with nothing would fill it with a guess.
+							// `mark`, `lead` and `tail` are `meta` again — a place to put
+							// children — so the two callers with nothing to say pass
+							// nothing and the row closes over the gap.
+							lead,
 							jsx("span", {
 								className: "swm-source-title",
-								style: { flex: 1, minWidth: 0, color: INK.primary, wordBreak: "break-word", ...clampBox(2) },
+								// A TITLE IS BOLD. This was 400 13px — the same weight as
+								// the sentence under it and the same weight as the host
+								// beside it — on the one line of the row that names the
+								// thing. "A title over a sentence" is not two lines; it is
+								// two weights.
+								style: { font: FONT.bodyStrong, flex: 1, minWidth: 0, color: INK.primary, wordBreak: "break-word", ...clampBox(2) },
 								children: title
 							}, "title"),
+							// THE STATUS COLUMN. Right-aligned, therefore at a fixed x
+							// down the whole list — which is the half of the reference's
+							// 状态 cell a wrapped meta line cannot give: a column you can
+							// scan without reading it.
+							tail,
 							// THE ONE MARK THAT SAYS "this opens somewhere else". The
 							// card carries no link colour — see the rule — so without
 							// this glyph a card with an address and a card whose address
@@ -3782,7 +3847,18 @@ window.__ModuleLoader__.load({
 								// paragraph the reader is checking.
 								style: { color: INK.secondary, maxHeight: "120px", overflowY: "auto" },
 								children: `“${source.quote}”`
-							}, "quote")
+							}, "quote"),
+							// THE WAY TO THE PAGE. The card showed the title, the host and the
+							// verified quote — everything except a way to check it. A reader
+							// who wanted the source had to go and find it again by eye in
+							// 参考文献, which is the errand a citation exists to save them.
+							(source.url ?? "") === "" ? null : jsx("a", {
+								href: source.url,
+								target: "_blank",
+								rel: "noreferrer noopener",
+								style: { font: FONT.micro, color: "var(--dsw-alias-label-link)" },
+								children: zh ? "打开原页 ↗" : "Open the page ↗"
+							}, "open")
 						]
 					}, "card")
 				]
@@ -13365,7 +13441,7 @@ window.__ModuleLoader__.load({
 									: (zh ? "这个维度没有留下任何读过的页面。" : "This dimension left no page behind.")
 					}, "account"),
 					entry.rows.length === 0 ? null : jsx("div", {
-						style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
+						className: "swm-sourcelist",
 						children: entry.rows.map(row)
 					}, "rows")
 				]
@@ -13420,27 +13496,93 @@ window.__ModuleLoader__.load({
 					? [...visible].sort((a, b) => seenAt(a.firstSeenAt) - seenAt(b.firstSeenAt))
 					: visible;
 
+			// WHICH KEY THE LIST IS ALREADY ARRANGED BY, and it is a rule rather
+			// than a taste. A key the list GROUPS by belongs on the group heading
+			// and nowhere else — this pane has said exactly that about the host
+			// since it was written, and 按维度 was still printing every dimension
+			// name on every row underneath the heading that names it. A key the
+			// list SORTS by has to be ON the row, because a sort whose key is
+			// invisible is a sort nobody can check — so the first-read stamp
+			// arrives under 按首次读到 and in none of the other four, where it was
+			// a monospace clock on every row of a finished bibliography.
+			const byDim = order === "dim";
+			// WHETHER THE LIBRARY MISS DISCRIMINATES. 不在信源库 is one fact stated
+			// once per row, and on a mission whose library holds none of its pages
+			// that is the same five characters a hundred and seven times: nought
+			// bits each, in the widest slot on the row. When it is true of every
+			// row it is a fact about the RUN and the bar above says it once; it
+			// stays on the row only where some other row disagrees with it.
+			const libraryHeld = sources.filter((source) => source.library !== null && source.library !== undefined).length;
+			const libraryMissed = sources.filter((source) => source.library === null).length;
+			const libraryDiscriminates = libraryHeld > 0 && libraryMissed > 0;
+
 			const row = (source) => {
-				const fed = (Array.isArray(source.dimensionIds) ? source.dimensionIds : [])
-					.map((id) => names.get(id) ?? id).join(zh ? "、" : ", ");
+				// THE NAMES, FOLDED. A page that fed four dimensions printed all
+				// four joined by 、 — the longest object on the row, and three
+				// names out of four the reader did not ask for. The first one
+				// names it and the count says there are more, which is the fold
+				// the run picker twenty lines up already uses.
+				const names_ = (Array.isArray(source.dimensionIds) ? source.dimensionIds : [])
+					.map((id) => names.get(id) ?? id);
+				const fed = byDim || names_.length === 0 ? ""
+					: names_.length === 1 ? names_[0]
+						: `${names_[0]} +${names_.length - 1}`;
+				// THE LIBRARY'S OWN FACTS, computed nowhere else. Empty only in
+				// the one case the bar above has taken over saying.
+				const library = source.library === null && !libraryDiscriminates ? [] : missionLibraryMeta(source.library, zh);
+				// ONE VERDICT, SAID THREE WAYS THAT COST ONE OBJECT EACH: the hue,
+				// the glyph in the left margin, and the ratio inside the chip. The
+				// equality is the one that was already here — nought, all, some —
+				// and not the 0.8/0.5 ladder the tiles grade on.
+				const tone = source.verified === 0 ? TONE.muted
+					: source.verified >= source.findings ? TONE.success
+						: TONE.warn;
 				return SourceLink({
 					zh,
 					title: sourceTitleOf(source.title, "", source.url),
 					url: source.url,
+					mark: jsx("span", {
+						style: { color: `rgb(${tone})` },
+						// NO `title` ON THE GLYPH, so it announces as nothing: the
+						// chip on the same line already says the words, and a mark
+						// that repeats them is read twice.
+						children: jsx(Icon, {
+							name: source.verified === 0 ? "minus"
+								: source.verified >= source.findings ? "check" : "alert",
+							size: ICON.xs
+						})
+					}),
+					// The first thing `missionLibraryMeta` returns is WHAT THE PAGE
+					// IS — a type chip, or the words for "the library has never
+					// collected it". That is the reference's category cell, so it
+					// leads the title. The rest of what the library knows is a bare
+					// figure and stays in the sentence below, where figures live.
+					lead: library.slice(0, 1),
+					// TWO CHIPS BECAME ONE AND IT SAYS MORE THAN EITHER DID. `18
+					// 条发现` and `✓ 已核验 18 条` were a denominator and a numerator
+					// drawn as two separate objects with a gap between them, and the
+					// reader did the division. The reference puts the score inside
+					// the status chip — 已完成 · 78/100 — and so does this: one
+					// object, one column, one ratio, still graded by the equality
+					// above rather than by a ladder this row cannot support.
+					tail: Chip({ tone, label: zh ? `已核验 ${source.verified}/${source.findings}` : `verified ${source.verified}/${source.findings}` }, "verified"),
 					// The host is the group's own heading when grouped, so repeating
 					// it on every card underneath is the same word twenty times down
 					// one column.
 					host: byHost ? "" : source.host,
+					// LINE TWO IS A SENTENCE, NOT A SHELF. It carried seven things in
+					// five faces and wrapped to two 26px chip lines on any real
+					// width. It carries where the page came from, what it fed, and —
+					// only under the arrangement that sorts by it — when we read it.
+					// The two chips moved to line one, which was already 26px tall
+					// because of them, so this line is 16px of text and the row stops
+					// wrapping.
 					meta: [
 						// WHAT THE LIBRARY KNOWS, FIRST — next to the host, because those
 						// two together answer "what is this page" and every chip after
 						// them answers "what did we get out of it". Nothing at all when
 						// the payload never carried the field: see missionLibraryMeta.
-						...missionLibraryMeta(source.library, zh),
-						jsx("span", {
-							style: { ...COUNT_CHIP, flex: "none" },
-							children: zh ? `${source.findings} 条发现` : `${source.findings} finding(s)`
-						}, "findings"),
+						...library.slice(1),
 						// VERIFIED AGAINST THE PAGE, not merely recorded from it — and
 						// now a mark rather than the third clause of five. A source
 						// that produced six findings of which none verified is a source
@@ -13454,14 +13596,6 @@ window.__ModuleLoader__.load({
 						// it too — a bare coloured dot, which is what the reference
 						// asked for, says nothing at all to a reader who cannot
 						// separate the two tints.
-						Chip({
-							tone: source.verified === 0 ? TONE.muted
-								: source.verified >= source.findings ? TONE.success
-									: TONE.warn,
-							icon: source.verified === 0 ? "minus"
-								: source.verified >= source.findings ? "check" : "alert",
-							label: zh ? `已核验 ${source.verified} 条` : `${source.verified} verified`
-						}, "verified"),
 						fed === "" ? null : jsx("span", {
 							style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
 							title: fed,
@@ -13477,7 +13611,11 @@ window.__ModuleLoader__.load({
 							title: zh ? "发表时间" : "Published",
 							children: zh ? `发表 ${formatDate(source.publishedAt)}` : `pub ${formatDate(source.publishedAt)}`
 						}, "published"),
-						source.firstSeenAt === null || source.firstSeenAt === undefined ? null : jsx("span", {
+						// ONLY UNDER 按首次读到. It is that arrangement's sort key and a
+						// sort whose key is off the row cannot be checked; under the
+						// other four it is a monospace clock on every row of a finished
+						// bibliography, answering a question nobody brought here.
+						order !== "seen" || source.firstSeenAt === null || source.firstSeenAt === undefined ? null : jsx("span", {
 							style: { flex: "none", fontFamily: MONO },
 							title: zh ? "首次读到" : "First read",
 							children: zh ? `读到 ${formatStamp(source.firstSeenAt)}` : `read ${formatStamp(source.firstSeenAt)}`
@@ -13537,6 +13675,59 @@ window.__ModuleLoader__.load({
 					jsxs("div", {
 						style: { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: SPACE.md, flexWrap: "wrap", margin: `0 0 ${SPACE.sm}` },
 						children: [
+							// THE BAR SAYS WHAT IS NEWS. Three sentences sat between the
+							// tiles and the first row, each taking a full-width 12px line
+							// and eight pixels under it, and on a run with no publish
+							// dates — which is most runs — two of them drew every time the
+							// pane opened. This row already exists, it is one control
+							// tall, and its left half was empty.
+							//
+							// A PERMANENT EXPLANATION OF AN ABSENT CONTROL IS A CLAUSE,
+							// NOT A PARAGRAPH. The fact earns its words — omitting the
+							// year strip in silence leaves "this screen has no date
+							// facet" and "not one of these pages is dated" looking
+							// identical, and only the second is a fact about the mission
+							// — but it does not earn a line of the reader's scroll on
+							// every visit forever.
+							//
+							// `marginRight: "auto"` rather than space-between: the two
+							// strips are ONE group and must stay together against the
+							// right edge whatever this holds.
+							jsxs("div", {
+								style: { font: FONT.small, display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", minWidth: 0, marginRight: "auto", color: INK.secondary },
+								children: [
+									// WHAT THE TILES ABOVE ARE COUNTING, said whenever the
+									// list below is shorter than they are. The tiles
+									// describe the RUN and the year chip narrows only the
+									// list, so without this a reader compares "14 findings"
+									// against three rows and concludes the pane dropped
+									// eleven.
+									!narrowed ? null : jsx("div", {
+										children: zh
+											? `只显示「${eraLabel(era)}」的 ${visible.length} 个来源，共 ${sources.length} 个；上面的数字是整轮的。`
+											: `Showing ${visible.length} of ${sources.length} sources from ${eraLabel(era)}; the figures above are the whole run.`
+									}, "narrowed"),
+									// WHY THERE IS NO YEAR CONTROL, on the run where there
+									// is none.
+									totals.dated > 0 ? null : jsx("div", {
+										children: zh
+											? "这些页面都没有发表日期，所以没有按年份筛选。"
+											: "Not one of these pages carries a publish date, so there is nothing to narrow by year."
+									}, "undated"),
+									// AND THE LIBRARY MISS, ONCE, WITH A COUNT IN IT. Every
+									// row said 不在信源库 on a mission whose library holds
+									// none of these pages — a fact that is always the same
+									// is not a fact worth repeating a hundred and seven
+									// times. Said here it is one sentence that also answers
+									// the question the row's silence would otherwise raise:
+									// why does nothing on this pane carry a type.
+									libraryHeld > 0 || libraryMissed === 0 ? null : jsx("div", {
+										children: zh
+											? `这 ${libraryMissed} 页都不在信源库，所以每一行都没有类型，也没有质量分。`
+											: `None of these ${libraryMissed} pages is in the library, so no row carries a type or a score.`
+									}, "unlisted")
+								]
+							}, "note"),
 							// THE FACET, LEFT OF THE ARRANGEMENT, because it changes WHICH
 							// rows exist while the strip beside it only changes their
 							// order. Drawn only when a run holds more than one era: an
@@ -13573,32 +13764,11 @@ window.__ModuleLoader__.load({
 							}, "orders")
 						]
 					}, "head"),
-					// WHAT THE TILES ABOVE ARE COUNTING, said out loud whenever the
-					// list below is shorter than they are. The tiles describe the RUN
-					// and the year chip narrows only the list, so without this
-					// sentence a reader compares "14 findings" against three rows and
-					// concludes the pane dropped eleven.
-					!narrowed ? null : jsx("div", {
-						style: { font: FONT.small, color: INK.secondary, margin: `0 0 ${SPACE.sm}` },
-						children: zh
-							? `只显示「${eraLabel(era)}」的 ${visible.length} 个来源，共 ${sources.length} 个；上面的数字仍是整轮的。`
-							: `Showing ${visible.length} of ${sources.length} sources from ${eraLabel(era)}. The figures above still count the whole run.`
-					}, "narrowed"),
-					// WHY THERE IS NO YEAR CONTROL, on the run where there is none.
-					// Omitting it silently leaves "this screen has no date facet" and
-					// "not one of these pages is dated" looking identical, and only
-					// one of the two is a fact about the mission.
-					totals.dated > 0 ? null : jsx("div", {
-						style: { font: FONT.small, color: INK.secondary, margin: `0 0 ${SPACE.sm}` },
-						children: zh
-							? "这些页面都没有发表日期，所以没有按年份筛选。"
-							: "Not one of these pages carries a publish date, so there is nothing to narrow by year."
-					}, "undated"),
 					order === "dim" ? jsx("div", {
 						style: { display: "flex", flexDirection: "column", gap: SPACE.lg },
 						children: byDimension.map(dimensionGroup)
 					}, "dims") : !byHost ? jsx("div", {
-						style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
+						className: "swm-sourcelist",
 						children: ordered.map(row)
 					}, "flat") : jsx("div", {
 						style: { display: "flex", flexDirection: "column", gap: SPACE.lg },
@@ -13640,7 +13810,7 @@ window.__ModuleLoader__.load({
 									style: { margin: `0 0 ${SPACE.sm}` }
 								}, "share"),
 								jsx("div", {
-									style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
+									className: "swm-sourcelist",
 									children: entry.rows.map(row)
 								}, "rows")
 							]
