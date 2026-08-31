@@ -288,7 +288,11 @@ test("the alpha steps are declared in both themes, and differ", () => {
   const light = read("light");
   const dark = read("dark");
   assert.deepEqual([...dark.keys()].sort(), [...light.keys()].sort(), "the two theme blocks declare different alpha steps");
-  assert.equal(light.size, 3, "three steps: soft, ring, fill");
+  // FOUR STEPS: soft, ring, fill, wash. `wash` is the faintest and it was
+  // added for the citation card, whose hovered ground the reference sets to
+  // `bg-violet-50/30` — a third of the palette's lightest step. `soft` at
+  // 0.10 is a filled chip and reads as a selection, not as a hover.
+  assert.equal(light.size, 4, "four steps: soft, ring, fill, wash");
   for (const [name, value] of light) {
     assert.notEqual(dark.get(name), value, `--swm-a-${name} is unchanged in the dark theme, which is the correction this token exists to carry`);
   }
@@ -1981,8 +1985,29 @@ test("a source is a card with a name, not an address on a line", () => {
   // PER SITE, NOT AS A TOTAL. A file-wide `SourceLink({ >= 2` passes with one
   // component still drawing its own row and another calling it twice, which is
   // the headroom that let a whole table lose its header cells one batch ago.
-  for (const site of ["function MissionSources(", "function MissionReferenceList("]) {
-    assert.ok(body(site).includes("SourceLink({"), `${site} draws its own source row again`);
+  assert.ok(body("function MissionSources(").includes("SourceLink({"), "MissionSources draws its own source row again");
+
+  // A CITATION IS NOT A SOURCE, and the reference keeps them apart on
+  // purpose: `ui/SourceLink.tsx` is the generic card for a search result and
+  // panels/ReferencesPanel.tsx draws its own, richer row for a citation.
+  // This test used to REQUIRE the citation list to call SourceLink, which
+  // capped a bibliography at what a search result needs.
+  //
+  // Four things a citation row has that a source card cannot: its NUMBER on
+  // the title's baseline, the verification state as a badge, how often the
+  // prose leans on it, and when the page was pulled. Guarded here so the
+  // exemption cannot decay into a hand-rolled copy of the source card.
+  const cite = code(body("function MissionReferenceList("));
+  for (const [needle, why] of [
+    ["`[${entry.index}]`", "the citation number"],
+    ["MISSION_VERIFY_FACES", "the verification state"],
+    ["entry.inText", "how often the prose leans on it"],
+    ["entry.fetchedAt", "when the page was pulled"],
+  ]) {
+    assert.ok(
+      cite.includes(needle),
+      `the citation row does not print ${why}, so it is a source card with a border and there was no reason to write a second component`,
+    );
   }
   // FOUR STEPS, and the third is the one that is easy to drop: without the
   // decoded path segment a titleless page on a site with twenty of them is

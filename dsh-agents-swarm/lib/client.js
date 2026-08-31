@@ -147,6 +147,11 @@ window.__ModuleLoader__.load({
 			"--swm-a-soft:0.10;",
 			"--swm-a-ring:0.28;",
 			"--swm-a-fill:0.90;",
+			// A HOVER GROUND SO FAINT IT IS ALMOST THE CARD. The reference washes a
+			// hovered citation with `bg-violet-50/30` and lets the border carry the
+			// signal. Heavier on dark for the same reason every alpha here is: the
+			// same fraction over a dark ground reads as nothing at all.
+			"--swm-a-wash:0.04;",
 			"}",
 			"body[data-ds-dark-theme]{",
 			"--swm-h-green:52,211,153;",      // = --dsw-static-green-400
@@ -167,6 +172,7 @@ window.__ModuleLoader__.load({
 			"--swm-a-soft:0.16;",
 			"--swm-a-ring:0.36;",
 			"--swm-a-fill:0.92;",
+			"--swm-a-wash:0.07;",
 			"}"
 		].join("");
 
@@ -347,6 +353,12 @@ window.__ModuleLoader__.load({
 			small: "var(--dsw-font-xxs-12)",
 			smallStrong: "var(--dsw-font-xxs-strong-12)",
 			body: "var(--dsw-font-xs-13)",
+			// 500. The reference sets a citation's title in `text-[12.5px]
+			// font-medium leading-snug`; half-pixel type is not a step we have and
+			// 13/18 is the nearest whole one, but the WEIGHT is the half of that
+			// declaration that carries — a citation title at regular weight reads as
+			// body text with a number in front of it.
+			bodyMedium: "var(--dsw-font-xs-medium-13)",
 			bodyStrong: "var(--dsw-font-xs-strong-13)",
 			base: "var(--dsw-font-s-14)",
 			// 500, the step between `base` and `baseStrong`. The reference sets every
@@ -473,7 +485,13 @@ window.__ModuleLoader__.load({
 		const TINT = {
 			soft: "var(--swm-a-soft,0.10)",
 			ring: "var(--swm-a-ring,0.28)",
-			fill: "var(--swm-a-fill,0.90)"
+			fill: "var(--swm-a-fill,0.90)",
+			// A WASH, not a tint. The reference hovers a citation to
+			// `bg-violet-50/30` — the palette's lightest step at a third of its
+			// opacity, which is almost nothing on white and is meant to be: the
+			// signal is the border going violet, and the ground only has to stop
+			// the row reading as inert. `soft` at 0.10 is a filled chip.
+			wash: "var(--swm-a-wash,0.04)"
 		};
 
 		/**
@@ -872,6 +890,13 @@ window.__ModuleLoader__.load({
 			`.swm-source{border:1px solid ${LINE.hair};background:${SURFACE.card};transition:border-color ${MOTION.fast},background ${MOTION.fast}}`,
 			`.swm-source:hover{border-color:${LINE.rule};background:${SURFACE.hover}}`,
 			`.swm-source:hover .swm-source-title{text-decoration:underline}`,
+			// A CITATION IS A CARD, not a line in a list. The reference gives each one
+			// `rounded-md border border-gray-200 bg-white px-3 py-2` and hovers it to
+			// `hover:border-violet-200 hover:bg-violet-50/30`: the border carries the
+			// signal and the ground barely moves.
+			`.swm-ref{border:1px solid ${LINE.hair};background:${SURFACE.card};border-radius:${RADIUS.sm};padding:${SPACE.sm} ${SPACE.md};transition:border-color ${MOTION.fast},background ${MOTION.fast}}`,
+			`.swm-ref:hover{border-color:rgba(${PALETTE.violet},${TINT.ring});background:rgba(${PALETTE.violet},${TINT.wash})}`,
+			`.swm-ref:hover .swm-ref-title{text-decoration:underline}`,
 
 			// A LIST IS ROWS SEPARATED BY A LINE. LINE's own docblock states the
 			// rule and the trajectory proved it: deleting a 2px gap between 120
@@ -1013,7 +1038,10 @@ window.__ModuleLoader__.load({
 		const TASK_INDENT = "18px";
 		const ELBOW_DROP = "6px";
 
-		const CONTROL = { xs: "24px", sm: "28px", md: "34px" };
+		// `dot` is the reference's round state badge — `h-5 w-5` holding a 12px
+		// glyph — and it is smaller than anything you can click, which is why it
+		// sits below `xs` rather than replacing it.
+		const CONTROL = { dot: "20px", xs: "24px", sm: "28px", md: "34px" };
 
 		/** Variables and rules, in the order the cascade needs them. */
 		/**
@@ -1147,6 +1175,7 @@ window.__ModuleLoader__.load({
 			"--dsw-font-xxs-12:12px/16px var(--dsw-font-family);",
 			"--dsw-font-xxs-strong-12:600 12px/16px var(--dsw-font-family);",
 			"--dsw-font-xs-13:13px/18px var(--dsw-font-family);",
+			"--dsw-font-xs-medium-13:500 13px/18px var(--dsw-font-family);",
 			"--dsw-font-xs-strong-13:600 13px/18px var(--dsw-font-family);",
 			"--dsw-font-s-14:14px/20px var(--dsw-font-family);",
 			"--dsw-font-s-medium-14:500 14px/20px var(--dsw-font-family);",
@@ -8061,7 +8090,7 @@ window.__ModuleLoader__.load({
 		*   count stays in the bar; a panel with no title cannot fold, because the
 		*   heading is the only thing there is to press.
 		*/
-		function MissionPanel({ title, count, note, action, children, bare, collapsible }) {
+		function MissionPanel({ title, count, note, action, children, bare, collapsible, icon, iconTone }) {
 			// OPEN, AND NO PROP TO SAY OTHERWISE. See the docblock: a section that
 			// arrives shut is a section the reader has to discover, and no call
 			// site wants that yet.
@@ -8143,6 +8172,25 @@ window.__ModuleLoader__.load({
 								onClick: () => { setOpen((value) => !value); },
 								children: jsx(Icon, { name: open ? "chevronDown" : "chevronRight", size: ICON.sm })
 							}, "fold"),
+							// THE PANEL'S OWN MARK, ahead of its name.
+							//
+							// Every named panel in the reference leads with one: `<Layers
+							// className="h-4 w-4 text-violet-500" />` on the references,
+							// `<ListChecks .../>` on the board, `<Coins ... text-amber-500 />` on the
+							// spend. It is how four panes that all open with 14px semibold text stop
+							// looking like four paragraphs of the same document.
+							//
+							// TONE IS A PARAMETER because the reference varies it — the spend panel's
+							// is amber and the rest are the accent violet — and because a mark that
+							// is always one colour is decoration, while one that is sometimes amber
+							// is telling you which pane you are on.
+							icon === undefined || icon === null ? null : jsx("span", {
+								style: {
+									flex: "none", display: "inline-flex",
+									color: `rgb(${iconTone ?? TONE.accent})`
+								},
+								children: jsx(Icon, { name: icon, size: ICON.md })
+							}, "mark"),
 							// THE `h3` IS WHAT `title` GATES, and it is the only thing that
 							// does. A panel with a count and no heading is a bar with a
 							// number in it, which is what the reference draws over a table.
@@ -8360,7 +8408,9 @@ window.__ModuleLoader__.load({
 								style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
 								children: [
 									jsxs("div", {
-										style: { font: FONT.small, display: "flex", alignItems: "baseline", gap: SPACE.sm, color: INK.secondary },
+									// 11px. CostBreakdownPanel sets this line `text-[11px]`, and it is a
+									// caption over a bar rather than a row of a table.
+									style: { font: FONT.micro, display: "flex", alignItems: "baseline", gap: SPACE.sm, color: INK.secondary },
 										children: [
 											jsx("span", { style: { flex: 1, minWidth: 0 }, children: missionFace(MISSION_STAGE_FACES, row.stepId, zh) }, "name"),
 											jsx("span", {
@@ -8382,7 +8432,21 @@ window.__ModuleLoader__.load({
 									// reports a defect the faintest bar on the pane.
 									Meter({
 										value: peak === 0 ? 0 : Math.max(1, Math.round((tokens / peak) * 100)),
-										tone: missing ? TONE.warn : TONE.info
+									// AMBER, NOT BLUE. Spend is amber all through the reference — a
+									// `Coins` glyph in `text-amber-500` over bars filled
+									// `bg-gradient-to-r from-amber-300 to-orange-400`. Ours were `info`,
+									// the same blue as every running stage on the board, so the one pane
+									// about money looked like the one about progress.
+									//
+									// The gradient is not copied: it is decoration, the reference keeps
+									// its gradients in a design-layer list precisely so feature code
+									// cannot hand-mix them, and the hue is the half that carries.
+									//
+									// A STAGE WITH NO TOKEN FIGURE GOES GREY, not amber. It draws a 1%
+									// sliver so the row still reads as present, and grey says the
+									// measurement is missing rather than small — which is what the
+									// sentence under the list spends four lines saying.
+									tone: missing ? TONE.muted : TONE.warn
 									}, "bar")
 								]
 							}, row.stepId);
@@ -15265,11 +15329,13 @@ window.__ModuleLoader__.load({
 										...(activePane !== "cost" ? [] : [
 										jsx(MissionPanel, {
 											title: zh ? "额度" : "Allowances",
+											icon: "gauge", iconTone: TONE.warn,
 											note: zh ? "上限在建立任务时冻结，之后每个阶段都读同一行" : "the ceilings were frozen when the mission was opened",
 											children: jsx(MissionCostMeters, { cost: view.cost ?? {}, zh })
 										}, "cost"),
 										jsx(MissionPanel, {
 											title: zh ? "返工" : "Rework",
+											icon: "refresh", iconTone: TONE.warn,
 											note: zh
 												? "花了两次的部分 —— 缓存是省下的，所以它是绿的"
 												: "what was paid for twice — cache hits are the saving, which is why they are green",
@@ -15277,6 +15343,7 @@ window.__ModuleLoader__.load({
 										}, "rework"),
 										(view.cost?.byStage ?? []).length === 0 ? null : jsx(MissionPanel, {
 											title: zh ? "哪一步花的" : "Which stage spent it",
+											icon: "gauge", iconTone: TONE.warn,
 											count: view.cost.byStage.length,
 											note: zh
 												? "按阶段分解 —— 一份总数说不出是哪一步在烧"
@@ -15285,6 +15352,7 @@ window.__ModuleLoader__.load({
 										}, "byStage"),
 										(view.cost?.byModel ?? []).length === 0 ? null : jsx(MissionPanel, {
 											title: zh ? "哪个模型花的" : "Which model spent it",
+											icon: "chip", iconTone: TONE.warn,
 											count: view.cost.byModel.length,
 											note: zh
 												? "按模型分解 —— 一个档位跑了三个模型时，总数说不出是哪一个在烧"
@@ -15293,6 +15361,7 @@ window.__ModuleLoader__.load({
 										}, "byModel"),
 										(view.cost?.byTool ?? []).length === 0 ? null : jsx(MissionPanel, {
 											title: zh ? "哪个工具在失败" : "Which tool is failing",
+											icon: "wrench", iconTone: TONE.warn,
 											count: view.cost.byTool.length,
 											note: zh
 												? "失败和缓存都算在调用里 —— 一次失败的抓取和一次命中缓存都花了额度"
@@ -15301,6 +15370,7 @@ window.__ModuleLoader__.load({
 										}, "byTool"),
 										(view.agents ?? []).length === 0 ? null : jsx(MissionPanel, {
 											title: zh ? "谁花的" : "Who spent it",
+											icon: "brain", iconTone: TONE.warn,
 											count: view.agents.length,
 											note: zh
 												? "按执行者分解 —— 一份总数说不出哪个维度在返工"
@@ -15889,12 +15959,35 @@ window.__ModuleLoader__.load({
 				// what makes a page look broken rather than typeset.
 				style: { margin: "0 0 18px" },
 				children: [
-					jsx("h3", {
-						style: { font: FONT.baseStrong,
-							margin: "0 0 10px",
- color: INK.primary
+					// THE HEADING LEADS WITH ITS MARK, and the four figures move onto the
+					// same line as the name.
+					//
+					// Every named panel in the reference opens `<Layers className="h-4 w-4
+					// text-violet-500" /><h3 className="text-sm font-semibold">` with a
+					// quiet figure pushed to the far end by `ml-auto`. Ours was a bare h3
+					// with a strip of four tiles under it, so the pane began with two
+					// full-width bands before the first citation.
+					jsxs("div", {
+						style: {
+							display: "flex", alignItems: "center", gap: SPACE.sm,
+							margin: `0 0 ${SPACE.md}`
 						},
-						children: zh ? "参考文献" : "References"
+						children: [
+							jsx("span", {
+								style: { flex: "none", display: "inline-flex", color: `rgb(${TONE.accent})` },
+								children: jsx(Icon, { name: "layers", size: ICON.md })
+							}, "mark"),
+							jsx("h3", {
+								style: { font: FONT.baseStrong, margin: 0, color: INK.primary },
+								children: zh ? "参考文献" : "References"
+							}, "title"),
+							jsx("span", {
+								style: { marginLeft: "auto", font: FONT.micro, color: INK.quiet },
+								children: zh
+									? `${references.length} 条 · ${hosts.size} 个站点 · 已核验 ${verified}`
+									: `${references.length} · ${hosts.size} host(s) · ${verified} verified`
+							}, "tally")
+						]
 					}, "head"),
 					MissionStatTiles({ tiles: [
 						{
@@ -15921,63 +16014,132 @@ window.__ModuleLoader__.load({
 					] }, "totals"),
 					jsx("div", {
 						style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
-						children: references.map((entry) => jsxs("div", {
-							id: `ref-${entry.index}`,
-							style: { font: FONT.small,
-								display: "flex", alignItems: "flex-start", gap: SPACE.sm, color: INK.secondary
-							},
-							children: [
-								jsx("span", {
-									// THE ORDINAL IS DECORATION, and INK's docblock is
-									// explicit that tertiary is the decoration budget: `[7]`
-									// is how the marker in the prose finds this row, not a
-									// value anybody reads for its own sake.
-									style: { flex: "none", minWidth: "26px", paddingTop: SPACE.sm, fontFamily: MONO, color: INK.quiet },
-									children: `[${entry.index}]`
-								}, "index"),
-								jsxs("span", {
-									style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: SPACE.xs },
+						// ONE CITATION IS A CARD, and the shape is the reference's
+						// (panels/ReferencesPanel.tsx): a round state badge, then the number on
+						// the TITLE'S OWN BASELINE, then the quote, then a wrapping row of small
+						// facts with the link pushed to the far end.
+						//
+						// It was a 26px mono gutter holding `[3]` beside a bare flex row: the
+						// number sat alone in a column of its own, the state was a word inside
+						// the link card, and nothing bounded one citation from the next. That is
+						// the whole of what read as a poor format.
+						//
+						// TWO FACTS THE REFERENCE PRINTS THAT WE DO NOT, and neither is an
+						// oversight to paper over:
+						//
+						//   - A credibility score. Theirs has a scored host list behind it; ours
+						//     would have to be invented, and a number with nothing under it is
+						//     worse than a gap.
+						//   - A published date. We hold `fetchedAt`, which is when WE pulled the
+						//     page. It goes in under its own name rather than into the slot a
+						//     reader reads as the date the source was published.
+						children: references.map((entry) => {
+							const vhue = missionHue(MISSION_VERIFY_FACES, entry.verifyState);
+							const vface = missionFace(MISSION_VERIFY_FACES, entry.verifyState, zh);
+							const titled = entry.url === ""
+								? (zh ? "这条引用没有留下地址。" : "No address was stored for this citation.")
+								: sourceTitleOf(entry.title, "", entry.url);
+							const fact = (child, key) => jsx("span", {
+								style: { flex: "none", fontFamily: MONO, color: INK.quiet },
+								children: child
+							}, key);
+							return jsx("div", {
+								id: `ref-${entry.index}`,
+								className: "swm-ref",
+								children: jsxs("div", {
+									style: { display: "flex", alignItems: "flex-start", gap: SPACE.sm },
 									children: [
-										SourceLink({
-											zh,
-											// A citation whose address did not survive still gets
-											// the card, and the sentence saying so IS its name.
-											// Dropping the row would leave a report claiming
-											// twelve references and listing eleven.
-											title: entry.url === ""
-												? (zh ? "这条引用没有留下地址。" : "No address was stored for this citation.")
-												: sourceTitleOf(entry.title, "", entry.url),
-											url: entry.url,
-											host: entry.host,
-											verifyState: entry.verifyState,
-											meta: [
-												jsx("span", {
-													style: { ...COUNT_CHIP, flex: "none" },
-													children: zh ? `文中 ${entry.inText} 处` : `cited ${entry.inText}× in the text`
-												}, "inText"),
-												entry.status === null || entry.status === undefined ? null : jsx("span", {
-													style: { flex: "none", fontFamily: MONO },
-													children: `HTTP ${entry.status}`
-												}, "status"),
-												entry.fetchedAt === null || entry.fetchedAt === undefined ? null : jsx("span", {
-													style: { flex: "none", fontFamily: MONO },
-													children: formatStamp(entry.fetchedAt)
-												}, "fetched")
+										// THE STATE, AS A ROUND BADGE rather than a word inside the card.
+										// It leads the row because it is the question a reader brings to a
+										// citation, and it carries its own label on hover for anyone who
+										// cannot read the hue.
+										jsx("span", {
+											title: vface,
+											style: {
+												flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
+												width: CONTROL.dot, height: CONTROL.dot, borderRadius: RADIUS.circle,
+												color: `rgb(${vhue})`, background: `rgba(${vhue},${TINT.soft})`,
+												boxShadow: `inset 0 0 0 1px rgba(${vhue},${TINT.ring})`
+											},
+											children: jsx(Icon, { name: missionIcon(MISSION_VERIFY_FACES, entry.verifyState), size: ICON.xs })
+										}, "state"),
+										jsxs("div", {
+											style: { flex: 1, minWidth: 0 },
+											children: [
+												// THE NUMBER ON THE TITLE'S BASELINE. `[12]` beside a title is
+												// a label; `[12]` in a 26px gutter is a second column the eye
+												// has to cross before it reaches the thing it wanted.
+												jsxs("div", {
+													style: { display: "flex", alignItems: "baseline", gap: SPACE.xs, minWidth: 0 },
+													children: [
+														jsx("span", {
+															style: { flex: "none", font: FONT.microStrong, fontFamily: MONO, color: `rgb(${PALETTE.violet})` },
+															children: `[${entry.index}]`
+														}, "n"),
+														entry.url === "" ? jsx("span", {
+															style: { ...clampBox(2), font: FONT.bodyMedium, color: INK.primary, minWidth: 0 },
+															children: titled
+														}, "title") : jsx("a", {
+															href: entry.url, target: "_blank", rel: "noreferrer noopener",
+															className: "swm-ref-title",
+															style: { ...clampBox(2), font: FONT.bodyMedium, color: INK.primary, minWidth: 0, textDecoration: "none" },
+															children: titled
+														}, "title")
+													]
+												}, "head"),
+												// The verified quote, clamped to two lines as the reference
+												// clamps its snippet. It was unclamped, so one long quote
+												// pushed every citation under it off the first screen.
+												entry.quote === "" ? null : jsx("p", {
+													style: { ...clampBox(2), margin: `${SPACE.xs} 0 0`, font: FONT.micro, color: INK.secondary },
+													children: `“${entry.quote}”`
+												}, "quote"),
+												!entry.joined ? jsx("p", {
+													style: { margin: `${SPACE.xs} 0 0`, font: FONT.micro, color: `rgb(${TONE.warn})` },
+													children: zh
+														? "引用元数据缺失：这个编号没有对上任何一条冻结证据，所以引语和核验状态都查不到。"
+														: "Citation metadata missing: this index matched no frozen evidence row, so neither the quote nor the verification can be looked up."
+												}, "unjoined") : null,
+												// THE SMALL FACTS, WRAPPING. A host, a stamp, an HTTP code and
+												// a count do not fit beside each other on a narrow pane, and
+												// the reference wraps them with a tighter ROW gap than column
+												// gap so a wrapped line still reads as the same cluster.
+												jsxs("div", {
+													style: {
+														display: "flex", flexWrap: "wrap", alignItems: "center",
+														rowGap: SPACE.xs, columnGap: SPACE.sm,
+														marginTop: SPACE.xs, font: FONT.micro
+													},
+													children: [
+														Chip({ tone: vhue, pill: true, label: vface }, "verify"),
+														entry.host === "" ? null : fact(entry.host, "host"),
+														entry.status === null || entry.status === undefined
+															? null : fact(`HTTP ${entry.status}`, "status"),
+														// UNDER ITS OWN NAME. This is when the harness pulled the
+														// page, not when the page was published, and the slot the
+														// reference puts here holds a publication date.
+														entry.fetchedAt === null || entry.fetchedAt === undefined
+															? null : fact(`${zh ? "取回" : "fetched"} ${formatStamp(entry.fetchedAt)}`, "fetched"),
+														jsx("span", {
+															style: { flex: "none", color: INK.quiet },
+															children: zh ? `引用 ${entry.inText} 处` : `cited ${entry.inText}× in the text`
+														}, "inText"),
+														entry.url === "" ? null : jsx("a", {
+															href: entry.url, target: "_blank", rel: "noreferrer noopener",
+															style: {
+																marginLeft: "auto", flex: "none",
+																color: "var(--dsw-alias-label-link)", textDecoration: "none"
+															},
+															children: zh ? "打开原页 ↗" : "Open ↗"
+														}, "open")
+													]
+												}, "meta")
 											]
-										}, "card"),
-										!entry.joined ? jsx("div", {
-											style: { color: `rgb(${TONE.warn})` },
-											children: zh
-												? "引用元数据缺失：这个编号没有对上任何一条冻结证据，所以引语和核验状态都查不到。"
-												: "Citation metadata missing: this index matched no frozen evidence row, so neither the quote nor its verify state can be shown."
-										}, "unjoined") : entry.quote === "" ? null : jsx("div", {
-											style: { color: INK.secondary },
-											children: `“${entry.quote}”`
-										}, "quote")
+										}, "body")
 									]
-								}, "body")
-							]
-						}, `ref-${entry.index}`))
+								}, "row")
+							}, `ref-${entry.index}`);
+						})
 					}, "list")
 				]
 			});

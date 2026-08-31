@@ -2487,7 +2487,11 @@ test("a citation marker is a control, and the report ends in a reference list", 
   // A real title, a real quote and a real host — not the column of bare
   // addresses a list built from `citations` alone would be.
   assert.ok(text.includes("Scaling test-time compute"), "the reference names no source");
-  assert.ok(text.includes("文中 1 处"), "the list does not say how often the prose leans on a source");
+  // THE REFERENCE'S WORDING. panels/ReferencesPanel.tsx prints `引用 {occ}
+  // 处`; ours said 文中, which is clearer on its own and is not what the
+  // product says. The English arm keeps "in the text" because "cited 1×"
+  // with nothing after it does not say cited WHERE.
+  assert.ok(text.includes("引用 1 处"), "the list does not say how often the prose leans on a source");
   // THE STRIP THE BIBLIOGRAPHY NEVER HAD. Four figures it already knew — how
   // many references, over how many hosts, how many verified, how many carry a
   // quote — and the pane opened straight onto row [1], so the one question a
