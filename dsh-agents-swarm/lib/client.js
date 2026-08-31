@@ -486,6 +486,16 @@ window.__ModuleLoader__.load({
 		const ICON = { xs: "12px", sm: "14px", md: "16px", lg: "20px" };
 
 		/**
+		 * The letter-spacing an uppercase label takes, and the only one.
+		 *
+		 * Tailwind's `tracking-wide` is 0.025em, and every uppercase label in the
+		 * reference carries it — the section title, the metric label, the CONSENSUS
+		 * caption. Ours were all 0.04em: a number I picked, applied five times, and
+		 * would have gone on applying.
+		 */
+		const TRACK_WIDE = "0.025em";
+
+		/**
 		* The three strengths a tinted surface may have.
 		*
 		* Twelve distinct alphas were in use — 0.035, 0.05, 0.06, 0.08, 0.09,
@@ -1858,7 +1868,7 @@ window.__ModuleLoader__.load({
 				},
 				children: [
 					jsx("div", {
-						style: { font: FONT.nano, letterSpacing: "0.04em", textTransform: "uppercase", color: INK.secondary, ...clipped },
+						style: { font: FONT.nano, letterSpacing: TRACK_WIDE, textTransform: "uppercase", color: INK.secondary, ...clipped },
 						children: label
 					}, "label"),
 					jsx("div", {
@@ -1996,7 +2006,7 @@ window.__ModuleLoader__.load({
 				children: [
 					jsx("div", {
 						style: {
-							font: FONT.micro, letterSpacing: "0.04em", textTransform: "uppercase",
+							font: FONT.micro, letterSpacing: TRACK_WIDE, textTransform: "uppercase",
 							color: tone === null || tone === undefined ? INK.secondary : `rgb(${tone})`,
 							whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
 						},
@@ -8176,7 +8186,7 @@ window.__ModuleLoader__.load({
 		*   count stays in the bar; a panel with no title cannot fold, because the
 		*   heading is the only thing there is to press.
 		*/
-		function MissionPanel({ title, count, note, action, children, bare, collapsible, icon, iconTone }) {
+		function MissionPanel({ title, count, note, action, children, bare, collapsible, icon, iconTone, section }) {
 			// OPEN, AND NO PROP TO SAY OTHERWISE. See the docblock: a section that
 			// arrives shut is a section the reader has to discover, and no call
 			// site wants that yet.
@@ -8282,13 +8292,28 @@ window.__ModuleLoader__.load({
 							// number in it, which is what the reference draws over a table.
 							title === undefined || title === null || title === "" ? null : jsx("h3", {
 								style: {
-									// A CARD TITLE, NOT A FORM LABEL. 12px uppercase tracked grey is what
-									// a field caption looks like, and these name panels — the reference
-									// sets its equivalents in sentence case at 14px in primary ink.
-									// Thirteen panels change weight together, which is the point: they
-									// were all whispering in the same voice.
-									font: FONT.baseStrong, margin: 0,
-									color: INK.primary,
+									// TWO HEADER IDIOMS, BECAUSE THE REFERENCE HAS TWO — and the note that
+									// stood here said there was one.
+									//
+									// It read: "12px uppercase tracked grey is what a field caption looks
+									// like, and these name panels — the reference sets its equivalents in
+									// sentence case at 14px in primary ink." That is true of a named PANEL
+									// and only of a named panel. ui/Section.tsx is `text-[12px]
+									// font-semibold uppercase tracking-wide text-gray-700`, and
+									// board/TodoDetailDrawer.tsx stacks five of them inside one drawer:
+									// 关键发现, 引用来源, 输入, LLM 调用, 输出概览.
+									//
+									// So both are right, for different things, and we had one doing both
+									// jobs — a sub-block of a drawer arriving at the weight of the pane
+									// that contains it, which made a drawer read as a stack of equals
+									// rather than as one thing with parts.
+									font: section === true ? FONT.smallStrong : FONT.baseStrong,
+									letterSpacing: section === true ? TRACK_WIDE : undefined,
+									textTransform: section === true ? "uppercase" : undefined,
+									margin: 0,
+									// gray-700 for a section, gray-900 for a panel: a part is quieter than
+									// the whole it sits in.
+									color: section === true ? INK.secondary : INK.primary,
 									whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
 								},
 								children: title
@@ -9179,7 +9204,7 @@ window.__ModuleLoader__.load({
 						// than raw everywhere: it makes the untranslated ones look like
 						// a bug rather than like the Leader's own vocabulary.
 						jsx("div", {
-							style: { font: FONT.micro, letterSpacing: "0.04em", textTransform: "uppercase", color: INK.secondary },
+							style: { font: FONT.micro, letterSpacing: TRACK_WIDE, textTransform: "uppercase", color: INK.secondary },
 							children: name
 						}, "key"),
 						Array.isArray(value)
@@ -13558,7 +13583,9 @@ window.__ModuleLoader__.load({
 			};
 			
 			const block = (title, count, body, key) => jsx(MissionPanel, {
-				title, count, note: "",
+				// SECTIONS, not panels: these nine live inside a stage's drawer, which
+				// is exactly where the reference uses ui/Section.
+				title, count, note: "", section: true,
 				children: body === null ? jsx(EmptyBox, { title: why(key), zh }, "empty") : body
 			}, key);
 			
@@ -16623,7 +16650,7 @@ window.__ModuleLoader__.load({
 										jsx("div", {
 											// `text-[10px] uppercase tracking-wide text-gray-500` — the reference's
 											// CONSENSUS label, and 10px is a step this file only just grew.
-											style: { font: FONT.nano, letterSpacing: "0.04em", textTransform: "uppercase", color: INK.secondary },
+											style: { font: FONT.nano, letterSpacing: TRACK_WIDE, textTransform: "uppercase", color: INK.secondary },
 											children: headline.label
 										}, "label"),
 										jsx("div", {
@@ -19420,7 +19447,7 @@ window.__ModuleLoader__.load({
 										? [jsxs("div", {
 											style: { font: FONT.micro,
 												display: "flex", alignItems: "baseline", gap: SPACE.sm,
-												margin: "16px 0 6px", letterSpacing: "0.04em",
+												margin: "16px 0 6px", letterSpacing: TRACK_WIDE,
 												color: INK.secondary
 											},
 											children: [
