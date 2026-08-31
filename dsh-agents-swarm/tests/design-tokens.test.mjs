@@ -231,7 +231,12 @@ test("the spacing rhythm stays five steps of four", () => {
 
 test("radii and icon sizes stay countable", () => {
   assert.ok([...scale("RADIUS").matchAll(/(\w+):/g)].length <= 5, "RADIUS has grown past five names");
-  assert.equal([...scale("ICON").matchAll(/(\w+):/g)].length, 3, "three icon sizes, as the reference has three");
+  // FOUR, AND THE OLD REASON WAS A GUESS. This said "three icon sizes, as
+  // the reference has three". lib/design/tokens.ts declares four —
+  // xs h-3, sm h-3.5, md h-4, lg h-5 — and the fourth is the one a drawer's
+  // back arrow takes. The count still has a ceiling; the ceiling was just
+  // measured against my notes instead of against the file.
+  assert.equal([...scale("ICON").matchAll(/(\w+):/g)].length, 4, "four icon sizes, as lib/design/tokens.ts declares four");
 });
 
 test("raw style values only ever decrease", () => {
@@ -3012,10 +3017,17 @@ test("a figure's ground is neutral and its reading size is declared", () => {
   // every tile in the row a reader scans precisely to find the one that is
   // short. The hue survives, on the figure, where it means something.
   const stat = code(body("function MetricStat("));
-  assert.match(
-    stat,
-    /background: SURFACE\.subtle\s*$/m,
+  // NEUTRAL IS THE ASSERTION; the token was not. This pinned
+  // `SURFACE.subtle` by name and so forbade the reference's own answer,
+  // which is a white `<Card ... bordered>` per cell with `shadow-sm`. What
+  // must never come back is a ground built from the HUE.
+  assert.ok(
+    !stat.includes("background: `rgba(${hue}"),
     "the tile ground is tinted by its tone again, so colour marks every figure instead of the exception",
+  );
+  assert.ok(
+    stat.includes("background: SURFACE.card") || stat.includes("background: SURFACE.subtle"),
+    "the tile has no declared ground, so it takes whatever is behind it and the row stops reading as a row of cells",
   );
   assert.ok(
     stat.includes("color: hue === null ? INK.primary : `rgb(${hue})`"),

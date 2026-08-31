@@ -479,7 +479,11 @@ window.__ModuleLoader__.load({
 		}
 
 		/** Icon box sizes: inline, default, and section-header. Three, as the reference has three. */
-		const ICON = { xs: "12px", sm: "14px", md: "16px" };
+		// `lg` is the reference's `iconSize.lg` — declared there for "drawer /
+		// modal" and spent, in practice, on the one glyph that takes you back out
+		// of a chapter. A 12px arrow beside 14px text is a mark you have to look
+		// for; the control it belongs to is the largest target on that header.
+		const ICON = { xs: "12px", sm: "14px", md: "16px", lg: "20px" };
 
 		/**
 		* The three strengths a tinted surface may have.
@@ -1845,11 +1849,16 @@ window.__ModuleLoader__.load({
 					// red and green boxes in one row, and colour that appears on every
 					// tile stops marking the exception and becomes decoration — in the
 					// row a reader scans precisely to find the exception.
-					background: SURFACE.subtle
+					// A CARD, NOT A WELL. Each cell of the reference's stat strip is its own
+					// `<Card className="px-3 py-2.5" bordered>` — white, hairline, shadow-sm.
+					// Ours sat on the subtle grey with no lift, so four figures read as one
+					// inset band rather than as four things.
+					background: SURFACE.card,
+					boxShadow: ELEVATION.raised
 				},
 				children: [
 					jsx("div", {
-						style: { font: FONT.micro, letterSpacing: "0.04em", textTransform: "uppercase", color: INK.secondary, ...clipped },
+						style: { font: FONT.nano, letterSpacing: "0.04em", textTransform: "uppercase", color: INK.secondary, ...clipped },
 						children: label
 					}, "label"),
 					jsx("div", {
@@ -1872,7 +1881,7 @@ window.__ModuleLoader__.load({
 					// had failed to reach a bar nobody set.
 					meter === null || meter === undefined ? null : Meter({ value: meter * 100, tone: hue ?? TONE.info }, "meter"),
 					hint === null || hint === undefined || hint === "" ? null : jsx("div", {
-						style: { font: FONT.micro, color: INK.secondary, ...clipped },
+						style: { font: FONT.nano, color: INK.secondary, ...clipped },
 						children: hint
 					}, "hint")
 				]
@@ -6159,7 +6168,7 @@ window.__ModuleLoader__.load({
 										type: "button",
 										className: "swm-back swm-focus", style: { ...backStyle(), font: FONT.small, flex: "none", height: CONTROL.sm, padding: "0 10px" },
 										onClick: onBack,
-										children: [jsx(Icon, { name: "arrowLeft", size: ICON.xs }, "glyph"), zh ? "返回" : "Back"]
+										children: [jsx(Icon, { name: "arrowLeft", size: ICON.lg }, "glyph"), zh ? "返回" : "Back"]
 									}),
 									jsx("span", {
 										style: { font: FONT.smallStrong,
@@ -14707,7 +14716,7 @@ window.__ModuleLoader__.load({
 					children: [
 						jsx("button", {
 							type: "button", className: "swm-back swm-focus", style: backStyle(), onClick: onBack,
-							children: [jsx(Icon, { name: "arrowLeft", size: ICON.xs }, "glyph"), zh ? "返回任务列表" : "Back to missions"]
+							children: [jsx(Icon, { name: "arrowLeft", size: ICON.lg }, "glyph"), zh ? "返回任务列表" : "Back to missions"]
 						}, "back"),
 						// THE REAL FRAME, in the real order: the header row, the meta
 						// line, the tab strip on its rule, then the panes. This
@@ -14753,7 +14762,7 @@ window.__ModuleLoader__.load({
 					children: [
 						jsx("button", {
 							type: "button", className: "swm-back swm-focus", style: backStyle(), onClick: onBack,
-							children: [jsx(Icon, { name: "arrowLeft", size: ICON.xs }, "glyph"), zh ? "返回任务列表" : "Back to missions"]
+							children: [jsx(Icon, { name: "arrowLeft", size: ICON.lg }, "glyph"), zh ? "返回任务列表" : "Back to missions"]
 						}, "back"),
 						// THE ONLY CONTROL ON THIS SCREEN USED TO BE THE ONE THAT
 						// LEAVES IT. A mission whose view route blipped could only be
@@ -15029,7 +15038,7 @@ window.__ModuleLoader__.load({
 									type: "button",
 									className: "swm-back swm-focus", style: { ...backStyle(), font: FONT.small, height: CONTROL.sm, padding: "0 10px", flex: "none" },
 									onClick: onBack,
-									children: [jsx(Icon, { name: "arrowLeft", size: ICON.xs }, "glyph"), zh ? "任务" : "Missions"]
+									children: [jsx(Icon, { name: "arrowLeft", size: ICON.lg }, "glyph"), zh ? "任务" : "Missions"]
 								}, "back"),
 								// THE RUN'S OWN MARK, in the Leader's hue and drawn from
 								// the Leader's glyph. This screen is where every role's
@@ -16327,7 +16336,7 @@ window.__ModuleLoader__.load({
 			// than no back button.
 			const back = onBack === null || onBack === undefined ? null : jsx("button", {
 				type: "button", className: "swm-back swm-focus", style: backStyle(), onClick: onBack,
-				children: [jsx(Icon, { name: "arrowLeft", size: ICON.xs }, "glyph"), zh ? "返回任务" : "Back to the mission"]
+				children: [jsx(Icon, { name: "arrowLeft", size: ICON.lg }, "glyph"), zh ? "返回任务" : "Back to the mission"]
 			}, "back");
 
 			// The source behind one quote, opened on the copy the mission kept:
