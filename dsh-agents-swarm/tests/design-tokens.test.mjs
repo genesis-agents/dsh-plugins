@@ -5124,7 +5124,12 @@ test("a chapter card shows the chapter's own opening words", () => {
 
   const report = code(body("function MissionReport("));
   assert.ok(report.includes("missionChapterPreview("), "the chapter list draws no preview");
-  assert.ok(report.includes("clampBox(3)"), "the preview is unclamped, so one chapter's opening paragraph pushes the next nine cards off the screen");
+  // TWO LINES, not three. `line-clamp-2 min-h-[2.5rem]` in the reference,
+  // and the min-height is the half that matters: the card is a fixed 128px,
+  // so a short preview has to hold its rows open rather than let the card
+  // under it ride up. The clamp is still the assertion — unclamped, one
+  // chapter's opening paragraph pushes the next nine cards off the screen.
+  assert.ok(report.includes("clampBox(2)"), "the preview is unclamped, so one chapter's opening paragraph pushes the next nine cards off the screen");
   assert.match(report, /第 \$\{at \+ 1\} 章/, "the card lost its ordinal, which is how a reader refers to a chapter at all");
   // AND THE TWO FIGURES SURVIVE THE REDRAW. They are the section's own columns
   // and the only per-chapter numbers this screen has ever carried.

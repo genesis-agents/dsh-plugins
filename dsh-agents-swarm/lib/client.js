@@ -348,6 +348,17 @@ window.__ModuleLoader__.load({
 		* step is 600 — the exception is the shell's, not ours.
 		*/
 		const FONT = {
+			// 10px, AND IT IS THE REFERENCE'S MOST COMMON SMALL SIZE — 145 sites
+			// against 125 at 11px. We had none: every meta row, chip and stamp in
+			// this file rendered a whole pixel larger than the product's, which is
+			// most of a step on type that small.
+			//
+			// NOT A BLANKET MIGRATION of the 109 `FONT.micro` sites. The reference
+			// uses both — 10px for a chip, a stamp or a row of small facts, 11px for
+			// a SENTENCE that happens to be quiet — so each site is a judgement and
+			// the ones moved here are the ones checked against it one at a time.
+			nano: "var(--dsw-font-xxxxs-10)",
+			nanoStrong: "var(--dsw-font-xxxxs-strong-10)",
 			micro: "var(--dsw-font-xxxs-11)",
 			microStrong: "var(--dsw-font-xxxs-strong-11)",
 			small: "var(--dsw-font-xxs-12)",
@@ -549,7 +560,13 @@ window.__ModuleLoader__.load({
 		const INK = {
 			primary: "var(--dsw-alias-label-primary)",
 			secondary: "var(--dsw-alias-label-secondary)",
-			quiet: "var(--dsw-alias-label-tertiary)"
+			quiet: "var(--dsw-alias-label-tertiary)",
+			// TEXT ON A FILLED GROUND, which none of the three above can be: they
+			// are all grades of the page's own ink, and on a violet tile every one
+			// of them is unreadable. The reference names the same thing
+			// (`text.inverse` in lib/design/tokens.ts) and the harness already
+			// declared the variable — nothing had ever asked for it.
+			inverse: "var(--dsw-alias-label-primary-inverted)"
 		};
 
 		/**
@@ -571,7 +588,9 @@ window.__ModuleLoader__.load({
 		* digits stop aligning in the one place alignment is the point.
 		*/
 		const COUNT_CHIP = {
-			font: FONT.micro,
+			// `font-mono rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold
+			// text-gray-600` — the reference's count badge, in ui/Section.tsx.
+			font: FONT.nanoStrong,
 			fontFamily: MONO,
 			fontVariantNumeric: "tabular-nums",
 			display: "inline-flex", alignItems: "center",
@@ -1039,6 +1058,17 @@ window.__ModuleLoader__.load({
 		const TASK_INDENT = "18px";
 		const ELBOW_DROP = "6px";
 
+		/**
+		 * A chapter card's height, and it is FIXED on purpose.
+		 *
+		 * `h-32` in artifact/ChapterReader.tsx, with the reason written beside it:
+		 * every card must look identical, so the height is one title line plus a
+		 * two-line preview, an empty preview gets a placeholder rather than
+		 * collapsing, and the word badge renders even at zero. Ragged card heights
+		 * were a bug report with a screenshot attached.
+		 */
+		const CHAPTER_CARD_HEIGHT = "128px";
+
 		// `dot` is the reference's round state badge — `h-5 w-5` holding a 12px
 		// glyph — and it is smaller than anything you can click, which is why it
 		// sits below `xs` rather than replacing it.
@@ -1171,6 +1201,8 @@ window.__ModuleLoader__.load({
 			// thirty-row board.
 			"--dsw-alias-state-business-primary:#6d28d9;",
 			"--dsw-radius-sm:6px;--dsw-radius-md:8px;--dsw-radius-lg:12px;",
+			"--dsw-font-xxxxs-10:10px/14px var(--dsw-font-family);",
+			"--dsw-font-xxxxs-strong-10:600 10px/14px var(--dsw-font-family);",
 			"--dsw-font-xxxs-11:11px/16px var(--dsw-font-family);",
 			"--dsw-font-xxxs-strong-11:600 11px/16px var(--dsw-font-family);",
 			"--dsw-font-xxs-12:12px/16px var(--dsw-font-family);",
@@ -11905,7 +11937,7 @@ window.__ModuleLoader__.load({
 													// hairline ring, and the NAME clipped at 96px rather than the
 													// chip stretched to hold whatever the provider called it.
 													display: "inline-flex", alignItems: "center", maxWidth: "96px",
-													font: FONT.micro, fontFamily: MONO, color: INK.secondary,
+							font: FONT.nano, fontFamily: MONO, color: INK.secondary,
 													background: SURFACE.subtle, borderRadius: RADIUS.sm,
 													padding: `0 ${SPACE.xs}`,
 													boxShadow: `inset 0 0 0 1px ${LINE.rule}`,
@@ -16153,7 +16185,9 @@ window.__ModuleLoader__.load({
 													style: {
 														display: "flex", flexWrap: "wrap", alignItems: "center",
 														rowGap: SPACE.xs, columnGap: SPACE.sm,
-														marginTop: SPACE.xs, font: FONT.micro
+								// 10px: `mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1
+								// text-[10px]`. The quote above it stays at 11 — it is a sentence.
+								marginTop: SPACE.xs, font: FONT.nano
 													},
 													children: [
 														Chip({ tone: vhue, pill: true, label: vface }, "verify"),
@@ -16514,22 +16548,82 @@ window.__ModuleLoader__.load({
 						// headline; a reader opening a report wants to know whether it
 						// stands up, and that is one number.
 						jsxs("div", {
-							style: { display: "flex", alignItems: "baseline", gap: SPACE.lg, margin: "0 0 6px" },
+							// THE REFERENCE'S HEADER: a mark, then the title WITH its meta line
+							// under it, then the score at the far end.
+							//
+							//   flex items-start justify-between gap-3 border-b p-5
+							//     span h-9 w-9 rounded-xl bg-gradient-to-br from-violet-500 …
+							//     div  h2 text-lg font-bold  +  p text-xs text-gray-500
+							//     div  CONSENSUS + the number
+							//
+							// Ours had the title and the score on a shared BASELINE with the meta
+							// line as a full-width sibling underneath, so the header was three
+							// bands and nothing tied the second to the first.
+							style: { display: "flex", alignItems: "flex-start", gap: SPACE.md, margin: `0 0 ${SPACE.md}` },
 							children: [
-								jsx("h2", {
-									style: { font: FONT.title, margin: 0, color: INK.primary, flex: 1, minWidth: 0 },
-									children: artifact.title
-								}, "text"),
+								// A SOLID TILE, NOT A GRADIENT. The reference fills this
+								// `bg-gradient-to-br from-violet-500 to-purple-600`, and its own token
+								// file keeps every gradient in a design-layer list so feature code
+								// cannot hand-mix one. We have no such list and one ramp of violet, so
+								// the tile takes the hue and skips the blend — which at 34px is a
+								// difference you have to be told about to see.
+								jsx("span", {
+									style: {
+										flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
+										width: CONTROL.md, height: CONTROL.md, borderRadius: RADIUS.lg,
+										background: `rgb(${PALETTE.violet})`, color: INK.inverse,
+										boxShadow: ELEVATION.raised
+									},
+									children: jsx(Icon, { name: "sparkles", size: ICON.md })
+								}, "mark"),
+								// The title and what it is made of, together — the meta line belongs to
+								// the title, not to the header.
+								jsxs("div", {
+									style: { flex: 1, minWidth: 0 },
+									children: [
+										jsx("h2", {
+											style: { font: FONT.title, margin: 0, color: INK.primary },
+											children: artifact.title
+										}, "text"),
+										jsx("div", {
+											style: { ...META_STYLE, margin: `${SPACE.xs} 0 0` },
+											children: [
+												// 章节 FIRST, as the reference leads with it. A reader deciding
+												// whether to open a report asks how much of it there is before
+												// anything else, and this list did not carry the figure at all.
+												zh ? `${readSections.length} 章节` : `${readSections.length} chapter(s)`,
+												zh ? `${citations.length} 处引用` : `${citations.length} citation(s)`,
+												zh ? `${artifact.wordCount} 字` : `${artifact.wordCount} words`,
+												zh ? `${evidence.length} 条冻结证据` : `${evidence.length} frozen evidence row(s)`,
+												artifact.trigger === null || artifact.trigger === undefined ? "" : String(artifact.trigger),
+												// ALWAYS, NOT ONLY WHEN THERE IS ONE. This was suppressed on the
+												// reasoning that the chips said it otherwise — and the chips are now
+												// in the toolbar below the scorecard, so on a three-version report the
+												// top of the page named every fact about the artefact except which one
+												// it was. It is the reference's `v1` beside 版本历史, said once, where
+												// the rest of this artefact's facts already are.
+												zh ? `第 ${artifact.version ?? 1} 版` : `v${artifact.version ?? 1}`,
+												formatStamp(artifact.createdAt)
+											].filter((piece) => piece !== "").join(" · ")
+										}, "meta")
+									]
+								}, "who"),
 								headline === null ? null : jsxs("div", {
 									style: { flex: "none", textAlign: "right", display: "flex", flexDirection: "column", gap: "2px" },
 									children: [
 										jsx("div", {
-											style: { font: FONT.micro, letterSpacing: "0.04em", textTransform: "uppercase", color: INK.secondary },
+											// `text-[10px] uppercase tracking-wide text-gray-500` — the reference's
+											// CONSENSUS label, and 10px is a step this file only just grew.
+											style: { font: FONT.nano, letterSpacing: "0.04em", textTransform: "uppercase", color: INK.secondary },
 											children: headline.label
 										}, "label"),
 										jsx("div", {
 											style: {
-												font: FONT.title, fontVariantNumeric: "tabular-nums",
+												// `text-2xl font-bold` — 24/700, which is FONT.display exactly, and it
+												// is DELIBERATELY larger than the title beside it. The reference sets a
+												// report's name at 18px and its score at 24px: the number is what you
+												// look for once you already know which report you opened.
+												font: FONT.display, fontVariantNumeric: "tabular-nums",
 												color: headline.tone === null || headline.tone === undefined
 													? INK.primary
 													: `rgb(${headline.tone})`
@@ -16540,23 +16634,6 @@ window.__ModuleLoader__.load({
 								}, "headline")
 							]
 						}, "title"),
-						jsx("div", {
-							style: { ...META_STYLE, margin: "0 0 6px" },
-							children: [
-								zh ? `${artifact.wordCount} 字` : `${artifact.wordCount} words`,
-								zh ? `${citations.length} 处引用` : `${citations.length} citation(s)`,
-								zh ? `${evidence.length} 条冻结证据` : `${evidence.length} frozen evidence row(s)`,
-								artifact.trigger === null || artifact.trigger === undefined ? "" : String(artifact.trigger),
-								// ALWAYS, NOT ONLY WHEN THERE IS ONE. This was suppressed on the
-								// reasoning that the chips said it otherwise — and the chips are now
-								// in the toolbar below the scorecard, so on a three-version report the
-								// top of the page named every fact about the artefact except which one
-								// it was. It is the reference's `v1` beside 版本历史, said once, where
-								// the rest of this artefact's facts already are.
-								zh ? `第 ${artifact.version ?? 1} 版` : `v${artifact.version ?? 1}`,
-								formatStamp(artifact.createdAt)
-							].filter((piece) => piece !== "").join(" · ")
-						}, "meta"),
 						!artifact.degraded ? null : jsx(MissionDegradeNote, { reason: artifact.degradeReason ?? null, zh }, "degraded"),
 						// Per section type, never averaged. "Chapter seven has zero
 						// citations" has to stay visible instead of disappearing
@@ -16666,11 +16743,13 @@ window.__ModuleLoader__.load({
 							style: {
 								display: "flex", flexDirection: "column",
 								margin: `0 0 ${SPACE.lg}`,
-								// hair OUTSIDE, rule BETWEEN. LINE's docblock is the guard and this
-								// list had the pair the wrong way round: the container's own top edge
-								// drew at the heavier inner weight while the dividers between ten
-								// cards drew at the one that is allowed to be nearly invisible.
-								borderTop: `1px solid ${LINE.hair}`
+								// SEPARATE CARDS, EIGHT PIXELS APART. This was one bordered block with
+								// a divider under every row, and I wrote a paragraph here defending it.
+								// The reference is `space-y-2` over `rounded-xl border bg-white p-4`:
+								// ten cards, not one list. A divider says these rows are parts of a
+								// table; a gap says each is a thing you can go into, which is what a
+								// chapter is.
+								gap: SPACE.sm
 							},
 							children: readSections.map((section, at) => {
 								// PER CHAPTER, off the join this page already made.
@@ -16689,10 +16768,12 @@ window.__ModuleLoader__.load({
 									style: {
 										...controlStyle(),
 										display: "flex", alignItems: "flex-start", gap: SPACE.sm,
-										width: "100%", textAlign: "left", height: "auto",
-										padding: `${SPACE.md} ${SPACE.sm}`,
-										border: "none", borderRadius: 0,
-										borderBottom: `1px solid ${LINE.rule}`,
+										// A FIXED HEIGHT, which the reference arrived at from a bug report: with
+										// `height: auto` a chapter with a one-line preview and one with three
+										// made a ragged column, and the eye reads ragged as unfinished.
+										width: "100%", textAlign: "left", height: CHAPTER_CARD_HEIGHT,
+										padding: SPACE.lg,
+										border: `1px solid ${LINE.hair}`, borderRadius: RADIUS.lg,
 										background: at === readAt ? SURFACE.hover : "transparent",
 										// AND A MARK IN THE MARGIN, the one the task board's open row
 										// takes. The tint on its own is indistinguishable from a hover
@@ -16710,7 +16791,10 @@ window.__ModuleLoader__.load({
 										jsx("span", {
 											style: {
 												flex: "none", marginTop: "2px",
-												width: "18px", height: "18px", borderRadius: RADIUS.circle,
+												// 32px in the reference (`h-8 w-8` holding an `h-4 w-4` mark). Ours was
+												// 18px, which is a bullet rather than a badge — at that size the check
+												// and the dash inside it are the same grey smudge.
+												width: CONTROL.md, height: CONTROL.md, borderRadius: RADIUS.circle,
 												display: "inline-flex", alignItems: "center", justifyContent: "center",
 												background: `rgba(${hue},${TINT.soft})`, color: `rgb(${hue})`
 											},
@@ -16719,7 +16803,7 @@ window.__ModuleLoader__.load({
 												: (zh ? `${section.citationCount} 处引用里有 ${verified} 处通过核验。` : `${verified} of this chapter's ${section.citationCount} citations verified.`),
 											children: jsx(Icon, {
 												name: section.citationCount === 0 ? "minus" : verified === section.citationCount ? "check" : "alert",
-												size: ICON.xs
+												size: ICON.sm
 											}, "glyph")
 										}, "mark"),
 										jsxs("span", {
@@ -16742,9 +16826,13 @@ window.__ModuleLoader__.load({
 																? (zh ? "无引用" : "no citations")
 																: (zh ? `${verified}/${section.citationCount} 已核验` : `${verified}/${section.citationCount} verified`)
 														}, "state"),
-														jsx("span", {
-															style: { ...COUNT_CHIP, flex: "none" },
-															children: zh ? `${section.wordCount} 字` : `${section.wordCount} words`
+														// A TONE PILL, and rendered even at zero. `rounded-full px-2 py-0.5
+														// text-xs` in the chapter's own colour — the reference keeps the slot
+														// filled at 0 字 precisely so every card is the same shape.
+														Chip({
+															tone: hue,
+															pill: true,
+															label: zh ? `${section.wordCount} 字` : `${section.wordCount} words`
 														}, "words")
 													]
 												}, "top"),
@@ -16753,8 +16841,16 @@ window.__ModuleLoader__.load({
 												// ten uncapped previews are a page of prose where a list was asked
 												// for. Nothing at all when the slice came back empty, rather than
 												// an empty box under every title.
-												preview === "" ? null : jsx("span", {
-													style: { font: FONT.body, color: INK.secondary, ...clampBox(3) },
+												// TWO LINES AT 14px, and a placeholder when there are none.
+												//
+												// `line-clamp-2 min-h-[2.5rem] text-sm` with an italic （暂无预览内容）
+												// in the empty case: the card is a fixed height, so a missing preview
+												// has to occupy its rows rather than let the ones under it ride up.
+												preview === "" ? jsx("span", {
+													style: { font: FONT.base, fontStyle: "italic", color: INK.quiet },
+													children: zh ? "（暂无预览内容）" : "(no preview)"
+												}, "preview") : jsx("span", {
+													style: { font: FONT.base, color: INK.secondary, ...clampBox(2) },
 													children: preview
 												}, "preview")
 											]
