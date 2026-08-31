@@ -800,39 +800,32 @@ window.__ModuleLoader__.load({
 			// was real: 32px of padding alone clears it on an empty cell. It read as
 			// a decision and was not one, and it was the last raw pixel in this pair.
 			//
-			// SPACE.md VERTICAL, AND THE FOURTH PASS'S ARITHMETIC MEASURED A ROW THAT
-			// WAS NOT ON THE SCREEN. What stood here read: "`10px ${SPACE.sm}` stood a
-			// one-line cell at 36px (16px of line plus 20 of air)... Sixteen takes the
-			// two-line row to 66 and the one-line row to 48." Both figures measure a
-			// 16px TEXT line — and the same round put a 26px chip in every row of the
-			// task board. The 状态 cell draws `Chip({ ..., pill: true })` with no
-			// `size`, which is `pillStyle(hue, "md")`: an 18px line box plus four
-			// pixels top and bottom, unconditional, on every row. So SPACE.lg did not
-			// stand the rows at 48 and 66. It stood them at 58 and 76 — and 76 is PAST
-			// the reference's 72, on a row that says LESS than the reference's does.
+			// EIGHT VERTICAL, AND IT IS DELIBERATELY UNDER THE REFERENCE'S.
 			//
-			// TWELVE, COUNTED THE SAME WAY: 26 + 24 = 50 for a one-line row, and
-			// 26 + 2 + 16 + 24 = 68 for the two-line name cell, which lands just under
-			// the reference's 72 with the remainder still in its larger type — the one
-			// half of the old note that was right. MissionModelTable one pane over,
-			// whose five cells hold a model name and four numbers and nothing else,
-			// drops from 48 to 40; at SPACE.lg it was 16px of ink in a 48px box, which
-			// is two thirds air and the worst ratio on the tab.
+			// The reference's own cell is `px-4 py-3` — twelve — and we matched it. Its
+			// row still came out shorter than ours because the CHIPS differed, not this
+			// number. A chip with no size is a 13/18 line plus 4px, so 26px of chip sat
 			//
-			// THE REFERENCE IS ROOMY BECAUSE ITS ROWS SAY MORE, NOT BECAUSE IT PADS
-			// MORE. Its 72px row carries a category chip, a title, a real description,
-			// a bordered owner chip, a model chip and a scored status. Ours carries a
-			// title and — when `note` is non-empty, which is a minority of rows — one
-			// grey sentence. Buying the reference's HEIGHT without its CONTENT is what
-			// 任务列表呈现极其松散 is the name of.
+			// (That sentence is worded around the phrase it would otherwise contain: a
+			// guard below reads the FIRST ``padding:`` template in this block, and prose
+			// quoting one is indistinguishable from the declaration to a regex.)
+			// in a row whose title is 20. Every chip in a task row is dense now, which
+			// took the row from 68 to 62 and landed it exactly on the reference's.
 			//
-			// AND THE HORIZONTAL STEP MOVES WITH `TH`'s, ALWAYS. The two agreed at 8
-			// and have to go on agreeing: the name cell one region below carries a
-			// paragraph about the two pixels that put 任务 out of line with its own
-			// column header, and an inset that moves alone is exactly that defect,
-			// four pixels wide, on all six tables at once. Only the FIRST value moves
-			// here; the inset stays SPACE.md and the guard below still pairs them.
-			padding: `${SPACE.md} ${SPACE.md}`,
+			// Twelve to eight is the step AFTER that, and it is not an alignment — it is
+			// a deliberate ten pixels under gens.team, asked for after seeing the row at
+			// 62. Counted the same way as every figure above:
+			//
+			//   one-line row     18 + 16 = 34      (was 42)
+			//   two-line name    18 + 2 + 16 + 16 = 52
+			//
+			// so the task row stands at 54 with its 20px title, against the reference's
+			// 62. If the tab ever reads as cramped, this is the number to put back — the
+			// chips are already where they belong and must not be shrunk instead.
+			//
+			// The INSET stays SPACE.md: the horizontal measure is what lines a header up
+			// with its column, and nothing about row height touches it.
+			padding: `${SPACE.sm} ${SPACE.md}`,
 			color: INK.primary,
 			overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
 			borderBottom: `1px solid ${LINE.rule}`

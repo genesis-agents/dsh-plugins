@@ -4069,7 +4069,17 @@ test("a table cell has room for two lines", () => {
   // reads as one line again. A row is as tall as what it has to say.
   const td = SOURCE.slice(SOURCE.indexOf("const TD = {"), SOURCE.indexOf("};", SOURCE.indexOf("const TD = {")));
   assert.ok(!/height: "30px"/.test(td), "TD pins a fixed 30px height again, which crushes the two-line name cell");
-  assert.ok(td.includes("padding: `${SPACE.md} ${SPACE.md}`"), "TD's vertical air moved. Sixteen is the value the fourth pass derived against a 16px text line while a 26px chip was already in the row; it stood the one-line row at 58 and the two-line row at 76, past the reference's 72");
+  // EIGHT VERTICAL, TWELVE HORIZONTAL — and the message this replaces said
+  // "Sixteen" about a value that had been twelve for two rounds, which is
+  // what a guard sounds like when its prose stops being re-read.
+  //
+  // Twelve MATCHED the reference (`px-4 py-3`). The row was still taller
+  // than the reference's because the chips were 26px against a 20px title;
+  // dense chips took it to 62, which is the reference's own row. Eight is
+  // the step after that: a deliberate ten pixels under gens.team, asked for
+  // after seeing 62 on screen. If the tab reads cramped this is the number
+  // to put back — not the chips, which are where they belong now.
+  assert.ok(td.includes("padding: `${SPACE.sm} ${SPACE.md}`"), "TD's vertical air moved off the eight it was taken to deliberately");
 });
 
 test("a category and a state differ in the corner and in nothing else", () => {
@@ -5615,7 +5625,7 @@ test("the two table recipes indent to the same column, and neither pins a height
   // moved; the pair below still has to agree.
   const cell = scale("TD");
   const head = scale("TH");
-  assert.match(cell, /padding: `\$\{SPACE\.md\} \$\{SPACE\.md\}`/, "the data cell's vertical air moved. Sixteen is what the fourth pass derived against a text line that a 26px chip had already replaced");
+  assert.match(cell, /padding: `\$\{SPACE\.sm\} \$\{SPACE\.md\}`/, "the data cell's vertical air moved off the eight it was taken to deliberately");
   assert.match(head, /padding: `\$\{SPACE\.sm\} \$\{SPACE\.md\}`/, "the header cell lost its own air, or went back to being a pinned box");
   // The LAST SPACE step in a two-value padding is the horizontal one. Taken
   // that way rather than by position, so a three-value padding written later
