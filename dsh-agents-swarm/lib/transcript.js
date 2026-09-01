@@ -324,6 +324,15 @@ function noteSupadataKey(key, outcome, error = "") {
  * @param raw - the stored key blob.
  * @returns `[{ position, state, calls, ok, quota, failed, lastError, lastAt }]`.
  */
+export function maskSupadataKey(key) {
+  const text = String(key ?? "");
+  // SHORT KEYS SHOW ALMOST NOTHING. Four trailing characters of a
+  // forty-character key is a fingerprint; four of a nine-character key is most
+  // of it. The mask has to be a function of what is left to hide.
+  if (text.length < 12) return "…" + text.slice(-2);
+  return text.slice(0, 3) + "…" + text.slice(-4);
+}
+
 export function supadataKeyHealth(raw) {
   return supadataKeys(raw).map((key, at) => {
     const held = supadataHealth.get(key) ?? { calls: 0, ok: 0, quota: 0, failed: 0, lastError: "", lastAt: "" };
@@ -333,7 +342,13 @@ export function supadataKeyHealth(raw) {
     const state = held.calls === 0
       ? "untried"
       : (held.lastError === "" ? "ok" : (held.quota > 0 && /quota|429|rate.?limit/i.test(held.lastError) ? "quota" : "failing"));
-    return { position: at + 1, state, ...held };
+    // MASKED, NEVER WHOLE. Enough to tell one row from another and to match a
+    // row against the key in somebody's password manager; not enough to use.
+    // This is the same trade every key-holding product makes, and it is what
+    // lets the settings page list keys individually at all — the alternative
+    // was one opaque box in which the only way to replace the third key was to
+    // retype all four.
+    return { position: at + 1, masked: maskSupadataKey(key), state, ...held };
   });
 }
 

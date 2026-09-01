@@ -1190,6 +1190,76 @@ export function createHandler(store, logger, chat, web, ctx, missions) {
       return;
     }
 
+    // ── one key at a time ───────────────────────────────────────────────
+    //
+    // WHY A ROUTE AND NOT `PUT /config`. The stored value is one blob and the
+    // page has never been sent it back — deliberately, so the only key material
+    // on screen is what the person in front of it just typed. That stance is
+    // right and it made per-key editing impossible: to replace the third of
+    // four keys through `supadataKey`, the page would have to send all four,
+    // which means it would have to have been told all four.
+    //
+    // So the mutation happens where the keys already live. The page sends a
+    // position and, for a replace or an add, one new key; it never learns the
+    // others and never sends them back.
+    if (req.method === "POST" && path === "/config/supadata-key") {
+      let body;
+      try {
+        body = await readJson(req);
+      } catch (cause) {
+        sendJson(res, 400, { success: false, error: String(cause?.message ?? cause) });
+        return;
+      }
+      const action = String(body?.action ?? "");
+      if (!["add", "replace", "remove"].includes(action)) {
+        sendJson(res, 400, { success: false, error: "action must be add, replace or remove" });
+        return;
+      }
+      const keys = supadataKeys(readConfig(store).supadataKey);
+      // ONE-BASED, matching what the page shows. A route that silently accepted
+      // a zero would edit the key before the one somebody pointed at.
+      const position = Number(body?.position);
+      if (action !== "add") {
+        if (!Number.isInteger(position) || position < 1 || position > keys.length) {
+          sendJson(res, 400, { success: false, error: `position must be a whole number between 1 and ${keys.length}` });
+          return;
+        }
+      }
+      let next = [...keys];
+      if (action === "remove") {
+        next.splice(position - 1, 1);
+      } else {
+        const key = String(body?.key ?? "").trim();
+        if (key === "") {
+          sendJson(res, 400, { success: false, error: "key must not be empty" });
+          return;
+        }
+        // Whitespace inside a pasted key is a paste accident, not a key.
+        if (/\s/u.test(key)) {
+          sendJson(res, 400, { success: false, error: "a key cannot contain whitespace; add them one at a time" });
+          return;
+        }
+        // A DUPLICATE IS REFUSED RATHER THAN STORED. The quota is the sum of
+        // the keys, so the same key twice is one key claiming to be two — and
+        // the health list would then show two rows that rise and fall together
+        // for no visible reason.
+        const clash = next.findIndex((one) => one === key);
+        if (clash !== -1 && (action === "add" || clash !== position - 1)) {
+          sendJson(res, 400, { success: false, error: `that key is already configured, at position ${clash + 1}` });
+          return;
+        }
+        if (action === "add") next.push(key);
+        else next[position - 1] = key;
+      }
+      const problems = writeConfig(store, { supadataKey: next.join("\n") });
+      if (problems.length > 0) {
+        sendJson(res, 400, { success: false, error: problems.join("; ") });
+        return;
+      }
+      sendJson(res, 200, { success: true, data: { count: next.length, keys: supadataKeyHealth(next.join("\n")) } });
+      return;
+    }
+
     if (req.method === "PUT" && path === "/config") {
       let body;
       try {

@@ -15,7 +15,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { supadataKeyHealth, supadataKeys, resolveTranscript } from "../lib/transcript.js";
+import { maskSupadataKey, supadataKeyHealth, supadataKeys, resolveTranscript } from "../lib/transcript.js";
 
 test("the setting is split into keys however it was pasted", () => {
   // A person pasting four keys uses whichever separator their clipboard
@@ -173,4 +173,32 @@ test("an unused key is untried, not healthy and not broken", () => {
 test("an empty key blob reports nothing rather than a phantom key", () => {
   assert.deepEqual(supadataKeyHealth(""), []);
   assert.deepEqual(supadataKeyHealth(undefined), []);
+});
+
+test("a key is masked to a fingerprint, and a short one gives up almost nothing", () => {
+  // THE MASK IS WHAT MAKES PER-KEY ROWS POSSIBLE. The settings pane was one
+  // opaque box and a list of states joined to it only by "line number", so a
+  // reader could not tell key 2 from key 3 and could not replace one without
+  // retyping all of them. A fingerprint is enough to match a row against the
+  // key in a password manager and useless for anything else.
+  assert.equal(maskSupadataKey("sd_live_aaaaaaaaaaaaaaaa1234"), "sd_…1234");
+  // Four trailing characters of a forty-character key is a fingerprint; four of
+  // a nine-character key is most of it. The mask is a function of what is left
+  // to hide.
+  assert.equal(maskSupadataKey("sd_abc123"), "…23");
+  assert.equal(maskSupadataKey(""), "…");
+});
+
+test("nothing usable leaves in the health payload", () => {
+  // This is drawn on a settings page and travels to a browser. The rule the
+  // failure strings already follow — position, never the secret — binds harder
+  // here, and a mask is only safe if it is actually a mask.
+  const keys = "sd_live_aaaaaaaaaaaaaaaa1234\nsd_live_bbbbbbbbbbbbbbbb5678";
+  const blob = JSON.stringify(supadataKeyHealth(keys));
+  for (const key of keys.split("\n")) {
+    assert.equal(blob.includes(key), false, "a whole key reached the payload");
+    assert.equal(blob.includes(key.slice(8, 20)), false, "the body of a key reached the payload");
+  }
+  // And the fingerprint that IS there is the one the row shows.
+  assert.deepEqual(supadataKeyHealth(keys).map((one) => one.masked), ["sd_…1234", "sd_…5678"]);
 });

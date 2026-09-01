@@ -23434,6 +23434,11 @@ window.__ModuleLoader__.load({
 			const [notice, setNotice] = useState("");
 			const [busy, setBusy] = useState(false);
 			const [keyDraft, setKeyDraft] = useState("");
+			// WHICH ROW IS BEING EDITED, by position. 0 means the add field at the
+			// foot, which is why it is a number rather than a boolean: the same
+			// draft string serves every row and the add field, and one flag saying
+			// "something is being edited" would let two of them claim it.
+			const [keyEdit, setKeyEdit] = useState(0);
 			const [feedUrl, setFeedUrl] = useState("");
 			const [feedType, setFeedType] = useState("BLOG");
 			const [status, setStatus] = useState(null);
@@ -23502,6 +23507,44 @@ window.__ModuleLoader__.load({
 					setBusy(false);
 				}
 			}, [reload]);
+
+			/**
+			* Add, replace or remove ONE key, by position.
+			*
+			* NOT THROUGH `save`. That writes `/config`, which takes the whole key
+			* blob — and the page has never been sent the stored keys, deliberately.
+			* Editing the third of four through it would mean the page had to know
+			* all four, which is the stance this pane exists to avoid. The host
+			* mutates its own list; the page names a position and at most one key.
+			* @param body - `{ action, position?, key? }`.
+			*/
+			const saveKey = useCallback(async (body) => {
+				setBusy(true);
+				setNotice("");
+				try {
+					const response = await fetch(`${apiBase()}/config/supadata-key`, {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify(body)
+					});
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? "HTTP " + response.status);
+					// The draft is cleared on success only. A rejected key stays in
+					// the field, because retyping a forty-character secret somebody
+					// just pasted is the worst possible answer to "that one is
+					// already configured".
+					setKeyDraft("");
+					setKeyEdit(0);
+					setNotice(zh
+						? `密钥已更新，现在有 ${payload.data.count} 把。`
+						: `Keys updated; ${payload.data.count} configured.`);
+					await reload();
+				} catch (cause) {
+					setError(String(cause?.message ?? cause));
+				} finally {
+					setBusy(false);
+				}
+			}, [reload, zh]);
 
 			const collect = useCallback(async () => {
 				setBusy(true);
@@ -23929,10 +23972,12 @@ window.__ModuleLoader__.load({
 									: "YouTube has hardened timedtext, so a server-side fetch returns an empty body for most videos, and the official Data API authorizes captions.download only for the owning channel. A Supadata key is the fallback; the free route is always tried first, so the key is spent only where it must be. One per line, and as many as you like: the quota is their sum, each transcript starts one further along the list, and a key that is spent costs one request before the next is tried."
 							}),
 							jsxs("div", {
-								// TOP-ALIGNED, not centred: the field is three rows tall now
-								// and two buttons floating at its middle read as belonging to
-								// whichever line they happen to sit beside.
-								style: { display: "flex", gap: SPACE.sm, alignItems: "flex-start" },
+								// A COLUMN, BECAUSE THE VALUE IS A LIST OF ROWS. It was a
+								// flex ROW holding one textarea and two buttons — the shape of
+								// a single field with actions beside it, which is what the
+								// keys used to be. They are rows now, each with its own state
+								// and its own controls, and rows stack.
+								style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
 								children: [
 									// A TEXTAREA, BECAUSE THE VALUE IS A LIST. One-line and
 									// `type="password"`, four pasted keys were a single row of
@@ -23946,124 +23991,152 @@ window.__ModuleLoader__.load({
 									// this pane never receives a stored key back, so the only
 									// thing that can be on screen is what the person in front
 									// of it just pasted. It empties on save.
-									jsx("textarea", {
-										value: keyDraft,
-										rows: 3,
-										spellCheck: false,
-										"aria-label": zh ? "Supadata 密钥，一行一个" : "Supadata keys, one per line",
-										placeholder: config.supadataKeySet
-											? (zh ? `已配置 ${config.supadataKeyCount ?? 1} 把（留空则保持不变）` : `${config.supadataKeyCount ?? 1} configured (leave blank to keep)`)
-											: (zh ? "尚未配置，一行一个" : "Not configured — one per line"),
-										onChange: (event) => { setKeyDraft(event.target.value); },
-										className: "swm-focus",
-										style: {
-											...SEARCH_STYLE, flex: 1, height: "auto", minWidth: 0,
-											fontFamily: MONO, resize: "vertical", lineHeight: LEAD.read
-										}
-									}, "key"),
-									jsx("button", {
-										type: "button",
-										disabled: busy || keyDraft.trim() === "",
-										className: "swm-ctl swm-focus", style: controlStyle(busy || keyDraft.trim() === ""),
-										onClick: () => {
-											// NORMALISED TO ONE PER LINE ON THE WAY IN. The server
-											// splits on any whitespace, so a comma-separated paste
-											// works either way — but what is stored is what comes
-											// back out of a config file someone opens by hand, and
-											// four keys on four lines is the readable form of it.
-											const keys = keyDraft.split(/[\s,;]+/u).map((one) => one.trim()).filter((one) => one !== "");
-											void save(
-												{ supadataKey: [...new Set(keys)].join("\n") },
-												zh ? `已保存 ${new Set(keys).size} 把密钥。` : `Saved ${new Set(keys).size} key(s).`
-											);
-											setKeyDraft("");
-										},
-										children: zh ? "保存" : "Save"
-									}, "save"),
-									config.supadataKeySet
-										? jsx("button", {
-											type: "button",
-											disabled: busy,
-											className: "swm-ctl swm-focus", style: controlStyle(busy),
-											onClick: () => { void save({ supadataKey: "" }, zh ? "密钥已全部清除。" : "All keys cleared."); },
-											children: zh ? "清除" : "Clear"
-										}, "clear")
-										: null
+									// ── ONE ROW PER KEY ────────────────────────────────────
+									//
+									// This was a single opaque textarea and a separate list of
+									// states underneath, joined only by "行号". Three things were
+									// wrong with it and they are the same thing: the page had no
+									// idea which key was which. You could not tell row 2 from row
+									// 3, you could not replace one without retyping all of them,
+									// and a state reported "by line number" pointed at a line
+									// nobody could see.
+									//
+									// THE MASK IS WHAT MAKES ROWS POSSIBLE. The old pane never
+									// received a stored key back, deliberately, so the only key
+									// material on screen was what had just been typed. That
+									// stance is right and it is kept: what arrives now is a
+									// FINGERPRINT — three leading and four trailing characters —
+									// which is enough to match a row against the key in a
+									// password manager and useless for anything else. It is the
+									// trade every product that holds keys makes, and it is the
+									// only alternative to an unlabelled box.
+									//
+									// EACH ROW EDITS ITSELF, THROUGH ITS POSITION. The mutation
+									// happens on the host, where the keys already are: the page
+									// sends a position and at most one new key, and never learns
+									// or resends the others.
+									jsx("div", {
+										style: { display: "flex", flexDirection: "column", gap: SPACE.xs, flex: 1, minWidth: 0 },
+										children: (Array.isArray(config.supadataKeyHealth) ? config.supadataKeyHealth : []).map((key) => {
+											const face = SUPADATA_KEY_FACES[key.state] ?? SUPADATA_KEY_FACES.untried;
+											const editing = keyEdit === key.position;
+											return jsxs("div", {
+												style: {
+													display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap",
+													padding: `${SPACE.xs} ${SPACE.sm}`,
+													border: `1px solid ${LINE.hair}`, borderRadius: RADIUS.md
+												},
+												children: [
+													jsx("span", {
+														style: { flex: "none", font: FONT.micro, color: INK.quiet, fontFamily: MONO },
+														children: zh ? `第 ${key.position} 把` : `#${key.position}`
+													}, "n"),
+													// The fingerprint, in mono because it is a value.
+													editing ? null : jsx("span", {
+														style: { flex: "none", font: FONT.body, fontFamily: MONO, color: INK.primary },
+														children: key.masked
+													}, "masked"),
+													// THE STATE ON THE SAME ROW AS THE KEY IT IS ABOUT,
+													// which is the whole request: a list of states under a
+													// list of keys is two lists a reader has to join by
+													// counting.
+													editing ? null : jsx("span", {
+														style: {
+															flex: "none", display: "inline-flex", alignItems: "center",
+															height: CONTROL.dot, padding: `0 ${SPACE.sm}`,
+															borderRadius: RADIUS.md,
+															border: `1px solid ${tint(face.hue, TINT.ring)}`,
+															background: tint(face.hue, TINT.soft),
+															color: `rgb(${face.hue})`, font: FONT.microStrong
+														},
+														children: zh ? face.zh : face.en
+													}, "state"),
+													editing || key.calls === 0 ? null : jsx("span", {
+														style: { flex: "none", font: FONT.micro, color: INK.quiet, fontFamily: MONO },
+														children: zh
+															? `${key.calls} 次 · 成功 ${key.ok} · 限额 ${key.quota}`
+															: `${key.calls} calls · ${key.ok} ok · ${key.quota} quota`
+													}, "counts"),
+													editing || key.lastError === "" ? null : jsx("span", {
+														title: key.lastError,
+														style: { flex: 1, minWidth: "80px", font: FONT.micro, color: INK.quiet, ...clampBox(1) },
+														children: key.lastError
+													}, "err"),
+													// THE REPLACEMENT FIELD IS THE ROW, not a dialog: the
+													// row already says which key is being replaced, and a
+													// modal would have to say it again.
+													!editing ? null : jsx("input", {
+														type: "text",
+														value: keyDraft,
+														spellCheck: false,
+														autoFocus: true,
+														placeholder: zh ? "粘贴新的密钥" : "Paste the new key",
+														"aria-label": zh ? `替换第 ${key.position} 把密钥` : `Replace key ${key.position}`,
+														className: "swm-focus",
+														style: { ...FORM_CONTROL, flex: 1, minWidth: "180px", fontFamily: MONO },
+														onChange: (event) => { setKeyDraft(event.target.value); }
+													}, "field"),
+													jsx("span", { style: { flex: editing ? "none" : 1 } }, "gap"),
+													!editing ? null : jsx("button", {
+														type: "button",
+														disabled: busy || keyDraft.trim() === "",
+														className: "swm-ctl swm-focus", style: controlStyle(busy || keyDraft.trim() === ""),
+														onClick: () => {
+															void saveKey({ action: "replace", position: key.position, key: keyDraft.trim() });
+														},
+														children: zh ? "保存" : "Save"
+													}, "ok"),
+													jsx("button", {
+														type: "button",
+														disabled: busy,
+														className: "swm-ctl swm-focus", style: controlStyle(busy),
+														onClick: () => {
+															setKeyDraft("");
+															setKeyEdit(editing ? 0 : key.position);
+														},
+														children: editing ? (zh ? "取消" : "Cancel") : (zh ? "替换" : "Replace")
+													}, "edit"),
+													editing ? null : jsx("button", {
+														type: "button",
+														disabled: busy,
+														className: "swm-ctl swm-focus", style: controlStyle(busy),
+														onClick: () => { void saveKey({ action: "remove", position: key.position }); },
+														children: zh ? "删除" : "Remove"
+													}, "rm")
+												]
+											}, String(key.position));
+										})
+									}, "keyrows"),
+									// ADDING IS ITS OWN ROW, always present. A key list with no
+									// visible way to grow is a list somebody edits by hand in a
+									// config file.
+									jsxs("div", {
+										style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", marginTop: SPACE.xs },
+										children: [
+											jsx("input", {
+												type: "text",
+												value: keyEdit === 0 ? keyDraft : "",
+												spellCheck: false,
+												placeholder: zh ? "新增一把密钥" : "Add a key",
+												"aria-label": zh ? "新增 Supadata 密钥" : "Add a Supadata key",
+												className: "swm-focus",
+												style: { ...FORM_CONTROL, flex: 1, minWidth: "200px", fontFamily: MONO },
+												onFocus: () => { setKeyEdit(0); },
+												onChange: (event) => { setKeyDraft(event.target.value); }
+											}, "newkey"),
+											jsx("button", {
+												type: "button",
+												disabled: busy || keyEdit !== 0 || keyDraft.trim() === "",
+												className: "swm-ctl swm-focus",
+												style: controlStyle(busy || keyEdit !== 0 || keyDraft.trim() === ""),
+												onClick: () => { void saveKey({ action: "add", key: keyDraft.trim() }); },
+												children: zh ? "添加" : "Add"
+											}, "add")
+										]
+									}, "keyadd")
 								]
 							}),
 
-							// ── WHICH KEY IS ACTUALLY WORKING ──────────────────────────
-							//
-							// THE QUOTA IS THE SUM OF THE KEYS, so a list of four with one
-							// exhausted behaves exactly like a list of three — and this pane
-							// said "已配置 2 把" and nothing else. Which one to replace was a
-							// question the product could not answer, while the information
-							// existed: every refusal already names its key by position,
-							// inside a failure string only whoever was reading one failed
-							// fetch ever saw.
-							//
-							// BY POSITION, NEVER BY VALUE. That is the same rule the failure
-							// strings follow and it binds harder here: this is drawn on a
-							// settings page. The ordinal is the line number in the box above,
-							// which is exactly what somebody needs to find the key to
-							// replace, and it is all they need.
-							//
-							// SINCE THIS HOST STARTED, not for ever. A count persisted across
-							// restarts would still be reporting a month-old exhaustion long
-							// after the quota reset — this is a health reading, not a ledger.
-							!Array.isArray(config.supadataKeyHealth) || config.supadataKeyHealth.length === 0 ? null : jsxs("div", {
-								style: { display: "flex", flexDirection: "column", gap: SPACE.xs, marginTop: SPACE.sm },
-								children: [
-									jsx("div", {
-										style: { font: FONT.micro, color: INK.quiet },
-										children: zh
-											? "每把密钥自本次启动以来的表现（按上面框里的行号）"
-											: "How each key has done since this host started, by line number above"
-									}, "cap"),
-									...config.supadataKeyHealth.map((key) => {
-										const face = SUPADATA_KEY_FACES[key.state] ?? SUPADATA_KEY_FACES.untried;
-										return jsxs("div", {
-											style: {
-												display: "flex", alignItems: "center", gap: SPACE.sm,
-												font: FONT.micro, color: INK.secondary, flexWrap: "wrap"
-											},
-											children: [
-												jsx("span", {
-													style: {
-														flex: "none", display: "inline-flex", alignItems: "center",
-														height: CONTROL.dot, padding: `0 ${SPACE.sm}`,
-														borderRadius: RADIUS.md,
-														border: `1px solid ${tint(face.hue, TINT.ring)}`,
-														background: tint(face.hue, TINT.soft),
-														color: `rgb(${face.hue})`, font: FONT.microStrong
-													},
-													children: zh ? `第 ${key.position} 把` : `Key ${key.position}`
-												}, "n"),
-												jsx("span", {
-													style: { flex: "none", color: `rgb(${face.hue})` },
-													children: zh ? face.zh : face.en
-												}, "state"),
-												// The counts, because "failing" over two calls and
-												// "failing" over four hundred are different problems.
-												key.calls === 0 ? null : jsx("span", {
-													style: { flex: "none", color: INK.quiet, fontFamily: MONO },
-													children: zh
-														? `${key.calls} 次 · 成功 ${key.ok} · 限额 ${key.quota} · 其他失败 ${key.failed}`
-														: `${key.calls} calls · ${key.ok} ok · ${key.quota} quota · ${key.failed} other`
-												}, "counts"),
-												// The provider's own words, untranslated: they are
-												// evidence, and it already carries no key material —
-												// resolveTranscript scrubs to "key N of M".
-												key.lastError === "" ? null : jsx("span", {
-													title: key.lastError,
-													style: { flex: 1, minWidth: 0, color: INK.quiet, ...clampBox(1) },
-													children: key.lastError
-												}, "err")
-											]
-										}, String(key.position));
-									})
-								]
-							}, "keyhealth"),
 							] })
 					}),
 					// One line for both, below the panes: a save made on Feeds is
