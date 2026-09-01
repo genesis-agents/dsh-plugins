@@ -471,6 +471,14 @@ window.__ModuleLoader__.load({
 			micro: "var(--dsw-font-xxxs-11)",
 			microStrong: "var(--dsw-font-xxxs-strong-11)",
 			small: "var(--dsw-font-xxs-12)",
+			// 500 AT 12px, AND ITS ABSENCE IS WHY THERE WERE TWO SCALES. The
+			// trajectory sheet needs "a name, quietly emphasised, in mono" three
+			// times; the scale offered 12px at 400 and at 600 and nothing between,
+			// so all three sites hand-wrote `500 12px/16px` — and once a sheet is
+			// writing its own type it writes ALL of it, which is how the same file
+			// came to hold 11px/16px, 11px/17px and a scale that has neither.
+			// `medium` exists at 13 and at 14 already; it was missing at 12.
+			smallMedium: "var(--dsw-font-xxs-medium-12)",
 			smallStrong: "var(--dsw-font-xxs-strong-12)",
 			body: "var(--dsw-font-xs-13)",
 			// 500. The reference sets a citation's title in `text-[12.5px]
@@ -493,6 +501,48 @@ window.__ModuleLoader__.load({
 		};
 
 		/**
+		* HOW FAR APART TWO LINES OF TEXT SIT, when the scale's own answer is
+		* wrong for the job.
+		*
+		* EVERY STEP IN FONT ALREADY CARRIES A LEADING — the tokens are `13px/18px`
+		* and not `13px` — so the normal case is to write no leading at all. This
+		* is for the cases where the scale's leading is measurably wrong, and there
+		* are only three of them.
+		*
+		* IT EXISTS BECAUSE THE OVERRIDES HAD NO SCALE AND SO HAD NO LIMIT.
+		* Counted the day this landed: ten sites overrode leading, in seven
+		* different values — 1.3, 1.45, 1.6, 1.65, 1.75, 1.8, 21px and 22px. Not
+		* one of them was a decision anybody could point at; each was a number
+		* picked at a call site by whoever was looking at that box that day, and
+		* several of them differ from the one beside them by a single pixel. Seven
+		* answers to one question is not a typography system, and "the fonts are
+		* inconsistent" is what it looks like from the outside.
+		*
+		* A RATIO, NOT A PIXEL. `21px` on a 13px step and `21px` on a 16px step are
+		* two different measures wearing one number, and they stop tracking the
+		* size the moment a reader changes it — which is now something a reader
+		* can do. `--dsw-font-scale` moves the size and the ratio follows.
+		*/
+		const LEAD = {
+			// A BOX WHOSE CONTENT IS A GLYPH, NOT A LINE OF TEXT. An icon in a
+			// 20px square is as tall as the square; giving it a text leading makes
+			// the square taller than itself for no reason a reader can see.
+			flush: 0,
+			// ONE LINE, EXACTLY ITS OWN HEIGHT. A rotated lane label, a single
+			// digit in a chip: things that are one line by construction and whose
+			// box is measured from the glyph.
+			solid: 1,
+			// A HEADING THAT WRAPS. The scale's leading is set for a line of body
+			// text; at 16px and 20px it leaves a two-line title looking like two
+			// titles. Tighter is what every reference sets a wrapped heading in.
+			tight: 1.3,
+			// LONG-FORM PROSE. A report paragraph, a transcript, a verbatim quote —
+			// text somebody READS rather than scans. The UI steps are led for a
+			// label in a row and are too close together to read a column in.
+			read: 1.7
+		};
+
+		/**
 		* Mono where the text is DATA rather than prose, HOISTED OUT OF THE
 		* MISSIONS REGION.
 		*
@@ -507,12 +557,19 @@ window.__ModuleLoader__.load({
 		* declaration down there is not a style bug: it is a TDZ
 		* `ReferenceError` at load and a blank tab.
 		*
-		* A stack that thirteen places in this file already reach for belongs
-		* beside the type scale anyway. `var(--ds-font-family-code)` is the
-		* harness's own name for the same thing and is used by the trajectory
-		* sheet; this is the JavaScript-side spelling, with the fallbacks
-		* written out because a `font-family` cannot carry a var fallback list
-		* through a `font` shorthand.
+		* A stack that twenty places in this file already reach for belongs
+		* beside the type scale anyway.
+		*
+		* AND IT IS THE ONLY SPELLING NOW. `var(--ds-font-family-code)` was the
+		* harness's own name for what was meant to be the same face, and it was
+		* used in two ways that are not the same: the trajectory sheet wrote
+		* `var(--ds-font-family-code,monospace)`, with a fallback, and three sites
+		* in this file wrote it bare. `--ds-` is the harness's namespace and
+		* SWM_THEME declares nothing under it, so bare it did not resolve, and a
+		* var with no fallback is invalid at computed-value time — the whole
+		* declaration dropped. Every code fence and every inline span in a report
+		* rendered in the proportional face, and nothing said so. One name, and it
+		* is the one that carries its own fallbacks.
 		*/
 		const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
@@ -1389,6 +1446,7 @@ window.__ModuleLoader__.load({
 			"--dsw-font-xxxs-11:11px/16px var(--dsw-font-family);",
 			"--dsw-font-xxxs-strong-11:600 11px/16px var(--dsw-font-family);",
 			"--dsw-font-xxs-12:12px/16px var(--dsw-font-family);",
+			"--dsw-font-xxs-medium-12:500 12px/16px var(--dsw-font-family);",
 			"--dsw-font-xxs-strong-12:600 12px/16px var(--dsw-font-family);",
 			"--dsw-font-xs-13:13px/18px var(--dsw-font-family);",
 			"--dsw-font-xs-medium-13:500 13px/18px var(--dsw-font-family);",
@@ -4158,7 +4216,7 @@ window.__ModuleLoader__.load({
 				onBlur: release,
 				style: { font: FONT.micro,
 					appearance: "none", border: "none", background: "transparent",
-					padding: "0 1px", margin: 0, cursor: "pointer", lineHeight: 1, verticalAlign: "super",
+					padding: "0 1px", margin: 0, cursor: "pointer", lineHeight: LEAD.solid, verticalAlign: "super",
 					color: broken ? `rgb(${TONE.warn})` : "var(--dsw-alias-state-business-primary)"
 				},
 				children: token
@@ -4310,7 +4368,7 @@ window.__ModuleLoader__.load({
 							padding: `0 ${SPACE.xs}`, borderRadius: RADIUS.sm,
 							color: `rgb(${PALETTE.violet})`,
 							background: tint(PALETTE.violet, TINT.soft),
-							fontFamily: "var(--ds-font-family-code)"
+							fontFamily: MONO
 						},
 						children: token.slice(1, -1)
 					}, key));
@@ -4363,7 +4421,7 @@ window.__ModuleLoader__.load({
 			return nodes;
 		}
 
-		const MD_BLOCK = { margin: "0 0 10px", lineHeight: "22px" };
+		const MD_BLOCK = { margin: "0 0 10px", lineHeight: LEAD.read };
 		const MD_HEADING_SIZES = { 1: "17px", 2: "15px", 3: "14px", 4: "13px" };
 
 		/**
@@ -4408,7 +4466,7 @@ window.__ModuleLoader__.load({
 		// the reason every screen read as loose.
 		/** 20px, which is `ml-5` — the reference's list indent. Not a SPACE step. */
 		const PROSE_INDENT = "20px";
-		const ARTICLE_BLOCK = { font: FONT.large, lineHeight: "1.75", margin: `${SPACE.sm} 0` };
+		const ARTICLE_BLOCK = { font: FONT.large, lineHeight: LEAD.read, margin: `${SPACE.sm} 0` };
 		const ARTICLE_HEADING_SIZES = { 1: "24px", 2: "20px", 3: "18px", 4: "16px" };
 
 		/**
@@ -4630,7 +4688,7 @@ window.__ModuleLoader__.load({
 				const items = list.items.map((item, at) => jsx("li", {
 					// `prose-li:my-1` is 4px, and the line height comes from the body rather
 					// than being set a notch under it here.
-					style: article ? { margin: `${SPACE.xs} 0`, lineHeight: "1.75" } : { margin: "0 0 5px" },
+					style: article ? { margin: `${SPACE.xs} 0`, lineHeight: LEAD.read } : { margin: "0 0 5px" },
 					children: renderInline(item, `l${key}-${at}`, refs)
 				}, `l${key}-${at}`));
 				blocks.push(jsx(list.ordered ? "ol" : "ul", {
@@ -4681,7 +4739,7 @@ window.__ModuleLoader__.load({
 							style: {
 								...MD_BLOCK, font: FONT.small, padding: "10px 12px", borderRadius: RADIUS.md, overflowX: "auto",
 								background: SURFACE.code,
-								fontFamily: "var(--ds-font-family-code)",
+								fontFamily: MONO,
 								color: INK.secondary
 							},
 							children: fence.join("\n")
@@ -4773,7 +4831,7 @@ window.__ModuleLoader__.load({
 								: {}),
 							fontSize: (headingSizes[level] ?? (article ? "16px" : "13px")),
 							fontWeight: article ? 600 : 650,
-							lineHeight: article ? "1.3" : "22px",
+							lineHeight: article ? LEAD.tight : LEAD.read,
 							// THE ACCENT, AND ONLY ON THE REPORT'S OWN STRUCTURE.
 							//
 							// `numbering !== null` is exactly "this is a document whose section
@@ -4869,7 +4927,7 @@ window.__ModuleLoader__.load({
 					style: {
 						...MD_BLOCK, font: FONT.small, padding: "10px 12px", borderRadius: RADIUS.md, overflowX: "auto",
 						background: SURFACE.code,
-						fontFamily: "var(--ds-font-family-code)"
+						fontFamily: MONO
 					},
 					children: fence.join("\n")
 				}, `pre${key++}`));
@@ -5480,7 +5538,7 @@ window.__ModuleLoader__.load({
 											children: [
 												jsx("div", {
 													style: {
-														lineHeight: "21px",
+														lineHeight: LEAD.read,
 														fontWeight: isActive ? 500 : 400,
 														color: isActive ? INK.primary : INK.secondary
 													},
@@ -5494,7 +5552,7 @@ window.__ModuleLoader__.load({
 												// count in the header already says work is running.
 												target === "" || !translated.has(block.start) ? null : jsx("div", {
 													style: {
-														marginTop: "4px", lineHeight: "21px",
+														marginTop: "4px", lineHeight: LEAD.read,
 														color: hue(kind, TINT.fill)
 													},
 													children: translated.get(block.start)
@@ -8389,7 +8447,7 @@ window.__ModuleLoader__.load({
 					// to carry indistinguishable from its own metadata. A card whose
 					// every line is the same size has no first line.
 					jsx("p", {
-						style: { font: FONT.largeStrong, lineHeight: 1.45, color: INK.primary, margin: 0 },
+						style: { font: FONT.largeStrong, lineHeight: LEAD.tight, color: INK.primary, margin: 0 },
 						children: String(row.statement ?? "")
 					}, "statement"),
 					...evidence.slice(0, 3).map((piece, at) => InsightQuote({ piece, zh, onOpenMoment }, `q${at}`)),
@@ -8492,7 +8550,7 @@ window.__ModuleLoader__.load({
 							// the token's own tight leading, a three-line quote read as a
 							// block of grey rather than as somebody talking.
 							margin: 0, font: FONT.large, fontFamily: SERIF,
-							lineHeight: 1.65, fontStyle: "italic", color: INK.secondary,
+							lineHeight: LEAD.read, fontStyle: "italic", color: INK.secondary,
 							// A QUOTE OFF A PAPER RUNS LONG AND OFTEN CARRIES AN IDENTIFIER
 							// WITH NO SPACES IN IT, which pushes the card past its column.
 							overflowWrap: "anywhere"
@@ -8550,11 +8608,16 @@ window.__ModuleLoader__.load({
 									? "这句话在转录里找不到，多半引自视频简介，所以没有可跳转的时间点。"
 									: "this sentence is not in the transcript — most likely quoted from the video's description, so there is no moment to jump to.",
 								style: {
-									// THE MOMENT CONTROL'S OWN PADDING, so the two sit on one line
-									// at one height — and it costs no new hard-coded pixel.
-									flex: "none", padding: `0 ${SPACE.sm}`,
+									// THE MOMENT CONTROL'S OWN HEIGHT, so the two sit on one line
+									// at one size — and it SAYS the height rather than reaching it
+									// by arithmetic. This read `lineHeight: 1.8`, which is 10px ×
+									// 1.8 + 2px of border = the 20px the control next to it happens
+									// to be. Nothing in that number says "match the thing beside
+									// me", so it survives exactly until somebody changes either box.
+									display: "inline-flex", alignItems: "center",
+									flex: "none", height: CONTROL.dot, padding: `0 ${SPACE.sm}`,
 									borderRadius: RADIUS.md, border: `1px solid ${LINE.hair}`,
-									font: FONT.nano, color: INK.quiet, lineHeight: 1.8
+									font: FONT.nano, color: INK.quiet
 								},
 								children: zh ? "来自简介" : "from the description"
 							}, "blurb"),
@@ -8745,25 +8808,30 @@ window.__ModuleLoader__.load({
 			return jsxs("div", {
 				style: { display: "flex", flexDirection: "column", gap: SPACE.lg },
 				children: [
-					// WHAT THIS IS AND WHEN IT LAST RAN, in one line each. A standing
-					// table with no "as of" is a table a reader has to guess the age
-					// of, and the guess is always "now".
-						// NO SECOND HEADER. This pane opened with its own name, its own
-						// subtitle and its own pair of buttons — directly under the tab's name,
-						// the tab's subtitle and the strip that had just said which pane you
-						// were on. 信源洞察 appeared twice, six lines apart, at two sizes.
-						//
-						// AND THAT IS THE ROOT OF THE TYPE BEING INCONSISTENT, not a font choice:
-						// two blocks each built as "the top of a page", each sized in isolation,
-						// stacked. One header per screen — the tab names the pane, the strip says
-						// which half, and what belongs to a half travels with that half.
+					// NO SECOND HEADER. This pane opened with its own name, its own
+					// subtitle and its own pair of buttons — directly under the tab's name,
+					// the tab's subtitle and the strip that had just said which pane you
+					// were on. 信源洞察 appeared twice, six lines apart, at two sizes.
+					//
+					// AND THAT IS THE ROOT OF THE TYPE BEING INCONSISTENT, not a font choice:
+					// two blocks each built as "the top of a page", each sized in isolation,
+					// stacked. One header per screen — the tab names the pane, the strip says
+					// which half, and what belongs to a half travels with that half.
 
-					// THE RUN, AS FIGURES RATHER THAN AS A SENTENCE.
+					// THE RUN, AS FIGURES RATHER THAN AS A SENTENCE, AND ON ONE BAND.
 					//
 					// This was one grey line of clauses — 每 N 分钟 · 数据截至 · 本次扫 N 行 ·
 					// 抽出 N 条 · 积压 N — in which every number looked like every other one.
 					// A pass over a library has four numbers worth comparing at a glance and
 					// they are not comparable inside a sentence.
+					//
+					// AND THE CONTROLS SIT ON THE SAME BAND AS THE FIGURES. They were two
+					// stacked rows: a right-aligned line of buttons with a whole empty row to
+					// its left, and under it a full-width slab of four numbers. Two bands, one
+					// of them three-quarters air, for one object — the state of the last pass
+					// and the two controls that change it. Figures left, controls right, one
+					// line: the numbers get the width they are read across, and the buttons
+					// stop claiming a row of their own.
 					//
 					// 积压 IS TINTED AND THE OTHERS ARE NOT. It is the one that says the
 					// table is partial: 200 rows read out of 21000 is a different object
@@ -8771,114 +8839,125 @@ window.__ModuleLoader__.load({
 					// that will take this for the library's whole opinion.
 					jsxs("div", {
 						style: {
-							display: "flex", alignItems: "center", gap: SPACE.sm,
+							display: "flex", alignItems: "stretch", gap: SPACE.lg,
 							flexWrap: "wrap", font: FONT.micro, color: INK.secondary
 						},
 						children: [
-							jsx("span", { style: { flex: 1 } }, "spacer"),
-								jsxs("div", {
-									style: { display: "flex", alignItems: "center", gap: SPACE.sm, flex: "none" },
-									children: [
-										jsx("button", {
-											type: "button",
-											className: "swm-ctl swm-focus", style: controlStyle(busy !== ""),
-											disabled: busy !== "",
-											onClick: () => { setTick((value) => value + 1); },
-											children: zh ? "刷新" : "Refresh"
-										}, "refresh"),
-										jsx("button", {
-											type: "button",
-											disabled: busy !== "",
-											className: "swm-ctl swm-focus",
-											style: {
-												...controlStyle(busy !== ""),
-												border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
-												background: tint(TONE.accent, TINT.soft),
-												color: `rgb(${TONE.accent})`
-											},
-											onClick: () => { void runNow(); },
-											children: busy === "run"
-												? (zh ? "正在跑…" : "Running…")
-												: (zh ? "立即跑一次" : "Run now")
-										}, "run")
-									]
-								}, "actions")
-							,
-							// A LIVE DOT ONLY WHEN THERE IS A SCHEDULE. A steady mark beside a
-							// table last written in August would be the page claiming to be live.
-							jsx("span", {
+							last === null ? null : jsx("div", {
+								// ONE BOX, NO DIVIDERS BETWEEN THE FIGURES, A RULE INSTEAD. Spread out
+								// with air between them the four numbers read as four things scattered
+								// on a band; the reference draws ONE object divided into cells, and that
+								// is what makes a strip of figures look like a strip.
+								//
+								// IT TAKES THE WIDTH AND THE CONTROLS TAKE WHAT THEY NEED. `1 1 420px`
+								// rather than `1 1 0`: below that the four cells would be narrower than
+								// their own labels, and the row wraps instead — which is the same band
+								// on a narrow window, not a broken one.
 								style: {
-									display: "inline-flex", alignItems: "center", gap: SPACE.xs,
-									padding: `2px ${SPACE.sm}`, borderRadius: RADIUS.pill,
+									flex: "1 1 420px", minWidth: 0,
+									display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))",
+									gap: 0,
 									border: `1px solid ${LINE.hair}`,
-									color: every > 0 ? `rgb(${TONE.success})` : `rgb(${TONE.warn})`
+									borderRadius: RADIUS.lg, background: SURFACE.card
 								},
-								children: every > 0
-									? (zh ? `每 ${every} 分钟` : `every ${every} min`)
-									: (zh ? "定时未开启" : "no schedule")
-							}, "cadence"),
-							last === null
-								? jsx("span", { children: zh ? "还没有跑过" : "never run" }, "never")
-								: jsx("span", {
-									title: formatStamp(last.at),
-									children: zh ? `数据截至 ${formatAgo(last.at, zh)}` : `as of ${formatAgo(last.at, zh)}`
-								}, "asof")
-						]
-					}, "cadence"),
-
-					last === null ? null : jsx("div", {
-						// ONE BOX, NO DIVIDERS. The reference separates its figures with a
-						// one-pixel gap over a line-coloured ground — which is the right
-						// technique and costs a hard-coded one-pixel gap, which the ratchet
-						// counts —
-						// and it is right to: air lives in gap and padding, and a file that names
-						// its own pixels there drifts a step at a time. Four figures with
-						// a full step between them read as a strip without the rules.
-						style: {
-							// A GRID THAT FILLS THE WIDTH, not a flex row huddled at the
-							// left. Four figures with 24px between them inside 20px of
-							// padding stood over a hundred pixels tall and left two thirds
-							// of the band empty — a slab of air for four small numbers, on
-							// a pane whose whole job is the list under it.
-							display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))",
-							// NO GAP, AND A RULE BETWEEN THE CELLS. Spread out with air
-							// between them the four numbers read as four things scattered on
-							// a band; the reference draws ONE object divided into cells, and
-							// that is what makes a strip of figures look like a strip.
-							gap: 0,
-							border: `1px solid ${LINE.hair}`,
-							borderRadius: RADIUS.lg, background: SURFACE.card
-						},
-						children: [
-							{ zh: "扫过", en: "rows read", value: last.rows ?? 0 },
-							{ zh: "抽出主张", en: "claims", value: last.claims ?? 0 },
-							{ zh: "通过核验", en: "verified", value: last.verified ?? 0 },
-							{ zh: "还没读到", en: "not yet read", value: last.backlog ?? 0, tone: TONE.warn }
-						].map((cell, at) => jsxs("div", {
-							style: {
-								display: "flex", flexDirection: "column", minWidth: 0,
-								padding: `${SPACE.md} ${SPACE.lg}`,
-								// The first cell already has the box's own border to its left.
-								borderLeft: at === 0 ? undefined : `1px solid ${LINE.hair}`
-							},
-							children: [
-								jsx("div", {
+								children: [
+									{ zh: "扫过", en: "rows read", value: last.rows ?? 0 },
+									{ zh: "抽出主张", en: "claims", value: last.claims ?? 0 },
+									{ zh: "通过核验", en: "verified", value: last.verified ?? 0 },
+									{ zh: "还没读到", en: "not yet read", value: last.backlog ?? 0, tone: TONE.warn }
+								].map((cell, index) => jsxs("div", {
 									style: {
-										font: FONT.title,
-										// TABULAR, because these four are read down a row and a 1 that
-										// is narrower than a 7 makes them look ragged rather than aligned.
-										fontVariantNumeric: "tabular-nums",
-										color: cell.tone === undefined ? INK.primary : `rgb(${cell.tone})`
+										display: "flex", flexDirection: "column", minWidth: 0,
+										padding: `${SPACE.md} ${SPACE.lg}`,
+										// The first cell already has the box's own border to its left.
+										borderLeft: index === 0 ? undefined : `1px solid ${LINE.hair}`
 									},
-									children: missionCompact(cell.value)
-								}, "n"),
-								jsx("div", {
-									style: { font: FONT.micro, color: INK.secondary },
-									children: zh ? cell.zh : cell.en
-								}, "l")
-							]
-						}, cell.en))
-					}, "figures"),
+									children: [
+										jsx("div", {
+											style: {
+												font: FONT.title,
+												// TABULAR, because these four are read down a row and a 1 that
+												// is narrower than a 7 makes them look ragged rather than aligned.
+												fontVariantNumeric: "tabular-nums",
+												color: cell.tone === undefined ? INK.primary : `rgb(${cell.tone})`
+											},
+											children: missionCompact(cell.value)
+										}, "n"),
+										jsx("div", {
+											style: { font: FONT.micro, color: INK.secondary },
+											children: zh ? cell.zh : cell.en
+										}, "l")
+									]
+								}, cell.en))
+							}, "figures"),
+
+							// THE CONTROLS AND WHEN IT LAST RAN, one column at the right end.
+							//
+							// Stacked rather than strung out on one line because the figures beside
+							// them are two lines tall: a single row of controls against a 64px box
+							// leaves the band ragged at the top and the bottom both.
+							jsxs("div", {
+								style: {
+									marginLeft: "auto", flex: "none",
+									display: "flex", flexDirection: "column", alignItems: "flex-end",
+									justifyContent: "center", gap: SPACE.sm
+								},
+								children: [
+									jsxs("div", {
+										style: { display: "flex", alignItems: "center", gap: SPACE.sm },
+										children: [
+											jsx("button", {
+												type: "button",
+												className: "swm-ctl swm-focus", style: controlStyle(busy !== ""),
+												disabled: busy !== "",
+												onClick: () => { setTick((value) => value + 1); },
+												children: zh ? "刷新" : "Refresh"
+											}, "refresh"),
+											jsx("button", {
+												type: "button",
+												disabled: busy !== "",
+												className: "swm-ctl swm-focus",
+												style: {
+													...controlStyle(busy !== ""),
+													border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
+													background: tint(TONE.accent, TINT.soft),
+													color: `rgb(${TONE.accent})`
+												},
+												onClick: () => { void runNow(); },
+												children: busy === "run"
+													? (zh ? "正在跑…" : "Running…")
+													: (zh ? "立即跑一次" : "Run now")
+											}, "run")
+										]
+									}, "actions"),
+									jsxs("div", {
+										style: { display: "flex", alignItems: "center", gap: SPACE.sm },
+										children: [
+											// A LIVE DOT ONLY WHEN THERE IS A SCHEDULE. A steady mark beside a
+											// table last written in August would be the page claiming to be live.
+											jsx("span", {
+												style: {
+													display: "inline-flex", alignItems: "center", gap: SPACE.xs,
+													padding: `2px ${SPACE.sm}`, borderRadius: RADIUS.pill,
+													border: `1px solid ${LINE.hair}`,
+													color: every > 0 ? `rgb(${TONE.success})` : `rgb(${TONE.warn})`
+												},
+												children: every > 0
+													? (zh ? `每 ${every} 分钟` : `every ${every} min`)
+													: (zh ? "定时未开启" : "no schedule")
+											}, "cadence"),
+											last === null
+												? jsx("span", { children: zh ? "还没有跑过" : "never run" }, "never")
+												: jsx("span", {
+													title: formatStamp(last.at),
+													children: zh ? `数据截至 ${formatAgo(last.at, zh)}` : `as of ${formatAgo(last.at, zh)}`
+												}, "asof")
+										]
+									}, "when")
+								]
+							}, "state")
+						]
+					}, "band"),
 
 					error === "" ? null : jsx(ErrorBox, { message: error, zh }, "err"),
 
@@ -11326,7 +11405,7 @@ window.__ModuleLoader__.load({
 			// one at a time.
 			'.swt-row[aria-pressed="true"]{background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 2px 0 0 0 var(--dsw-alias-state-business-primary)}',
 			".swt-row:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}",
-			".swt-idx{flex:none;width:24px;font:var(--dsw-font-xs-13);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}",
+			`.swt-idx{flex:none;width:24px;font:${FONT.body};font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}`,
 			// TWO LINES IN THE SAME SLOT: the offset from the run's start over
 			// the wall clock. 58px held one `14:02:11`; `+11m 4s` needs the extra
 			// six. The line-height comes AFTER the `font` shorthand, which sets
@@ -11342,7 +11421,7 @@ window.__ModuleLoader__.load({
 			// `nowrap` is the half that keeps this honest. Without it the next string
 			// that outgrows the column silently becomes two lines again; with it, it
 			// clips, which is visible.
-			".swt-clock{flex:none;width:74px;display:flex;flex-direction:column;white-space:nowrap;justify-content:center;font:11px/16px var(--ds-font-family-code,monospace);line-height:13px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}",
+			`.swt-clock{flex:none;width:74px;display:flex;flex-direction:column;white-space:nowrap;justify-content:center;font:${FONT.micro};font-family:${MONO};line-height:${LEAD.tight};font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}`,
 			// 96px, up from 64. The slot now carries TWO marks — what kind of record
 			// this is, and who made it — because either one alone answers half of
 			// what a person scanning a hundred rows is asking.
@@ -11370,15 +11449,15 @@ window.__ModuleLoader__.load({
 			// reason `TD`'s docblock gives one region over: a box is as tall as what it
 			// has to say plus its air, and the air here is the chip's.
 			`.swt-tag{display:inline-flex;align-items:center;box-sizing:border-box;min-width:0;max-width:100%;padding:1px 6px;border-radius:${RADIUS.sm};font:${FONT.microStrong};white-space:nowrap;overflow:hidden;text-overflow:ellipsis}`,
-			".swt-title{flex:none;width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 12px/16px var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-primary)}",
-			".swt-text{flex:2 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}",
+			`.swt-title{flex:none;width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:${FONT.smallMedium};font-family:${MONO};color:var(--dsw-alias-label-primary)}`,
+			`.swt-text{flex:2 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:${FONT.body};color:var(--dsw-alias-label-secondary)}`,
 			".swt-arrow{flex:none;color:var(--dsw-alias-label-caption)}",
-			".swt-res{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}",
+			`.swt-res{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:${FONT.body};color:var(--dsw-alias-label-secondary)}`,
 			".swt-trail{flex:none;display:flex;align-items:center;justify-content:flex-end;width:72px;min-width:0}",
-			".swt-metric{flex:none;width:69px;text-align:right;font:var(--dsw-font-xs-13);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+			`.swt-metric{flex:none;width:69px;text-align:right;font:${FONT.body};font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}`,
 			`.swt-band{flex:none;border:1px solid ${LINE.hair};border-radius:8px;overflow:hidden;user-select:none;margin-bottom:10px}`,
 			".swt-plot{display:grid;grid-template-columns:44px minmax(0,1fr);height:50px;overflow:hidden;background:var(--dsw-alias-bg-layer-2)}",
-			`.swt-lanelabels{position:relative;border-right:1px solid ${LINE.rule};color:var(--dsw-alias-label-caption);font-size:10px;line-height:1}`,
+			`.swt-lanelabels{position:relative;border-right:1px solid ${LINE.rule};color:var(--dsw-alias-label-caption);font:${FONT.nano};line-height:${LEAD.solid}}`,
 			".swt-lanelabels span{position:absolute;right:4px;display:flex;align-items:center;justify-content:flex-end;height:8px}",
 			".swt-lanelabels span:nth-child(1){top:7px}",
 			".swt-lanelabels span:nth-child(2){top:21px}",
@@ -11417,8 +11496,8 @@ window.__ModuleLoader__.load({
 			`.swt-panehead{display:flex;flex:none;align-items:center;justify-content:space-between;box-sizing:border-box;height:42px;padding:0 8px 0 12px;border-bottom:1px solid ${LINE.rule};gap:8px}`,
 			".swt-panetitle{display:flex;align-items:center;min-width:0;gap:8px;color:var(--dsw-alias-label-primary)}",
 			".swt-dot{flex:none;width:5px;height:5px;border-radius:50%;background:var(--dsw-alias-label-secondary)}",
-			".swt-panename{flex:none;font:500 12px/16px var(--ds-font-family-code,monospace)}",
-			".swt-paneref{min-width:0;overflow:hidden;color:var(--dsw-alias-label-tertiary);font:11px/16px var(--ds-font-family-code,monospace);text-overflow:ellipsis;white-space:nowrap}",
+			`.swt-panename{flex:none;font:${FONT.smallMedium};font-family:${MONO}}`,
+			`.swt-paneref{min-width:0;overflow:hidden;color:var(--dsw-alias-label-tertiary);font:${FONT.micro};font-family:${MONO};text-overflow:ellipsis;white-space:nowrap}`,
 			`.swt-tabs{display:flex;flex:none;box-sizing:border-box;width:100%;height:34px;padding:0 8px;overflow-x:auto;overflow-y:hidden;gap:1px;border-bottom:1px solid ${LINE.rule};white-space:nowrap;scrollbar-width:none}`,
 			".swt-tabs::-webkit-scrollbar{display:none}",
 			// `.swt-tab` IS GONE AND IS NOW `.swm-tab`, on SWM_RULES. The rules
@@ -11428,7 +11507,7 @@ window.__ModuleLoader__.load({
 			// happened to open a trajectory. The drawer loses nothing — every
 			// caller of this sheet injects SWM_SHEET in the same breath.
 			".swt-panebody{flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;padding-bottom:12px}",
-			".swt-kv{margin:0;padding:8px 0;font:var(--dsw-font-xs-13)}",
+			`.swt-kv{margin:0;padding:8px 0;font:${FONT.body}}`,
 			".swt-kv>div{display:grid;grid-template-columns:94px minmax(0,1fr);min-height:22px;padding:0 14px;align-items:center;gap:8px}",
 			".swt-kv dt{color:var(--dsw-alias-label-tertiary);margin:0}",
 			".swt-kv dd{min-width:0;margin:0;overflow:hidden;color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap}",
@@ -11464,22 +11543,22 @@ window.__ModuleLoader__.load({
 			`.swt-evdot{position:absolute;left:-18px;top:12px;width:7px;height:7px;border-radius:${RADIUS.circle}}`,
 			`.swt-evhead{display:flex;align-items:center;gap:${SPACE.xs};min-width:0}`,
 			`.swt-evkind{flex:none;display:inline-flex;align-items:center;height:18px;padding:0 5px;border-radius:${RADIUS.sm};font:${FONT.microStrong};white-space:nowrap}`,
-			".swt-evname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 12px/16px var(--ds-font-family-code,monospace)}",
+			`.swt-evname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:${FONT.smallMedium};font-family:${MONO}}`,
 			// `margin-left:auto` rather than a spacer element, and the offset, the
 			// clock and the duration ride together so the right end of the head is
 			// ONE block of tabular figures rather than three floating ones.
-			`.swt-evat{flex:none;margin-left:auto;display:flex;align-items:baseline;gap:${SPACE.sm};font:11px/16px var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}`,
+			`.swt-evat{flex:none;margin-left:auto;display:flex;align-items:baseline;gap:${SPACE.sm};font:${FONT.micro};font-family:${MONO};font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}`,
 			// THE BOX THE TEXT SITS IN, in `.swt-code`'s material — layer 2 under
 			// a hairline — because it holds the same thing: an argument and a
 			// result, which are data. `hair` and not `rule`: this is a container's
 			// own outer edge. It carries NO margin; the card it is inside owns the
 			// inset, which is what `.swt-code`'s `margin:0 14px` could not do here.
-			`.swt-evbox{display:flex;flex-direction:column;gap:2px;min-width:0;padding:6px 8px;border-radius:${RADIUS.sm};border:1px solid ${LINE.hair};background:var(--dsw-alias-bg-layer-2);font:11px/17px var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-secondary);word-break:break-word}`,
+			`.swt-evbox{display:flex;flex-direction:column;gap:2px;min-width:0;padding:6px 8px;border-radius:${RADIUS.sm};border:1px solid ${LINE.hair};background:var(--dsw-alias-bg-layer-2);font:${FONT.micro};font-family:${MONO};color:var(--dsw-alias-label-secondary);word-break:break-word}`,
 			// A DIFFERENT MATERIAL FROM THE PROSE ABOVE IT. Layer 2 is what the
 			// pane itself is drawn on, so a payload block sat on its own
 			// background with no edge — a wall of monospace that began and ended
 			// nowhere. Layer 3 and a hairline give it a lid.
-			`.swt-code{margin:0 14px;padding:8px 10px;border-radius:6px;overflow:auto;max-height:340px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:1px solid ${LINE.hair};font:11px/17px var(--ds-font-family-code,monospace);white-space:pre-wrap;word-break:break-word}`,
+			`.swt-code{margin:0 14px;padding:8px 10px;border-radius:6px;overflow:auto;max-height:340px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:1px solid ${LINE.hair};font:${FONT.micro};font-family:${MONO};white-space:pre-wrap;word-break:break-word}`,
 			// THE THREE RULES THAT WERE NEVER WRITTEN. `missionColourJson` has
 			// been emitting `k`, `s` and `n` on every payload since it was
 			// added and no stylesheet in this file defined any of them, so the
@@ -11520,7 +11599,7 @@ window.__ModuleLoader__.load({
 			// The rule now inherits, and each call site passes `borderLeftColor`
 			// for what it actually is. With no override it resolves to the text
 			// colour, which is a neutral rule rather than a claim.
-			".swt-quote{margin:0 14px;padding:10px 12px;border-radius:6px;border-left:2px solid currentColor;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-13);line-height:19px;white-space:pre-wrap;word-break:break-word}"
+			`.swt-quote{margin:0 14px;padding:10px 12px;border-radius:6px;border-left:2px solid currentColor;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:${FONT.body};line-height:${LEAD.read};white-space:pre-wrap;word-break:break-word}`
 		].join("\n");
 
 		/**
@@ -19337,7 +19416,7 @@ window.__ModuleLoader__.load({
 								onClick: toggle,
 								style: {
 									flex: "none", width: "30px", height: CONTROL.sm, borderRadius: RADIUS.circle,
-									border: "none", cursor: failed ? "not-allowed" : "pointer", padding: 0, lineHeight: 0,
+									border: "none", cursor: failed ? "not-allowed" : "pointer", padding: 0, lineHeight: LEAD.flush,
 									display: "inline-flex", alignItems: "center", justifyContent: "center",
 									background: open ? `rgb(${accent})` : tint(accent, TINT.soft),
 									color: open ? "var(--dsw-alias-label-primary-inverted)" : `rgb(${accent})`,
@@ -19379,7 +19458,7 @@ window.__ModuleLoader__.load({
 								onClick: () => { onDelete(); },
 								style: {
 									flex: "none", appearance: "none", border: "none", background: "transparent",
-									padding: "2px", cursor: "pointer", lineHeight: 0, color: INK.quiet
+									padding: "2px", cursor: "pointer", lineHeight: LEAD.flush, color: INK.quiet
 								},
 								children: jsx("svg", {
 									width: 13, height: 13, viewBox: "0 0 24 24", fill: "none",
@@ -19444,7 +19523,7 @@ window.__ModuleLoader__.load({
 		/** The − and + of a stepper: same weight, same box, no platform spinner. */
 		const STEPPER_BUTTON = {
 			appearance: "none", border: "none", background: "transparent",
-			font: FONT.base, lineHeight: 1,
+			font: FONT.base, lineHeight: LEAD.solid,
 			width: "28px", height: CONTROL.sm, cursor: "pointer", color: INK.secondary
 		};
 
@@ -19752,7 +19831,7 @@ window.__ModuleLoader__.load({
 											onClick: () => { togglePick(row); },
 											style: {
 												flex: "none", appearance: "none", border: "none", background: "transparent",
-												padding: "2px", cursor: "pointer", lineHeight: 0, color: INK.quiet
+												padding: "2px", cursor: "pointer", lineHeight: LEAD.flush, color: INK.quiet
 											},
 											children: jsx("svg", {
 												width: 12, height: 12, viewBox: "0 0 24 24", fill: "none",
@@ -19865,7 +19944,7 @@ window.__ModuleLoader__.load({
 															onClick: () => { void remove(record.id); },
 															style: {
 																flex: "none", appearance: "none", border: "none", background: "transparent",
-																padding: "2px", cursor: "pointer", lineHeight: 0, color: INK.quiet
+																padding: "2px", cursor: "pointer", lineHeight: LEAD.flush, color: INK.quiet
 															},
 															children: jsx("svg", {
 																width: 13, height: 13, viewBox: "0 0 24 24", fill: "none",
@@ -20484,7 +20563,7 @@ window.__ModuleLoader__.load({
 												onClick: () => { togglePick(row); },
 												style: {
 													flex: "none", appearance: "none", border: "none", background: "transparent",
-													padding: "2px", cursor: "pointer", lineHeight: 0, color: INK.quiet
+													padding: "2px", cursor: "pointer", lineHeight: LEAD.flush, color: INK.quiet
 												},
 												children: jsx("svg", {
 													width: 12, height: 12, viewBox: "0 0 24 24", fill: "none",
@@ -21377,6 +21456,13 @@ window.__ModuleLoader__.load({
 				}
 			}, []);
 
+			// AND THE SHEET HAS TO BE ON THE DOCUMENT BEFORE ANY OF IT RESOLVES.
+			// `ensureStyle` ran in the swarm overlay's own layout effect and
+			// nowhere else, so a person who opened Settings without ever opening
+			// the swarm page got this page with no sheet at all: no `.swm-ctl`,
+			// no `.swm-focus` ring, and none of the tokens above. It is idempotent
+			// by id — the overlay calling it too is not a second stylesheet.
+			useLayoutEffect(() => { ensureStyle(SWM_STYLE_ID, SWM_SHEET); }, []);
 			useEffect(() => { void reload(); void loadStatus(); }, [reload, loadStatus]);
 
 			const save = useCallback(async (patch, message) => {
@@ -21452,6 +21538,18 @@ window.__ModuleLoader__.load({
 			];
 
 			return jsxs("div", {
+				// THE SCOPE THAT RESOLVES EVERY TOKEN ON THIS PAGE.
+				//
+				// This page draws `FONT.body`, `INK.primary`, `SURFACE.card` and
+				// `LINE.hair` — thirty-odd declarations — and every one of them is a
+				// `var(--dsw-…)` with NO FALLBACK. SWM_THEME declares those names on
+				// `.swm-page`, and this page is not inside `.swm-page`: it renders in
+				// the shell's Settings panel, a different subtree entirely. An
+				// unresolved var with no fallback is invalid at computed-value time,
+				// so the declaration is DROPPED — which is why the eight steps of the
+				// type scale all came out at one size here. It is not a font choice
+				// and it is not eight wrong choices; it is one missing class.
+				className: "swm-page",
 				style: { padding: "4px 4px 32px", maxWidth: "720px" },
 				children: [
 					jsx(VersionLine, { zh }),
@@ -21729,7 +21827,7 @@ window.__ModuleLoader__.load({
 										className: "swm-focus",
 										style: {
 											...SEARCH_STYLE, flex: 1, height: "auto", minWidth: 0,
-											fontFamily: MONO, resize: "vertical", lineHeight: 1.6
+											fontFamily: MONO, resize: "vertical", lineHeight: LEAD.read
 										}
 									}, "key"),
 									jsx("button", {

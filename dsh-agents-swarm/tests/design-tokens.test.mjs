@@ -302,10 +302,17 @@ test("radii and icon sizes stay countable", () => {
 test("raw style values only ever decrease", () => {
   // Measured 2026-08-26, the day FONT/SPACE/RADIUS/ICON landed. Lower these in
   // the commit that migrates a batch; never raise one.
-  const ceiling = { fontSize: 0, fontWeight: 9, lineHeight: 5, borderRadius: 0, gap: 5, padding: 126, height: 19 };
+  const ceiling = { fontSize: 0, fontWeight: 9, lineHeight: 0, borderRadius: 0, gap: 5, padding: 126, height: 19 };
   // 128 -> 126 with the prose batch: inline code took `0 ${SPACE.xs}` in
   // place of a hand-typed `1px 5px`, and the list's indent became a named
   // 20px — the reference's `ml-5` — instead of a literal at the call site.
+  //
+  // 5 -> 0 with the leading batch, and it is the one that reached zero. There
+  // were ten leading overrides in SEVEN values — 1.3, 1.45, 1.6, 1.65, 1.75,
+  // 1.8, 21px, 22px — several differing from the one beside them by a single
+  // pixel, none of them a decision anybody could point at. They are LEAD now:
+  // flush, solid, tight, read. A ratio rather than a pixel, so a leading still
+  // tracks its size when a reader moves `--dsw-font-scale`.
   const counted = {
     fontSize: [...SOURCE.matchAll(/fontSize: "\d+px"/g)].length,
     fontWeight: [...SOURCE.matchAll(/fontWeight: \d+/g)].length,
@@ -1897,7 +1904,11 @@ test("a trajectory says how far into the run, not only what time it was", () => 
   );
   // The slot has to hold two lines now, and the line-height has to come after
   // the `font` shorthand that would reset it.
-  const clock = /\.swt-clock\{([^}]+)\}/.exec(TRACE_RULES);
+  // NOT `[^}]+`. The rule interpolates `${FONT.micro}` and `${LEAD.tight}` now
+  // that this sheet reads the type scale instead of hand-writing one, and a
+  // negated-brace class stops at the first `}` inside a substitution — so the
+  // guard was reading a third of the rule and reporting on the rest by absence.
+  const clock = /\.swt-clock\{([\s\S]*?)\}[`"]/.exec(TRACE_RULES);
   assert.ok(clock, ".swt-clock lost its rule, so the two-line slot is whatever flex gives it");
   // 74px, AND THE HISTORY IS THE POINT. This was 58, then 64 for `+11m 4s`,
   // and 64 was still measured against the ENGLISH offset — eight monospace
@@ -3223,9 +3234,19 @@ test("the article is one family, and its ladder is the reference's", () => {
     .map(([, value]) => value.trim());
   // Twice: the fenced block and the inline code span, which are the same face
   // and the only one this renderer may name.
+  //
+  // AND IT IS SPELLED `MONO`, not `var(--ds-font-family-code)`. Those were the
+  // same face by intention and not by mechanism: `--ds-` is the harness's own
+  // namespace, SWM_THEME declares nothing under it, and the three sites that
+  // reached for it wrote NO FALLBACK — so inside `.swm-page` the declaration
+  // was invalid at computed-value time and dropped, and every code fence and
+  // inline span in a report rendered in the proportional face. The trajectory
+  // sheet spells the same name `var(--ds-font-family-code,monospace)`, with a
+  // fallback, which is why it never showed. One spelling, and it is the one
+  // that carries its own stack.
   assert.deepEqual(
     [...new Set(families)],
-    ['"var(--ds-font-family-code)"'],
+    ["MONO"],
     `renderMarkdown names a font family besides the code face, so the article has two typefaces again: ${families.join(", ")}`,
   );
   assert.match(
