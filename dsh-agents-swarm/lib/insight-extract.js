@@ -219,6 +219,26 @@ export const INSIGHT_DEFAULTS = {
   // TWELVE, which drains a five-hundred-video backlog in under two days of
   // hourly passes and never makes a pass noticeably longer.
   insightTranscribePerPass: 12,
+  // HOW OLD A SOURCE MAY BE AND STILL BE WORTH READING, by publication date.
+  //
+  // WHY IT EXISTS. The scan took everything above the watermark whatever its
+  // age, so a library with a seeded back catalogue spent its model calls on
+  // material from years ago — measured on this one, 27,642 unread rows, most
+  // of them old — and the tab filled with a 2009 supercomputer comparison and
+  // a methods detail from an archived paper, presented beside this week's
+  // funding news as though they were the same kind of thing.
+  //
+  // A DIFFERENT FIELD FROM THE WATERMARK, deliberately. `insightLastRun.watermark`
+  // is `created_at` — where the reader got to — and answers "have we read
+  // this". This is `published_at` and answers "is it still worth reading".
+  // A row can be new by one and old by the other, which is exactly the case
+  // that produced the complaint.
+  //
+  // 0 TURNS IT OFF, for a library whose whole point is an archive. Thirty days
+  // is the default because that is the horizon a person watching an industry
+  // actually holds; anything older is research, and research is what 主题洞察
+  // is for.
+  insightMaxAgeDays: 30,
   insightResourceTypes: ["YOUTUBE_VIDEO", "NEWS", "BLOG", "PAPER", "REPORT", "POLICY"],
   insightMaxRows: 200,
   insightMaxClusters: 20,
@@ -244,6 +264,7 @@ export function readInsightConfig(store) {
   return {
     insightIntervalMinutes: store.getSetting("insightIntervalMinutes", INSIGHT_DEFAULTS.insightIntervalMinutes),
     insightTranscribePerPass: store.getSetting("insightTranscribePerPass", INSIGHT_DEFAULTS.insightTranscribePerPass),
+    insightMaxAgeDays: store.getSetting("insightMaxAgeDays", INSIGHT_DEFAULTS.insightMaxAgeDays),
     insightResourceTypes: store.getSetting("insightResourceTypes", INSIGHT_DEFAULTS.insightResourceTypes),
     insightMaxRows: store.getSetting("insightMaxRows", INSIGHT_DEFAULTS.insightMaxRows),
     insightMaxClusters: store.getSetting("insightMaxClusters", INSIGHT_DEFAULTS.insightMaxClusters),
@@ -370,6 +391,14 @@ export function collectCandidates(store, config, scope = {}) {
   const search = typeof scope.search === "string" && scope.search.trim() !== ""
     ? scope.search.trim()
     : undefined;
+  // THE FRESHNESS FLOOR, in publication time. A scope may widen or narrow it
+  // for one run — "read the last quarter about inference cost" is a reasonable
+  // thing to ask for — and 0 anywhere means no floor at all.
+  const maxAgeDays = bounded(
+    scope.maxAgeDays ?? config.insightMaxAgeDays,
+    0, 3650, INSIGHT_DEFAULTS.insightMaxAgeDays,
+  );
+  const publishedAfter = maxAgeDays > 0 ? shiftIso(new Date().toISOString(), -maxAgeDays * 24 * 60) : undefined;
   // A VIDEO WE HOLD NO TRANSCRIPT FOR IS A TITLE AND A BLURB.
   //
   // `sourceMaterial` builds a video's block out of its transcript — its own
@@ -454,6 +483,7 @@ export function collectCandidates(store, config, scope = {}) {
       const page = store.query({
         type,
         search,
+        publishedAfter,
         sortBy: "createdAt",
         sortOrder: "asc",
         createdAfter: since === "" ? undefined : since,

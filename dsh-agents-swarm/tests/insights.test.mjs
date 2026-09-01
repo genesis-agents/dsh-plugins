@@ -1995,3 +1995,62 @@ test("a caller with no card in hand still gets the blend's answer", () => {
   assert.equal(strengthOf(0.65, {}), "high");
   assert.equal(strengthOf(0.65, { independentCount: "not a number" }), "high");
 });
+
+/* ── only what is still worth reading ──────────────────────────────────── */
+
+test("a source published long ago is not read, however new it is to us", (t) => {
+  // MEASURED ON THE LIVE TAB: a 2009-to-Frontier comparison and a methods
+  // detail from an archived paper sat beside this week's funding news as
+  // though they were the same kind of thing. The scan took everything above
+  // the watermark whatever its age, and the watermark is `created_at` — when
+  // we learned of a row — so an archive harvested this morning is new by the
+  // only measure the scan had.
+  const { store } = library(t);
+  const old = new Date(Date.now() - 400 * 86_400_000).toISOString();
+  const fresh = new Date(Date.now() - 3 * 86_400_000).toISOString();
+  store.put(resource("archive", { title: "A comparison from 2009", publishedAt: old }));
+  store.put(resource("recent", { title: "A funding round this week", publishedAt: fresh }));
+
+  const { rows } = collectCandidates(store, {
+    insightMaxRows: 50, insightResourceTypes: ["NEWS"], insightMaxAgeDays: 30,
+  });
+  assert.deepEqual(rows.map((row) => row.id), ["recent"], "the archived source was read anyway");
+});
+
+test("zero means no floor, for a library that exists to hold an archive", (t) => {
+  const { store } = library(t);
+  store.put(resource("archive", { publishedAt: new Date(Date.now() - 400 * 86_400_000).toISOString() }));
+  const { rows } = collectCandidates(store, {
+    insightMaxRows: 50, insightResourceTypes: ["NEWS"], insightMaxAgeDays: 0,
+  });
+  assert.deepEqual(rows.map((row) => row.id), ["archive"], "zero was treated as a floor rather than as none");
+});
+
+test("a source with no publication date stays reachable", (t) => {
+  // A feed that carries no date would otherwise be excluded by every window,
+  // silently and for ever. Falling back to `created_at` reads "we do not know
+  // when this was published" as "as old as our knowledge of it", which keeps
+  // the row reachable while it is fresh to us.
+  const { store } = library(t);
+  store.put(resource("undated", { publishedAt: undefined }));
+  const { rows } = collectCandidates(store, {
+    insightMaxRows: 50, insightResourceTypes: ["NEWS"], insightMaxAgeDays: 30,
+  });
+  assert.deepEqual(rows.map((row) => row.id), ["undated"], "an undated source was excluded by the freshness floor");
+});
+
+test("the freshness floor and the watermark are different questions", (t) => {
+  // `days` in a scope moves the WATERMARK — where the reader carries on from.
+  // `maxAgeDays` moves the freshness floor — what is still worth reading. Both
+  // are a number of days, which is exactly why they were being confused.
+  const { store } = library(t);
+  const old = new Date(Date.now() - 400 * 86_400_000).toISOString();
+  store.put(resource("archive", { publishedAt: old }));
+  const config = { insightMaxRows: 50, insightResourceTypes: ["NEWS"], insightMaxAgeDays: 30 };
+  // Re-reading from the beginning of time does not make an old source fresh.
+  const { rows } = collectCandidates(store, config, { since: "2000-01-01T00:00:00.000Z" });
+  assert.equal(rows.length, 0, "a wide watermark window overrode the freshness floor");
+  // Widening the floor for one run does.
+  const wide = collectCandidates(store, config, { maxAgeDays: 3650 });
+  assert.deepEqual(wide.rows.map((row) => row.id), ["archive"]);
+});

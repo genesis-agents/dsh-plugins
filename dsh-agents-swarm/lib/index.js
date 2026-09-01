@@ -621,6 +621,10 @@ export function writeConfig(store, patch) {
     // zero-or-a-minimum shape the two intervals use: a budget of 1 is not a
     // race with itself, it is just a slow drain.
     ["insightTranscribePerPass", 0, 60],
+    // 0 is "read the whole archive" and is a legitimate choice for a library
+    // that exists to hold one. Ten years is the ceiling rather than infinity
+    // so a typo cannot silently mean "no floor" by being enormous.
+    ["insightMaxAgeDays", 0, 3650],
     ["insightMinIndependent", 2, 5], ["insightWindowDays", 1, 30], ["insightDormantDays", 3, 120],
     ["insightDuplicateBits", 0, 12],
   ]) {
@@ -716,6 +720,7 @@ export function writeConfig(store, patch) {
     "insightIntervalMinutes", "insightResourceTypes", "insightMaxRows", "insightMaxClusters",
     "insightMaxReconcileCalls", "insightMinIndependent", "insightWindowDays", "insightDormantDays",
     "insightDuplicateBits", "insightChinese", "insightCorroborateClaims", "insightTranscribePerPass",
+    "insightMaxAgeDays",
     // 任务. The whitelist comes from the defaults object, so adding a setting is
     // one edit in one file rather than two that can disagree — the way the three
     // lists above can, and have.

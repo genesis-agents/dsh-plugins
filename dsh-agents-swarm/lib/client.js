@@ -9294,6 +9294,7 @@ window.__ModuleLoader__.load({
 			const [types, setTypes] = useState([]);
 			const [maxRows, setMaxRows] = useState(0);
 			const [transcribe, setTranscribe] = useState(0);
+			const [maxAgeDays, setMaxAgeDays] = useState(30);
 
 			// THE FORM RESETS TO THE SETTINGS EVERY TIME IT OPENS, not once at
 			// mount. A dialog carrying last time's answer is a dialog that runs a
@@ -9305,6 +9306,7 @@ window.__ModuleLoader__.load({
 				setTypes(Array.isArray(status?.insightResourceTypes) ? [...status.insightResourceTypes] : []);
 				setMaxRows(Number(status?.insightMaxRows ?? 200));
 				setTranscribe(Number(status?.insightTranscribePerPass ?? 12));
+				setMaxAgeDays(Number(status?.insightMaxAgeDays ?? 30));
 			}, [open, status]);
 
 			const vocabulary = Array.isArray(status?.resourceTypes) && status.resourceTypes.length > 0
@@ -9312,6 +9314,7 @@ window.__ModuleLoader__.load({
 				: (Array.isArray(status?.insightResourceTypes) ? status.insightResourceTypes : []);
 			const configuredRows = Number(status?.insightMaxRows ?? 200);
 			const configuredTranscribe = Number(status?.insightTranscribePerPass ?? 12);
+			const configuredAge = Number(status?.insightMaxAgeDays ?? 30);
 			const awaiting = Number.isFinite(Number(status?.awaitingTranscript)) ? Number(status.awaitingTranscript) : null;
 
 			const field = (title, hint, body, key) => jsxs("div", {
@@ -9338,7 +9341,8 @@ window.__ModuleLoader__.load({
 							search: search.trim() === "" ? undefined : search.trim(),
 							types: types.length === vocabulary.length ? undefined : types,
 							maxRows: maxRows === configuredRows ? undefined : maxRows,
-							transcribe: transcribe === configuredTranscribe ? undefined : transcribe
+							transcribe: transcribe === configuredTranscribe ? undefined : transcribe,
+							maxAgeDays: maxAgeDays === configuredAge ? undefined : maxAgeDays
 						});
 					},
 					children: [
@@ -9357,6 +9361,23 @@ window.__ModuleLoader__.load({
 								}, String(one.days)))
 							}),
 							"days"
+						),
+						field(
+							zh ? "只看多新的材料" : "How recent",
+							zh
+								? "按发布时间过滤：早于这个天数的信源不读。0 表示不限。这和上面的「时间范围」不是一回事 —— 那个说的是从哪里接着读，这个说的是什么还值得读。"
+								: "Filters on publication date: sources older than this are not read. 0 means no floor. Different from the window above — that says where to carry on reading from, this says what is still worth reading.",
+							jsx("input", {
+								type: "number",
+								min: 0,
+								max: 3650,
+								step: 1,
+								value: String(maxAgeDays),
+								className: "swm-focus",
+								style: { ...FORM_CONTROL, fontVariantNumeric: "tabular-nums" },
+								onChange: (event) => { setMaxAgeDays(Number(event.target.value)); }
+							}),
+							"age"
 						),
 						field(
 							zh ? "主题" : "Topic",
@@ -11072,6 +11093,9 @@ window.__ModuleLoader__.load({
 							// reader would open. A rule the library applies and cannot
 							// name is indistinguishable from a feed that stopped
 							// publishing.
+							Number(status?.insightMaxAgeDays ?? 0) <= 0 ? null : (zh
+								? `时效 只读发布时间在 ${status.insightMaxAgeDays} 天以内的信源；更早的留给主题洞察`
+								: `Recency: only sources published within ${status.insightMaxAgeDays} days are read; older material is what 主题洞察 is for`),
 							zh
 								? `视频 只收长度在 ${Math.round(Number(status?.minVideoSeconds ?? 1200) / 60)} 分钟以上的，并且必须已经取到转录 —— 只有标题和简介抽不出可核验的引语`
 								: `Videos are kept only above ${Math.round(Number(status?.minVideoSeconds ?? 1200) / 60)} minutes, and only with a stored transcript: a title and a blurb cannot produce a checkable quote`,

@@ -390,7 +390,7 @@ export class SourceStore {
    * @param options - `{ type, search, sortBy, take, skip }`.
    * @returns `{ rows, total, hasMore }` in the upstream's envelope shape.
    */
-  query({ type, search, sortBy, sortOrder, createdAfter, minDurationSeconds, take = 20, skip = 0 } = {}) {
+  query({ type, search, sortBy, sortOrder, createdAfter, publishedAfter, minDurationSeconds, take = 20, skip = 0 } = {}) {
     const where = [];
     const params = [];
     if (typeof type === "string" && type !== "") {
@@ -420,6 +420,21 @@ export class SourceStore {
     //
     // The floor therefore excludes only rows KNOWN to be shorter. A caller who
     // wants "known to be long" has to say so, and none does yet.
+    // WHEN THE THING HAPPENED, which is a different question from when this
+    // library learned of it. `createdAfter` is the drain's watermark — where
+    // the reader got to — and it says nothing about whether a row is worth
+    // reading now: a 2009 comparison harvested this morning is new by that
+    // measure and old by every measure a person uses.
+    //
+    // COALESCE, because `published_at` is nullable. A feed that carries no date
+    // would otherwise be excluded by every window, silently and for ever;
+    // falling back to `created_at` treats "we do not know when this was
+    // published" as "as old as our knowledge of it", which is the honest
+    // reading and the one that keeps the row reachable.
+    if (typeof publishedAfter === "string" && publishedAfter !== "") {
+      where.push("COALESCE(published_at, created_at) >= ?");
+      params.push(publishedAfter);
+    }
     const floor = Number(minDurationSeconds);
     if (Number.isFinite(floor) && floor > 0) {
       where.push("(duration_seconds IS NULL OR duration_seconds >= ?)");

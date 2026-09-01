@@ -569,6 +569,19 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
             scope.transcribe = many;
           }
         }
+        // HOW OLD A SOURCE MAY BE, for this run. Distinct from `days`, which
+        // moves the WATERMARK — where the reader got to. This moves the
+        // freshness floor: "read the last quarter" is a different request from
+        // "re-read what we already covered", and the two were being confused
+        // because both are a number of days.
+        if (asked.maxAgeDays !== undefined && asked.maxAgeDays !== null && asked.maxAgeDays !== "") {
+          const age = Number(asked.maxAgeDays);
+          if (!Number.isInteger(age) || age < 0 || age > 3650) {
+            problems.push("maxAgeDays must be a whole number of days from 0 (no floor) to 3650");
+          } else {
+            scope.maxAgeDays = age;
+          }
+        }
         if (asked.maxRows !== undefined && asked.maxRows !== null && asked.maxRows !== "") {
           const rows = Number(asked.maxRows);
           if (!Number.isInteger(rows) || rows < 20 || rows > 600) {
@@ -828,6 +841,10 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
           // that has to guess a bound is a page that guesses it wrong the
           // first time somebody moves it.
           insightMinIntervalMinutes: MIN_INSIGHT_INTERVAL_MINUTES,
+          // The freshness floor, so the pane can state the 口径 it is actually
+          // reading under. It was reading everything above the watermark and
+          // saying nothing about age at all.
+          insightMaxAgeDays: Number(readInsightConfig(store).insightMaxAgeDays),
           // The cuts a strength band is read at, so the pane can STATE them
           // rather than print 高 over a number nobody was shown the scale for.
           // A judgement a reader cannot see is indistinguishable from one
