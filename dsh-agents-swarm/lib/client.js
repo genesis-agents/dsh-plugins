@@ -1378,6 +1378,26 @@ window.__ModuleLoader__.load({
 		 * wrapping, growing with every rerun. That is the same defect the run picker
 		 * had and was fixed for, one control over.
 		 */
+		/**
+		* How one Supadata key is doing.
+		*
+		* THE STATE IS THE LAST THING THAT HAPPENED, not a ratio. A key that
+		* served a thousand transcripts and is now out of quota IS out of quota,
+		* and an average would report it healthy for a very long time — which is
+		* the whole failure this display exists to make visible.
+		*
+		* `untried` IS NOT A FAULT and is toned so. On a library whose free routes
+		* are working, every key sits untried and that is the system behaving
+		* correctly: Supadata is the paid fallback, reached only when timedtext,
+		* the relay and gens have all refused.
+		*/
+		const SUPADATA_KEY_FACES = {
+			ok: { zh: "可用", en: "Working", hue: TONE.success },
+			quota: { zh: "配额用尽 / 被限流", en: "Out of quota or limited", hue: TONE.danger },
+			failing: { zh: "在报错", en: "Failing", hue: TONE.warn },
+			untried: { zh: "本次启动后未用过", en: "Not used since start", hue: TONE.muted }
+		};
+
 		const SELECT_STYLE = {
 			appearance: "none", height: CONTROL.sm, padding: `0 ${SPACE.sm}`, borderRadius: RADIUS.md,
 			border: `1px solid ${LINE.rule}`, background: "transparent",
@@ -9514,6 +9534,65 @@ window.__ModuleLoader__.load({
 		};
 
 		/**
+		* WHY a source produced nothing, said in the reader's language.
+		*
+		* THE WORDS BELONG HERE, NOT IN THE DATABASE. The first version of the
+		* ledger wrote sentences into the row, and half of them were written in
+		* Chinese: "这个视频没有字幕可取" sat beside "over this pass's cluster
+		* ceiling" in the same column, so the panel was permanently
+		* half-translated for every reader whichever language they had picked. A
+		* localized string in a stored row can never be shown in the other one.
+		*
+		* Every other vocabulary in this file is a code with a face table; this
+		* one had simply been typed by hand at five call sites.
+		*
+		* THE DETAIL IS NOT TRANSLATED AND MUST NOT BE. The provider's own error
+		* text and a model's refusal are evidence, not copy — inventing a Chinese
+		* rendering of "HTTP 429 quota exceeded" would put words in the mouth of
+		* the system that is failing.
+		*/
+		const LEDGER_REASON_FACES = {
+			"transcript-untried": {
+				zh: "还没有去取过转录", en: "No transcript fetched yet"
+			},
+			"transcript-quota": {
+				zh: "取转录失败：配额用尽或被限流", en: "Fetch failed: out of quota or rate limited"
+			},
+			"transcript-absent": {
+				zh: "这个视频没有字幕可取", en: "This video has no captions to fetch"
+			},
+			"transcript-other": {
+				zh: "取转录失败", en: "Fetching the transcript failed"
+			},
+			"no-usable-text": {
+				zh: "没有标题或正文可供归并", en: "No title or body the clusterer could use"
+			},
+			"over-ceiling": {
+				zh: "超出本次上限，下一轮会回来", en: "Over this pass's ceiling; it returns next pass"
+			},
+			"extract-failed": {
+				zh: "抽取时模型调用失败", en: "The model call for its cluster failed"
+			}
+		};
+
+		/**
+		* One ledger row's reason, code and detail together.
+		* @param entry - a ledger row.
+		* @param zh - Chinese.
+		* @returns the sentence, or an empty string.
+		*/
+		function ledgerReason(entry, zh) {
+			const face = LEDGER_REASON_FACES[entry?.reasonCode] ?? null;
+			const said = face === null ? "" : (zh ? face.zh : face.en);
+			const detail = typeof entry?.reason === "string" ? entry.reason.trim() : "";
+			// A ROW WRITTEN BEFORE THE CODE EXISTED still has its sentence, in
+			// whichever language it was typed in. Falling back to it is the only
+			// thing that can be done with one, and it beats a blank column.
+			if (said === "") return detail;
+			return detail === "" ? said : `${said}：${detail}`;
+		}
+
+		/**
 		* A duration in whole seconds, said the way a person reads one.
 		* @param seconds - the stored length, or anything else.
 		* @returns "1:12" / "44 min", or an empty string when it is not known.
@@ -9798,10 +9877,10 @@ window.__ModuleLoader__.load({
 									// THE REASON, NOT JUST THE STATE. "17 unusable" is a number
 									// nobody can act on; "no transcript stored" beside a title is
 									// a feed to go and look at.
-									entry.reason === "" ? null : jsx("span", {
+									ledgerReason(entry, zh) === "" ? null : jsx("span", {
 										style: { flex: "none", maxWidth: "34%", color: INK.quiet, ...clampBox(1) },
-										title: entry.reason,
-										children: entry.reason
+										title: ledgerReason(entry, zh),
+										children: ledgerReason(entry, zh)
 									}, "why"),
 									jsx("span", {
 										style: {
@@ -23912,6 +23991,79 @@ window.__ModuleLoader__.load({
 										: null
 								]
 							}),
+
+							// ── WHICH KEY IS ACTUALLY WORKING ──────────────────────────
+							//
+							// THE QUOTA IS THE SUM OF THE KEYS, so a list of four with one
+							// exhausted behaves exactly like a list of three — and this pane
+							// said "已配置 2 把" and nothing else. Which one to replace was a
+							// question the product could not answer, while the information
+							// existed: every refusal already names its key by position,
+							// inside a failure string only whoever was reading one failed
+							// fetch ever saw.
+							//
+							// BY POSITION, NEVER BY VALUE. That is the same rule the failure
+							// strings follow and it binds harder here: this is drawn on a
+							// settings page. The ordinal is the line number in the box above,
+							// which is exactly what somebody needs to find the key to
+							// replace, and it is all they need.
+							//
+							// SINCE THIS HOST STARTED, not for ever. A count persisted across
+							// restarts would still be reporting a month-old exhaustion long
+							// after the quota reset — this is a health reading, not a ledger.
+							!Array.isArray(config.supadataKeyHealth) || config.supadataKeyHealth.length === 0 ? null : jsxs("div", {
+								style: { display: "flex", flexDirection: "column", gap: SPACE.xs, marginTop: SPACE.sm },
+								children: [
+									jsx("div", {
+										style: { font: FONT.micro, color: INK.quiet },
+										children: zh
+											? "每把密钥自本次启动以来的表现（按上面框里的行号）"
+											: "How each key has done since this host started, by line number above"
+									}, "cap"),
+									...config.supadataKeyHealth.map((key) => {
+										const face = SUPADATA_KEY_FACES[key.state] ?? SUPADATA_KEY_FACES.untried;
+										return jsxs("div", {
+											style: {
+												display: "flex", alignItems: "center", gap: SPACE.sm,
+												font: FONT.micro, color: INK.secondary, flexWrap: "wrap"
+											},
+											children: [
+												jsx("span", {
+													style: {
+														flex: "none", display: "inline-flex", alignItems: "center",
+														height: CONTROL.dot, padding: `0 ${SPACE.sm}`,
+														borderRadius: RADIUS.md,
+														border: `1px solid ${tint(face.hue, TINT.ring)}`,
+														background: tint(face.hue, TINT.soft),
+														color: `rgb(${face.hue})`, font: FONT.microStrong
+													},
+													children: zh ? `第 ${key.position} 把` : `Key ${key.position}`
+												}, "n"),
+												jsx("span", {
+													style: { flex: "none", color: `rgb(${face.hue})` },
+													children: zh ? face.zh : face.en
+												}, "state"),
+												// The counts, because "failing" over two calls and
+												// "failing" over four hundred are different problems.
+												key.calls === 0 ? null : jsx("span", {
+													style: { flex: "none", color: INK.quiet, fontFamily: MONO },
+													children: zh
+														? `${key.calls} 次 · 成功 ${key.ok} · 限额 ${key.quota} · 其他失败 ${key.failed}`
+														: `${key.calls} calls · ${key.ok} ok · ${key.quota} quota · ${key.failed} other`
+												}, "counts"),
+												// The provider's own words, untranslated: they are
+												// evidence, and it already carries no key material —
+												// resolveTranscript scrubs to "key N of M".
+												key.lastError === "" ? null : jsx("span", {
+													title: key.lastError,
+													style: { flex: 1, minWidth: 0, color: INK.quiet, ...clampBox(1) },
+													children: key.lastError
+												}, "err")
+											]
+										}, String(key.position));
+									})
+								]
+							}, "keyhealth"),
 							] })
 					}),
 					// One line for both, below the panes: a save made on Feeds is

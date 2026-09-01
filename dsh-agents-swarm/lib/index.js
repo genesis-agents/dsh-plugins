@@ -19,7 +19,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { SourceStore, RESOURCE_TYPES } from "./store.js";
 import { COLLECTORS, DEFAULT_COLLECT_INTERVAL_MINUTES, runCollector } from "./collect.js";
 import { registerLibraryTool } from "./tool.js";
-import { resolveTranscript, listCaptionTracks, transcriptFromXml, fetchVideoDetails, supadataKeys } from "./transcript.js";
+import { resolveTranscript, listCaptionTracks, transcriptFromXml, fetchVideoDetails, supadataKeyHealth, supadataKeys } from "./transcript.js";
 import { translateBatch, isSupportedLanguage, BATCH_SIZE, TARGET_LANGUAGES } from "./translate.js";
 import { admissibleUrl, fetchDocument, readableText, readArticle, displayModeOf, documentUrlOf } from "./proxy.js";
 import { sourceFeeds } from "./sources.js";
@@ -1180,6 +1180,11 @@ export function createHandler(store, logger, chat, web, ctx, missions) {
           supadataKeyCount: supadataKeys(config.supadataKey).length,
           collectors: Object.keys(COLLECTORS),
           resourceTypes: RESOURCE_TYPES,
+          // HOW EACH KEY IS DOING, by position and never by value. The settings
+          // page said "已配置 2 把" and nothing else, so a list of four keys
+          // with one exhausted was indistinguishable from a list of three —
+          // and which one to replace was unanswerable from the product.
+          supadataKeyHealth: supadataKeyHealth(readConfig(store).supadataKey),
         },
       });
       return;

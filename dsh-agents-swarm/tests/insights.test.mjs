@@ -1659,7 +1659,13 @@ test("a video with no captions is told apart from one nobody asked about", async
     transcribe: async () => { throw new Error("timedtext: HTTP 404 no caption track"); },
   });
   const row = insights.passLedger(result.batch).rows.find((one) => one.resourceId === "v");
-  assert.match(row.reason, /没有字幕/, "the ledger still repeats the library's description: " + row.reason);
+  // A CODE, NOT A SENTENCE. The words are the page's job now: half of these
+  // were being written into the database in Chinese and half in English, so the
+  // panel was permanently half-translated whichever language a reader chose.
+  assert.equal(row.reasonCode, "transcript-absent", "the ledger did not record WHY the fetch failed: " + row.reasonCode);
+  // And the provider's own words survive as the detail, untranslated, because
+  // they are evidence rather than copy.
+  assert.match(row.reason, /404|caption/i, "the provider's answer was discarded: " + row.reason);
 });
 
 test("a top-up that cannot fetch leaves the pass unharmed", async (t) => {

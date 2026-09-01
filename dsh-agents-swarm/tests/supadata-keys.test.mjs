@@ -15,7 +15,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { supadataKeys, resolveTranscript } from "../lib/transcript.js";
+import { supadataKeyHealth, supadataKeys, resolveTranscript } from "../lib/transcript.js";
 
 test("the setting is split into keys however it was pasted", () => {
   // A person pasting four keys uses whichever separator their clipboard
@@ -137,4 +137,40 @@ test("no key configured is still said, and said as that", async () => {
   const { used, error } = await chain("", () => 200);
   assert.deepEqual(used, [], "a request went out with no key");
   assert.match(String(error?.message), /no API key configured/u, "an unconfigured key reads as a failed one");
+});
+
+/* ── which key is actually working ─────────────────────────────────────── */
+
+test("key health is reported by position and never carries the key", () => {
+  // THE QUOTA IS THE SUM OF THE KEYS, so a list of four with one exhausted
+  // behaves exactly like a list of three — and the settings page said
+  // "已配置 2 把" and nothing else. Which one to replace was unanswerable from
+  // the product while the information already existed: every refusal names its
+  // key by position inside a failure string only whoever read one failed fetch
+  // ever saw.
+  const raw = "sd_aaaaaaaaaaaaaaaa\nsd_bbbbbbbbbbbbbbbb\nsd_cccccccccccccccc";
+  const health = supadataKeyHealth(raw);
+  assert.equal(health.length, 3, "a configured key went missing from the report");
+  assert.deepEqual(health.map((one) => one.position), [1, 2, 3], "positions are not the line numbers");
+  // NEVER THE VALUE. This is drawn on a settings page in a browser.
+  const serialized = JSON.stringify(health);
+  for (const key of raw.split("\n")) {
+    assert.equal(serialized.includes(key), false, "the report carries a key value");
+    assert.equal(serialized.includes(key.slice(-8)), false, "the report carries a recognisable tail of a key");
+  }
+});
+
+test("an unused key is untried, not healthy and not broken", () => {
+  // On a library whose free routes are working, every key sits unused and that
+  // is the system behaving correctly: Supadata is the paid fallback, reached
+  // only when timedtext, the relay and gens have all refused. Reporting those
+  // as "ok" would claim a working key nobody has ever exercised.
+  const health = supadataKeyHealth("sd_dddddddddddddddd");
+  assert.equal(health[0].state, "untried");
+  assert.equal(health[0].calls, 0);
+});
+
+test("an empty key blob reports nothing rather than a phantom key", () => {
+  assert.deepEqual(supadataKeyHealth(""), []);
+  assert.deepEqual(supadataKeyHealth(undefined), []);
 });

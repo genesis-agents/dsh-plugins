@@ -206,7 +206,19 @@ CREATE TABLE IF NOT EXISTS insight_pass_rows (
   duration_seconds INTEGER,             -- NULL when nobody ever asked
   -- extracted | read | unusable | binned | failed | no-transcript
   state            TEXT NOT NULL,
-  reason           TEXT,                -- why, for the states that are not successes
+  -- WHY, AS A CODE. The words belong to the page, not to the database.
+  --
+  -- The first version wrote sentences here, and half of them were written in
+  -- Chinese: "这个视频没有字幕可取" beside "over this pass's cluster ceiling".
+  -- A localized string baked into a stored row can never be shown in the other
+  -- language, so the ledger was permanently half-translated for every reader
+  -- whichever language they had chosen. Every other vocabulary in this feature
+  -- is a code with a face table beside it; this one had simply been written by
+  -- hand at each call site.
+  reason_code      TEXT,
+  -- Free-form detail that is NOT ours to translate: the transcript provider's
+  -- own error text, a model's refusal. Rendered after the code's sentence.
+  reason           TEXT,
   claims           INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (batch, resource_id)
 ) STRICT;
@@ -549,6 +561,14 @@ export class InsightStore {
     }
     if (!columns.some((column) => column.name === "speaker")) {
       this.db.exec("ALTER TABLE insight_evidence ADD COLUMN speaker TEXT");
+    }
+    // `reason_code` arrived after the ledger's first rows were written. Added in
+    // place for `cues`' reason; existing rows carry NULL and the page falls
+    // back to their stored sentence, which is the only thing that can be done
+    // with a sentence somebody already wrote in one language.
+    const ledgerColumns = this.db.prepare("PRAGMA table_info(insight_pass_rows)").all();
+    if (ledgerColumns.length > 0 && !ledgerColumns.some((column) => column.name === "reason_code")) {
+      this.db.exec("ALTER TABLE insight_pass_rows ADD COLUMN reason_code TEXT");
     }
     // Deliberately no close(): the handle belongs to the SourceStore, and
     // offering a close here is an invitation to shut the whole library from a
@@ -1489,14 +1509,15 @@ export class InsightStore {
     if (typeof batch !== "string" || batch === "" || !Array.isArray(entries)) return 0;
     const insert = this.db.prepare(`
       INSERT INTO insight_pass_rows (
-        batch, resource_id, title, resource_type, duration_seconds, state, reason, claims
-      ) VALUES (?,?,?,?,?,?,?,?)
+        batch, resource_id, title, resource_type, duration_seconds, state, reason_code, reason, claims
+      ) VALUES (?,?,?,?,?,?,?,?,?)
       ON CONFLICT(batch, resource_id) DO UPDATE SET
         -- A SOURCE IS LOOKED AT ONCE PER PASS, but it reaches this table from
         -- two places: the scan reports what it skipped, and the extractor
         -- reports what happened to what it kept. The extractor's verdict is
         -- the later and the more specific, so it wins.
-        state = excluded.state, reason = excluded.reason, claims = excluded.claims,
+        state = excluded.state, reason_code = excluded.reason_code,
+        reason = excluded.reason, claims = excluded.claims,
         duration_seconds = COALESCE(excluded.duration_seconds, insight_pass_rows.duration_seconds)
     `);
     let written = 0;
@@ -1514,6 +1535,7 @@ export class InsightStore {
           String(entry?.resourceType ?? ""),
           Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : null,
           state,
+          typeof entry?.reasonCode === "string" && entry.reasonCode !== "" ? entry.reasonCode : null,
           typeof entry?.reason === "string" && entry.reason !== "" ? entry.reason : null,
           Number.isFinite(Number(entry?.claims)) ? Number(entry.claims) : 0,
         );
@@ -1578,7 +1600,7 @@ export class InsightStore {
     }
     const limit = Math.max(1, Math.min(500, Number(take) || 200));
     const rows = this.db.prepare(`
-      SELECT resource_id, title, resource_type, duration_seconds, state, reason, claims
+      SELECT resource_id, title, resource_type, duration_seconds, state, reason_code, reason, claims
         FROM insight_pass_rows
        WHERE ${clause}
        ORDER BY CASE state
@@ -1592,6 +1614,7 @@ export class InsightStore {
       resourceType: row.resource_type,
       durationSeconds: row.duration_seconds ?? null,
       state: row.state,
+      reasonCode: row.reason_code ?? "",
       reason: row.reason ?? "",
       claims: row.claims,
     }));

@@ -273,6 +273,71 @@ export function supadataKeys(raw) {
 let supadataCursor = 0;
 
 /**
+ * What each Supadata key has actually done, keyed by the key itself.
+ *
+ * WHY IT EXISTS. The quota is the SUM of the keys, so a list of four with one
+ * exhausted behaves exactly like a list of three — and there was no way to
+ * learn which one. `resolveTranscript` names the position in its failure
+ * string, but that string is only seen by whoever happens to be reading a
+ * single failed fetch; a person looking at the settings page saw "已配置 2 把"
+ * and nothing else. Which key to replace was unanswerable from the product.
+ *
+ * KEYED BY THE KEY, NOT BY POSITION. Positions move: editing the textarea to
+ * remove a dead key renumbers every one after it, and a tally that survived
+ * that edit would attribute the dead key's refusals to its innocent successor.
+ *
+ * IN MEMORY, DELIBERATELY. This is "what has happened since this host started",
+ * which is the question worth asking about a quota — a count persisted across
+ * restarts would still be counting a month-old exhaustion after the quota
+ * reset. It is a health reading, not a ledger.
+ */
+const supadataHealth = new Map();
+
+/**
+ * Record one key's outcome.
+ * @param key - the key used.
+ * @param outcome - "ok" | "quota" | "failed".
+ * @param error - the scrubbed message, for the two that are not "ok".
+ */
+function noteSupadataKey(key, outcome, error = "") {
+  const held = supadataHealth.get(key) ?? { calls: 0, ok: 0, quota: 0, failed: 0, lastError: "", lastAt: "" };
+  held.calls += 1;
+  held[outcome] += 1;
+  held.lastAt = new Date().toISOString();
+  if (outcome !== "ok") held.lastError = error;
+  else held.lastError = "";
+  supadataHealth.set(key, held);
+}
+
+/**
+ * How each configured key is doing, in the order they are configured.
+ *
+ * THE KEYS THEMSELVES NEVER LEAVE THIS FUNCTION. This is handed to a browser,
+ * and the rule the failure strings already follow — position, never the secret
+ * — applies with more force to something drawn on a settings page. A caller
+ * gets the ordinal, which is the line number in the textarea and therefore the
+ * one thing that lets somebody find the key they need to replace.
+ *
+ * A key with no calls is reported as untried rather than omitted: "we have not
+ * needed it yet" and "it is failing" are different answers, and a list that
+ * silently drops the idle ones cannot be counted against the number configured.
+ * @param raw - the stored key blob.
+ * @returns `[{ position, state, calls, ok, quota, failed, lastError, lastAt }]`.
+ */
+export function supadataKeyHealth(raw) {
+  return supadataKeys(raw).map((key, at) => {
+    const held = supadataHealth.get(key) ?? { calls: 0, ok: 0, quota: 0, failed: 0, lastError: "", lastAt: "" };
+    // The state is the LAST thing that happened, not a ratio: a key that served
+    // a thousand transcripts and is now out of quota is out of quota, and an
+    // average would report it as healthy for a long time.
+    const state = held.calls === 0
+      ? "untried"
+      : (held.lastError === "" ? "ok" : (held.quota > 0 && /quota|429|rate.?limit/i.test(held.lastError) ? "quota" : "failing"));
+    return { position: at + 1, state, ...held };
+  });
+}
+
+/**
  * Fetch a transcript through Supadata.
  *
  * The paid path, and the one the upstream falls back to for the same reason:
@@ -391,8 +456,18 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
     for (let step = 0; step < keys.length; step += 1) {
       const at = (start + step) % keys.length;
       try {
-        return { ...await fetchViaSupadata(videoId, keys[at], languages[0] ?? "en"), via: "supadata" };
+        const got = { ...await fetchViaSupadata(videoId, keys[at], languages[0] ?? "en"), via: "supadata" };
+        noteSupadataKey(keys[at], "ok");
+        return got;
       } catch (cause) {
+        // Recorded before the message is folded into `failures`, so the tally
+        // sees the individual answer rather than the joined string every route
+        // above it also contributed to.
+        noteSupadataKey(
+          keys[at],
+          /quota|429|rate.?limit|too many requests/i.test(String(cause?.message ?? cause)) ? "quota" : "failed",
+          String(cause?.message ?? cause),
+        );
         // WHICH key failed, by position. The keys themselves must not reach
         // a log or an error body — this string is handed to the browser —
         // and "key 3 of 4" is what a person needs to know which one to

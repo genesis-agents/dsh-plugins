@@ -1528,7 +1528,11 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
   // says "no transcript", the clusterer says "unusable", the extractor says
   // "extracted, 2 claims", and a source reaches at most one of the three.
   const ledger = new Map();
-  const note = (row, state, reason, claims) => {
+  // A CODE AND, WHERE THERE IS ONE, A DETAIL THAT IS NOT OURS TO TRANSLATE.
+  // The sentence a reader sees is assembled by the page from the code; the
+  // detail is the provider's or the model's own words, which no face table can
+  // localise and which are the whole point of recording a failure.
+  const note = (row, state, reasonCode, detail, claims) => {
     if (row === undefined || row === null) return;
     ledger.set(String(row.id), {
       resourceId: String(row.id),
@@ -1536,7 +1540,8 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
       resourceType: String(row.type ?? ""),
       durationSeconds: row.durationSeconds,
       state,
-      reason: reason ?? "",
+      reasonCode: reasonCode ?? "",
+      reason: detail ?? "",
       claims: claims ?? 0,
     });
   };
@@ -1551,10 +1556,9 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
       entry.row,
       "no-transcript",
       said === undefined || said.ok === true
-        ? `${entry.reason}（未尝试）`
-        : (said.kind === "quota"
-          ? "取转录失败：配额用尽或被限流"
-          : (said.kind === "absent" ? "这个视频没有字幕可取" : `取转录失败：${said.reason}`)),
+        ? "transcript-untried"
+        : `transcript-${said.kind}`,
+      said === undefined || said.ok === true ? "" : said.reason,
     );
   }
   if (rows.length < MIN_PASS_ROWS) {
@@ -1582,7 +1586,7 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
       // Counted in `unusable` since this pass was written, and NAMED here for
       // the first time. "17 unusable" is a number nobody can act on; a title
       // beside it is a feed to go and look at.
-      note(row, "unusable", "no title or body the clusterer could use");
+      note(row, "unusable", "no-usable-text");
       continue;
     }
     items.push(item);
@@ -1629,7 +1633,7 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     // WHICH rows these are cannot tell a ceiling doing its job from one set
     // far too low, which is what `binned`'s own note asks for and could not
     // give.
-    note(row, "binned", "over this pass's cluster ceiling; it returns next pass");
+    note(row, "binned", "over-ceiling");
   }
 
   const failures = [];
@@ -1668,7 +1672,7 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
       // and must not pretend to. `read` for a cluster that produced nothing is
       // the commonest honest outcome on a quiet week and is not a fault.
       for (const entry of entries) {
-        note(entry.row, result.claims.length > 0 ? "extracted" : "read", "", result.claims.length);
+        note(entry.row, result.claims.length > 0 ? "extracted" : "read", "", "", result.claims.length);
       }
       claimCount += result.parsed;
       verified += result.claims.length;
@@ -1680,7 +1684,7 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     } catch (cause) {
       const reason = String(cause?.message ?? cause);
       failures.push(`${cluster.id}: ${reason}`);
-      for (const entry of entries) note(entry.row, "failed", reason);
+      for (const entry of entries) note(entry.row, "failed", "extract-failed", reason);
     }
   }
 
