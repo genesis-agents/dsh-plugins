@@ -21649,10 +21649,13 @@ window.__ModuleLoader__.load({
 			const [feedUrl, setFeedUrl] = useState("");
 			const [feedType, setFeedType] = useState("BLOG");
 			const [status, setStatus] = useState(null);
-			// Feeds first: it is the pane with something to decide in it. The
-			// other two are a log you read when something looks wrong and a key
-			// you set once.
-			const [pane, setPane] = useState("feeds");
+			// THE FIRST TAB IS ALSO THE ONE IT OPENS ON. These were two different
+			// panes — the strip led with 通用 and the page landed on 订阅源 — so
+			// the setting that had just been added sat behind a tab nobody had a
+			// reason to press, on a page that opened somewhere else. A strip
+			// whose first entry is not where you are is a strip that hides its
+			// own first entry.
+			const [pane, setPane] = useState("general");
 			// The settings page belongs to no one kind, so the log borrows a
 			// single accent for failures rather than tinting itself at random.
 			const alert = KINDS[0];

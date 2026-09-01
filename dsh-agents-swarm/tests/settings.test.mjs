@@ -1814,15 +1814,18 @@ test("the settings page renders rather than throwing", async () => {
 
 test("its three jobs are three panes, not one column", async () => {
   stubFetch();
-  const { tree } = await render("SourcesSettings");
-  const bar = find(tree, (node) => node.props?.role === "tablist");
+  const view = await render("SourcesSettings");
+  const bar = find(view.tree, (node) => node.props?.role === "tablist");
   assert.ok(bar, "no tab bar");
-  const labels = textOf(bar).filter((s) => ["订阅源", "采集", "密钥"].includes(s));
-  assert.deepEqual(labels, ["订阅源", "采集", "密钥"]);
+  // 通用 IS FIRST AND IS ALSO WHERE IT OPENS — see `feedsPane`. The other
+  // three keep their order and their names.
+  const labels = textOf(bar).filter((s) => ["通用", "订阅源", "采集", "密钥"].includes(s));
+  assert.deepEqual(labels, ["通用", "订阅源", "采集", "密钥"]);
 
   // The feeds pane opens, and only it: the collectors heading belongs to
   // another pane and rendering it here would mean the column is still a column.
-  const text = textOf(tree).join(" ");
+  await feedsPane(view);
+  const text = textOf(view.tree).join(" ");
   assert.ok(text.includes("arXiv cs.AI"), "the feeds pane does not name its feeds");
   assert.ok(text.includes("https://rss.arxiv.org/rss/cs.AI"), "the feeds pane is not showing its feeds");
   assert.ok(!text.includes("采集任务"), "the collectors section rendered on the feeds pane");
@@ -1868,8 +1871,9 @@ test("clicking a tab actually swaps the pane", async () => {
 
 test("feeds are grouped under the kind they belong to", async () => {
   stubFetch();
-  const { tree } = await render("SourcesSettings");
-  const text = textOf(tree);
+  const view = await render("SourcesSettings");
+  await feedsPane(view);
+  const text = textOf(view.tree);
   // Both kinds in the fixture get a heading, and PAPER sorts before BLOG only
   // if the grouping is by kind rather than by insertion order.
   assert.ok(text.includes("PAPER"), "no PAPER group");
@@ -1967,6 +1971,23 @@ async function missionsPane(view) {
     && textOf(node).some((piece) => piece.includes("主题洞察") || piece.includes("By topic")));
   if (strip === undefined || strip === null) return;
   await view.act(() => { strip.props.onClick(); });
+}
+
+/**
+ * Switch the settings section to its feeds pane.
+ *
+ * IT NO LONGER LANDS THERE. The strip led with 通用 and the page opened on
+ * 订阅源, so the first tab was not the one you were on — and the typeface
+ * setting, which is what 通用 holds, sat behind a tab nobody had a reason to
+ * press. The strip's first entry is where it opens now, and the tests that
+ * assert on feeds say so themselves instead of relying on a landing.
+ * @param view - a rendered SourcesSettings.
+ */
+async function feedsPane(view) {
+  const tab = find(view.tree, (node) => node.props?.role === "tab"
+    && textOf(node).some((piece) => piece.includes("订阅源") || piece.includes("Feeds")));
+  if (tab === undefined || tab === null) return;
+  await view.act(() => { tab.props.onClick(); });
 }
 
 async function open(view, topic) {
