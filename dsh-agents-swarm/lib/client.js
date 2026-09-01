@@ -15878,14 +15878,13 @@ window.__ModuleLoader__.load({
 										jsx(MissionPanel, {
 											bare: true,
 											note: "",
-											// NOT WIRED YET, AND SAYING SO. MissionReferenceTab is written and reads
-											// the same artefact the report does; what is not finished is the six tests
-											// that exercise this tab through MissionSources, whose subject the swap
-											// removes. Shipping the swap with those red would be shipping a tab whose
-											// behaviour nothing checks.
-											children: jsx(MissionSources, {
-												missionId, zh, mission,
-												onOpenTrace: (id) => { setFocusDimension(id); setPane("trace"); },
+											// CITATIONS, WHICH IS WHAT A BIBLIOGRAPHY IS. This rendered MissionSources
+											// — the PAGES the run read, grouped by host with a bar each — under a
+											// heading that says 参考文献. The reference's tab of that name lists the
+											// citations the report makes, and that is what a reader opening it came
+											// for: which claim rests on what, how often, and whether it held.
+											children: jsx(MissionReferenceTab, {
+												missionId, zh,
 												onOpenSource: (entry) => { setSource(entry); }
 											})
 										}, "sources")
@@ -16534,12 +16533,23 @@ window.__ModuleLoader__.load({
 			// after fixing it.
 			const [group, setGroup] = useState("kind");
 			const [search, setSearch] = useState("");
+			// AND THE TWO FILTERS THE REFERENCE PUTS BESIDE THE SEARCH BOX. Not its
+			// three: 全部权威度 needs a scored host list we do not have, and a
+			// dropdown that cannot rank anything is furniture.
+			const [kind, setKind] = useState("");
+			const [year, setYear] = useState("");
 			// THE ARTEFACT, FETCHED HERE. The citations live on the report and this
 			// pane is not inside it; passing them down would mean the mission view
 			// carrying a copy of the artefact for one tab. One GET, and the pane is
 			// self-contained — the same route the report reads, so the two can never
 			// disagree about which version they are showing.
-			const [artifact, setArtifact] = useState(null);
+			//
+			// undefined IS IN FLIGHT, null IS NOTHING THERE. Seeded with null, the
+			// pane could not tell a fetch still running from a mission that has not
+			// written a report yet — and every running mission's 参考文献 tab was a
+			// skeleton that never resolved, because `data.artifact` is null until s12
+			// freezes one and null was also the seed.
+			const [artifact, setArtifact] = useState(undefined);
 			const [error, setError] = useState("");
 			useEffect(() => {
 				if ((missionId ?? "") === "") return undefined;
@@ -16552,7 +16562,14 @@ window.__ModuleLoader__.load({
 			}, [missionId]);
 		
 			if (error !== "") return jsx(ErrorBox, { message: error, zh }, "err");
-			if (artifact === null) return jsx(Skeleton, { rows: 4 }, "load");
+			if (artifact === undefined) return jsx(Skeleton, { rows: 4 }, "load");
+			// A RUN THAT HAS NOT WRITTEN A REPORT HAS NO BIBLIOGRAPHY, and that is a
+			// different sentence from one that wrote a report citing nothing. The
+			// second is a finding about the report; the first is just the clock.
+			if (artifact === null || typeof artifact !== "object" || artifact.kind === "empty-artifact") return jsx("div", {
+				style: { font: FONT.small, color: INK.secondary },
+				children: zh ? "报告还没有写出来，参考文献要等它落地。" : "No report has been written yet, so there is no bibliography."
+			}, "pending");
 			const references = missionReferences(artifact);
 			const list = Array.isArray(references) ? references : [];
 
@@ -16589,10 +16606,25 @@ window.__ModuleLoader__.load({
 				{ id: "host", zh: "按域名", en: "By domain" }
 			];
 
+			// THE OPTIONS ARE READ OFF THE LIST, not declared. Only the types and
+			// the years this bibliography contains can be chosen, so no choice ever
+			// empties the pane on its own.
+			const kindOptions = [];
+			for (const face of KIND.map(([, one]) => one)) {
+				if (kindOptions.some((had) => had.id === face.id)) continue;
+				if (list.some((entry) => kindOf(entry.host)?.id === face.id)) kindOptions.push(face);
+			}
+			const yearOptions = [...new Set(list
+				.map((entry) => formatDate(entry.publishedAt).slice(0, 4))
+				.filter((y) => y !== ""))].sort().reverse();
+
 			const needle = search.trim().toLowerCase();
-			const shown = needle === ""
-				? list
-				: list.filter((entry) => `${entry.title ?? ""} ${entry.host ?? ""} ${entry.quote ?? ""}`.toLowerCase().includes(needle));
+			const shown = list.filter((entry) => {
+				if (needle !== "" && !`${entry.title ?? ""} ${entry.host ?? ""} ${entry.quote ?? ""}`.toLowerCase().includes(needle)) return false;
+				if (kind !== "" && (kindOf(entry.host)?.id ?? "") !== kind) return false;
+				if (year !== "" && formatDate(entry.publishedAt).slice(0, 4) !== year) return false;
+				return true;
+			});
 
 			const bucketOf = (entry) => {
 				if (group === "host") return entry.host === "" ? (zh ? "未记录域名" : "no domain recorded") : entry.host;
@@ -16601,8 +16633,8 @@ window.__ModuleLoader__.load({
 					const date = formatDate(entry.publishedAt);
 					return date === "" ? (zh ? "没有发表日期" : "no publication date") : date.slice(0, 4);
 				}
-				const kind = kindOf(entry.host);
-				return kind === null ? (zh ? "未标注类型" : "unlabelled") : (zh ? kind.zh : kind.en);
+				const face = kindOf(entry.host);
+				return face === null ? (zh ? "未标注类型" : "unlabelled") : (zh ? face.zh : face.en);
 			};
 			const buckets = new Map();
 			for (const entry of shown) {
@@ -16634,15 +16666,21 @@ window.__ModuleLoader__.load({
 							label: zh ? "已核验" : "Verified",
 							value: String(verified),
 							hint: share(verified),
-							tone: missionRateHue(verified, list.length),
-							meter: missionRate(verified, list.length)
+							// NO BAR UNDER THE FIGURE. The reference's four tiles are four numbers;
+							// a meter under one of them makes that one the headline and the other
+							// three its context, which is not what the row is. The hue stays — it
+							// is the grade, and it belongs on the figure.
+							tone: missionRateHue(verified, list.length)
 						},
 						{ label: zh ? "官方 / 学术" : "Gov / academic", value: String(official), hint: share(official) },
 						{ label: zh ? "有日期" : "Dated", value: String(dated), hint: share(dated) }
 					] }, "figures"),
 
-					// The heading, the count, and the four cuts — one row, as the
-					// reference has it.
+					// THE HEADING ROW IS THE HEADING AND THE CUTS. The reference puts its
+					// four arrangements at the right end of this line as a segmented
+					// control — four labels, all four readable at once, the current one
+					// filled. A <select> hid three of the four behind a click and read as
+					// a form field in a row that has no form in it.
 					jsxs("div", {
 						style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" },
 						children: [
@@ -16654,27 +16692,64 @@ window.__ModuleLoader__.load({
 								style: { font: FONT.baseStrong, margin: 0, color: INK.primary },
 								children: zh ? `参考文献 · 共 ${list.length} 条` : `References · ${list.length}`
 							}, "title"),
+							jsx("div", {
+								style: { ...SEGMENT_TRACK, marginLeft: "auto" },
+								role: "group",
+								"aria-label": zh ? "分组方式" : "Group by",
+								children: GROUPS.map((one) => jsx("button", {
+									type: "button",
+									"aria-pressed": group === one.id,
+									className: "swm-focus",
+									style: segmentStyle(group === one.id),
+									onClick: () => { setGroup(one.id); },
+									children: zh ? one.zh : one.en
+								}, one.id))
+							}, "group")
+						]
+					}, "head"),
+
+					// THE TOOLBAR IS ITS OWN ROW. Search shared the heading line, which put
+					// a text field between a title and its controls and left no room for
+					// the filters at all.
+					jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" },
+						children: [
 							jsx("input", {
 								type: "search",
 								value: search,
 								placeholder: zh ? "搜索标题 / 域名 / 引语…" : "Search title, domain or quote…",
 								"aria-label": zh ? "搜索参考文献" : "Search the references",
 								className: "swm-focus",
-								style: {
-									...SELECT_STYLE, cursor: "text", flex: 1,
-									minWidth: "180px", marginLeft: "auto"
-								},
+								style: { ...SELECT_STYLE, cursor: "text", flex: 1, minWidth: "180px" },
 								onChange: (event) => { setSearch(event.target.value); }
 							}, "search"),
+							// EVERY TYPE AND EVERY YEAR THE LIST ACTUALLY HAS. A fixed list of
+							// options would offer 2019 on a bibliography whose oldest page is
+							// from 2023 and produce an empty pane on a legal choice.
 							jsx("select", {
-								value: group,
-								"aria-label": zh ? "分组方式" : "Group by",
+								value: kind,
+								"aria-label": zh ? "类型" : "Type",
 								style: SELECT_STYLE,
-								onChange: (event) => { setGroup(event.target.value); },
-								children: GROUPS.map((one) => jsx("option", { value: one.id, children: zh ? one.zh : one.en }, one.id))
-							}, "group")
+								onChange: (event) => { setKind(event.target.value); },
+								children: [
+									jsx("option", { value: "", children: zh ? "全部类型" : "All types" }, "all"),
+									...kindOptions.map((face) => jsx("option", {
+										value: face.id, children: zh ? face.zh : face.en
+									}, face.id))
+								]
+							}, "kind"),
+							jsx("select", {
+								value: year,
+								"aria-label": zh ? "年份" : "Year",
+								style: SELECT_STYLE,
+								onChange: (event) => { setYear(event.target.value); },
+								children: [
+									jsx("option", { value: "", children: zh ? "全部年份" : "All years" }, "all"),
+									...yearOptions.map((y) => jsx("option", { value: y, children: y }, y))
+								]
+							}, "year")
 						]
-					}, "head"),
+					}, "tools"),
 
 					// NOTHING MATCHED IS A SENTENCE, not an empty column.
 					shown.length !== 0 ? null : jsx("div", {
@@ -17209,6 +17284,19 @@ window.__ModuleLoader__.load({
 			// anything behind it, and the list under the article is the same set.
 			const references = missionReferences(artifact);
 			const numbered = new Set(references.map((entry) => entry.index));
+			// WHAT ONE CHAPTER CITES, read off the chapter. `[12]` in running text is
+			// the only record of which chapter leans on which source — s12 writes no
+			// per-section citation list — so the slice is scanned for its markers.
+			//
+			// It is a Set of numbers, and `references` is filtered by it rather than
+			// the other way round, so the chapter's list keeps the report's order and
+			// the report's numbering. A chapter that cites [58] and [92] shows those
+			// two numbers, not a fresh 1 and 2 that no marker in the prose matches.
+			const citedIn = (text) => {
+				const found = new Set();
+				for (const hit of String(text).matchAll(/[(d+)]/gu)) found.add(Number(hit[1]));
+				return found;
+			};
 			// THE FIGURES THIS VERSION OF THE REPORT NAMES, in the order `:::figure N`
 			// counts them.
 			//
@@ -17491,36 +17579,14 @@ window.__ModuleLoader__.load({
 						//
 						// 版本历史 IS THE ONE WE HOLD, and it is `listArtifactVersions` — the same
 						// chips that used to sit in a band of their own above the title.
-						// 执行摘要 — the band the reference opens its report with.
+						// NO EXECUTIVE SUMMARY BAND. The report opened with one — `howToRead` plus
+						// a verdict per acceptance criterion — sitting ABOVE the reading-mode and
+						// version controls, so the first thing on the page was a preamble and the
+						// document itself started below the furniture.
 						//
-						// `border-b border-violet-100 bg-gradient-to-br from-violet-50/60 to-
-						// purple-50/40 px-5 py-4` with an uppercase violet caption. Flat rather
-						// than a gradient, for the reason the header tile is flat: the reference
-						// keeps its gradients in a design-layer list so feature code cannot
-						// hand-mix one, and we have no such list.
-						MissionForeword({ foreword, zh, part: "summary" }) === null ? null : jsxs("section", {
-							style: {
-								padding: CARD_PAD, borderRadius: RADIUS.lg,
-								background: tint(PALETTE.violet, TINT.wash),
-								border: `1px solid ${tint(PALETTE.violet, TINT.ring)}`,
-								margin: `0 0 ${SPACE.lg}`
-							},
-							children: [
-								jsxs("div", {
-									style: {
-										display: "flex", alignItems: "center", gap: SPACE.xs,
-										font: FONT.microStrong, letterSpacing: TRACK_WIDE,
-										textTransform: "uppercase", color: `rgb(${PALETTE.violet})`,
-										margin: `0 0 ${SPACE.sm}`
-									},
-									children: [
-										jsx(Icon, { name: "sparkles", size: ICON.xs }, "glyph"),
-										jsx("span", { children: zh ? "执行摘要" : "Executive summary" }, "label")
-									]
-								}, "head"),
-								MissionForeword({ foreword, zh, part: "summary" }, "body")
-							]
-						}, "summary"),
+						// It is not dropped, it is not duplicated here: the same foreword renders in
+						// full on the publish pane, where a reader goes to see what the run claims
+						// it answered. The report is the document.
 						readSections.length < 2 && versions.length <= 1 ? null : jsxs("div", {
 							// NOT ON PAPER. The reading modes and the version picker are how a reader
 							// got to this document, not part of it.
@@ -17804,29 +17870,48 @@ window.__ModuleLoader__.load({
 						// listing what they rest on is the honest place for it, and it
 						// is drawn from the same `references` array as the list, so the
 						// two cannot disagree about how many citations there are.
-						// 结论与建议 — the band the reference closes its report with, and the
-						// half a reader acts on: what is still open, and what to do next.
-						MissionForeword({ foreword, zh, part: "closing" }) === null ? null : jsxs("section", {
-							style: {
-								padding: CARD_PAD, borderRadius: RADIUS.lg,
-								background: tint(PALETTE.violet, TINT.wash),
-								border: `1px solid ${tint(PALETTE.violet, TINT.ring)}`,
-								margin: `0 0 ${SPACE.lg}`
-							},
-							children: [
-								jsx("div", {
-									style: {
-										font: FONT.microStrong, letterSpacing: TRACK_WIDE,
-										textTransform: "uppercase", color: `rgb(${PALETTE.violet})`,
-										margin: `0 0 ${SPACE.sm}`
-									},
-									children: zh ? "结论与建议" : "Conclusions and next steps"
-								}, "head"),
-								MissionForeword({ foreword, zh, part: "closing" }, "body")
-							]
-						}, "closing"),
-						references.length === 0 ? null : jsx(MissionEvidenceSpread, { references, zh }, "spread"),
-						references.length === 0 ? null : jsx(MissionReferenceList, { references, zh }, "references")
+						// THE WHOLE-DOCUMENT BLOCKS BELONG TO THE WHOLE DOCUMENT.
+						//
+						// 结论与建议 and the host spread were drawn under EVERY reading, so a
+						// reader who opened chapter 8 alone got that chapter, then the report's
+						// conclusions, then a bar chart of where all 109 citations across all
+						// eight chapters came from. Two of those three are not about chapter 8,
+						// and printed under it they read as if they were.
+						//
+						// The chapter keeps the one that is its own: the sources IT cites, in the
+						// report's numbering, directly under its prose — which is where a reader
+						// following a `[58]` in that chapter is looking.
+						...(reading === "chapter" ? [
+							!chosen ? null : (() => {
+								const mine = citedIn(readSlice);
+								const cited = references.filter((entry) => mine.has(entry.index));
+								return cited.length === 0 ? null : jsx(MissionReferenceList, { references: cited, zh }, "references");
+							})()
+						] : [
+							// 结论与建议 — the band the reference closes its report with, and the
+							// half a reader acts on: what is still open, and what to do next.
+							MissionForeword({ foreword, zh, part: "closing" }) === null ? null : jsxs("section", {
+								style: {
+									padding: CARD_PAD, borderRadius: RADIUS.lg,
+									background: tint(PALETTE.violet, TINT.wash),
+									border: `1px solid ${tint(PALETTE.violet, TINT.ring)}`,
+									margin: `0 0 ${SPACE.lg}`
+								},
+								children: [
+									jsx("div", {
+										style: {
+											font: FONT.microStrong, letterSpacing: TRACK_WIDE,
+											textTransform: "uppercase", color: `rgb(${PALETTE.violet})`,
+											margin: `0 0 ${SPACE.sm}`
+										},
+										children: zh ? "结论与建议" : "Conclusions and next steps"
+									}, "head"),
+									MissionForeword({ foreword, zh, part: "closing" }, "body")
+								]
+							}, "closing"),
+							references.length === 0 ? null : jsx(MissionEvidenceSpread, { references, zh }, "spread"),
+							references.length === 0 ? null : jsx(MissionReferenceList, { references, zh }, "references")
+						])
 					]
 				})
 			});

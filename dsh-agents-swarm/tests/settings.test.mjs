@@ -639,6 +639,24 @@ const DEAD_VIEW = {
       unchecked: { "unchecked-fetch-failed": 3, "unchecked-rate-limited": 1 }, uncheckedTotal: 4,
     },
   ],
+  // A DIMENSION IS A ROW ON THE BOARD, and this view plans one. Without a
+  // `work` tree the board falls back to the twelve pipeline stages and the
+  // dimension has no row at all — which is not what the projector returns:
+  // `buildWork` emits a node per dimension.
+  //
+  // A fixture that omits them makes every test of a dimension reach it
+  // through whichever pane happened to list one, which is how three tests
+  // came to depend on the references pane for something the board owns.
+  work: [
+    ...LIVE_VIEW.work.filter((node) => node.parentId === null),
+    {
+      id: "dimension:d1", parentId: "stage:s3-collect", origin: "s2-plan",
+      title: "这个冷门课题的公开材料", state: "degraded",
+      assignee: "researcher:d1", dimensionId: "d1",
+      reason: "s2 规划的维度之一。",
+      counts: { verified: 0, floor: 3, attempts: 1 },
+    },
+  ],
   // What /view actually returns for a mission that has run agents. An empty
   // array here made the spend pane a total with nobody attached to it, and the
   // fixture was the only thing saying that was normal.
@@ -1584,6 +1602,30 @@ function stubFetch(overrides = {}) {
 
 
 
+/**
+ * Open a dimension's drawer, from the board where its row lives.
+ *
+ * These reached it through the references pane's by-dimension arrangement.
+ * That pane lists CITATIONS now, the way the reference's tab of the same
+ * name does, and its four cuts are the reference's four: type, verification,
+ * year, domain. There is no by-dimension one, and adding one to keep three
+ * tests reachable would be keeping the test and losing the change.
+ *
+ * BY KEY, NOT BY TEXT. A first attempt clicked every row and looked for a
+ * sentence the drawer prints — which failed on the mission whose dimension
+ * found nothing, because that drawer opens on an empty state and prints none
+ * of them. The board keys a child row `dimension:<id>`, and that is what a
+ * dimension row IS.
+ */
+async function openDimension(view) {
+  const row = find(view.tree, (node) => node.type === "tr"
+    && typeof node.props?.onClick === "function"
+    && String(node.key ?? "").startsWith("dimension:"));
+  assert.ok(row, "no dimension row on the task board to open");
+  await view.act(() => { row.props.onClick(); });
+  return textOf(view.tree).join(" ");
+}
+
 test("the settings page renders rather than throwing", async () => {
   stubFetch();
   const { tree } = await render("SourcesSettings");
@@ -2044,8 +2086,7 @@ test("a mission that verified nothing says what it tried", async () => {
   // group under, so the arrangement renders its group anyway and prints the
   // dimension's summary — otherwise a mission that half-failed reads as a
   // mission that was half as ambitious.
-  await pane(view, "参考文献");
-  await view.act(() => { button(view.tree, "按维度").props.onClick(); });
+  await openDimension(view);
   assert.ok(
     textOf(view.tree).join(" ").includes("这个维度读了 2 个页面，没有产出任何通过核验的引语。"),
     "the dimension's own account is missing",
@@ -2427,23 +2468,23 @@ test("a board on a host that has not shipped work yet is still a board", async (
   assert.ok(tasks.includes("规划") && tasks.includes("采集"), "the board fell back to nothing");
 });
 
-test("the report opens and closes with the leader's own words", async () => {
+test("the report closes with the leader's own words, and does not open with them", async () => {
   // THE ONE PIECE OF WRITING ABOUT THE REPORT WAS NOT ON THE REPORT. s11
-  // writes the foreword against the mission's own criteria — what was
-  // answered, what is still open, how to read this, what to do next — and it
-  // was reachable only by opening one stage's drawer. panels/ReportPanel.tsx
-  // opens with 执行摘要 and closes with 结论与建议, and that is the same text.
+  // writes the foreword against the mission's own criteria, and it was
+  // reachable only by opening one stage's drawer. The closing half — what is
+  // still unclear, and what to do next — belongs at the end of the document.
+  //
+  // THE OPENING HALF DOES NOT. A 执行摘要 band rendered above the reading-mode
+  // and version controls, so the first thing on the page was a preamble and
+  // the document started below the furniture. It is not lost: the same
+  // foreword renders whole on the publish pane, which the test below mounts.
   stubFetch();
   const view = await render("MissionReport", { missionId: SIGNED.id, zh: true, onBack: null });
   const text = textOf(view.tree).join(" ");
-  assert.ok(text.includes("执行摘要"), "the report does not open with the summary band");
+  assert.ok(!text.includes("执行摘要"), "the report opens with a summary band again");
+  assert.ok(!text.includes("这是一份证据审计后的阶段性底稿"), "the reading guidance is back on the report");
   assert.ok(text.includes("结论与建议"), "the report does not close with the conclusions band");
-  assert.ok(text.includes("这是一份证据审计后的阶段性底稿"), "the summary band is empty of the leader's reading guidance");
   assert.ok(text.includes("向规划局"), "the closing band drops the follow-up, which is the half a reader acts on");
-  // AND THE VERDICT PER CRITERION KEEPS ITS MIDDLE VALUE. `partial` is not a
-  // pass and not a failure; a report that renders it as either is lying about
-  // what the leader signed.
-  assert.ok(text.includes("部分回答"), "a partially answered criterion is not shown as partial");
 });
 
 test("the leader's foreword renders its parts, not the object it arrives in", async () => {
@@ -2465,6 +2506,10 @@ test("the leader's foreword renders its parts, not the object it arrives in", as
   assert.ok(text.includes("这是一份证据审计后的阶段性底稿"), "the foreword's reading guidance is not on the page");
   assert.ok(text.includes("园区的法定边界"), "the foreword does not say what remains unclear");
   assert.ok(text.includes("向规划局"), "the foreword does not carry its recommended follow-up, which is the half a reader acts on");
+  // AND THE VERDICT PER CRITERION KEEPS ITS MIDDLE VALUE. `partial` is not a
+  // pass and not a failure; a foreword that renders it as either is lying
+  // about what the leader signed.
+  assert.ok(text.includes("部分回答"), "a partially answered criterion is not shown as partial");
 });
 
 test("the panes are separate screens, not one scroll with headings", async () => {
@@ -2719,52 +2764,47 @@ test("a degraded version says which of the two things went wrong", async () => {
 
 // ── the references pane ─────────────────────────────────────────────────────
 
-test("参考文献 is one row per page read, not one per finding", async () => {
+test("参考文献 is one row per citation, and says what the bibliography is made of", async () => {
+  // THIS PANE LISTED THE PAGES THE RUN READ. A bibliography is what a
+  // document CITES, and the reference's tab of this name is exactly that:
+  // four figures, a count, four ways to cut it, one card per citation. The
+  // pages-read view answered a different question under a heading that
+  // promised this one.
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   await open(view, SIGNED.topic);
   const text = await pane(view, "参考文献");
 
-  // FOUR TILES, not one clause. The totals were 14 条发现 · 3 个来源 ·
-  // 3 个站点 · 已核验 9 条 — the four figures a reader comes to this pane for,
-  // dot-joined into a 12px grey sentence — and each is now a labelled tile.
-  // Asserted one at a time, which is strictly stronger than the joined
-  // substring was: the old form passed as long as the sentence was built, and
-  // could not tell which of the four numbers a label had come unstuck from.
-  for (const pair of ["发现 14", "来源 3", "站点 3", "已核验 11"]) {
-    assert.ok(text.includes(pair), `the references totals do not label ${pair}`);
+  // FOUR FIGURES, EACH LABELLED. Asserted one at a time, which is stronger
+  // than one joined substring: that form passed as long as the row was
+  // built and could not tell which number a label had come unstuck from.
+  for (const label of ["总引用", "已核验", "官方 / 学术", "有日期"]) {
+    assert.ok(text.includes(label), `the references figures do not label ${label}`);
   }
-  // The page cited six times is ONE row. Counted over the whole tree, because
-  // the failure this pane exists to prevent is the same address six times over.
-  const rendered = textOf(view.tree).join("\u0000");
-  assert.equal(
-    rendered.split("https://kanatanorthba.com/about/").length - 1, 1,
-    "the six-times-cited page is listed more than once",
-  );
-  assert.ok(text.includes("About the Kanata North business association"), "a source is listed as a bare address");
-  // ONE CHIP, ONE RATIO. The two chips this replaces — `6 条发现` and
-  // `已核验 4 条` — were a denominator and a numerator drawn as separate
-  // objects, and the assertion could pass with the reader still doing the
-  // division. The reference's own status cell carries its score inside the
-  // chip (已完成 · 78/100) and so does this one.
-  assert.ok(text.includes("已核验 4/6"), "a source does not say how much of what rests on it held up, as a ratio");
-  assert.ok(!text.includes("6 条发现"), "the denominator is drawn a second time as a chip of its own");
-  assert.ok(text.includes("推理时序扩展的训练侧做法"), "a source does not say which dimension it fed");
+  assert.ok(text.includes("参考文献 · 共 3 条"), "the pane does not say how many citations it is showing");
+  assert.ok(text.includes("2 个域名"), "the citation total does not say how many domains it spans");
 
-  // FOUR ARRANGEMENTS, ALL NAMED AT ONCE. The old control was a two-state
-  // toggle whose label was always the arrangement you were NOT looking at —
-  // 按站点分组 while flat, 按引用次数排 while grouped — which is the one
-  // control shape that cannot be read without pressing it.
-  for (const arrangement of ["按引用", "按站点", "按核验率", "按首次读到"]) {
-    assert.ok(text.includes(arrangement), `the sources pane cannot be arranged ${arrangement}`);
+  // ONE CARD PER CITATION, keeping the report's numbering. A card numbered
+  // afresh would not match the [1] in the prose that sent the reader here.
+  for (const marker of ["[1]", "[2]", "[3]"]) {
+    assert.ok(text.includes(marker), `citation ${marker} has no card`);
   }
-  await view.act(() => { button(view.tree, "按站点").props.onClick(); });
+  assert.ok(text.includes("we observe the same scaling behaviour"), "a citation card drops the quote, which is what the claim is checked against");
+  assert.ok(text.includes("deepmind.google"), "a citation card does not say which domain it came from");
+  assert.ok(text.includes("已核验"), "a citation card does not say whether the quote held up");
+  assert.ok(text.includes("这条引用没有留下地址"), "the citation whose address did not survive is dropped rather than marked");
+
+  // FOUR ARRANGEMENTS, ALL NAMED AT ONCE — the reference's own set, with its
+  // 按权威度 replaced by the grade we can actually compute. A two-state
+  // toggle whose label is the arrangement you are NOT looking at is the one
+  // control shape that cannot be read without pressing it.
+  for (const arrangement of ["按类型", "按核验", "按年份", "按域名"]) {
+    assert.ok(text.includes(arrangement), `the references pane cannot be arranged ${arrangement}`);
+  }
+  await view.act(() => { button(view.tree, "按域名").props.onClick(); });
   const grouped = textOf(view.tree).join(" ");
-  // The host, the page count and the finding count were one `·`-joined mono
-  // line. Asserted apart, for the same reason as the scorecard above.
-  assert.ok(grouped.includes("kanatanorthba.com"), "grouping by host does not group");
-  assert.ok(grouped.includes("1 页"), "a host group does not say how many pages it holds");
-  assert.ok(grouped.includes("6 条发现"), "a host group does not say how much it carried");
+  assert.ok(grouped.includes("deepmind.google"), "grouping by domain does not group");
+  assert.ok(grouped.includes("未记录域名"), "the citation with no domain is filed under a group that claims one");
 });
 
 test("a references pane that cannot load says so rather than looking empty", async () => {
@@ -2858,7 +2898,13 @@ test("a pane with nothing in it says which nothing", async () => {
   const view = await render("MissionsTab", { zh: true });
   await open(view, RUNNING.topic);
   assert.ok(
-    (await pane(view, "参考文献")).includes("还没有读到任何一页"),
+    // TWO NOTHINGS, TWO SENTENCES. This run has not written a report, so it
+    // has no bibliography to be empty — which is not the same as a report
+    // that cites nothing, and a pane that said the second here would be
+    // reporting a finding about a document that does not exist. (It said
+    // neither: seeded with null, the pane could not tell a fetch in flight
+    // from an absent artefact and drew a skeleton for ever.)
+    (await pane(view, "参考文献")).includes("报告还没有写出来"),
     "an empty references pane is a blank rectangle",
   );
 
@@ -3060,13 +3106,12 @@ test("everything added here reads in English too", async () => {
   };
 
   const references = await at("References");
-  for (const pair of ["Findings 14", "Sources 3", "Hosts 3", "Verified 11"]) {
-    assert.ok(references.includes(pair), `the references totals have no English arm for ${pair}`);
+  for (const label of ["Citations", "Verified", "Gov / academic", "Dated"]) {
+    assert.ok(references.includes(label), `the references figures have no English arm for ${label}`);
   }
-  for (const arrangement of ["By citations", "By host", "By verified rate", "By first read"]) {
-    assert.ok(references.includes(arrangement), `the grouping control has no English arm for ${arrangement}`);
-  }
-  assert.ok(references.includes("verified 5/5"), "the verified ratio has no English arm");
+  assert.ok(references.includes("References · 3"), "the citation count has no English arm");
+  assert.ok(references.includes("2 domain(s)"), "the domain span has no English arm");
+  assert.ok(references.includes("No address was stored for this citation."), "the address-less citation has no English arm");
 
   const report = await at("Report");
   assert.ok(report.includes("References"), "the reference list has no English heading");
@@ -3081,8 +3126,11 @@ test("everything added here reads in English too", async () => {
   // The arrangement control is the one new set of words the merge introduced,
   // so it is swept here rather than left to the Chinese-only path.
   const refs = await at("References");
-  for (const word of ["By citations", "By host", "By dimension", "By verified rate", "By first read"]) {
+  for (const word of ["By type", "By verification", "By year", "By domain"]) {
     assert.ok(refs.includes(word), `the ${word} arrangement has no English arm`);
+  }
+  for (const word of ["All types", "All years"]) {
+    assert.ok(refs.includes(word), `the ${word} filter has no English arm`);
   }
 
   const cost = await at("Cost");
@@ -3102,7 +3150,7 @@ test("everything added here reads in English too", async () => {
   await running.act(() => { button(running.tree, "Report").props.onClick(); });
   assert.ok(textOf(running.tree).join(" ").includes("No report yet"), "the empty report pane has no English arm");
   await running.act(() => { button(running.tree, "References").props.onClick(); });
-  assert.ok(textOf(running.tree).join(" ").includes("Nothing has been read yet"), "the empty references pane has no English arm");
+  assert.ok(textOf(running.tree).join(" ").includes("No report has been written yet"), "the empty references pane has no English arm");
 
   const empty = await render("MissionTaskBoard", { stages: [], agents: [], zh: false });
   assert.ok(textOf(empty.tree).join(" ").includes("No tasks yet"), "the empty task board has no English arm");
@@ -3381,17 +3429,11 @@ test("a dimension opens into a drawer, and the drawer carries what the pane cann
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   await open(view, SIGNED.topic);
-  await pane(view, "参考文献");
-  await view.act(() => { button(view.tree, "按维度").props.onClick(); });
-
-  const heads = findAll(view.tree, (node) => node.type === "button"
-    && typeof node.props?.["aria-label"] === "string"
-    && node.props["aria-label"].startsWith("打开维度："));
-  assert.ok(heads.length > 0, "a dimension heading is not a control, so there is no way into its findings");
-
+  // THE WAY IN IS THE ROW. A dimension used to be a heading on the 证据 pane
+  // with a button on it; it is a row on the task board, and pressing a row is
+  // how every other thing on that board opens.
   const before = textOf(view.tree).join(" ");
-  await view.act(() => { heads[0].props.onClick(); });
-  const opened = textOf(view.tree).join(" ");
+  const opened = await openDimension(view);
   assert.ok(opened.length > before.length, "pressing a dimension opened nothing");
   assert.ok(opened.includes("三家实验室同期收敛"), "the drawer does not carry the dimension's findings");
   assert.ok(opened.includes("we observe the same scaling behaviour"), "the drawer drops the quote, which is what a claim is checked against");
@@ -3399,7 +3441,7 @@ test("a dimension opens into a drawer, and the drawer carries what the pane cann
   // A DRAWER, NOT AN EXPANSION: the rows it opened over are still there, in
   // place. An inline expansion pushes every row below it down the page, so the
   // thing being compared against moves while it is read.
-  assert.ok(opened.includes("参考文献"), "the pane under the drawer went away, so this is a screen change rather than a drawer");
+  assert.ok(opened.includes("采集"), "the board under the drawer went away, so this is a screen change rather than a drawer");
 
   const close = findAll(view.tree, (node) => node.props?.["aria-label"] === "关闭");
   assert.ok(close.length > 0, "the drawer has no way out of itself");
@@ -3615,14 +3657,7 @@ test("a dimension jumps to what it actually searched for", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   await open(view, SIGNED.topic);
-  await pane(view, "参考文献");
-  await view.act(() => { button(view.tree, "按维度").props.onClick(); });
-
-  const heads = findAll(view.tree, (node) => node.type === "button"
-    && typeof node.props?.["aria-label"] === "string"
-    && node.props["aria-label"].startsWith("打开维度："));
-  assert.ok(heads.length > 0, "there is no way into a dimension to jump out of");
-  await view.act(() => { heads[0].props.onClick(); });
+  await openDimension(view);
 
   await view.act(() => { button(view.tree, "看它搜了什么").props.onClick(); });
   const text = textOf(view.tree).join(" ");
@@ -3636,12 +3671,12 @@ test("a dimension jumps to what it actually searched for", async () => {
   assert.ok(text.includes("显示 2 / 2 条"), "the list is not narrowed to this dimension's rows");
   assert.ok(text.includes("未筛选共 7 条"), "the list does not say how much of the trajectory it is hiding, so a filtered view reads as the whole of it");
 
-  // AND IT IS A PANE CHANGE, not a drawer over the references list.
-  assert.equal(
-    findAll(view.tree, (node) => typeof node.props?.["aria-label"] === "string"
-      && node.props["aria-label"].startsWith("打开维度：")).length,
-    0,
-    "the references pane is still underneath, so the jump opened a second screen rather than moving to one",
+  // AND IT IS A PANE CHANGE, not the drawer still open over the board. The
+  // drawer's own heading is the thing that would still be on screen if the
+  // jump had drawn a second layer instead of moving to the trajectory.
+  assert.ok(
+    !text.includes("这个分数是怎么来的"),
+    "the dimension drawer is still underneath, so the jump opened a second screen rather than moving to one",
   );
 });
 
@@ -3841,29 +3876,41 @@ test("a stage row re-runs itself, and only the rows the pipeline lets re-run", a
   assert.ok(!text.includes("re-resolve caps"), "the un-rerunable reason is printed on the row; thirty of those down a 16% column is not a table");
 });
 
-test("a references row says its ratio once, and only the arrangement that sorts by a key prints it", async () => {
+test("the references filters narrow the list, and offer only what the list has", async () => {
   const times = (haystack, needle) => haystack.split(needle).length - 1;
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   await open(view, SIGNED.topic);
   const text = await pane(view, "参考文献");
+  assert.equal(times(text, "[1]"), 1, "a citation is carded more than once");
 
-  assert.ok(text.includes("已核验 4/6"), "the row does not carry its verdict as a ratio");
-  // FOLDED, NOT JOINED. The page that fed two dimensions names the first and
-  // counts the rest, the way the run picker folds its history.
-  assert.ok(text.includes("推理时序扩展的训练侧做法 +1"), "a page that fed two dimensions prints both names in full again");
-  // ONE occurrence: the arrangement's own label in the strip, and no stamp on
-  // any row. Counted rather than matched on the clock itself, because
-  // `formatStamp` renders in the runner's zone and the digits move with it.
+  // THE OPTIONS ARE READ OFF THE LIST. A fixed set of years would offer
+  // 2019 on a bibliography whose oldest page is from 2023, and a reader who
+  // picked it would get an empty pane on a legal choice. Nothing here is
+  // dated, so the year control offers only the all-years default.
+  assert.ok(text.includes("全部年份"), "the year filter is missing");
+  assert.ok(text.includes("全部类型"), "the type filter is missing");
+  const years = find(view.tree, (node) => node.props?.["aria-label"] === "年份");
+  assert.ok(years, "the year filter is not a labelled control");
   assert.equal(
-    times(text, "首次读到"),
-    1,
-    "the first-read stamp is on every row under 按引用, where nothing is sorted by it",
+    [years.props.children].flat(9).filter(Boolean).length, 1,
+    "the year filter offers years no citation in this bibliography was published in",
   );
-  await view.act(() => { button(view.tree, "按首次读到").props.onClick(); });
+
+  // AND THE SEARCH BOX NARROWS BY WHAT IS ON THE CARD — title, domain and
+  // quote — rather than by the title alone, which is the one field a reader
+  // scanning a bibliography is least likely to remember.
+  const box = find(view.tree, (node) => node.props?.["aria-label"] === "搜索参考文献");
+  assert.ok(box, "the references pane has no search box");
+  await view.act(() => { box.props.onChange({ target: { value: "deepmind" } }); });
+  const narrowed = textOf(view.tree).join(" ");
+  assert.ok(narrowed.includes("[1]"), "searching by domain drops the citation that matches it");
+  assert.ok(!narrowed.includes("[3]"), "searching by domain keeps a citation from another one");
+
+  await view.act(() => { box.props.onChange({ target: { value: "没有这样的东西" } }); });
   assert.ok(
-    times(textOf(view.tree).join(" "), "首次读到") > 1,
-    "按首次读到 orders the list by a key that appears nowhere on the rows it ordered",
+    textOf(view.tree).join(" ").includes("没有引用匹配"),
+    "a search that matches nothing is an empty column rather than a sentence",
   );
 });
 
