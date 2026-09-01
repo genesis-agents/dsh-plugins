@@ -4965,7 +4965,11 @@ test("the drawer has one heading device, and it is MissionPanel", () => {
   assert.ok(!SOURCE.includes("TraceSectionHead"), "a second section-heading component exists beside MissionPanel");
   // The one call site it had reads as a panel now, with its amber quote inside.
   const drawer = code(body("function MissionStageDetail("));
-  assert.match(drawer, /MissionPanel\(\{\s*\n?\s*bare: true,\s*\n?\s*title: zh \? "降级说明"/, "the degradation note lost its heading, so the sentence a degraded stage wrote about itself is an unlabelled amber block");
+  // THROUGH `jsx`, NOT AS A PLAIN CALL. MissionPanel holds a `useState`, so
+  // invoking it as a function puts that hook on the CALLER's list — and this
+  // call is conditional on `note`, so the caller's hook count moved the
+  // moment a note appeared. React throws #310 on that and the tab dies.
+assert.match(drawer, /jsx\(MissionPanel, \{\s*\n?\s*bare: true,\s*\n?\s*title: zh \? "降级说明"/, "the degradation note lost its heading, so the sentence a degraded stage wrote about itself is an unlabelled amber block");
 });
 
 test("a citation with nothing behind it is not drawn like one that holds up", () => {
@@ -6303,5 +6307,67 @@ test("a dimension's drawer says how it was researched, not only what it found", 
   assert.ok(
     code(body("function MissionTaskBoard(")).includes('roster.find((a) => String(a.dimensionId ?? "") === String(chosenDim.id)'),
     "the drawer is handed the whole roster rather than the agent that ran this dimension",
+  );
+});
+
+/** The three shapes the plain-call guard below reads, built rather than typed.
+ *
+ * WRITTEN THIS WAY ON PURPOSE. Every regex literal in this file that has gone
+ * through a shell has come out with its backslashes eaten — `[\s\S]` as
+ * `[sS]`, a `\t` as a real tab, a `\b` as a backspace character — and one of
+ * them took the whole file down for three commits. `String.fromCharCode` and
+ * `new RegExp` have no backslashes to lose.
+ */
+const NEWLINE = String.fromCharCode(10);
+const TAB = String.fromCharCode(9);
+const DECLARES = new RegExp("^" + TAB + TAB + "function ([A-Z]" + "\\w+)\\(", "u");
+const USES_HOOK = new RegExp("\\buse(State|Effect|LayoutEffect|Ref|Memo|Callback|SyncExternalStore)\\(", "u");
+
+test("a component that holds a hook is never called as a plain function", () => {
+  // REACT ERROR #310, AND IT KILLED THE TAB.
+  //
+  // `MissionPanel` holds a `useState`. Four call sites invoked it as a
+  // FUNCTION — `MissionPanel({ ... })` — rather than through `jsx`, so that
+  // hook landed on the CALLER's hook list instead of on a component of its
+  // own. Three of those calls were conditional on data that arrives
+  // asynchronously: the panel is absent on the first render and present on
+  // the second, so the caller rendered a different number of hooks each
+  // time. React throws `Rendered more hooks than during the previous
+  // render` on exactly that, and the pane dies with it.
+  //
+  // It reached a user as "clicking a row hangs", which is what an error
+  // thrown during render looks like from outside.
+  //
+  // A PLAIN CALL IS NOT ALWAYS WRONG — `Chip`, `RoleChip` and the rest hold
+  // no state and are called this way all over the file, deliberately. The
+  // rule is narrow: a component that HOLDS A HOOK must be reached through
+  // `jsx`, so its hooks are its own.
+  const lines = SOURCE.split(NEWLINE);
+  const holders = new Set();
+  let current = null;
+  for (const line of lines) {
+    const declared = DECLARES.exec(line);
+    if (declared !== null) current = declared[1];
+    if (current !== null && USES_HOOK.test(line)) holders.add(current);
+  }
+  assert.ok(
+    holders.size >= 20,
+    `${holders.size} components hold hooks; this file has many more than that, so the scan is reading the wrong shape`,
+  );
+
+  const offenders = [];
+  for (const [at, line] of lines.entries()) {
+    for (const name of holders) {
+      if (line.includes("function " + name + "(")) continue;
+      // A CALL, not `jsx(Name, {` and not a longer identifier ending in it.
+      if (new RegExp("[^(\\w.]" + name + "\\(\\{", "u").test(line)) {
+        offenders.push(name + " at line " + String(at + 1));
+      }
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `a component holding a hook is called as a plain function, so its hooks join the caller's list and that count changes with the condition around it: ${offenders.join(", ")}`,
   );
 });

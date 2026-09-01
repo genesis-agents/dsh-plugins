@@ -12789,7 +12789,7 @@ window.__ModuleLoader__.load({
 							// two lines inside a table cell. AMBER, because a stage that finished
 							// by lowering its own bar wrote it, and a green rule beside it read
 							// as the stage endorsing itself.
-							note === "" ? null : MissionPanel({
+							note === "" ? null : jsx(MissionPanel, {
 								bare: true,
 								title: zh ? "降级说明" : "Why it degraded",
 								children: jsx("div", {
@@ -13718,7 +13718,7 @@ window.__ModuleLoader__.load({
 										// The reference puts 章节进度 inside the dimension's own drawer, and the
 										// projection has been per-dimension all along: every chapter row carries
 										// its `dimensionId` and this drawer is handed only its own.
-										(Array.isArray(chapters) ? chapters : []).length === 0 ? null : MissionPanel({
+										(Array.isArray(chapters) ? chapters : []).length === 0 ? null : jsx(MissionPanel, {
 											bare: true,
 											title: zh ? "成章记录" : "Chapter delivery",
 											count: chapters.length,
@@ -13737,7 +13737,7 @@ window.__ModuleLoader__.load({
 										// Per AGENT, because `mission_tool_calls` has no dimension column; the
 										// roster resolves one out of the agent id, which is the same route the
 										// tokens beside it take.
-										(agent?.tools ?? []).length === 0 ? null : MissionPanel({
+										(agent?.tools ?? []).length === 0 ? null : jsx(MissionPanel, {
 											bare: true,
 											title: zh ? "使用工具" : "Tools used",
 											count: (agent.tools ?? []).reduce((sum, t) => sum + (t.calls ?? 0), 0),
@@ -13758,7 +13758,7 @@ window.__ModuleLoader__.load({
 										// each — a dimension whose thirteen findings come from two hosts and
 										// one whose thirteen come from eleven are different pieces of work, and
 										// the 独立站点 tile gives the count without the shape.
-										((list) => (list.length === 0 ? null : MissionPanel({
+										((list) => (list.length === 0 ? null : jsx(MissionPanel, {
 											bare: true,
 											title: zh ? "引用来源" : "Sources",
 											count: list.length,

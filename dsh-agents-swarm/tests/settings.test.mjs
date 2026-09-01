@@ -44,6 +44,9 @@ async function render(Component, props = {}) {
   // hooks are conditional misbehaves here in the same way rather than quietly
   // working.
   const stores = new Map();
+  // Hooks used per component instance on the previous pass, so a change is
+  // reported where React reports one.
+  const hookCounts = new Map();
   let frame = null;
   let seq = 0;
   const effects = [];
@@ -92,6 +95,28 @@ async function render(Component, props = {}) {
     try {
       return type(props2 ?? {});
     } finally {
+      // REACT ERROR #310, WHICH THIS HARNESS COULD NOT SEE.
+      //
+      // React counts a component's hooks and throws — `Rendered more hooks
+      // than during the previous render` — the moment the count changes.
+      // This harness just kept reading slots by index, so a component whose
+      // hook count moved read ANOTHER hook's state and carried on.
+      //
+      // MEASURED: `MissionPanel` holds a `useState`, and four call sites
+      // invoked it as a PLAIN FUNCTION rather than through `jsx` — so its
+      // hook landed on the CALLER's list. Three of those calls were
+      // conditional on data that arrives asynchronously: empty on the first
+      // render, present on the second, and the caller's hook count changed
+      // between them. On the page that is a dead tab. Here it was nothing.
+      const used = frame.cursor;
+      const before = hookCounts.get(id);
+      if (before !== undefined && before !== used) {
+        frame = outer;
+        assert.fail(
+          `${id} rendered ${used} hooks after rendering ${before} — React throws #310 on this. A hook behind a condition, or a hook-using component called as a plain function instead of through jsx()`,
+        );
+      }
+      hookCounts.set(id, used);
       frame = outer;
     }
   };
