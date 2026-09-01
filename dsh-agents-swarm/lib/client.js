@@ -7877,24 +7877,43 @@ window.__ModuleLoader__.load({
 			// a row that has not reached s1 yet.
 			const stageAt = MISSION_STAGE_ORDER.indexOf(mission.lastStage ?? "");
 			const stageOrdinal = stageAt < 0 ? null : stageAt + 1;
-			const meta = [
-				missionFace(MISSION_TIER_FACES, mission.depth, zh),
-				zh ? `第 ${mission.runCount} 次运行` : `run ${mission.runCount}`,
-				zh ? `已核验 ${mission.verifiedFindings ?? 0} 条` : `${mission.verifiedFindings ?? 0} verified`,
-				// SHORT, like everywhere else the same quantity is drawn. This was
-				// the site where the list and the detail header disagreed about one
-				// run: `412,000 令牌` here and `412k` four inches away on the screen
-				// the row opens. There is no per-figure hover to hang the exact
-				// number on — this meta line is one joined sentence — and it does
-				// not need one: the detail header's token tile prints the exact
-				// figure against its ceiling in its own hint.
-				zh ? `${missionCompact(mission.spend?.tokens ?? 0)} 令牌` : `${missionCompact(mission.spend?.tokens ?? 0)} tokens`,
-				formatStamp(mission.startedAt)
-			].filter((piece) => piece !== "").join(" · ");
 
-			// The topic is the control, the way a 信源 card's title is: a whole
-			// card wrapped in one button puts flow content inside phrasing
-			// content and hands a screen reader one enormous label.
+			// WHAT THIS RUN SET OUT TO ESTABLISH, in its own words. The card
+			// carried the topic, a status pill and a dot-joined line of five
+			// figures, and that was the whole of what a reader had to tell two runs
+			// of the same topic apart. s2 writes `goals.successCriteria` — the bar
+			// the Leader will be held to at sign-off — and the first of them is the
+			// closest thing this mission has to a sentence about itself.
+			//
+			// THE ERROR WINS WHEN THERE IS ONE. A run that died has one thing on it
+			// worth reading, and it is not what it had hoped to prove. This is also
+			// where the error line used to live, four rows further down, under the
+			// figures it invalidates.
+			const criteria = Array.isArray(mission.goals?.successCriteria) ? mission.goals.successCriteria : [];
+			const blurb = (mission.errorMessage ?? "") === ""
+				? String(criteria[0] ?? "")
+				: (mission.failureCode === null || mission.failureCode === undefined ? "" : `${mission.failureCode} · `) + mission.errorMessage;
+
+			// THE FIGURES, EACH WITH ITS OWN GLYPH. Middot-joined they were one
+			// 12px grey sentence in which every number looked like every other, and
+			// the two a reader actually compares runs by — what it cost and what it
+			// scored — sat in the middle of it with no mark of their own.
+			//
+			// A SCORE ONLY WHEN ONE WAS GIVEN. `finalScore` is null until the
+			// Leader signs, and 0 / 100 on a running mission is a verdict nobody
+			// reached. A DURATION ONLY WITH BOTH ENDS, for the same reason: a run
+			// still going has no elapsed figure that is still true a second later.
+			const score = Number.isFinite(mission.finalScore) ? mission.finalScore
+				: Number.isFinite(mission.leaderScore) ? mission.leaderScore : null;
+			const spanMs = Date.parse(String(mission.completedAt ?? "")) - Date.parse(String(mission.startedAt ?? ""));
+			const figures = [
+				{ icon: "chip", text: zh ? `${missionCompact(mission.spend?.tokens ?? 0)} 令牌` : `${missionCompact(mission.spend?.tokens ?? 0)} tokens` },
+				{ icon: "checklist", text: zh ? `已核验 ${mission.verifiedFindings ?? 0} 条` : `${mission.verifiedFindings ?? 0} verified` },
+				score === null ? null : { icon: "gauge", text: `${Math.round(score)} / 100`, tone: missionRateHue(score, 100) },
+				!Number.isFinite(spanMs) || spanMs <= 0 ? null : { icon: "clock", text: missionDuration(spanMs, zh) }
+			].filter((figure) => figure !== null);
+
+
 			return jsx("article", {
 				// THE CARD'S OWN MARGIN IS OVERRIDDEN HERE AND NOT REMOVED FROM
 				// CARD_STYLE. That margin has four consumers — the 信源 feed, the
@@ -7908,37 +7927,75 @@ window.__ModuleLoader__.load({
 				children: jsxs("div", {
 					style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: SPACE.sm },
 					children: [
+						// THE TILE, THE WAY EVERY CARD IN THE REFERENCE'S GRID OPENS. Not
+						// decoration: forty cards of pure text are forty identical grey
+						// rectangles, and the tile is what gives the eye somewhere to land
+						// before it starts reading.
+						jsx("div", {
+							style: {
+								flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
+								width: "44px", height: "44px", borderRadius: RADIUS.lg,
+								color: `rgb(${TONE.accent})`, background: tint(TONE.accent, TINT.soft),
+								boxShadow: `inset 0 0 0 1px ${tint(TONE.accent, TINT.ring)}`
+							},
+							children: jsx(Icon, { name: "sparkles", size: ICON.md })
+						}, "tile"),
+						// WHAT KIND OF RUN THIS WAS, AS LABELS RATHER THAN AS A SENTENCE. The
+						// tier, the language and the attempt were three clauses inside one grey
+						// middot line, where they read as statistics. They are what a reader
+						// tells two cards apart by, so they are chips.
 						jsxs("div", {
-							style: { display: "flex", alignItems: "center", gap: SPACE.md, width: "100%" },
+							style: { display: "flex", alignItems: "center", gap: SPACE.xs, flexWrap: "wrap" },
 							children: [
-								jsx("button", {
-									type: "button",
-									onClick: () => { onOpen(mission.id); },
-									style: { font: FONT.baseStrong,
-										appearance: "none", border: "none", background: "transparent", padding: 0,
-										flex: 1, minWidth: 0, textAlign: "left", cursor: "pointer",
-										color: INK.primary
-									},
-									children: mission.topic
-								}, "topic"),
-								// The mission's STATE, so it takes the pill shape rather
-								// than the chip's. It was drawn at `1px 7px` on a 5px
-								// radius here and at `1px 8px` on a 6px one in the
-								// header of the screen this row opens.
+								Chip({
+									label: missionFace(MISSION_TIER_FACES, mission.depth, zh),
+									tone: missionHue(MISSION_TIER_FACES, mission.depth)
+								}, "tier"),
+								(mission.language ?? "") === "" ? null : Chip({ label: String(mission.language) }, "lang"),
+								// The mission's STATE, so it takes the pill shape rather than the
+								// chip's. It was drawn at `1px 7px` on a 5px radius here and at
+								// `1px 8px` on a 6px one in the header of the screen this row opens.
 								//
-								// AND A MARK BESIDE THE WORD. 已取消 and 未知 are both
-								// TONE.neutral and 失败 and 未知（已结束） are both
-								// TONE.danger, so in a scanned list the colour narrows
-								// the answer to two and the glyph finishes it. A running
-								// mission gets the spinner, which is the one row in the
-								// list that is still moving.
-								Chip({ tone: face.hue, pill: true, icon: face.icon, label: face.label }, "pill")
+								// AND A MARK BESIDE THE WORD. 已取消 and 未知 are both TONE.neutral
+								// and 失败 and 未知（已结束） are both TONE.danger, so in a scanned
+								// list the colour narrows the answer to two and the glyph finishes
+								// it. A running mission gets the spinner, which is the one row in
+								// the list that is still moving.
+								Chip({ tone: face.hue, pill: true, icon: face.icon, label: face.label }, "pill"),
+								// A SECOND RUN IS A DIFFERENT DOCUMENT, and it is the reason two
+								// cards in this grid share a topic.
+								Number(mission.runCount ?? 1) <= 1 ? null : Chip({
+									label: zh ? `第 ${mission.runCount} 次` : `run ${mission.runCount}`
+								}, "run")
 							]
-						}, "head"),
-						// Only while running, and only once a stage has been recorded.
-						// A row that has not reached s1 yet has nothing to measure —
-						// an empty track under it would say the mission is a twelfth
-						// of the way through nothing.
+						}, "chips"),
+						// The topic is the control, the way a 信源 card's title is: a whole card
+						// wrapped in one button puts flow content inside phrasing content and
+						// hands a screen reader one enormous label.
+						//
+						// TWO LINES, CLAMPED. A topic is a question and questions run long; on
+						// one line every card in the grid ended in an ellipsis at the same
+						// column, which is a list of forty rows that all look the same.
+						jsx("button", {
+							type: "button",
+							onClick: () => { onOpen(mission.id); },
+							style: {
+								...clampBox(2),
+								font: FONT.baseStrong,
+								appearance: "none", border: "none", background: "transparent", padding: 0,
+								width: "100%", minWidth: 0, textAlign: "left", cursor: "pointer",
+								color: INK.primary
+							},
+							children: mission.topic
+						}, "topic"),
+						blurb === "" ? null : jsx("p", {
+							style: { ...clampBox(2), margin: 0, font: FONT.small, color: INK.secondary },
+							children: blurb
+						}, "blurb"),
+						// Only while running, and only once a stage has been recorded. A row
+						// that has not reached s1 yet has nothing to measure — an empty track
+						// under it would say the mission is a twelfth of the way through
+						// nothing.
 						mission.status !== "running" || stageOrdinal === null ? null : Meter({
 							value: stageOrdinal, max: MISSION_STAGE_ORDER.length, tone: face.hue,
 							role: "progressbar",
@@ -7949,7 +8006,27 @@ window.__ModuleLoader__.load({
 								? `阶段 ${stageOrdinal}/${MISSION_STAGE_ORDER.length}`
 								: `stage ${stageOrdinal} of ${MISSION_STAGE_ORDER.length}`
 						}, "progress"),
-						jsx("div", { style: META_STYLE, children: meta }, "meta"),
+						// PUSHES THE FIGURES TO THE FLOOR. Cards in a grid stretch to the
+						// tallest in their row, so without this a short card's footer floats in
+						// the middle of it and one row reads as four differently-built objects.
+						jsx("div", { style: { flex: 1, minHeight: 0 } }, "spacer"),
+						jsx("div", {
+							style: {
+								display: "flex", flexWrap: "wrap", alignItems: "center",
+								rowGap: SPACE.xs, columnGap: SPACE.md,
+								font: FONT.micro, color: INK.secondary
+							},
+							children: figures.map((figure) => jsxs("span", {
+								style: {
+									display: "inline-flex", alignItems: "center", gap: SPACE.xs,
+									color: figure.tone === undefined ? INK.secondary : `rgb(${figure.tone})`
+								},
+								children: [
+									jsx(Icon, { name: figure.icon, size: ICON.xs }, "glyph"),
+									jsx("span", { children: figure.text }, "text")
+								]
+							}, figure.icon))
+						}, "figures"),
 						// A row that says running while nothing is running it is the
 						// symptom of a process that died mid-mission. Named here
 						// rather than left for the person to infer from a clock that
@@ -7996,6 +8073,21 @@ window.__ModuleLoader__.load({
 									: (zh ? "删除" : "Delete")
 							}, "delete")
 						}, "actions"),
+						// A RULE, AND THE AGE UNDER IT. The reference closes every card in its
+						// grid this way, and the reason it works is that the age is the one
+						// fact on the card that is about the card rather than about the run.
+						//
+						// THE EXACT STAMP IS STILL HERE, on hover: a relative age cannot be
+						// matched against a log line and an absolute one cannot be scanned, and
+						// `title` is what lets one element carry both.
+						jsx("div", {
+							style: { paddingTop: SPACE.sm, borderTop: `1px solid ${LINE.hair}` },
+							children: jsx("span", {
+								title: formatStamp(mission.startedAt),
+								style: { font: FONT.micro, color: INK.quiet },
+								children: formatAgo(mission.startedAt, zh)
+							}, "age")
+						}, "foot"),
 						trouble === "" ? null : jsx("div", {
 							style: { font: FONT.small, color: `rgb(${TONE.danger})` },
 							children: trouble
@@ -8013,6 +8105,40 @@ window.__ModuleLoader__.load({
 		* reader, so the frame never moves under the person reading it.
 		* @param zh - whether to write Chinese.
 		*/
+		/**
+		* How long ago, in the coarsest unit that still says something.
+		*
+		* BESIDE `formatStamp`, NOT INSTEAD OF IT. A stamp answers "which run was
+		* that" and an interval answers "is this still current", and a list of
+		* forty missions is read for the second question — 08-30 10:30 against
+		* thirty-nine other stamps is a column of digits nobody sorts by eye. The
+		* exact stamp stays one hover away, on the same element.
+		*
+		* MINUTES ARE THE FLOOR. Seconds on a card that redraws every few seconds
+		* is a number that moves while it is read, for a distinction nobody
+		* scanning this list is making.
+		* @param iso - an ISO stamp, or null.
+		* @param zh - whether to write Chinese.
+		* @returns the interval, or "" when there is no stamp to measure from.
+		*/
+		function formatAgo(iso, zh) {
+			const at = Date.parse(String(iso ?? ""));
+			if (!Number.isFinite(at)) return "";
+			const mins = Math.floor((Date.now() - at) / 60000);
+			// A CLOCK AHEAD OF OURS IS NOT AN ERROR TO SHOW. Server and browser
+			// disagree by seconds routinely, and "in 1 minute" on a row that has
+			// already finished reads as a bug in the run rather than in the clocks.
+			if (mins < 1) return zh ? "刚刚" : "just now";
+			if (mins < 60) return zh ? `${mins} 分钟前` : `${mins} min ago`;
+			const hours = Math.floor(mins / 60);
+			if (hours < 24) return zh ? `${hours} 小时前` : `${hours} h ago`;
+			const days = Math.floor(hours / 24);
+			if (days < 7) return zh ? `${days} 天前` : `${days} d ago`;
+			const weeks = Math.floor(days / 7);
+			if (weeks < 5) return zh ? `${weeks} 周前` : `${weeks} w ago`;
+			return zh ? `${Math.floor(days / 30)} 个月前` : `${Math.floor(days / 30)} mo ago`;
+		}
+
 		function MissionsTab({ zh }) {
 			const [filterId, setFilterId] = useState("");
 			// The empty list's call to action puts the cursor in the starter's

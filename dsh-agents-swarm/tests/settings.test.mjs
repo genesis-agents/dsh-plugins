@@ -409,7 +409,18 @@ const RUNNING = {
   topic: "推理时序扩展的三条技术路线",
   depth: "standard", language: "zh", status: "running", rawStatus: "running",
   budget: { maxTokens: 1500000, maxCalls: 120, maxArxiv: 60, maxWeb: 120, maxFetch: 100, wallMs: 3600000 },
-  retryBelowSeam: false, goals: null, derivedFloor: 3, runCount: 1, patchRound: 0,
+  retryBelowSeam: false, derivedFloor: 3, runCount: 1, patchRound: 0,
+  // WHAT s2 WROTE DOWN THAT THIS RUN MUST ESTABLISH. `goals` was null on
+  // every fixture here, so the one sentence a mission has about itself
+  // reached no test — and the card that now prints it could have printed
+  // anything.
+  goals: {
+    successCriteria: [
+      "说清楚三家以上实验室的公开做法，并给出可核验的出处。",
+      "分清训练侧与推理侧两条路径。",
+    ],
+    qualityBar: { minVerifiedFindings: 6, minIndependentSources: 3, minCoverage: 60 },
+  },
   lastStage: "s3-collect",
   startedAt: "2026-08-24T09:00:00.000Z", completedAt: null,
   failureCode: null, errorMessage: null, leaderSigned: null, finalScore: null,
@@ -1859,6 +1870,54 @@ test("a mission row says how it ended and what it cost", async () => {
   assert.ok(refused.includes("未签署"), "a quality-failed mission is drawn as a plain failure");
   assert.ok(refused.includes("quality_refused"), "the failure code is not on the row");
   assert.ok(refused.includes("The report cites nothing."), "the failure sentence is not on the row");
+});
+
+test("a mission card is a card, not a title with a grey sentence under it", async () => {
+  // FORTY CARDS OF PURE TEXT ARE FORTY IDENTICAL GREY RECTANGLES. This one
+  // was a topic, a status pill and one middot-joined line of five figures —
+  // no mark to land on, nothing said about the run in words, and every
+  // number in the same 12px grey as every other number. The reference's grid
+  // opens each card with a tile, labels what kind of run it was, says what
+  // the run set out to establish, and gives each figure its own glyph.
+  stubFetch();
+  const { tree } = await render("MissionsTab", { zh: true });
+  const running = card(tree, RUNNING.topic);
+  const row = textOf(running).join(" ");
+
+  // WHAT THIS RUN SET OUT TO ESTABLISH, in the Leader's own words. s2 writes
+  // `goals.successCriteria` and nothing on this screen had ever shown one,
+  // so two runs of the same topic were two identical cards.
+  assert.ok(
+    row.includes("三家以上实验室的公开做法"),
+    "the card says nothing about what this run is trying to establish",
+  );
+
+  // AND THE AGE, WHICH IS THE QUESTION A LIST IS READ FOR. A column of
+  // 08-30 10:30 stamps is not something anybody sorts by eye.
+  const age = find(running, (node) => typeof node.props?.title === "string"
+    && node.props.title !== ""
+    && typeof node.props?.children === "string"
+    && /前|just now/u.test(node.props.children));
+  assert.ok(age, "the card does not say how long ago the run started");
+  // THE EXACT STAMP SURVIVES, on the same element. A relative age cannot be
+  // matched against a log line; dropping the stamp to gain the interval
+  // would trade one unanswerable question for another.
+  assert.match(age.props.title, /\d/u, "the exact stamp went away with the interval that replaced it");
+
+  // A GLYPH PER FIGURE. Counted, because the failure this replaces is one
+  // undifferentiated sentence — a card that drew the icons and kept the
+  // joined line would read as both at once.
+  assert.ok(!row.includes("令牌 · "), "the figures are still joined into one grey sentence");
+
+  // THE SCORE ONLY ONCE THERE IS ONE. `finalScore` is null until the Leader
+  // signs, and 0 / 100 on a running mission is a verdict nobody reached.
+  assert.ok(!row.includes("/ 100"), "a running mission is carrying a sign-off score");
+  const signed = textOf(card(tree, SIGNED.topic)).join(" ");
+  assert.ok(signed.includes("/ 100"), "a signed mission does not carry the score it was signed at");
+
+  // AND A DURATION ONLY WITH BOTH ENDS. A run still going has no elapsed
+  // figure that is still true a second later.
+  assert.ok(signed.includes("秒") || signed.includes("分"), "a finished mission does not say how long it took");
 });
 
 test("a running mission says how far along it is, and a settled one does not", async () => {

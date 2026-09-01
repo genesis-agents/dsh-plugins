@@ -3235,11 +3235,16 @@ test("a signature that holds up costs no band at all", () => {
     detail.includes("mission.verdict"),
     "the header carries the score without the verdict word, which then appears nowhere at all",
   );
-  // And it is the SECOND meta array. The first belongs to MissionListRow, and
-  // an earlier attempt at this edit landed there instead — a score on every
-  // row of the mission list, and none on the screen it was written for.
+  // AND IT IS THE ONLY meta ARRAY LEFT. There were two, and this counted
+  // them because an earlier attempt at this edit landed in the other one —
+  // a score on every row of the mission list, and none on the screen it was
+  // written for. MissionListRow's is gone: its card states its figures as
+  // glyph-and-value pairs now, the way the reference's grid does, rather
+  // than as one middot-joined grey sentence. So the count is 1, and the
+  // guard below no longer has an ambiguity to resolve — it is kept because
+  // the score still does not belong on a list row.
   const metas = [...SOURCE.matchAll(/const meta = \[/g)].length;
-  assert.equal(metas, 2, `there are now ${metas} meta arrays; the guard below can no longer tell which one was edited`);
+  assert.equal(metas, 1, `there are now ${metas} meta arrays; the one this guard is about is the mission header's`);
   assert.ok(
     !code(body("function MissionListRow(")).includes("Number(mission.score) >= 80"),
     "the mission list's rows carry the sign-off score, which belongs to the detail header",
