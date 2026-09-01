@@ -517,6 +517,41 @@ window.__ModuleLoader__.load({
 		const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
 		/**
+		* A reading face, and it has exactly one caller.
+		*
+		* THE VERBATIM QUOTE ON AN INSIGHT CARD IS NOT OUR VOICE. Everything
+		* else there is a machine's judgement — the statement is its paraphrase,
+		* the scores its arithmetic, the kind its classification — and the quote
+		* is the one thing a reader can check the rest against. Set in the UI
+		* face at the UI size it reads as another field; set in a serif at a
+		* larger size it reads as a quotation, which is what it is.
+		*
+		* A RAW FAMILY, LIKE MONO ABOVE, and for the same reason: FONT is the
+		* harness's type scale and the harness has no serif in it. Declared once
+		* here rather than inline at the one call site, so a second caller has
+		* something to reach for instead of pasting a stack.
+		*/
+		const SERIF = "Spectral, Georgia, \"Times New Roman\", serif";
+
+		/**
+		* A second, written the way a player writes it.
+		*
+		* THE SAME FUNCTION AS insight-moment.js's, and that is a copy on purpose:
+		* this module is a browser bundle with no imports, and the alternative to
+		* eight lines here is a build step. It is pinned by a guard so the two
+		* cannot come to disagree about whether 3792 is 1:03:12.
+		* @param seconds - the moment.
+		* @returns `1:03:12` over an hour, `38:08` under one.
+		*/
+		function formatMoment(seconds) {
+			const total = Math.max(0, Math.floor(Number(seconds) || 0));
+			const s = String(total % 60).padStart(2, "0");
+			const m = Math.floor(total / 60) % 60;
+			const h = Math.floor(total / 3600);
+			return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+		}
+
+		/**
 		* The spacing rhythm: five steps, all multiples of four.
 		*
 		* This file used sixteen distinct gap values — including 1, 3, 7, 9, 11
@@ -8231,13 +8266,7 @@ window.__ModuleLoader__.load({
 		function InsightCard({ row, zh, onPin, busy }, key) {
 			const kind = INSIGHT_KIND_FACES[row.kind] ?? null;
 			const face = INSIGHT_STATUS_FACES[row.effectiveStatus] ?? INSIGHT_STATUS_FACES.candidate;
-			const entities = Array.isArray(row.entities) ? row.entities : [];
 			const evidence = Array.isArray(row.evidencePreview) ? row.evidencePreview : [];
-			// THE FOUR, AS ONE FIGURE AND FOUR. `rankScore` is the weighted blend
-			// the list is ordered by, so it is what the row is placed by and
-			// belongs on the row; the four it is made of go behind a title,
-			// because a reader who wants to know why this is at the top wants the
-			// breakdown and a reader who does not wants one number.
 			const scores = [
 				{ zh: "新颖", en: "novelty", value: row.novelty },
 				{ zh: "相关", en: "relevance", value: row.relevance },
@@ -8247,22 +8276,35 @@ window.__ModuleLoader__.load({
 			const breakdown = scores
 				.map((one) => `${zh ? one.zh : one.en} ${Number(one.value ?? 0).toFixed(2)}`)
 				.join(" · ");
-
+			// THE CARD IS TIED TO ITS GROUP BY ITS EDGE. Ten cards under a heading
+			// are ten identical rectangles and the reader has to hold the heading in
+			// mind to know what they are looking at. A rule down the left in the
+			// group's colour carries it, and squaring that corner is what makes the
+			// rule read as the card's edge rather than as a stripe inside it.
+			const edge = kind === null ? TONE.neutral : kind.hue;
 			return jsxs("article", {
-				style: { ...CARD_STYLE, marginBottom: 0, display: "flex", flexDirection: "column", gap: SPACE.sm },
+				style: {
+					...CARD_STYLE, marginBottom: 0,
+					display: "flex", flexDirection: "column", gap: SPACE.sm,
+					borderLeft: `3px solid ${tint(edge, TINT.ring)}`,
+					borderTopLeftRadius: 0, borderBottomLeftRadius: 0
+				},
 				children: [
+					// TWO PILLS AND THE FIGURE, on one line. The reference opens every
+					// signal with a strength and a type; ours are the status the pass
+					// computed and the kind it classified, which are the two facts the
+					// same shape.
 					jsxs("div", {
 						style: { display: "flex", alignItems: "center", gap: SPACE.xs, flexWrap: "wrap" },
 						children: [
 							Chip({ tone: face.hue, pill: true, icon: face.icon, label: zh ? face.zh : face.en }, "state"),
 							kind === null ? null : Chip({ tone: kind.hue, icon: kind.icon, label: zh ? kind.zh : kind.en }, "kind"),
 							// PINNED IS SAID, not just obeyed. `pinnedStatus` outranks the
-							// pass, so a card sitting at 成立 because a person put it there
-							// and one the pass computed are the same colour and different
-							// facts — and the second reverts on the next run.
+							// pass, so a card at 成立 because a person put it there and one
+							// the pass computed are the same colour and different facts —
+							// and the second reverts on the next run.
 							row.pinnedStatus === null || row.pinnedStatus === undefined ? null : Chip({
-								tone: TONE.accent,
-								label: zh ? "人工判定" : "your verdict"
+								tone: TONE.accent, label: zh ? "人工判定" : "your verdict"
 							}, "pinned"),
 							jsx("span", { style: { flex: 1 } }, "spacer"),
 							jsx("span", {
@@ -8272,58 +8314,26 @@ window.__ModuleLoader__.load({
 							}, "rank")
 						]
 					}, "top"),
+					// THE CLAIM, AT THE SIZE THE REFERENCE SETS IT. It was FONT.bodyMedium
+					// — the same 13px as the fields around it — which made the one
+					// sentence the card exists to carry indistinguishable from its meta.
 					jsx("p", {
-						style: { font: FONT.bodyMedium, color: INK.primary, margin: 0 },
+						style: { font: FONT.baseStrong, color: INK.primary, margin: 0 },
 						children: String(row.statement ?? "")
 					}, "statement"),
-					entities.length === 0 ? null : jsx("div", {
-						style: { display: "flex", flexWrap: "wrap", gap: SPACE.xs },
-						children: entities.slice(0, 6).map((name, at) => Chip({ label: String(name) }, `e${at}`))
-					}, "entities"),
-					// THE VERBATIM HALF. One per stance at most: a claim with nine
-					// supporting quotes does not need nine on the card, but a claim
-					// with a contradiction against it must show that one — it is the
-					// whole reason `contested` exists as a status.
-					...evidence.slice(0, 3).map((piece, at) => {
-						const stance = INSIGHT_STANCE_FACES[piece?.stance] ?? INSIGHT_STANCE_FACES.context;
-						return jsxs("blockquote", {
-							style: {
-								margin: 0, padding: `${SPACE.xs} 0 ${SPACE.xs} ${SPACE.md}`,
-								borderLeft: `2px solid ${tint(stance.hue, TINT.ring)}`
-							},
-							children: [
-								jsx("p", {
-									style: { margin: 0, font: FONT.body, color: INK.secondary },
-									children: `“${String(piece?.quote ?? "")}”`
-								}, "quote"),
-								jsxs("div", {
-									style: {
-										display: "flex", alignItems: "center", gap: SPACE.xs,
-										marginTop: "2px", font: FONT.nano, color: INK.quiet
-									},
-									children: [
-										jsx("span", { style: { color: `rgb(${stance.hue})` }, children: zh ? stance.zh : stance.en }, "stance"),
-										piece?.sourceKey === undefined || piece.sourceKey === null || piece.sourceKey === ""
-											? null
-											: jsx("span", { style: { fontFamily: MONO }, children: String(piece.sourceKey) }, "host")
-									]
-								}, "by")
-							]
-						}, `q${at}`);
-					}),
+					...evidence.slice(0, 3).map((piece, at) => InsightQuote({ piece, zh }, `q${at}`)),
 					jsxs("div", {
 						style: {
 							display: "flex", flexWrap: "wrap", alignItems: "center",
 							rowGap: SPACE.xs, columnGap: SPACE.md,
 							paddingTop: SPACE.sm, borderTop: `1px solid ${LINE.hair}`,
-							font: FONT.micro, color: INK.secondary
+							font: FONT.micro, color: INK.secondary, fontFamily: MONO
 						},
 						children: [
-							// INDEPENDENT SOURCES, NOT ARTICLES, and the two are printed
-							// together because their difference is the whole claim about
-							// corroboration: six articles off one wire service is one
-							// source, and a card that said "6" would be saying the
-							// opposite of what it means.
+							// INDEPENDENT SOURCES, NOT ARTICLES, and both are printed because
+							// their difference IS the claim about corroboration: six articles
+							// off one wire service is one source, and a card that said "6"
+							// would be saying the opposite of what it means.
 							jsx("span", {
 								title: zh
 									? "独立来源 / 证据条数。六篇转载同一条通稿算一个来源。"
@@ -8342,9 +8352,9 @@ window.__ModuleLoader__.load({
 							}, "first"),
 							jsx("span", { style: { flex: 1 } }, "gap"),
 							// THE VERDICT CONTROLS. Three buttons rather than a menu: the
-							// whole point of `pinned_status` is that it survives the next
-							// pass, and a control that decides that must not be one click
-							// deeper than the pass's own opinion.
+							// point of `pinned_status` is that it survives the next pass, and
+							// a control that decides that must not sit a click deeper than
+							// the pass's own opinion.
 							...[
 								{ id: "standing", zh: "成立", en: "Standing" },
 								{ id: "contested", zh: "存疑", en: "Contest" },
@@ -8360,15 +8370,100 @@ window.__ModuleLoader__.load({
 									color: row.pinnedStatus === choice.id ? `rgb(${TONE.accent})` : INK.secondary,
 									borderRadius: RADIUS.md, padding: `2px ${SPACE.sm}`, font: FONT.micro
 								},
-								// PRESSING THE ONE THAT IS ALREADY SET CLEARS IT. That is
-								// what hands the card back to the pass, and a separate
-								// "clear" button would be a fourth control for a state
-								// three of them already describe.
+								// PRESSING THE ONE ALREADY SET CLEARS IT, which is what hands
+								// the card back to the pass. A separate "clear" would be a
+								// fourth control for a state three of them already describe.
 								onClick: () => { onPin(row.pinnedStatus === choice.id ? null : choice.id); },
 								children: zh ? choice.zh : choice.en
 							}, choice.id))
 						]
 					}, "foot")
+				]
+			}, key);
+		}
+
+		/**
+		* One quote, and where it came from.
+		*
+		* THE MOMENT IS THE SOURCE, for anything with a timeline. A link to a
+		* ninety-minute interview is not a citation of one sentence — it hands the
+		* reader the search problem back. `atUrl` is computed by matching the quote
+		* against the stored transcript's cues, so pressing 38:08 opens the video
+		* at the second the sentence starts. See insight-moment.js: no match, no
+		* link, because a confident timestamp under a sentence nobody said there is
+		* worse than none.
+		* @param piece - one evidence row, with `at` and `atUrl` when it has them.
+		* @param zh - whether to write Chinese.
+		* @param key - React key.
+		* @returns the quotation.
+		*/
+		function InsightQuote({ piece, zh }, key) {
+			const stance = INSIGHT_STANCE_FACES[piece?.stance] ?? INSIGHT_STANCE_FACES.context;
+			const title = typeof piece?.title === "string" && piece.title !== "" ? piece.title : null;
+			const url = typeof piece?.sourceUrl === "string" && piece.sourceUrl !== "" ? piece.sourceUrl : null;
+			const at = Number.isFinite(piece?.at) ? piece.at : null;
+			return jsxs("blockquote", {
+				style: {
+					margin: 0, padding: `${SPACE.xs} 0 ${SPACE.xs} ${SPACE.md}`,
+					borderLeft: `2px solid ${tint(stance.hue, TINT.ring)}`
+				},
+				children: [
+					// SET AS A QUOTATION. Everything else on the card is a machine's
+					// judgement — the statement is its paraphrase, the scores its
+					// arithmetic — and this is the one thing a reader can check the rest
+					// against, so it is not drawn in the same face at the same size as
+					// the fields around it. See SERIF.
+					jsx("p", {
+						style: {
+							margin: 0, font: FONT.base, fontFamily: SERIF,
+							fontStyle: "italic", color: INK.secondary,
+							// A QUOTE OFF A PAPER RUNS LONG AND OFTEN CARRIES AN IDENTIFIER
+							// WITH NO SPACES IN IT, which pushes the card past its column.
+							overflowWrap: "anywhere"
+						},
+						children: `“${String(piece?.quote ?? "")}”`
+					}, "quote"),
+					jsxs("div", {
+						style: {
+							display: "flex", flexWrap: "wrap", alignItems: "center",
+							rowGap: SPACE.xs, columnGap: SPACE.sm,
+							marginTop: SPACE.xs, font: FONT.nano, color: INK.quiet, fontFamily: MONO
+						},
+						children: [
+							jsx("span", { style: { color: `rgb(${stance.hue})` }, children: zh ? stance.zh : stance.en }, "stance"),
+							// WHO SAID IT, which for us is the page it was said on: the
+							// extractor stores no speaker, and putting a name here that
+							// nothing recorded would be the card inventing an attribution.
+							title === null ? null : jsx(url === null ? "span" : "a", {
+								...(url === null ? {} : { href: url, target: "_blank", rel: "noreferrer noopener", className: "swm-prose-a" }),
+								title,
+								style: {
+									...clampBox(1), maxWidth: "42ch", minWidth: 0,
+									fontFamily: "inherit", color: url === null ? INK.quiet : "var(--dsw-alias-label-link)",
+									textDecoration: "none"
+								},
+								children: title
+							}, "who"),
+							piece?.sourceKey === undefined || piece.sourceKey === null || piece.sourceKey === ""
+								? null
+								: jsx("span", { children: String(piece.sourceKey) }, "host"),
+							// ▶ 38:08, AND IT OPENS THERE. This is the whole reason the
+							// moment is computed: the source of a spoken claim is a second
+							// in a video, not the video.
+							at === null || piece.atUrl === null || piece.atUrl === undefined ? null : jsx("a", {
+								href: piece.atUrl,
+								target: "_blank", rel: "noreferrer noopener",
+								className: "swm-focus",
+								title: zh ? "在视频里跳到这句话" : "open the video where this is said",
+								style: {
+									fontFamily: "inherit", color: `rgb(${PALETTE.blue})`,
+									textDecoration: "none",
+									borderBottom: `1px solid ${tint(PALETTE.blue, TINT.ring)}`
+								},
+								children: `▶ ${formatMoment(at)}`
+							}, "at")
+						]
+					}, "by")
 				]
 			}, key);
 		}
@@ -8545,46 +8640,85 @@ window.__ModuleLoader__.load({
 						]
 					}, "head"),
 
-					// THE CADENCE, AND WHETHER THERE IS ONE. 0 is off, and it is off
-					// on this machine — a pane that said nothing would let a reader
-					// take a table last written in August for a live one.
+					// THE RUN, AS FIGURES RATHER THAN AS A SENTENCE.
+					//
+					// This was one grey line of clauses — 每 N 分钟 · 数据截至 · 本次扫 N 行 ·
+					// 抽出 N 条 · 积压 N — in which every number looked like every other one.
+					// A pass over a library has four numbers worth comparing at a glance and
+					// they are not comparable inside a sentence.
+					//
+					// 积压 IS TINTED AND THE OTHERS ARE NOT. It is the one that says the
+					// table is partial: 200 rows read out of 21000 is a different object
+					// from a table built from all of them, and a reader who does not notice
+					// that will take this for the library's whole opinion.
 					jsxs("div", {
 						style: {
-							display: "flex", flexWrap: "wrap", alignItems: "center",
-							rowGap: SPACE.xs, columnGap: SPACE.md,
-							padding: CARD_PAD, borderRadius: RADIUS.lg,
-							background: SURFACE.subtle, font: FONT.small, color: INK.secondary
+							display: "flex", alignItems: "center", gap: SPACE.sm,
+							flexWrap: "wrap", font: FONT.micro, color: INK.secondary
 						},
 						children: [
+							// A LIVE DOT ONLY WHEN THERE IS A SCHEDULE. A steady mark beside a
+							// table last written in August would be the page claiming to be live.
 							jsx("span", {
-								style: { color: every > 0 ? `rgb(${TONE.success})` : `rgb(${TONE.warn})` },
+								style: {
+									display: "inline-flex", alignItems: "center", gap: SPACE.xs,
+									padding: `2px ${SPACE.sm}`, borderRadius: RADIUS.pill,
+									border: `1px solid ${LINE.hair}`,
+									color: every > 0 ? `rgb(${TONE.success})` : `rgb(${TONE.warn})`
+								},
 								children: every > 0
-									? (zh ? `每 ${every} 分钟跑一次` : `every ${every} min`)
-									: (zh ? "定时未开启 —— 只有手动跑过" : "no schedule — manual runs only")
+									? (zh ? `每 ${every} 分钟` : `every ${every} min`)
+									: (zh ? "定时未开启" : "no schedule")
 							}, "cadence"),
-							last === null ? jsx("span", { children: zh ? "还没有跑过" : "never run" }, "never") : jsx("span", {
-								title: formatStamp(last.at),
-								children: zh ? `数据截至 ${formatAgo(last.at, zh)}` : `as of ${formatAgo(last.at, zh)}`
-							}, "asof"),
-							// THE RUN'S OWN ARITHMETIC. `backlog` is the one worth
-							// printing beside the rest: it is how much of the library
-							// the pass has not looked at, and a table built from 200
-							// rows out of 21000 is a different object from one built
-							// from all of them.
-							last === null ? null : jsx("span", {
-								children: zh
-									? `本次扫 ${last.rows ?? 0} 行 · 抽出 ${last.claims ?? 0} 条 · 核验 ${last.verified ?? 0} 条`
-									: `${last.rows ?? 0} rows · ${last.claims ?? 0} claims · ${last.verified ?? 0} verified`
-							}, "run"),
-							last === null || Number(last.backlog ?? 0) === 0 ? null : jsx("span", {
-								style: { color: `rgb(${TONE.warn})` },
-								title: zh
-									? "还没有被这个流程看过的信源条数。"
-									: "rows of the library this pass has not looked at yet.",
-								children: zh ? `积压 ${last.backlog}` : `${last.backlog} not yet read`
-							}, "backlog")
+							last === null
+								? jsx("span", { children: zh ? "还没有跑过" : "never run" }, "never")
+								: jsx("span", {
+									title: formatStamp(last.at),
+									children: zh ? `数据截至 ${formatAgo(last.at, zh)}` : `as of ${formatAgo(last.at, zh)}`
+								}, "asof")
 						]
 					}, "cadence"),
+
+					last === null ? null : jsx("div", {
+						// ONE BOX, NO DIVIDERS. The reference separates its figures with a
+						// one-pixel gap over a line-coloured ground — which is the right
+						// technique and costs a hard-coded one-pixel gap, which the ratchet
+						// counts —
+						// and it is right to: air lives in gap and padding, and a file that names
+						// its own pixels there drifts a step at a time. Four figures with
+						// a full step between them read as a strip without the rules.
+						style: {
+							display: "flex", flexWrap: "wrap", gap: SPACE.xl,
+							padding: CARD_PAD, border: `1px solid ${LINE.hair}`,
+							borderRadius: RADIUS.lg, background: SURFACE.card
+						},
+						children: [
+							{ zh: "扫过", en: "rows read", value: last.rows ?? 0 },
+							{ zh: "抽出主张", en: "claims", value: last.claims ?? 0 },
+							{ zh: "通过核验", en: "verified", value: last.verified ?? 0 },
+							{ zh: "还没读到", en: "not yet read", value: last.backlog ?? 0, tone: TONE.warn }
+						].map((cell) => jsxs("div", {
+							style: {
+								display: "flex", flexDirection: "column", gap: SPACE.xs, minWidth: "96px"
+							},
+							children: [
+								jsx("div", {
+									style: {
+										font: FONT.largeStrong,
+										// TABULAR, because these four are read down a row and a 1 that
+										// is narrower than a 7 makes them look ragged rather than aligned.
+										fontVariantNumeric: "tabular-nums",
+										color: cell.tone === undefined ? INK.primary : `rgb(${cell.tone})`
+									},
+									children: missionCompact(cell.value)
+								}, "n"),
+								jsx("div", {
+									style: { font: FONT.micro, color: INK.secondary },
+									children: zh ? cell.zh : cell.en
+								}, "l")
+							]
+						}, cell.en))
+					}, "figures"),
 
 					error === "" ? null : jsx(ErrorBox, { message: error, zh }, "err"),
 

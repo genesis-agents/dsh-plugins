@@ -29,6 +29,7 @@
 
 import { INSIGHT_KINDS, INSIGHT_STATUSES, openInsightStore } from "./insight-store.js";
 import { pickCandidates, readInsightConfig, runInsightPass } from "./insight-extract.js";
+import { withMoments } from "./insight-moment.js";
 
 /** The id shape `newInsightId` mints. Checked before an id reaches SQL. */
 const INSIGHT_ID = /^insight-[0-9A-Za-z]+-[0-9a-f]{8}$/;
@@ -160,6 +161,41 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
   /** The search parameters of the request being answered. */
   const paramsOf = (req) => new URL(req.url ?? "/", "http://localhost").searchParams;
 
+  /**
+   * Put the moment on every quote that has one.
+   *
+   * WHERE IN A VIDEO A SENTENCE WAS SAID IS THE SOURCE, for a talk. A link
+   * to a ninety-minute interview is not a citation of one sentence — it
+   * hands the reader the search problem back. The library already stores
+   * the transcript with a start time on every cue, so the second is
+   * computable, and see insight-moment.js for why it is computed at read
+   * rather than stored: every evidence row already written has no offset
+   * column to have filled in.
+   *
+   * SHAPED FOR BOTH CALLERS. The list route returns `{ insights: [...] }`
+   * with an `evidencePreview` on each, and the item route returns one card
+   * with `evidence`; the same two lines would otherwise be written twice
+   * and drift the first time one of them gained a field.
+   * @param payload - what the store answered, or undefined.
+   * @returns the same object, its quotes carrying `at` and `atUrl`.
+   */
+  const momentise = (payload) => {
+    if (payload === undefined || payload === null) return payload;
+    const read = (id) => store.getTranscript(id);
+    if (Array.isArray(payload.insights)) {
+      return {
+        ...payload,
+        insights: payload.insights.map((row) => ({
+          ...row,
+          evidencePreview: withMoments(row.evidencePreview, read),
+        })),
+      };
+    }
+    return Array.isArray(payload.evidence)
+      ? { ...payload, evidence: withMoments(payload.evidence, read) }
+      : payload;
+  };
+
   return async function handleInsights(req, res, path) {
     /** Answer 400 with `error`, and report the request as handled. */
     const bad = (error) => {
@@ -217,7 +253,7 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
       // card. One request per page view, not one per card.
       sendJson(res, 200, {
         success: true,
-        data: insights.list({
+        data: momentise(insights.list({
           status: status.value,
           kind: kind.value,
           filter: filter.value,
@@ -225,7 +261,7 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
           sortBy: sort.value ?? "rank",
           take: take.value,
           skip: skip.value,
-        }),
+        })),
       });
       return true;
     }
@@ -291,7 +327,7 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
       // `resource: null` when the library no longer holds the source. The page
       // renders those as the quote with its `sourceKey` and no link — dropping
       // them would make the card disagree with its own `sourceCount`.
-      const insight = insights.getWithEvidence(id.value);
+      const insight = momentise(insights.getWithEvidence(id.value));
       if (insight === undefined) {
         sendJson(res, 404, { success: false, error: "no such insight" });
         return true;

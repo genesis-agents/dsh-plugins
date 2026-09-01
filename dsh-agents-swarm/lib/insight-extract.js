@@ -136,10 +136,25 @@ const MIN_PASS_ROWS = 2;
  * are plain strings. Wiring the claim kinds in where the resource types belong
  * scores relevance 0 on every card for ever, on a 15% weight, and throws
  * nothing — the ranking stays plausible and is quietly wrong.
+ *
+ * YOUTUBE_VIDEO IS FIRST, AND IT USED TO BE ABSENT. Nothing here said why —
+ * there was no note, no test and no argument, and the rest of the pipeline was
+ * plainly built to read them: `sourceMaterial` takes a transcript beside the
+ * row and carries its own comment about a video carrying no summary, so the
+ * budget has to favour the transcript. The type list simply did not name them,
+ * and 523 videos went unread while the pass mined abstracts.
+ *
+ * It leads the list because a talk is the one source type that can say WHERE a
+ * sentence came from. A paper's citation is the paper; a video's is the
+ * second, and the second is computable — insight-moment.js matches the quote
+ * against the stored cues, so a claim off an interview carries `▶ 38:08` that
+ * opens the video where the sentence starts. No other type can do that, which
+ * makes videos the type this feature is most worth pointing at, not the one to
+ * leave out.
  */
 export const INSIGHT_DEFAULTS = {
   insightIntervalMinutes: 0,
-  insightResourceTypes: ["NEWS", "BLOG", "PAPER", "REPORT", "POLICY"],
+  insightResourceTypes: ["YOUTUBE_VIDEO", "NEWS", "BLOG", "PAPER", "REPORT", "POLICY"],
   insightMaxRows: 200,
   insightMaxClusters: 20,
   insightMaxReconcileCalls: 10,
