@@ -42,9 +42,14 @@ const CANDIDATES = [
   { path: "C:/Windows/Fonts/msyh.ttc", index: 0, bold: { path: "C:/Windows/Fonts/msyhbd.ttc", index: 0 } },
   { path: "C:/Windows/Fonts/simsun.ttc", index: 0, bold: null },
   { path: "C:/Windows/Fonts/simhei.ttf", index: 0, bold: null },
-  // macOS
+  // macOS. PingFang is the system face and is NOT always on disk as a file:
+  // measured on a Sequoia machine, /System/Library/Fonts held STHeiti and
+  // Hiragino and no PingFang at all. It stays first for the machines that have
+  // it, and the two below are why the list does not stop there.
   { path: "/System/Library/Fonts/PingFang.ttc", index: 0, bold: null },
-  { path: "/System/Library/Fonts/STHeiti Light.ttc", index: 0, bold: null },
+  { path: "/System/Library/Fonts/STHeiti Light.ttc", index: 0, bold: { path: "/System/Library/Fonts/STHeiti Medium.ttc", index: 0 } },
+  { path: "/System/Library/Fonts/Hiragino Sans GB.ttc", index: 0, bold: null },
+  { path: "/System/Library/Fonts/Supplemental/Songti.ttc", index: 0, bold: null },
   // Linux
   { path: "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", index: 0, bold: { path: "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", index: 0 } },
   { path: "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", index: 0, bold: null },
