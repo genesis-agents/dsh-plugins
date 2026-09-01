@@ -11081,7 +11081,7 @@ window.__ModuleLoader__.load({
 							// arithmetic anybody can check.
 							!Array.isArray(status?.strengthBands) || status.strengthBands.length === 0 ? null : (zh
 								? `强度 由排序分分档：${status.strengthBands.map((band) => `${({ high: "强", medium: "中", low: "弱" })[band.id] ?? band.id} ≥ ${band.floor}`).join("，")}。排序分 = 动量 0.35 + 可信 0.30 + 新鲜 0.20 + 相关 0.15`
-								: `Strength bands the rank score: ${status.strengthBands.map((band) => `${band.id} ≥ ${band.floor}`).join(", ")}. Rank = momentum 0.35 + credibility 0.30 + novelty 0.20 + relevance 0.15`),
+								: `Strength bands the rank score: ${status.strengthBands.map((band) => `${band.id} ≥ ${band.floor}`).join(", ")}. Rank = momentum 0.35 + credibility 0.30 + novelty 0.20 + relevance 0.15. A claim under ${status?.insightMinIndependent ?? 2} independent sources is capped at medium, and novelty measures when this library first saw the claim rather than when the thing happened`),
 							// THE SPEAKER RULE, because a name under a sentence is an
 							// attribution and a reader is owed the terms it was made
 							// under. Most cards will carry none, and that absence is the

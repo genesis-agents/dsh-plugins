@@ -1129,15 +1129,53 @@ export const STRENGTH_BANDS = Object.freeze([
 ]);
 
 /**
- * Which band a score falls in.
+ * Which band a claim reads in.
+ *
+ * THE SCORE ALONE WAS ANSWERING THE WRONG QUESTION, and it put 强度 强 on three
+ * single-source cards about a 2009 supercomputer, a methods detail from one
+ * paper, and a background fact from a government report. Every component of
+ * `rank_score` was measuring THIS LIBRARY'S RELATIONSHIP TO THE ROW rather than
+ * the claim's standing:
+ *
+ * - `novelty` is `1 - days(firstSeenAt, now)/window`, and `firstSeenAt` is
+ *   when we first saw it. A fact from 2009 extracted three hours ago scores 1.
+ * - `credibility` weighs the source TYPE, not how many there are. One arXiv
+ *   paper takes the maximum weight and the mean of a one-element list is that
+ *   same weight, so a single paper scores as high as a single paper can.
+ * - `momentum` rises with recent evidence, and the evidence arrived just now.
+ * - `independentCount` — how many separate sources say it — was not in the
+ *   blend at all.
+ *
+ * So the number is a good RANKING signal ("show me what just landed, from
+ * sources worth reading") and a bad STRENGTH one, and calling it 强度 promoted
+ * the first into the second.
+ *
+ * THE CAP IS THE PRODUCT'S OWN STANDARD, not a new opinion. The pane's rules
+ * footer says a claim needs `insightMinIndependent` separate sources before it
+ * is 成立; below that it is a candidate by construction. A screen that prints
+ * 强 beside 候选 on a card with one source contradicts the standard it states
+ * four inches lower down.
+ *
+ * NOT DEMOTED TO 弱, and that matters: one well-sourced claim is not weak, it
+ * is unconfirmed. 中 is the honest ceiling for material nothing has
+ * corroborated yet, and it is what makes 强 mean something when it appears.
  * @param score - a rank score, 0..1.
+ * @param options - `{ independentCount, minIndependent }`; omitting them scores
+ *   on the blend alone, which is what a caller with no card in hand can do.
  * @returns "high" | "medium" | "low", or null when there is no score to band.
  */
-export function strengthOf(score) {
+export function strengthOf(score, options = {}) {
   const value = Number(score);
   // NULL, NOT "low". A card that has never been scored — `scored_at` is NULL
   // and `rank_score` defaults to 0 — is not a weak claim, it is an unmeasured
   // one, and a page that prints 低 over it reports a verdict nobody reached.
   if (!Number.isFinite(value) || value <= 0) return null;
-  return STRENGTH_BANDS.find((band) => value >= band.floor)?.id ?? "low";
+  const band = STRENGTH_BANDS.find((one) => value >= one.floor)?.id ?? "low";
+  if (band !== "high") return band;
+  const sources = Number(options.independentCount);
+  // Unknown independence cannot demote: a caller that did not pass it gets the
+  // blend's own answer rather than a cap applied on a guess.
+  if (!Number.isFinite(sources)) return band;
+  const floor = Number.isFinite(Number(options.minIndependent)) ? Number(options.minIndependent) : 2;
+  return sources >= floor ? "high" : "medium";
 }

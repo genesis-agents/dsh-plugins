@@ -1959,3 +1959,39 @@ test("a slice small enough to fit is returned untouched", () => {
   // Everything was read, so the watermark may cover the whole slice.
   assert.equal(watermarkOf(rows, reached), String(rows[rows.length - 1].createdAt));
 });
+
+test("a single-source claim cannot be called strong", () => {
+  // MEASURED ON THE LIVE TAB: three cards read 强度 强 at 0.65 — a 2009
+  // supercomputer comparison, a methods detail from one paper, and a
+  // background fact from a government report. All three had ONE independent
+  // source, and every component of the blend was measuring this library's
+  // relationship to the row rather than the claim's standing: novelty counts
+  // from `firstSeenAt`, credibility weighs the source TYPE (one arXiv paper
+  // takes the maximum), momentum rises with evidence that arrived just now,
+  // and `independentCount` was not in the blend at all.
+  //
+  // The cap is the product's own standard: the rules footer four inches below
+  // those cards says a claim needs `insightMinIndependent` separate sources
+  // before it is 成立. Printing 强 beside 候选 on one source contradicts it.
+  assert.equal(strengthOf(0.65, { independentCount: 1, minIndependent: 2 }), "medium");
+  assert.equal(strengthOf(0.65, { independentCount: 2, minIndependent: 2 }), "high");
+  assert.equal(strengthOf(0.9, { independentCount: 1, minIndependent: 2 }), "medium", "a very high score still cannot buy corroboration");
+});
+
+test("the cap only ever demotes, and never invents a band", () => {
+  // A claim already below the high floor is unaffected: the cap answers "may
+  // this be called strong", not "how strong is this".
+  assert.equal(strengthOf(0.4, { independentCount: 1, minIndependent: 2 }), "medium");
+  assert.equal(strengthOf(0.2, { independentCount: 1, minIndependent: 2 }), "low");
+  assert.equal(strengthOf(0.2, { independentCount: 9, minIndependent: 2 }), "low", "corroboration cannot promote a weak score");
+  // An unscored card stays unmeasured whatever its sources.
+  assert.equal(strengthOf(0, { independentCount: 5, minIndependent: 2 }), null);
+});
+
+test("a caller with no card in hand still gets the blend's answer", () => {
+  // Unknown independence must not demote on a guess: some callers band a bare
+  // score and have no evidence rows to count.
+  assert.equal(strengthOf(0.65), "high");
+  assert.equal(strengthOf(0.65, {}), "high");
+  assert.equal(strengthOf(0.65, { independentCount: "not a number" }), "high");
+});

@@ -217,7 +217,17 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
    * @param row - a shaped insight.
    * @returns the row, carrying `strength`.
    */
-  const banded = (row) => ({ ...row, strength: strengthOf(row?.rankScore) });
+  const banded = (row) => ({
+    ...row,
+    // THE CARD'S OWN INDEPENDENCE AND THE LIBRARY'S OWN FLOOR. The blend does
+    // not carry either, and without them the band answers "how recently did we
+    // ingest this, from how reputable a kind of source" — which put 强 on
+    // single-source cards about a 2009 supercomputer.
+    strength: strengthOf(row?.rankScore, {
+      independentCount: row?.independentCount,
+      minIndependent: readInsightConfig(store).insightMinIndependent,
+    }),
+  });
 
   const momentise = (payload) => {
     if (payload === undefined || payload === null) return payload;
