@@ -1707,3 +1707,51 @@ test("the library can say how many videos are waiting on a transcript", (t) => {
   store.putTranscript("v1", "en", "some spoken words", [{ start: 0, text: "some spoken words" }]);
   assert.equal(store.countVideosWithoutTranscript(), 1, "a stored transcript did not come off the count");
 });
+
+test("runInsightPass forwards the transcript fetcher it was handed", async (t) => {
+  // SHIPPED BROKEN AND EVERY TEST PASSED. Both call sites — the timer in
+  // index.js and the run-now route — hand this function a fetcher. It accepted
+  // the option, never destructured it, and called the pass without it, so every
+  // run on the live library reported transcribeTried: 0 while index.js,
+  // insight-routes.js, insightPassOnce and topUpTranscripts were all correct.
+  //
+  // The suite missed it because every other test in this file calls
+  // `insightPassOnce` directly — the function that USES the fetcher, not the
+  // one that passes it on. A seam is precisely where a value gets dropped, and
+  // exercising only the inner side of one tests the half that cannot fail this
+  // way. This test enters at the layer production enters at.
+  const { store, insights } = library(t);
+  store.put(resource("v1", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/aaaaaaaaaaa" }));
+  store.put(resource("v2", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/bbbbbbbbbbb" }));
+  let asked = 0;
+  const chat = async function* () { yield { error: "no model here" }; };
+  await runInsightPass(store, insights, chat, undefined, {
+    markSkips: false,
+    transcribe: async (row) => {
+      asked += 1;
+      return { language: "en", text: "a long spoken sentence a claim could quote from " + row.id, cues: [], via: "timedtext" };
+    },
+  });
+  assert.ok(asked > 0, "runInsightPass dropped the fetcher on the way to the pass");
+  const config = readInsightConfig(store);
+  assert.ok(
+    Number(config.insightLastManualRun.transcribeGained) > 0,
+    "the run recorded no transcripts even though the fetcher answered",
+  );
+});
+
+test("the scheduled pass gets a fetcher through the same seam", async (t) => {
+  // The timer path writes `insightLastRun` and carries the watermark, so it is
+  // a different branch of `note()` and a different record — and it is the one
+  // that actually drains a backlog unattended. Worth its own entry rather than
+  // trusting that two paths through one function behave alike.
+  const { store, insights } = library(t);
+  store.put(resource("v1", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/ccccccccccc" }));
+  let asked = 0;
+  const chat = async function* () { yield { error: "no model here" }; };
+  await runInsightPass(store, insights, chat, undefined, {
+    markSkips: true,
+    transcribe: async () => { asked += 1; return { language: "en", text: "spoken words long enough to matter here", cues: [] }; },
+  });
+  assert.ok(asked > 0, "the scheduled pass never reached the fetcher");
+});

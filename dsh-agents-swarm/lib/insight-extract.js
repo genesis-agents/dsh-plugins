@@ -1938,7 +1938,7 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
  * @param options - `{ markSkips }`.
  * @returns the outcome, as `insightPassOnce` reports it.
  */
-export async function runInsightPass(store, insightStore, chat, logger, { markSkips = false, web, scope } = {}) {
+export async function runInsightPass(store, insightStore, chat, logger, { markSkips = false, web, scope, transcribe } = {}) {
   const key = markSkips ? "insightLastRun" : "insightLastManualRun";
   const carried = readInsightConfig(store).insightLastRun?.watermark;
   const stamp = () => ({ date: localDate(), at: new Date().toISOString() });
@@ -1998,7 +1998,17 @@ export async function runInsightPass(store, insightStore, chat, logger, { markSk
   };
 
   try {
-    const result = await insightPassOnce(store, insightStore, chat, logger, { web, onProgress, scope });
+    // `transcribe` FORWARDED, AND IT WAS NOT. Both call sites hand this
+    // function a transcript fetcher — the timer in index.js and the run-now
+    // route — and it accepted the option, never destructured it, and called
+    // the pass without it. Every run therefore reported transcribeTried: 0
+    // while every layer above looked correctly wired.
+    //
+    // The unit tests missed it because they call `insightPassOnce` directly,
+    // which is the function that USES the fetcher rather than the one that
+    // passes it on. A seam is exactly where a value gets dropped, and testing
+    // only the inner side of one tests the half that cannot fail this way.
+    const result = await insightPassOnce(store, insightStore, chat, logger, { web, onProgress, scope, transcribe });
     if (result.ran) {
       const settled = { ...stamp(), ...result, scope: scopeNote };
       note(settled);

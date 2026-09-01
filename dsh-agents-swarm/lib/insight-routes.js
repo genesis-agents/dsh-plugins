@@ -491,13 +491,6 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
         sendJson(res, 503, { success: false, error: "no model routed" });
         return true;
       }
-      if (manualRunInFlight) {
-        sendJson(res, 202, {
-          success: true,
-          data: { started: false, running: true, reason: "a manual pass is already running" },
-        });
-        return true;
-      }
       // WHAT THIS RUN IS ALLOWED TO READ, when the reader said.
       //
       // Optional and absent-means-everything, so a bare POST is exactly the
@@ -573,6 +566,28 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
           sendJson(res, 400, { success: false, error: problems.join("; ") });
           return true;
         }
+      }
+      // REFUSED ONLY AFTER THE BODY HAS BEEN READ, and the order is the bug.
+      //
+      // This answered 202 the moment it saw a pass already running — before
+      // touching the request body. The client is still sending one, so the
+      // response lands on a connection with an unread stream behind it, the
+      // socket is torn down, and the PROXY in front of this reports
+      // "fetch failed" as a 502. Measured through the Tailscale hop: a second
+      // press of 运行分析 answered 502 while the first pass ran perfectly, so
+      // the page reported the library as unreachable at the exact moment it
+      // was busiest.
+      //
+      // A body must be consumed whatever the answer is going to be. Parsing it
+      // first also means a malformed scope is still a 400 rather than being
+      // swallowed by a 202 that says the run was refused for a different
+      // reason entirely.
+      if (manualRunInFlight) {
+        sendJson(res, 202, {
+          success: true,
+          data: { started: false, running: true, reason: "a manual pass is already running" },
+        });
+        return true;
       }
       manualRunInFlight = true;
       // Answered immediately and the work continues: a pass is up to twenty
