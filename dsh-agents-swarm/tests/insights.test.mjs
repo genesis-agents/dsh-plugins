@@ -24,6 +24,7 @@ import {
   MIN_QUOTE_CHARS,
   MIN_QUOTE_CJK_CHARS,
   SCORE_WEIGHTS,
+  STRENGTH_BANDS,
   ZERO_SIMHASH,
   bucketOf,
   clusterItems,
@@ -44,6 +45,7 @@ import {
   simhash,
   sourceKeyOf,
   statementsMatch,
+  strengthOf,
   tokenize,
   verifyQuote,
 } from "../lib/insights.js";
@@ -60,7 +62,7 @@ import {
 // The candidate scan lives with the pass, not with the pure helpers: it needs
 // the store. Imported here because the drain order is a correctness property,
 // not an implementation detail.
-import { collectCandidates } from "../lib/insight-extract.js";
+import { collectCandidates, insightPassOnce, readInsightConfig, runInsightPass } from "../lib/insight-extract.js";
 import { buildQueries, createPacer, isIndependent, searchArxiv, searchWeb } from "../lib/insight-corroborate.js";
 
 /** Floating point comparison, for scores that are exact only in decimal. */
@@ -1214,4 +1216,375 @@ test("a web search reads the field the seam actually returns", async () => {
   const none = await searchWeb({ search: async () => ({ sources: [] }) }, "x");
   assert.deepEqual(none.hits, []);
   assert.equal(none.error, "");
+});
+
+/* ── a scoped manual run ───────────────────────────────────────────────── */
+//
+// THE SCOPE EXISTS BECAUSE "RUN" IS NOT A REQUEST ANYBODY HAS. The button that
+// spends the model calls asked for nothing and read whatever the settings said,
+// so a reader who wanted this week's videos about one subject had one control
+// that did none of it. These four guards are the ones that fail SILENTLY: a
+// scope that is accepted and ignored reads everything and reports a normal
+// pass, and a scope let through onto the SCHEDULED pass watermarks past every
+// row the filter excluded — the twenty-thousand-row loss this file already
+// records once, with a filter in front of it.
+
+test("a scoped run reads only the matching rows", (t) => {
+  const { store } = library(t);
+  store.put(resource("hit", { title: "Inference cost is falling fast this quarter" }));
+  store.put(resource("miss", { title: "A robotics startup opened an office" }));
+  const wide = collectCandidates(store, { insightMaxRows: 20, insightResourceTypes: ["NEWS"] });
+  assert.equal(wide.rows.length, 2, "the fixture does not have two readable rows");
+  const narrow = collectCandidates(
+    store,
+    { insightMaxRows: 20, insightResourceTypes: ["NEWS"] },
+    { search: "inference cost" },
+  );
+  assert.deepEqual(narrow.rows.map((row) => row.id), ["hit"], "the search term was accepted and ignored");
+});
+
+test("a scope's type list replaces the configured one", (t) => {
+  const { store } = library(t);
+  store.put(resource("n1", { type: "NEWS" }));
+  store.put(resource("p1", { type: "PAPER" }));
+  const { rows } = collectCandidates(
+    store,
+    { insightMaxRows: 20, insightResourceTypes: ["NEWS", "PAPER"] },
+    { types: ["PAPER"] },
+  );
+  assert.deepEqual(rows.map((row) => row.id), ["p1"]);
+});
+
+test("a window replaces the watermark rather than narrowing it further", (t) => {
+  // A reader looking at a drained library asks for "the last week" because the
+  // table has not moved. Intersected with a watermark past every row, that
+  // answers a deliberate request with the skip reason for an idle one.
+  const { store } = library(t);
+  const recent = new Date(Date.now() - 2 * 86_400_000).toISOString();
+  store.put(resource("fresh", { createdAt: recent }));
+  const drained = { insightMaxRows: 20, insightResourceTypes: ["NEWS"], insightLastRun: { watermark: "2099-01-01T00:00:00.000Z" } };
+  assert.equal(collectCandidates(store, drained).rows.length, 0, "the watermark is not draining the fixture");
+  const { rows } = collectCandidates(store, drained, {
+    since: new Date(Date.now() - 7 * 86_400_000).toISOString(),
+  });
+  assert.deepEqual(rows.map((row) => row.id), ["fresh"], "the window was intersected with the watermark instead of replacing it");
+});
+
+test("the scheduled pass refuses a scope instead of carrying the watermark over one", async (t) => {
+  const { store, insights } = library(t);
+  await assert.rejects(
+    () => runInsightPass(store, insights, () => {}, undefined, { markSkips: true, scope: { search: "anything" } }),
+    /cannot be scoped/,
+    "a scoped scheduled pass would watermark past every row the filter excluded",
+  );
+});
+
+/* ── the pass says where it has got to ─────────────────────────────────── */
+//
+// A PASS IS UP TO TWENTY MODEL CALLS OVER MINUTES AND IT USED TO REPORT TWICE:
+// `{running: true}` at the top and a summary at the bottom. The button that
+// starts it answers 202 in milliseconds, so everything a reader saw was a label
+// that flickered once. These guard the reporting itself — a listener that is
+// accepted and never called is the same silence with more code behind it.
+
+test("a pass reports every stage it walks through", async (t) => {
+  const { store, insights } = library(t);
+  for (let at = 0; at < 4; at += 1) {
+    store.put(resource(`p${at}`, {
+      title: `Anthropic raised money in round ${at} at a stated valuation`,
+      abstract: `Body ${at}: the company confirmed the figure in a filing this week.`,
+      createdAt: `2026-08-2${at}T00:00:00.000Z`,
+    }));
+  }
+  const seen = [];
+  // A model that refuses. The pass records the failure and carries on, which is
+  // what makes this a test of the REPORTING rather than of the extraction.
+  const chat = async function* () { yield { error: "no model here" }; };
+  await insightPassOnce(store, insights, chat, undefined, {
+    onProgress: ({ phase, done, total }) => { seen.push({ phase, done, total }); },
+  });
+  const phases = seen.map((one) => one.phase);
+  assert.ok(phases.includes("reading"), `no reading stage reported: ${phases.join(",")}`);
+  assert.ok(phases.includes("clustering"), `no clustering stage reported: ${phases.join(",")}`);
+  assert.ok(phases.includes("extracting"), `no extracting stage reported: ${phases.join(",")}`);
+  // The counted stages must carry a denominator, or the page draws a bar
+  // against a total it invented.
+  const extracting = seen.filter((one) => one.phase === "extracting");
+  assert.ok(extracting.every((one) => one.total > 0), "an extracting step reported no total");
+  assert.ok(
+    extracting.every((one) => one.done < one.total),
+    "a step reported itself already finished; the counter is ahead of the work",
+  );
+});
+
+test("a listener that throws does not lose the pass", async (t) => {
+  // Progress is a courtesy; the run is the work. A listener writes a setting,
+  // a setting writes SQLite, and a failed write must not discard extraction
+  // that has already been paid for.
+  const { store, insights } = library(t);
+  store.put(resource("a", { createdAt: "2026-08-20T00:00:00.000Z" }));
+  store.put(resource("b", { createdAt: "2026-08-21T00:00:00.000Z" }));
+  const chat = async function* () { yield { error: "no model here" }; };
+  const result = await insightPassOnce(store, insights, chat, undefined, {
+    onProgress: () => { throw new Error("the listener is broken"); },
+  });
+  assert.equal(typeof result, "object", "a broken progress listener took the pass with it");
+});
+
+test("the figures of the last good run survive the next press", async (t) => {
+  // `setSetting` writes whole values, so the `{running:true}` marker replaces
+  // the summary of the run before it. Measured: pressing the button on a band
+  // reading 200 / 13 / 12 / 0 blanked all four for the whole pass — and the
+  // band they sat in collapsed, because the cell beside it is `marginLeft:auto`.
+  const { store, insights } = library(t);
+  store.setSetting("insightLastGoodRun", { ran: true, rows: 200, claims: 13, verified: 12, at: "2026-08-20T00:00:00.000Z" });
+  const chat = async function* () { yield { error: "no model here" }; };
+  // A run with too little material: skips, and writes a skip record.
+  await runInsightPass(store, insights, chat, undefined, { markSkips: false });
+  const config = readInsightConfig(store);
+  assert.equal(config.insightLastManualRun.ran, undefined, "the fixture did not skip; this proves nothing");
+  assert.equal(config.insightLastGoodRun.rows, 200, "a skipped run wiped the last good figures");
+  assert.equal(config.insightLastGoodRun.claims, 13);
+});
+
+/* ── the pass's own account of itself ──────────────────────────────────── */
+//
+// THE AGGREGATES ANSWER "HOW MANY" FOR A QUESTION WHOSE ONLY USEFUL FORM IS
+// "WHICH ONE". A pass that reads two hundred sources and writes three claims is
+// either working perfectly on a quiet week or silently dropping a hundred and
+// ninety videos for want of a transcript, and `rows / unusable / binned /
+// clusters / failures` report those two identically.
+
+test("a video with no transcript is skipped by name, not in silence", (t) => {
+  // Measured on the library this was built against: 523 videos, 23
+  // transcripts. Five hundred sources were held, wanted, correctly skipped,
+  // and reported nowhere — not in `rows`, not in `backlog`, not in `unusable`.
+  const { store } = library(t);
+  store.put(resource("v", { type: "YOUTUBE_VIDEO", title: "An hour-long interview" }));
+  store.put(resource("n", { type: "NEWS" }));
+  const scan = collectCandidates(store, { insightMaxRows: 20, insightResourceTypes: ["YOUTUBE_VIDEO", "NEWS"] });
+  assert.deepEqual(scan.rows.map((row) => row.id), ["n"], "the transcript-less video was read anyway");
+  assert.deepEqual(
+    scan.skipped.map((one) => one.row.id),
+    ["v"],
+    "the skip was applied and not reported",
+  );
+  assert.match(scan.skipped[0].reason, /transcript/, "the skip carries no usable reason");
+});
+
+test("a pass writes one ledger row per source it looked at", async (t) => {
+  const { store, insights } = library(t);
+  store.put(resource("v", { type: "YOUTUBE_VIDEO", title: "An hour-long interview", durationSeconds: 4000 }));
+  for (let at = 0; at < 3; at += 1) {
+    store.put(resource(`n${at}`, {
+      title: `Anthropic confirmed a figure in filing ${at} this week`,
+      abstract: `Body ${at}: the company stated the number in a document.`,
+    }));
+  }
+  const chat = async function* () { yield { error: "no model here" }; };
+  const result = await insightPassOnce(store, insights, chat, undefined, {});
+  assert.equal(result.ran, true, "the fixture did not run a pass");
+  const ledger = insights.passLedger(result.batch);
+  const byId = Object.fromEntries(ledger.rows.map((row) => [row.resourceId, row]));
+  assert.equal(byId.v.state, "no-transcript", "the skipped video is missing from the ledger");
+  assert.equal(byId.v.durationSeconds, 4000, "the ledger lost the video's length");
+  // The model refused, so every cluster failed and every clustered row must
+  // say so — with the reason, which is the whole point of recording it.
+  assert.equal(byId.n0.state, "failed");
+  assert.match(byId.n0.reason, /no model here/);
+  assert.ok(ledger.counts.failed >= 1, "the counts do not add up to the rows");
+});
+
+test("the ledger keeps whole passes and prunes whole passes", (t) => {
+  // Half a pass's ledger is a screen reporting that a run read forty sources
+  // when it read two hundred, which is worse than not showing it at all.
+  const { insights } = library(t);
+  for (let at = 0; at < 4; at += 1) {
+    insights.recordPass(`2026-08-2${at}T00:00:00.000Z`, [
+      { resourceId: `a${at}`, title: "one", resourceType: "NEWS", state: "extracted", claims: 1 },
+      { resourceId: `b${at}`, title: "two", resourceType: "NEWS", state: "read" },
+    ], { keepBatches: 2 });
+  }
+  const batches = insights.passBatches();
+  assert.equal(batches.length, 2, `kept ${batches.length} batches instead of 2`);
+  assert.equal(batches[0].batch, "2026-08-23T00:00:00.000Z", "pruning kept the wrong end");
+  assert.equal(batches[0].rows, 2, "a batch was pruned down the middle");
+});
+
+test("the ledger sorts by concern, not alphabetically", (t) => {
+  // A failure sorted among two hundred successes is a failure nobody finds.
+  const { insights } = library(t);
+  insights.recordPass("2026-08-20T00:00:00.000Z", [
+    { resourceId: "z", title: "aaa", resourceType: "NEWS", state: "extracted", claims: 3 },
+    { resourceId: "y", title: "bbb", resourceType: "NEWS", state: "failed", reason: "the model refused" },
+    { resourceId: "x", title: "ccc", resourceType: "YOUTUBE_VIDEO", state: "no-transcript" },
+  ]);
+  const states = insights.passLedger().rows.map((row) => row.state);
+  assert.deepEqual(states, ["failed", "no-transcript", "extracted"]);
+});
+
+test("a strength band is derived from the score, and an unscored card has none", () => {
+  assert.equal(strengthOf(0.71), "high");
+  assert.equal(strengthOf(0.55), "high", "the floor is inclusive");
+  assert.equal(strengthOf(0.47), "medium");
+  assert.equal(strengthOf(0.38), "medium");
+  assert.equal(strengthOf(0.2), "low");
+  // A card that has never been scored is not a weak claim, it is an unmeasured
+  // one. `rank_score` defaults to 0, so banding that as 低 would print a
+  // verdict nobody reached over every row the rescore sweep has not reached.
+  assert.equal(strengthOf(0), null);
+  assert.equal(strengthOf(undefined), null);
+  assert.equal(strengthOf("not a number"), null);
+});
+
+test("the bands are ordered high to low, so the first match wins", () => {
+  // `strengthOf` uses `find`, which returns the FIRST band whose floor the
+  // score clears. Written low-to-high the table would answer "low" for every
+  // score in existence and every card in the pane would agree with it.
+  const floors = STRENGTH_BANDS.map((band) => band.floor);
+  assert.deepEqual([...floors].sort((a, b) => b - a), floors, "the bands are not ordered high to low");
+  assert.equal(STRENGTH_BANDS[STRENGTH_BANDS.length - 1].floor, 0, "the last band does not catch everything");
+});
+
+/* ── which kind of SOURCE, not which kind of claim ─────────────────────── */
+//
+// THE MOST CONFUSABLE PAIR OF VOCABULARIES IN THIS FEATURE. `kind` is launch /
+// funding / policy / finding / shift — what the claim SAYS. `resourceType` is
+// NEWS / PAPER / YOUTUBE_VIDEO — where it CAME FROM. Both are plain strings and
+// neither validates as the other, so mixing them up produces an empty page
+// rather than an error.
+
+test("a source-type cut selects claims by where their evidence came from", (t) => {
+  const { store, insights } = library(t);
+  store.put(resource("vid", { type: "YOUTUBE_VIDEO", title: "A talk" }));
+  store.put(resource("art", { type: "NEWS", title: "An article" }));
+  const spoken = claim(insights, { statement: "A figure was stated on stage at a conference in March" });
+  const written = claim(insights, {
+    statement: "A different figure was reported by an outlet in April",
+    simhash: simhash("A different figure was reported by an outlet in April"),
+  });
+  insights.addEvidence(spoken, [evidence("vid", { resourceType: "YOUTUBE_VIDEO" })]);
+  insights.addEvidence(written, [evidence("art", { resourceType: "NEWS" })]);
+
+  const talks = insights.list({ resourceType: "YOUTUBE_VIDEO", take: 50 });
+  assert.deepEqual(talks.insights.map((row) => row.id), [spoken], "the source cut selected the wrong claims");
+  const news = insights.list({ resourceType: "NEWS", take: 50 });
+  assert.deepEqual(news.insights.map((row) => row.id), [written]);
+});
+
+test("a claim with three quotes from one source type is still one row", (t) => {
+  // AN EXISTS SUBQUERY, NOT A JOIN. Joining evidence returns the claim once per
+  // matching quote, so `total`, the paging and `hasMore` would all be wrong by
+  // a factor nobody can predict — and the page would draw the same card three
+  // times with every count on it still correct.
+  const { store, insights } = library(t);
+  for (const id of ["a", "b", "c"]) store.put(resource(id, { type: "NEWS" }));
+  const id = claim(insights);
+  insights.addEvidence(id, ["a", "b", "c"].map((one) => evidence(one, {
+    resourceType: "NEWS",
+    quote: `raised $3.5bn in a Series E round led by Lightspeed, per source ${one}`,
+  })));
+  const page = insights.list({ resourceType: "NEWS", take: 50 });
+  assert.equal(page.insights.length, 1, "the claim came back once per quote");
+  assert.equal(page.total, 1, "the total counted quotes rather than claims");
+});
+
+test("a source cut and a claim-kind cut compose rather than collide", (t) => {
+  const { store, insights } = library(t);
+  store.put(resource("vid", { type: "YOUTUBE_VIDEO" }));
+  const id = claim(insights, { kind: "funding" });
+  insights.addEvidence(id, [evidence("vid", { resourceType: "YOUTUBE_VIDEO" })]);
+  assert.equal(insights.list({ resourceType: "YOUTUBE_VIDEO", kind: "funding" }).insights.length, 1);
+  // The pair that proves they are different axes: the right source, the wrong
+  // claim kind. If either parameter were quietly reading the other's
+  // vocabulary this would answer one row.
+  assert.equal(insights.list({ resourceType: "YOUTUBE_VIDEO", kind: "policy" }).insights.length, 0);
+});
+
+/* ── a verdict moves the card, it does not just colour it ──────────────── */
+//
+// THE POINT OF THE STRIP. A person who marks a claim 成立 has finished with it,
+// and a tab that keeps showing it grows monotonically until nobody opens it.
+// `pinned_status` already outranked the pass; what was missing was that
+// deciding did anything visible beyond a chip.
+
+test("a judged claim leaves the inbox and lands in exactly one seat", (t) => {
+  const { insights } = library(t);
+  const judged = claim(insights, { statement: "Anthropic raised a round that a person has now signed off" });
+  const untouched = claim(insights, {
+    statement: "A second claim nobody has looked at yet, stated plainly",
+    simhash: simhash("A second claim nobody has looked at yet, stated plainly"),
+  });
+  insights.setStatus(judged, "standing");
+
+  const inbox = insights.list({ verdict: "pending", take: 50 }).insights.map((row) => row.id);
+  assert.deepEqual(inbox, [untouched], "a judged card is still sitting in the inbox");
+  const standing = insights.list({ verdict: "standing", take: 50 }).insights.map((row) => row.id);
+  assert.deepEqual(standing, [judged], "the judged card is not in the seat it was put in");
+});
+
+test("the strip's counts are the verdict column, not the pass's", (t) => {
+  // `status` and `pinned_status` are different columns and a card whose person
+  // and pass disagree is counted in one bucket by each. Deriving either tally
+  // from the other is wrong for exactly the cards a reader has touched — the
+  // only ones that matter here.
+  const { insights } = library(t);
+  const id = claim(insights);
+  claim(insights, {
+    statement: "Another claim entirely, left alone by everybody so far",
+    simhash: simhash("Another claim entirely, left alone by everybody so far"),
+  });
+  insights.setStatus(id, "dormant");
+  const counts = insights.countsByVerdict();
+  assert.equal(counts.dormant, 1, "the shelved card was not counted as shelved");
+  assert.equal(counts.pending, 1, "the untouched card was not counted as pending");
+  assert.equal(counts.standing, 0);
+  // `setStatus` writes BOTH columns, so right after a verdict the two tallies
+  // agree — this is what that looks like, and asserting the pass still saw a
+  // candidate here was wrong about the code rather than about the design.
+  //
+  // They diverge LATER, which is the whole reason there are two: the pass
+  // rescores and rewrites `status` on every run while `pinned_status` stays,
+  // and `nextStatus` returns the pinned value so the reader's verdict wins.
+  // A tally derived from the other column would go quietly wrong at exactly
+  // that moment, on exactly the cards a person has touched.
+  const byStatus = insights.countsByStatus();
+  assert.equal(byStatus.dormant, 1, "the verdict did not carry into the pass's own column");
+  assert.equal(byStatus.candidate, 1, "the untouched card stopped being a candidate");
+});
+
+test("a shelved card stays shelved after the pass gives up on it", (t) => {
+  // "Show me what I shelved" means all of it. A decided seat suppresses the
+  // default live-status clause, or a card would vanish from the one place the
+  // reader deliberately put it because the swarm changed its mind.
+  const { insights } = library(t);
+  const id = claim(insights, { status: "dormant" });
+  insights.setStatus(id, "dormant");
+  const seat = insights.list({ verdict: "dormant", take: 50 }).insights.map((row) => row.id);
+  assert.deepEqual(seat, [id], "a card the pass let go dormant fell out of the seat it was filed in");
+});
+
+test("the inbox does not fill with what the pass has already given up on", (t) => {
+  // The opposite rule, and it is why `pending` keeps the live-status clause:
+  // an inbox that accumulates every dormant card is an inbox nobody reaches
+  // the bottom of, which is the failure the strip exists to remove.
+  const { insights } = library(t);
+  claim(insights, { status: "dormant" });
+  const inbox = insights.list({ verdict: "pending", take: 50 }).insights;
+  assert.equal(inbox.length, 0, "a dormant card nobody judged is sitting in the inbox");
+  assert.equal(insights.countsByVerdict().pending, 0, "and it is being counted there too");
+});
+
+test("a claim's reading survives the round trip to the list", (t) => {
+  // CAUGHT BY AN END-TO-END PROBE, NOT BY A UNIT TEST, and that is the point:
+  // `gloss` was written by upsertInsight, hydrated by shapeInsight, and absent
+  // from INSIGHT_COLUMNS — so every write worked, every read of one card
+  // worked, and the LIST silently served `gloss: null` for every row. A column
+  // added to a table, a writer and a reader but not to the column list is
+  // invisible at exactly the layer the page uses.
+  const { insights } = library(t);
+  const id = claim(insights, { gloss: "这条主张说明云上推理的单位成本已经越过临界点。" });
+  assert.equal(insights.get(id).gloss, "这条主张说明云上推理的单位成本已经越过临界点。", "the single-card read lost it");
+  const listed = insights.list({ take: 10 }).insights.find((row) => row.id === id);
+  assert.equal(listed.gloss, "这条主张说明云上推理的单位成本已经越过临界点。", "the list route serves no reading");
 });

@@ -6639,3 +6639,103 @@ test("every family stack draws both scripts, and no shorthand discards one", () 
     `a \`fontFamily\` is written above the \`font\` shorthand that resets it, so the face asked for is silently discarded:\n${inverted.join("\n")}`,
   );
 });
+
+test("a form's fields are one metric, not three borrowed ones", () => {
+  // MEASURED, AND IT WAS VISIBLE FROM ACROSS THE ROOM. The scope dialog was
+  // built out of controls lifted from three places: SELECT_STYLE is a toolbar
+  // filter (28px, 12px type, INK.secondary), SEARCH_STYLE is a page-level
+  // search box (42px, 14px type, INK.primary), and the type chips were 11px.
+  // Four rows of the same kind of field, in three sizes and two inks.
+  //
+  // Both borrowed recipes are correct WHERE THEY LIVE, which is why this
+  // cannot be a rule about the constants themselves — it is a rule about
+  // where they may be spent. A form field is not a toolbar filter.
+  const dialog = body("function InsightRunDialog(");
+  for (const wrong of ["SEARCH_STYLE", "SELECT_STYLE"]) {
+    assert.equal(
+      dialog.includes(wrong),
+      false,
+      `InsightRunDialog reaches for ${wrong}. That is a toolbar/page recipe; a form field is FORM_CONTROL`,
+    );
+  }
+  assert.ok(dialog.includes("FORM_CONTROL"), "the dialog builds no control from the form recipe");
+  assert.ok(dialog.includes("FORM_LABEL"), "the dialog names no field with the form's label recipe");
+});
+
+test("a Latin caption idiom is not spent on a Chinese label", () => {
+  // `textTransform: "uppercase"` does nothing whatever to 时间范围 — CJK has no
+  // case — so on the Chinese half of this product an uppercase-plus-tracking
+  // caption rule is pure letter-spacing, which loosens 汉字 into something that
+  // reads as damaged. The eyebrows that legitimately carry it are Latin-only
+  // strings; a label that can be either language may not.
+  const dialog = body("function InsightRunDialog(");
+  assert.equal(
+    /textTransform:\s*"uppercase"/.test(dialog),
+    false,
+    "the scope dialog uppercases a label that is Chinese half the time",
+  );
+});
+
+test("a secondary panel does not take the screen when it fails", () => {
+  // MEASURED. `PassLedger` returned `ErrorBox` — the PANE-level shape, a tall
+  // bordered box with an icon, built for "the claims could not be read". Handed
+  // a failure of the BOOKKEEPING it put 300px of red between the run's figures
+  // and the claims themselves and pushed the content this tab exists for below
+  // the fold. The claims had loaded perfectly; only the account of them had
+  // not.
+  //
+  // The rule is about RANK, not about errors: a panel that is secondary when it
+  // works is secondary when it breaks.
+  //
+  // MATCHED AS A CALL, NOT AS A MENTION. The first version of this guard tested
+  // `includes("ErrorBox")` and failed on the comment above the fix explaining
+  // why ErrorBox is wrong here — a guard that forbids a component cannot forbid
+  // writing its name, or the only thing it reliably prevents is documentation.
+  const ledger = body("function PassLedger(");
+  assert.equal(
+    /jsx\(\s*ErrorBox/.test(ledger),
+    false,
+    "PassLedger renders the pane-level error box; a secondary panel gets one muted line",
+  );
+});
+
+test("a route the Host may not have yet degrades to nothing", () => {
+  // The page is served fresh on every request while the Host is loaded into a
+  // running process, so a browser newer than the plugin is the NORMAL state
+  // after an edit rather than an edge case. A Host with no ledger route has no
+  // ledger concept, so there is nothing to report about it — and reporting it
+  // as a fault put a red box on every screen between an edit and a restart.
+  //
+  // Every new route this page learns to call has to degrade this way, or the
+  // tab breaks itself on the way to being improved.
+  const ledger = body("function PassLedger(");
+  assert.match(
+    ledger,
+    /no such route/,
+    "PassLedger does not recognise a missing route, so a Host that predates it renders an error",
+  );
+});
+
+test("the only control on a row is not gated on the Host having a field", () => {
+  // MEASURED, AND IT COST A WHOLE FILTER. The source cut replaced the
+  // claim-kind cut and was then rendered only when `/insights/status` carried
+  // `resourceTypes`. The running Host predated the field, so the tab shipped
+  // with a control removed and its replacement invisible — one search box and
+  // nothing else — in a single step.
+  //
+  // "Absent rather than drawn empty" is the right instinct when there is
+  // another control on the row and exactly wrong when this IS the row. The
+  // vocabulary has a floor in `KINDS`, which this page has always owned, so the
+  // control can always draw; only its ENABLED state may depend on the Host.
+  const pane = body("function LibraryInsightPane(");
+  assert.match(
+    pane,
+    /sourceTypes\s*=\s*sourceFilterLive\s*\?\s*status\.resourceTypes\s*:\s*KINDS/,
+    "the source vocabulary has no local floor, so an older Host renders no filter at all",
+  );
+  assert.equal(
+    /resourceTypes[^\n]*\?\s*null\s*:\s*jsx\("select"/.test(pane),
+    false,
+    "the source select is still gated out of existence by a Host field",
+  );
+});

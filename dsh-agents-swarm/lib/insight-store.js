@@ -31,6 +31,49 @@ import { createHash } from "node:crypto";
  * SourceStore. Contains no `PRAGMA` of any kind, deliberately — see the module
  * comment.
  */
+/**
+ * What one pass can conclude about one source, in order of concern.
+ *
+ * THE ORDER IS THE CONTRACT, not a preference: `passLedger` sorts by position
+ * in this array, because a reader opening a pass's account is asking what went
+ * wrong, and a failure sorted alphabetically among two hundred successes is a
+ * failure nobody finds.
+ *
+ * - `failed`        the model call for its cluster threw. It carries a reason.
+ * - `no-transcript` a video the library holds no transcript for. Skipped
+ *                   before the model sees it, because a title and a blurb
+ *                   cannot produce a checkable quote — the correct behaviour,
+ *                   and the one that was previously invisible.
+ * - `unusable`      no title or no body the clusterer could use at all.
+ * - `binned`        clustered, then lost the ceiling. NOT a loss: the
+ *                   watermark does not cover it and it returns next pass.
+ * - `read`          shown to the model, which found nothing worth keeping.
+ *                   The commonest honest outcome and not a fault.
+ * - `extracted`     produced at least one claim that survived verification.
+ */
+export const PASS_STATES = ["failed", "no-transcript", "unusable", "binned", "read", "extracted"];
+
+/**
+ * How many passes' ledgers to keep.
+ *
+ * A pass writes up to `insightMaxRows` entries and runs as often as the
+ * collection tick, so an unpruned ledger grows by roughly 1.7 million rows a
+ * year to serve a screen that shows the latest batch. Twenty is a fortnight of
+ * hourly passes at the point anybody is still asking "what did it do".
+ */
+export const LEDGER_BATCHES = 20;
+
+/**
+ * Longest attribution this store will keep.
+ *
+ * A name and a role -- "Jensen Huang, Nvidia" -- is about twenty characters.
+ * This is a CEILING, not a target: a model that answers the speaker field with
+ * a sentence has not given a name. Duplicated from the extractor's own bound
+ * on purpose, because a store that trusts its caller to have checked is a
+ * store with no bound at all the first time a second caller appears.
+ */
+export const MAX_SPEAKER_CHARS = 80;
+
 export const INSIGHT_DDL = `
 -- ── 洞察 ────────────────────────────────────────────────────────────────
 -- Lives in the SAME database file as \`resources\`, created by InsightStore over
@@ -73,6 +116,16 @@ CREATE TABLE IF NOT EXISTS insights (
   -- stored score with no stamp cannot be told from a fresh one — a tab that
   -- has been ranking on month-old novelty looks exactly like a working tab.
   scored_at           TEXT,
+  -- ONE SENTENCE ON WHAT THE CLAIM MEANS, and the only field on this row that
+  -- is not checkable against a quote. The statement is verified, every quote
+  -- is verified character for character, the speaker must be stated in the
+  -- block -- this is a READING, and every surface that renders it has to
+  -- present it as one rather than beside them as another fact.
+  --
+  -- NULL-able and never required: the prompt asks the model to omit it rather
+  -- than speculate, and a claim must not be discarded for taking that
+  -- instruction.
+  gloss               TEXT,
   supersedes          TEXT,              -- id of the claim this replaced
   updated_at          TEXT NOT NULL
 ) STRICT;
@@ -98,6 +151,18 @@ CREATE TABLE IF NOT EXISTS insight_evidence (
   -- anything wrong. Empty string when the type was not known at write time,
   -- which \`stats()\` counts so the gap is visible rather than assumed away.
   resource_type TEXT NOT NULL DEFAULT '',
+  -- WHO SAID IT, when the source block itself says so.
+  --
+  -- On the EVIDENCE and not on the claim, because a claim with three sources
+  -- has three speakers, and folding them onto the claim would put one name
+  -- under sentences the other two people said. It is the same reason the
+  -- source_key column lives here.
+  --
+  -- Only ever what the block states: an interviewer naming their guest, a
+  -- transcript line attributing a sentence, an article quoting somebody by
+  -- name. Never inferred from the channel or the title, because a name under
+  -- a sentence is an attribution and a wrong attribution is worse than none.
+  speaker       TEXT,
   added_at      TEXT NOT NULL,
   PRIMARY KEY (insight_id, resource_id)
 ) STRICT;
@@ -112,6 +177,42 @@ CREATE TABLE IF NOT EXISTS insight_evidence (
 -- comments included: the rule that this DDL executes no such directive is one
 -- a reviewer checks with a grep, and a comment that trips it costs more than
 -- the rewording.)
+
+-- ── what one pass did to each source it looked at ────────────────────────
+--
+-- WHY A LEDGER AND NOT A COUNTER. The pass already reported five aggregate
+-- numbers — rows, unusable, binned, clusters, failures — and every one of them
+-- answers "how many" for a question whose only useful form is "which one".
+-- A pass that reads two hundred sources and writes three claims is either
+-- working perfectly on a quiet week or silently dropping a hundred and ninety
+-- videos for want of a transcript, and the aggregates report those two
+-- identically.
+--
+-- MEASURED, on the library this was built against: 523 videos held, 23
+-- transcripts. The scan skips a video it holds no transcript for — correctly,
+-- since a title and a blurb cannot produce a checkable quote — and said
+-- nothing at all about the other five hundred. They were not counted as read,
+-- not counted as unusable, not counted as binned, and not in any error. They
+-- were simply absent, which is the shape of loss this repository keeps
+-- re-shipping.
+--
+-- ONE ROW PER SOURCE PER PASS. The batch is the run's own timestamp, so a
+-- pass is a unit a reader can ask about: what did the 09:00 run actually read.
+CREATE TABLE IF NOT EXISTS insight_pass_rows (
+  batch            TEXT NOT NULL,       -- the run's ISO stamp
+  resource_id      TEXT NOT NULL,
+  title            TEXT NOT NULL,
+  resource_type    TEXT NOT NULL,
+  duration_seconds INTEGER,             -- NULL when nobody ever asked
+  -- extracted | read | unusable | binned | failed | no-transcript
+  state            TEXT NOT NULL,
+  reason           TEXT,                -- why, for the states that are not successes
+  claims           INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (batch, resource_id)
+) STRICT;
+
+-- The ledger is read one batch at a time, newest first, and pruned by batch.
+CREATE INDEX IF NOT EXISTS ix_insight_pass_batch ON insight_pass_rows(batch DESC);
 
 -- ── indexes the routes actually make queries against ─────────────────────
 -- \`/insights/list\` default and \`?status=\`: filtered, ordered by rank.
@@ -322,6 +423,11 @@ function shapeInsight(row) {
     // one — which is also how a reader sees how much of the table predates
     // the field.
     layer: row.layer ?? null,
+    // A READING, NOT A FACT, and every surface that renders it has to say so.
+    // Null for every row written before the extractor was asked for one, and
+    // null again whenever the model declined — which the prompt asks it to do
+    // rather than speculate.
+    gloss: row.gloss ?? null,
     entities: entitiesOf(row.entities),
     status: row.status,
     pinnedStatus: pinned,
@@ -345,7 +451,7 @@ function shapeInsight(row) {
 
 /** Every column shapeInsight reads, so no reader is served a half row. */
 const INSIGHT_COLUMNS = `
-  id, statement, kind, layer, entities, status, pinned_status, simhash,
+  id, statement, kind, layer, gloss, entities, status, pinned_status, simhash,
   first_seen_at, last_seen_at, source_count, independent_count, contradiction_count,
   novelty, relevance, credibility, momentum, rank_score, scored_at, supersedes, updated_at
 `;
@@ -433,6 +539,17 @@ export class InsightStore {
     if (!own.some((column) => column.name === "corroborated_at")) {
       this.db.exec("ALTER TABLE insights ADD COLUMN corroborated_at TEXT");
     }
+    // `gloss` and `speaker` arrived together, after the column lists above were
+    // settled. Added in place for `cues`' reason, and NULL-able on purpose:
+    // "never asked" and "asked and declined" are both honestly nothing, and a
+    // DEFAULT of '' would make every existing card look like one whose gloss
+    // came back empty.
+    if (!own.some((column) => column.name === "gloss")) {
+      this.db.exec("ALTER TABLE insights ADD COLUMN gloss TEXT");
+    }
+    if (!columns.some((column) => column.name === "speaker")) {
+      this.db.exec("ALTER TABLE insight_evidence ADD COLUMN speaker TEXT");
+    }
     // Deliberately no close(): the handle belongs to the SourceStore, and
     // offering a close here is an invitation to shut the whole library from a
     // route handler.
@@ -467,12 +584,47 @@ export class InsightStore {
   }
 
   /**
+   * Rows per VERDICT — what a person decided, not what the pass computed.
+   *
+   * COUNTED THE SAME WAY THE FILTER SELECTS, which is the rule countsByStatus
+   * states one method up and the reason this is a second method rather than
+   * arithmetic over the first: `status` and `pinned_status` are different
+   * columns, and a card whose person and pass disagree is counted in one bucket
+   * by each. Deriving either tally from the other is wrong for exactly those
+   * cards — the ones a reader has actually touched.
+   *
+   * `pending` IS THE INBOX and is the count of NULLs, because "nobody has
+   * judged this" is the absence of a verdict rather than a fourth kind of one.
+   * It is scoped to the live statuses, matching what `list` selects for
+   * `verdict: "pending"`: an inbox that fills with everything the pass has
+   * given up on is an inbox nobody reaches the bottom of.
+   *
+   * The three decided buckets are NOT scoped that way, matching `list` again:
+   * a card the reader shelved stays counted where they put it even after the
+   * pass lets it go dormant.
+   * @returns `{ pending: n, standing: n, contested: n, dormant: n }`.
+   */
+  countsByVerdict() {
+    const counts = { pending: 0, standing: 0, contested: 0, dormant: 0 };
+    counts.pending = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM insights
+        WHERE pinned_status IS NULL AND status IN (${LIVE_STATUSES.map(() => "?").join(",")})`,
+    ).get(...LIVE_STATUSES).n;
+    for (const row of this.db.prepare(
+      "SELECT pinned_status AS v, COUNT(*) AS n FROM insights WHERE pinned_status IS NOT NULL GROUP BY pinned_status",
+    ).all()) {
+      counts[row.v] = row.n;
+    }
+    return counts;
+  }
+
+  /**
    * Page the 洞察 tab.
    * @param options - `{ status, kind, filter, search, sortBy, take, skip, now, windowDays, minIndependent }`.
    * @returns `{ insights, total, hasMore, counts }`.
    */
   list({
-    status, kind, filter, search, sortBy,
+    status, kind, resourceType, verdict, filter, search, sortBy,
     take = 20, skip = 0,
     now = new Date().toISOString(),
     windowDays = 7,
@@ -490,6 +642,66 @@ export class InsightStore {
       assertMember(kind, INSIGHT_KINDS, "kind");
       where.push("kind = ?");
       params.push(kind);
+    }
+    // WHICH KIND OF SOURCE THE CLAIM RESTS ON, which is a different question
+    // from what kind of claim it is, and the two are the most confusable pair
+    // of vocabularies in this feature. `kind` is launch / funding / policy /
+    // finding / shift — what the claim SAYS. This is NEWS / PAPER /
+    // YOUTUBE_VIDEO — where it CAME FROM, and the same list the 信源 tab pages
+    // by. Both are plain strings and neither validates as the other, so a
+    // caller that passes one where the other belongs gets an empty page rather
+    // than an error, which is why they are separate parameters with separate
+    // names rather than one "type".
+    //
+    // AN EXISTS SUBQUERY, NOT A JOIN. A claim with three NEWS quotes is ONE
+    // claim; joining evidence would return it three times, and the total,
+    // the paging and the `hasMore` would all be wrong by a factor nobody
+    // could predict. EXISTS asks "does any of its evidence come from here",
+    // which is the question, and stops at the first row that answers it.
+    //
+    // Against the DENORMALISED `resource_type`, not a join back to
+    // `resources`: that column is what survives a library prune, and it is
+    // the same value `scoreCredibility` weighs the claim by. Filtering on the
+    // live row would silently drop every claim whose source has since been
+    // pruned — the card would vanish from a filtered page while still
+    // appearing on the unfiltered one.
+    if (typeof resourceType === "string" && resourceType !== "") {
+      where.push(`EXISTS (
+        SELECT 1 FROM insight_evidence e
+         WHERE e.insight_id = insights.id AND e.resource_type = ?
+      )`);
+      params.push(resourceType);
+    }
+
+    // ── WHAT A PERSON DECIDED, as opposed to what the pass computed ──────
+    //
+    // `status` is the pass's opinion and moves under the reader's feet on
+    // every run. `pinned_status` is the reader's own, and it outranks the
+    // pass — that is the whole reason the column exists. They are separate
+    // columns and this is a separate cut.
+    //
+    // "pending" IS THE INBOX AND IS NOT A STATUS. A card nobody has judged is
+    // not a fourth verdict; it is the absence of one, so it is NULL and has to
+    // be asked for as a distinct value rather than as a member of the
+    // vocabulary. Spelling it "" or leaving it out would make "show me what I
+    // have not looked at" indistinguishable from "show me everything".
+    const verdicting = typeof verdict === "string" && verdict !== "";
+    // A DECIDED VERDICT SUPPRESSES THE DEFAULT LIVE-STATUS CLAUSE; "pending"
+    // does not. "Show me what I shelved" means all of it, including the rows
+    // the pass has since let go dormant — hiding those would make a card
+    // disappear from the one place the reader put it. "Show me what I have
+    // not judged" is the opposite: it is an INBOX, and an inbox that fills up
+    // with everything the pass has already given up on is an inbox nobody
+    // reaches the bottom of.
+    const judged = verdicting && verdict !== "pending";
+    if (verdicting) {
+      if (verdict === "pending") {
+        where.push("pinned_status IS NULL");
+      } else {
+        assertMember(verdict, INSIGHT_STATUSES, "verdict");
+        where.push("pinned_status = ?");
+        params.push(verdict);
+      }
     }
 
     const filtering = typeof filter === "string" && filter !== "";
@@ -514,7 +726,7 @@ export class InsightStore {
       } else {
         throw new Error(`filter must be one of new, rising, contested, dormant; got ${JSON.stringify(filter)}`);
       }
-    } else if (!narrowed) {
+    } else if (!narrowed && !judged) {
       // Default page: the three live statuses. Candidates are INCLUDED —
       // hiding them by default gives the first day an empty tab, which reads
       // as a broken feature rather than as a sprawl control. Spelt as an IN
@@ -554,6 +766,13 @@ export class InsightStore {
       // Always the full tally, whatever the active filter, so the page can
       // offer "+N candidates" without a second request.
       counts: this.countsByStatus(),
+      // AND THE VERDICT TALLY, on the same terms and for a sharper reason: the
+      // page's verdict strip IS its navigation, so every segment has to carry
+      // its own number while a different one is selected. Derived here rather
+      // than from `counts` because they answer different questions out of two
+      // different columns, and a page that subtracted one from the other would
+      // be quietly wrong for every card whose person and pass disagree.
+      verdictCounts: this.countsByVerdict(),
     };
   }
 
@@ -571,10 +790,10 @@ export class InsightStore {
     if (ids.length === 0) return byInsight;
     const holes = ids.map(() => "?").join(",");
     const rows = this.db.prepare(`
-      SELECT e.insight_id, e.resource_id, e.stance, e.quote, e.source_key, e.added_at,
+      SELECT e.insight_id, e.resource_id, e.stance, e.quote, e.source_key, e.speaker, e.added_at,
              r.title AS title, r.source_url AS source_url, r.type AS type
       FROM (
-        SELECT insight_id, resource_id, stance, quote, source_key, added_at,
+        SELECT insight_id, resource_id, stance, quote, source_key, speaker, added_at,
                ROW_NUMBER() OVER (PARTITION BY insight_id, stance ORDER BY added_at DESC) AS rn
         FROM insight_evidence
         WHERE insight_id IN (${holes}) AND stance IN ('supports','contradicts')
@@ -590,6 +809,11 @@ export class InsightStore {
         stance: row.stance,
         quote: row.quote,
         sourceKey: row.source_key,
+        // Who said it, when the block said so. On the CARD PREVIEW as well as
+        // on the detail, because the card is where a reader decides whether a
+        // quote is worth opening — and "somebody named, on the record" and
+        // "an outlet's own prose" are different weights of evidence.
+        speaker: row.speaker ?? null,
         // Null, not dropped, when the library no longer holds the row: the
         // page renders the quote with its sourceKey and no link, rather than
         // showing five rows under a card claiming six sources.
@@ -640,7 +864,7 @@ export class InsightStore {
    */
   listEvidence(insightId) {
     const rows = this.db.prepare(`
-      SELECT e.resource_id, e.stance, e.quote, e.source_key, e.resource_type, e.added_at,
+      SELECT e.resource_id, e.stance, e.quote, e.source_key, e.resource_type, e.speaker, e.added_at,
              r.id AS r_id, r.title AS r_title, r.source_url AS r_source_url,
              r.type AS r_type, r.source_type AS r_source_type, r.published_at AS r_published_at
       FROM insight_evidence e
@@ -654,6 +878,11 @@ export class InsightStore {
       quote: row.quote,
       sourceKey: row.source_key,
       resourceType: row.resource_type,
+      // Who said the quote, when the block said so. Null is the common answer
+      // and the honest one: an article speaking in its own voice has no
+      // speaker, and neither has an hour of conversation between two people
+      // whose names appear nowhere in what the model was shown.
+      speaker: row.speaker ?? null,
       // `type` is the DENORMALISED value, not the joined one, and deliberately
       // so: the credibility weight is looked up by `type`, and reading it off
       // the join means a pruned PAPER quietly weighs the same as an unknown
@@ -820,9 +1049,9 @@ export class InsightStore {
     const id = typeof record?.id === "string" && record.id !== "" ? record.id : newInsightId();
     this.db.prepare(`
       INSERT INTO insights (
-        id, statement, kind, layer, entities, status, simhash,
+        id, statement, kind, layer, gloss, entities, status, simhash,
         first_seen_at, last_seen_at, supersedes, updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         statement = excluded.statement,
         kind = excluded.kind,
@@ -830,6 +1059,11 @@ export class InsightStore {
         -- not erase a layer an earlier pass — or a person — established.
         -- The other direction is fine: a pass that DOES place it wins.
         layer = COALESCE(excluded.layer, insights.layer),
+        -- COALESCE, for the layer's reason. A later pass that could not write
+        -- a gloss must not erase one an earlier pass produced: the field is
+        -- optional by design, so "absent" is the common case and overwriting
+        -- with it would make the reading flicker away on the next merge.
+        gloss = COALESCE(excluded.gloss, insights.gloss),
         entities = excluded.entities,
         simhash = excluded.simhash,
         supersedes = excluded.supersedes,
@@ -847,6 +1081,7 @@ export class InsightStore {
       // no layer, and the pane groups those under their own heading — which
       // is also how a reader sees how much of the table predates the field.
       INSIGHT_LAYERS.includes(record?.layer) ? record.layer : null,
+      typeof record?.gloss === "string" && record.gloss.trim() !== "" ? record.gloss.trim() : null,
       entitiesJson(record?.entities), status, simhash,
       firstSeenAt, lastSeenAt,
       typeof record?.supersedes === "string" && record.supersedes !== "" ? record.supersedes : null,
@@ -858,7 +1093,7 @@ export class InsightStore {
   /**
    * Attach evidence to one insight and refresh its counts.
    * @param insightId - the insight the quotes belong to.
-   * @param rows - `[{ resourceId, stance, quote, sourceKey, resourceType?, addedAt? }]`.
+   * @param rows - `[{ resourceId, stance, quote, sourceKey, resourceType?, speaker?, addedAt? }]`.
    * @returns `{ added, updated, skipped, conflicted, counts }`.
    */
   addEvidence(insightId, rows) {
@@ -870,11 +1105,17 @@ export class InsightStore {
     const now = new Date().toISOString();
     const existing = this.db.prepare("SELECT stance FROM insight_evidence WHERE insight_id = ? AND resource_id = ?");
     const insert = this.db.prepare(`
-      INSERT INTO insight_evidence (insight_id, resource_id, stance, quote, source_key, resource_type, added_at)
-      VALUES (?,?,?,?,?,?,?)
+      INSERT INTO insight_evidence (insight_id, resource_id, stance, quote, source_key, resource_type, speaker, added_at)
+      VALUES (?,?,?,?,?,?,?,?)
     `);
     const refresh = this.db.prepare(`
-      UPDATE insight_evidence SET stance = ?, quote = ?, source_key = ?, resource_type = ?
+      UPDATE insight_evidence SET stance = ?, quote = ?, source_key = ?, resource_type = ?,
+        -- COALESCE, so a re-extraction that could not name the speaker does
+        -- not erase one an earlier pass found. Same rule as the layer and the
+        -- gloss, and it matters most here: the field is optional BY DESIGN, so
+        -- "absent" is the common answer and plain assignment would delete a
+        -- correct attribution on the next merge.
+        speaker = COALESCE(?, speaker)
       WHERE insight_id = ? AND resource_id = ?
     `);
     const typeOf = this.db.prepare("SELECT type FROM resources WHERE id = ?");
@@ -905,9 +1146,16 @@ export class InsightStore {
           ? row.resourceType
           : (typeOf.get(resourceId)?.type ?? "");
 
+        // Bounded and trimmed to null. A "speaker" that arrived as a sentence
+        // is not a name, and rendering one inline breaks the card row it sits
+        // in; the extractor already applies the same ceiling, and this is the
+        // store refusing to trust that it did.
+        const said = typeof row?.speaker === "string" ? row.speaker.trim() : "";
+        const speaker = said !== "" && said.length <= MAX_SPEAKER_CHARS ? said : null;
+
         const prior = existing.get(insightId, resourceId);
         if (prior === undefined) {
-          insert.run(insightId, resourceId, row.stance, quote, sourceKey, resourceType, addedAt);
+          insert.run(insightId, resourceId, row.stance, quote, sourceKey, resourceType, speaker, addedAt);
           added += 1;
           continue;
         }
@@ -917,7 +1165,7 @@ export class InsightStore {
           // the same card into `contradicts`: recount then decrements
           // sourceCount, increments contradictionCount, and demotes a standing
           // card — with no error and no log anywhere.
-          refresh.run(row.stance, quote, sourceKey, resourceType, insightId, resourceId);
+          refresh.run(row.stance, quote, sourceKey, resourceType, speaker, insightId, resourceId);
           updated += 1;
           continue;
         }
@@ -1219,6 +1467,135 @@ export class InsightStore {
       this.db.exec("ROLLBACK");
       throw cause;
     }
+  }
+
+  /**
+   * Record what one pass did to each source it looked at.
+   *
+   * WRITTEN IN ONE TRANSACTION AND PRUNED IN THE SAME ONE. A ledger nobody
+   * prunes is a table that grows by two hundred rows an hour for the life of
+   * the library — 1.7 million rows a year — to serve a screen that shows the
+   * latest batch and, at most, the handful before it.
+   *
+   * NEVER THROWS OUT OF HERE ON A ROW. A ledger is a record OF the work, not
+   * the work: losing the account of a pass must not lose the claims the pass
+   * extracted, which are already committed by the time this is called.
+   * @param batch - the run's ISO stamp, the same one the record carries.
+   * @param entries - `[{ resourceId, title, resourceType, durationSeconds, state, reason, claims }]`.
+   * @param keepBatches - how many passes' ledgers to retain.
+   * @returns the number of rows written.
+   */
+  recordPass(batch, entries, { keepBatches = LEDGER_BATCHES } = {}) {
+    if (typeof batch !== "string" || batch === "" || !Array.isArray(entries)) return 0;
+    const insert = this.db.prepare(`
+      INSERT INTO insight_pass_rows (
+        batch, resource_id, title, resource_type, duration_seconds, state, reason, claims
+      ) VALUES (?,?,?,?,?,?,?,?)
+      ON CONFLICT(batch, resource_id) DO UPDATE SET
+        -- A SOURCE IS LOOKED AT ONCE PER PASS, but it reaches this table from
+        -- two places: the scan reports what it skipped, and the extractor
+        -- reports what happened to what it kept. The extractor's verdict is
+        -- the later and the more specific, so it wins.
+        state = excluded.state, reason = excluded.reason, claims = excluded.claims,
+        duration_seconds = COALESCE(excluded.duration_seconds, insight_pass_rows.duration_seconds)
+    `);
+    let written = 0;
+    this.db.exec("BEGIN");
+    try {
+      for (const entry of entries) {
+        const id = String(entry?.resourceId ?? "");
+        const state = String(entry?.state ?? "");
+        if (id === "" || !PASS_STATES.includes(state)) continue;
+        const seconds = Number(entry?.durationSeconds);
+        insert.run(
+          batch,
+          id,
+          String(entry?.title ?? ""),
+          String(entry?.resourceType ?? ""),
+          Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : null,
+          state,
+          typeof entry?.reason === "string" && entry.reason !== "" ? entry.reason : null,
+          Number.isFinite(Number(entry?.claims)) ? Number(entry.claims) : 0,
+        );
+        written += 1;
+      }
+      // Whole batches, never "the oldest N rows": half a pass's ledger is a
+      // screen that reports a run read forty sources when it read two hundred.
+      const keep = this.db.prepare(
+        "SELECT DISTINCT batch FROM insight_pass_rows ORDER BY batch DESC LIMIT ?",
+      ).all(Math.max(1, keepBatches)).map((row) => row.batch);
+      if (keep.length > 0) {
+        this.db.prepare(
+          `DELETE FROM insight_pass_rows WHERE batch NOT IN (${keep.map(() => "?").join(",")})`,
+        ).run(...keep);
+      }
+      this.db.exec("COMMIT");
+    } catch (cause) {
+      this.db.exec("ROLLBACK");
+      throw cause;
+    }
+    return written;
+  }
+
+  /**
+   * The batches the ledger still holds, newest first.
+   * @param limit - how many to name.
+   * @returns `[{ batch, rows }]`.
+   */
+  passBatches(limit = LEDGER_BATCHES) {
+    return this.db.prepare(
+      "SELECT batch, COUNT(*) AS rows FROM insight_pass_rows GROUP BY batch ORDER BY batch DESC LIMIT ?",
+    ).all(Math.max(1, Math.min(50, Number(limit) || LEDGER_BATCHES)));
+  }
+
+  /**
+   * What one pass did, source by source.
+   *
+   * ORDERED BY STATE, NOT BY TITLE. A reader opening this is asking what went
+   * wrong, and a failure sorted alphabetically among two hundred successes is
+   * a failure nobody finds. The order is the order of concern: the states that
+   * cost the library something come first.
+   * @param batch - the run's stamp, or undefined for the newest.
+   * @param options - `{ state, take }`.
+   * @returns `{ batch, counts, rows }`; `batch` is null when the ledger is empty.
+   */
+  passLedger(batch, { state, take = 200 } = {}) {
+    const wanted = typeof batch === "string" && batch !== ""
+      ? batch
+      : this.db.prepare("SELECT batch FROM insight_pass_rows ORDER BY batch DESC LIMIT 1").get()?.batch;
+    if (wanted === undefined) return { batch: null, counts: {}, rows: [] };
+    const counts = {};
+    for (const row of this.db.prepare(
+      "SELECT state, COUNT(*) AS n FROM insight_pass_rows WHERE batch = ? GROUP BY state",
+    ).all(wanted)) {
+      counts[row.state] = row.n;
+    }
+    const params = [wanted];
+    let clause = "batch = ?";
+    if (typeof state === "string" && PASS_STATES.includes(state)) {
+      clause += " AND state = ?";
+      params.push(state);
+    }
+    const limit = Math.max(1, Math.min(500, Number(take) || 200));
+    const rows = this.db.prepare(`
+      SELECT resource_id, title, resource_type, duration_seconds, state, reason, claims
+        FROM insight_pass_rows
+       WHERE ${clause}
+       ORDER BY CASE state
+         ${PASS_STATES.map((one, at) => `WHEN '${one}' THEN ${at}`).join(" ")}
+         ELSE 99 END,
+         claims DESC, title ASC
+       LIMIT ?
+    `).all(...params, limit).map((row) => ({
+      resourceId: row.resource_id,
+      title: row.title,
+      resourceType: row.resource_type,
+      durationSeconds: row.duration_seconds ?? null,
+      state: row.state,
+      reason: row.reason ?? "",
+      claims: row.claims,
+    }));
+    return { batch: wanted, counts, rows };
   }
 
   /**

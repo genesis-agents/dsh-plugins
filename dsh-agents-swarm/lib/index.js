@@ -27,7 +27,7 @@ import { enrichThumbnails, imageForPage, ENRICHABLE_TYPES, DEFAULT_ENRICH_LIMIT 
 import { createPublishRoutes } from "./publish-routes.js";
 import { PUBLISH_DEFAULTS, readPublishConfig, startPublishTimer } from "./publish-schedule.js";
 import { createInsightRoutes } from "./insight-routes.js";
-import { isInsightDue, readInsightConfig, runInsightPass } from "./insight-extract.js";
+import { MIN_INSIGHT_INTERVAL_MINUTES, isInsightDue, readInsightConfig, runInsightPass } from "./insight-extract.js";
 import { openInsightStore } from "./insight-store.js";
 import { openMissionStore } from "./mission-store.js";
 import { createMissionRuntime } from "./mission-handlers.js";
@@ -233,16 +233,6 @@ const DEFAULT_COLLECT_INTERVAL_MINUTES = 60;
 
 /** Shortest interval accepted, so a misconfiguration cannot hammer a provider. */
 const MIN_COLLECT_INTERVAL_MINUTES = 15;
-
-/**
- * Shortest insight interval accepted, zero aside.
- *
- * Zero-or-a-minimum rather than a plain range, mirroring the collection
- * interval above: a five-minute pass would re-read the same watermark before
- * the previous run had finished recording it, paying for the same clusters
- * twice while reporting two successful runs.
- */
-const MIN_INSIGHT_INTERVAL_MINUTES = 30;
 
 /**
  * Run every configured collector once, tolerating individual failures.
@@ -1249,7 +1239,23 @@ export function createHandler(store, logger, chat, web, ctx, missions) {
       }
       try {
         const details = await fetchVideoDetails(videoId);
-        store.put({ ...row, abstract: details.description });
+        // THE LENGTH RIDES ALONG, because this request already paid for it.
+        //
+        // `fetchVideoDetails` returns `lengthSeconds` whether or not anybody
+        // asked, and this route is hit whenever a reader opens a video whose
+        // description was never stored — which is most of the back catalogue,
+        // collected before `duration_seconds` existed. So opening an old video
+        // backfills its length for free, and the column fills in over use
+        // rather than needing a sweep that re-fetches thousands of watch pages.
+        //
+        // `put` COALESCEs the column, so a details call that came back without
+        // a length cannot erase one already known.
+        const seconds = Number(details?.lengthSeconds);
+        store.put({
+          ...row,
+          abstract: details.description,
+          ...(Number.isFinite(seconds) && seconds > 0 ? { durationSeconds: seconds } : {}),
+        });
         sendJson(res, 200, { success: true, data: { ...details, via: "watch-page" } });
       } catch (cause) {
         sendJson(res, 502, { success: false, error: String(cause?.message ?? cause) });

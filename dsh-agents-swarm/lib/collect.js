@@ -177,8 +177,25 @@ export async function dropShortVideos(rows, { seen, details, minSeconds = MIN_VI
         dropped.push({ url: row.sourceUrl, title: row.title, seconds });
         continue;
       }
-      kept.push(row);
+      // THE NUMBER IS KEPT NOW, and it was thrown away for as long as this
+      // function has existed.
+      //
+      // The lookup above costs one request per NEW video — a cost this
+      // function's own docblock explains, budgets and defends — and it was
+      // spent to answer one boolean and then discarded. So the library
+      // enforced a length rule it could not state, no card could show how
+      // long a talk was, no filter could name a length, and a reader asking
+      // "why is this hour-long interview not in here" had nothing to look at.
+      //
+      // Attached rather than mutated in place: these rows come out of
+      // `parseFeed`, which is pure, and a collector that edits its input is a
+      // collector whose second caller gets different rows than its first.
+      kept.push(Number.isFinite(seconds) && seconds > 0 ? { ...row, durationSeconds: seconds } : row);
     } catch {
+      // A LOOKUP THAT FAILED LEAVES NO LENGTH, and that is not the same as
+      // zero. `put` stores null for it and the length floor in `query` keeps
+      // NULL rows, so a network error costs the video its badge and never its
+      // place in the library.
       kept.push(row);
     }
   }

@@ -27,9 +27,12 @@
  * publish-routes.js does for `/publish/documents`.
  */
 
-import { INSIGHT_KINDS, INSIGHT_STATUSES, openInsightStore } from "./insight-store.js";
-import { pickCandidates, readInsightConfig, runInsightPass } from "./insight-extract.js";
+import { INSIGHT_KINDS, INSIGHT_STATUSES, PASS_STATES, openInsightStore } from "./insight-store.js";
+import { RESOURCE_TYPES } from "./store.js";
+import { MIN_VIDEO_SECONDS } from "./collect.js";
+import { MIN_INSIGHT_INTERVAL_MINUTES, pickCandidates, readInsightConfig, runInsightPass } from "./insight-extract.js";
 import { withMoments } from "./insight-moment.js";
+import { STRENGTH_BANDS, strengthOf } from "./insights.js";
 import { mergeIdenticalEvidence, runReclassifyPass } from "./insight-reclassify.js";
 
 /** The id shape `newInsightId` mints. Checked before an id reaches SQL. */
@@ -40,6 +43,18 @@ const INSIGHT_ID_EXAMPLE = "insight-20260101T090000Z-1a2b3c4d";
 
 /** The four chips: 新出现 / 升温中 / 有分歧 / 已沉寂. */
 const FILTERS = ["new", "rising", "contested", "dormant"];
+
+/**
+ * The verdict strip: 待判定 / 成立 / 存疑 / 搁置.
+ *
+ * `pending` FIRST AND IT IS NOT A STATUS. The other three are members of
+ * INSIGHT_STATUSES written into `pinned_status`; this one is the ABSENCE of
+ * one, and it is the tab's default view. Declared as its own list rather than
+ * spread from INSIGHT_STATUSES because "candidate" is a member of that
+ * vocabulary and is emphatically not a verdict — a person never decides that a
+ * claim is a candidate, the pass does.
+ */
+const VERDICTS = ["pending", "standing", "contested", "dormant"];
 
 /**
  * Sorts the list route accepts.
@@ -184,20 +199,35 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
    * @param payload - what the store answered, or undefined.
    * @returns the same object, its quotes carrying `at` and `atUrl`.
    */
+  /**
+   * The band a card's score reads in, computed HERE rather than in the page.
+   *
+   * The alternative is a copy of the thresholds in client.js, and a threshold
+   * table that exists twice is a table that disagrees with itself the first
+   * time either copy moves — with the symptom being a card labelled 高 on one
+   * screen and 中 on another, out of one number, with nothing throwing.
+   *
+   * It also keeps the cut where the arithmetic is: `strengthOf` sits beside
+   * `scoreInsight`, which is what produced the number it bands.
+   * @param row - a shaped insight.
+   * @returns the row, carrying `strength`.
+   */
+  const banded = (row) => ({ ...row, strength: strengthOf(row?.rankScore) });
+
   const momentise = (payload) => {
     if (payload === undefined || payload === null) return payload;
     const read = (id) => store.getTranscript(id);
     if (Array.isArray(payload.insights)) {
       return {
         ...payload,
-        insights: payload.insights.map((row) => ({
+        insights: payload.insights.map((row) => banded({
           ...row,
           evidencePreview: withMoments(row.evidencePreview, read),
         })),
       };
     }
     return Array.isArray(payload.evidence)
-      ? { ...payload, evidence: withMoments(payload.evidence, read) }
+      ? banded({ ...payload, evidence: withMoments(payload.evidence, read) })
       : payload;
   };
 
@@ -237,6 +267,21 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
       if (status.error !== undefined) return bad(status.error);
       const kind = oneOf(params, "kind", INSIGHT_KINDS, "omit it for every kind");
       if (kind.error !== undefined) return bad(kind.error);
+      // `resourceType`, spelled out, NOT "type". The one thing this parameter
+      // must never be is confusable with `kind`: launch / funding / policy are
+      // what a claim SAYS, NEWS / PAPER / YOUTUBE_VIDEO are where it CAME FROM,
+      // both are plain strings, and neither validates as the other. A shared
+      // name would make `?type=funding` a legal-looking request that returns
+      // an empty page, and `oneOf` naming the accepted list in its rejection
+      // is the whole defence.
+      const resourceType = oneOf(params, "resourceType", RESOURCE_TYPES, "omit it for every kind of source");
+      if (resourceType.error !== undefined) return bad(resourceType.error);
+      // WHAT A PERSON DECIDED, which is a different column from what the pass
+      // computed. `pending` is in the vocabulary and is NOT one of
+      // INSIGHT_STATUSES: it means the verdict is absent, and it is the tab's
+      // default view — a claim a reader has judged should leave the inbox.
+      const verdict = oneOf(params, "verdict", VERDICTS, "omit it for every card, judged or not");
+      if (verdict.error !== undefined) return bad(verdict.error);
       const filter = oneOf(params, "filter", FILTERS, "omit it for the default view");
       if (filter.error !== undefined) return bad(filter.error);
       const sort = oneOf(params, "sort", SORTS, "the default is rank");
@@ -261,6 +306,8 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
         data: momentise(insights.list({
           status: status.value,
           kind: kind.value,
+          resourceType: resourceType.value,
+          verdict: verdict.value,
           filter: filter.value,
           search: search === "" ? undefined : search,
           sortBy: sort.value ?? "rank",
@@ -451,6 +498,70 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
         });
         return true;
       }
+      // WHAT THIS RUN IS ALLOWED TO READ, when the reader said.
+      //
+      // Optional and absent-means-everything, so a bare POST is exactly the
+      // run this route has always made. A body that is present and wrong is a
+      // 400 naming what is accepted rather than a run quietly made over the
+      // wrong slice — the second rule at the top of this file.
+      let scope = {};
+      const hasBody = Number(req.headers?.["content-length"] ?? 0) > 0
+        || typeof req.headers?.["transfer-encoding"] === "string";
+      if (hasBody) {
+        let body;
+        try {
+          body = await readJson(req);
+        } catch (cause) {
+          sendJson(res, 400, { success: false, error: String(cause?.message ?? cause) });
+          return true;
+        }
+        const problems = [];
+        const asked = body ?? {};
+        // A WINDOW IN DAYS, TURNED INTO AN INSTANT HERE. The client sends
+        // `days` rather than a timestamp so the boundary is computed against
+        // the Host's clock: a browser three hours out would otherwise ask for
+        // "the last week" and get six days and twenty-one hours, silently.
+        if (asked.days !== undefined && asked.days !== null && asked.days !== "") {
+          const days = Number(asked.days);
+          if (!Number.isFinite(days) || days <= 0 || days > 365) {
+            problems.push("days must be a number of days between 1 and 365, or absent to carry on from the last pass");
+          } else {
+            scope.since = new Date(Date.now() - days * 86_400_000).toISOString();
+            scope.days = days;
+          }
+        }
+        if (asked.search !== undefined && asked.search !== null && String(asked.search).trim() !== "") {
+          const search = String(asked.search).trim();
+          if (search.length > MAX_SEARCH_CHARS) {
+            problems.push(`search must be ${MAX_SEARCH_CHARS} characters or fewer`);
+          } else {
+            scope.search = search;
+          }
+        }
+        if (Array.isArray(asked.types) && asked.types.length > 0) {
+          for (const type of asked.types) {
+            if (!RESOURCE_TYPES.includes(type)) problems.push(`types must be drawn from ${RESOURCE_TYPES.join(", ")}`);
+          }
+          if (problems.length === 0) scope.types = [...asked.types];
+        } else if (Array.isArray(asked.types)) {
+          // An empty array is a reader who unticked every box. Reading
+          // everything instead would be the page doing the opposite of what
+          // the form plainly says.
+          problems.push("types must name at least one source type");
+        }
+        if (asked.maxRows !== undefined && asked.maxRows !== null && asked.maxRows !== "") {
+          const rows = Number(asked.maxRows);
+          if (!Number.isInteger(rows) || rows < 20 || rows > 600) {
+            problems.push("maxRows must be a whole number between 20 and 600");
+          } else {
+            scope.maxRows = rows;
+          }
+        }
+        if (problems.length > 0) {
+          sendJson(res, 400, { success: false, error: problems.join("; ") });
+          return true;
+        }
+      }
       manualRunInFlight = true;
       // Answered immediately and the work continues: a pass is up to twenty
       // model calls, and a request held open for minutes reads as a hang.
@@ -468,7 +579,7 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
       // moves — a translated claim and a freshly-extracted one are the same
       // fact with two hashes. Two claims resting on an identical set of quotes
       // are one claim whatever they say, and that test needs no threshold.
-      void runInsightPass(store, insights, chat, logger, { markSkips: false, web })
+      void runInsightPass(store, insights, chat, logger, { markSkips: false, web, scope })
         .then(() => mergeIdenticalEvidence(insights, logger))
         .catch((cause) => { logger?.warn?.(`swarm: manual insight pass failed: ${String(cause?.message ?? cause)}`); })
         .finally(() => { manualRunInFlight = false; });
@@ -478,6 +589,40 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
       // error. A pass that finds nothing and says nothing is the exact bug
       // this codebase keeps hitting.
       sendJson(res, 202, { success: true, data: { started: true, running: true } });
+      return true;
+    }
+
+    // ── what one pass actually did, source by source ────────────────────
+    if (req.method === "GET" && path === "/insights/ledger") {
+      const params = new URL(req.url, "http://local").searchParams;
+      const batch = params.get("batch") ?? undefined;
+      const state = params.get("state") ?? undefined;
+      // A bad state is a 400 naming the vocabulary, not an empty list. An
+      // empty list from a typo is indistinguishable from a pass in which
+      // nothing failed, which is the one thing a reader opens this to learn.
+      if (state !== undefined && state !== "" && !PASS_STATES.includes(state)) {
+        sendJson(res, 400, { success: false, error: `state must be one of ${PASS_STATES.join(", ")}` });
+        return true;
+      }
+      const take = boundedInteger(params, "take", 1, 500, 200);
+      if (take.error !== undefined) {
+        sendJson(res, 400, { success: false, error: take.error });
+        return true;
+      }
+      const ledger = insights.passLedger(batch, { state: state === "" ? undefined : state, take: take.value });
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          ...ledger,
+          // Every state the vocabulary holds, so a page can draw a zero rather
+          // than omit a column. A missing "取文失败" column and a "取文失败 0"
+          // column say different things, and the first one says it by accident.
+          states: PASS_STATES,
+          // The passes still on record, so a reader can look at the one before
+          // this one rather than only at the newest.
+          batches: insights.passBatches(),
+        },
+      });
       return true;
     }
 
@@ -518,6 +663,37 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
           // screen is stale while every route still answers 200.
           stats: insights.stats(),
           quoteDrop: quoteDrop(config.insightLastRun ?? null),
+          // THE COLLECTION INTERVAL, BECAUSE THE PASS RIDES ITS TICK.
+          //
+          // `startCollectionTimer` returns early when collection is off, and
+          // the insight pass is inside that timer — so an installation with
+          // `insightIntervalMinutes: 60` and `collectIntervalMinutes: 0` has a
+          // schedule set, reports it, and never runs. That combination is
+          // logged once at boot into a file nobody reading the tab will open.
+          // The number goes on the wire so the arming control can say so at
+          // the moment somebody arms it.
+          //
+          // Read straight off the store rather than through `readConfig`:
+          // importing index.js here would close a cycle — index.js is what
+          // mounts this router.
+          collectIntervalMinutes: Number(store.getSetting("collectIntervalMinutes", 0)),
+          // The floor `writeConfig` enforces, so the picker offers what the
+          // validator accepts instead of finding out by being refused. A page
+          // that has to guess a bound is a page that guesses it wrong the
+          // first time somebody moves it.
+          insightMinIntervalMinutes: MIN_INSIGHT_INTERVAL_MINUTES,
+          // The cuts a strength band is read at, so the pane can STATE them
+          // rather than print 高 over a number nobody was shown the scale for.
+          // A judgement a reader cannot see is indistinguishable from one
+          // invented for the look of it.
+          strengthBands: STRENGTH_BANDS,
+          // The length floor the collector applies, so the pane's 口径 can name
+          // the rule the library is actually enforcing. It has been enforced
+          // since videos were first collected and stated nowhere.
+          minVideoSeconds: MIN_VIDEO_SECONDS,
+          // The source vocabulary a scoped run may name, so the dialog offers
+          // the list the route validates against instead of a copy of it.
+          resourceTypes: RESOURCE_TYPES,
           // Whether THIS process has a manual pass in flight. Deliberately
           // distinct from the record's own `running` stamp, which survives a
           // crash: a stamp with no process behind it is precisely the "started"

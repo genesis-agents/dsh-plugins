@@ -15,6 +15,7 @@ import { test } from "node:test";
 import { join } from "node:path";
 
 import { LIBRARY_ENV, normalizeRemote, resolveLibrary } from "../lib/library.js";
+import { SourceStore } from "../lib/store.js";
 
 /** A home directory that exists nowhere, so no pointer file is ever found. */
 const HOME = process.platform === "win32" ? "C:\\nowhere" : "/nowhere";
@@ -86,4 +87,51 @@ test("the environment beats the pointer file", () => {
   const path = process.platform === "win32" ? "C:\\from-env.sqlite" : "/from-env.sqlite";
   const library = resolveLibrary({ DSH_HOME: HOME, [LIBRARY_ENV]: path }, HOME);
   assert.deepEqual(library, { kind: "local", path });
+});
+
+/* ── how long a recording is ───────────────────────────────────────────── */
+
+test("a video's length is stored, not paid for and thrown away", (t) => {
+  // `dropShortVideos` asks the watch page for `lengthSeconds` on every NEW
+  // video — one request each, deliberately budgeted — used it to apply the
+  // twenty-minute floor, and then discarded it. The library enforced a length
+  // rule it could not state and no card could show a duration.
+  const store = new SourceStore(":memory:");
+  t.after(() => store.close());
+  store.put({
+    id: "v1", type: "YOUTUBE_VIDEO", title: "A long interview",
+    sourceUrl: "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+    durationSeconds: 3720,
+  });
+  assert.equal(store.get("v1").durationSeconds, 3720, "the length did not survive the round trip");
+});
+
+test("an unknown length is null, and a length filter keeps it", (t) => {
+  // NULL is "nobody ever asked" — every row collected before the column
+  // existed, every non-video, and every video whose lookup failed (which
+  // `dropShortVideos` keeps on purpose, because a network error is not
+  // evidence that something is short). Coerced to 0 they would all fall under
+  // any floor, and "only videos over 20 minutes" would silently delete the
+  // whole back catalogue while looking like it worked.
+  const store = new SourceStore(":memory:");
+  t.after(() => store.close());
+  store.put({ id: "old", type: "YOUTUBE_VIDEO", title: "Collected before the column", sourceUrl: "https://youtu.be/bbbbbbbbbbb" });
+  store.put({ id: "short", type: "YOUTUBE_VIDEO", title: "A clip", sourceUrl: "https://youtu.be/ccccccccccc", durationSeconds: 240 });
+  store.put({ id: "long", type: "YOUTUBE_VIDEO", title: "A talk", sourceUrl: "https://youtu.be/ddddddddddd", durationSeconds: 3600 });
+  assert.equal(store.get("old").durationSeconds, undefined, "an unknown length was coerced to a number");
+  const ids = store.query({ minDurationSeconds: 20 * 60, take: 50 }).rows.map((row) => row.id).sort();
+  assert.deepEqual(ids, ["long", "old"], "the floor either dropped the unknowns or kept the clip");
+});
+
+test("an hourly re-collection does not erase a length it did not fetch", (t) => {
+  // The lookup is gated on the row being NEW, so the hourly re-write of a row
+  // the library already holds carries no duration at all. Plain assignment
+  // would wipe the number on the next poll, and there is no second chance to
+  // learn it.
+  const store = new SourceStore(":memory:");
+  t.after(() => store.close());
+  const row = { id: "v2", type: "YOUTUBE_VIDEO", title: "A talk", sourceUrl: "https://youtu.be/eeeeeeeeeee" };
+  store.put({ ...row, durationSeconds: 4200 });
+  store.put(row);
+  assert.equal(store.get("v2").durationSeconds, 4200, "the next poll erased the length");
 });

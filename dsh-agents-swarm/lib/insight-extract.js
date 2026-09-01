@@ -49,6 +49,10 @@ import {
   statementsMatch,
   verifyQuote,
 } from "./insights.js";
+// The resource vocabulary a scope may name. Imported rather than re-typed:
+// a type this file accepted and store.js did not would filter every row out
+// of a scan that reports itself as having read nothing new.
+import { RESOURCE_TYPES } from "./store.js";
 
 /** How often the clock is consulted for a due pass. */
 const TICK_MS = 60_000;
@@ -120,8 +124,47 @@ const MAX_STATEMENT_CHARS = 600;
 /** Claims kept from one answer, matching the prompt's own cap. */
 const MAX_CLAIMS = 3;
 
+/**
+ * Longest accepted attribution.
+ *
+ * A name and a role — "Jensen Huang, Nvidia" — is about twenty characters, and
+ * this is generous against that. It is a CEILING, not a target: a model that
+ * answers the speaker field with a sentence has not given a name, and a
+ * sentence rendered where a card expects a name breaks the row it sits in.
+ * Over the bound the field is dropped rather than truncated, because half an
+ * attribution is a different attribution.
+ */
+const MAX_SPEAKER_CHARS = 80;
+
+/**
+ * Longest accepted gloss.
+ *
+ * One sentence, which is what the prompt asks for. The statement's own ceiling
+ * is 600 and this is deliberately under it: a gloss as long as the claim it
+ * explains is a second claim, unverified, sitting under a verified one.
+ */
+const MAX_GLOSS_CHARS = 220;
+
 /** New rows a pass needs before it is worth its model calls. */
 const MIN_PASS_ROWS = 2;
+
+/**
+ * Shortest insight interval accepted, zero aside.
+ *
+ * Zero-or-a-minimum rather than a plain range, mirroring the collection
+ * interval: a five-minute pass would re-read the same watermark before the
+ * previous run had finished recording it, paying for the same clusters twice
+ * while reporting two successful runs.
+ *
+ * LIVES HERE AND IS EXPORTED, because three files need to agree on it and two
+ * of them cannot import the third. index.js validates against it, the 洞察
+ * router puts it on the wire so the arming control offers what the validator
+ * accepts, and this module is the one both of them already import. Typed a
+ * second time in either place it becomes a page offering 15 minutes over a
+ * validator that refuses them — a control that looks like it works and hands
+ * back an error the reader did nothing to earn.
+ */
+export const MIN_INSIGHT_INTERVAL_MINUTES = 30;
 
 /**
  * Defaults for every insight field, so an unset store still reads whole.
@@ -190,6 +233,24 @@ export function readInsightConfig(store) {
     insightCorroborateClaims: store.getSetting("insightCorroborateClaims", INSIGHT_DEFAULTS.insightCorroborateClaims),
     insightLastRun: store.getSetting("insightLastRun", null),
     insightLastManualRun: store.getSetting("insightLastManualRun", null),
+    // THE LAST RUN THAT ACTUALLY PRODUCED NUMBERS, whichever kind it was.
+    //
+    // A THIRD KEY, AND IT IS NOT REDUNDANT. `setSetting` writes WHOLE values,
+    // so the `{running: true}` marker a pass writes before it starts REPLACES
+    // the summary of the run before it — the rows, claims and verified counts
+    // are gone from the library the instant somebody presses the button, and
+    // they do not come back if that run skips or fails. Measured: pressing
+    // 抽取主张 on a library whose figures read 200 / 13 / 12 blanked all four
+    // for the whole pass, and the band they were in collapsed with them.
+    //
+    // Kept for BOTH kinds under one key on purpose. "When did this table last
+    // change, and by how much" is one question, and answering it out of two
+    // keys means a page that shows the scheduled figures on Tuesday and the
+    // manual ones on Wednesday with nothing saying which.
+    //
+    // NO WATERMARK EVER GOES IN HERE. It is a display fact; `insightLastRun`
+    // remains the only record the drain reads.
+    insightLastGoodRun: store.getSetting("insightLastGoodRun", null),
   };
 }
 
@@ -261,8 +322,31 @@ function shiftIso(iso, minutes) {
  * @param config - the insight settings.
  * @returns `{ rows, backlog, truncated }`.
  */
-export function collectCandidates(store, config) {
-  const types = resourceTypesOf(config);
+export function collectCandidates(store, config, scope = {}) {
+  // A SCOPE NARROWS THE SCAN AND NOTHING ELSE.
+  //
+  // It exists for the manual run: "read the last week", "read only the videos",
+  // "read what mentions inference cost". The scheduled pass never passes one —
+  // it is a drain, and a drain with a filter on it strands whatever the filter
+  // excluded behind a watermark that moved anyway.
+  //
+  // WHICH IS WHY A SCOPED RUN MUST STAY MANUAL. `runInsightPass` writes
+  // `insightLastManualRun` for those and never carries a watermark out of them,
+  // so narrowing a manual scan cannot make the scheduled one skip rows it has
+  // not read. That guarantee is upstream of this function and this comment is
+  // the only place both halves are visible at once — do not reach for a scope
+  // from the `markSkips: true` path.
+  const types = Array.isArray(scope.types) && scope.types.length > 0
+    ? scope.types.filter((type) => RESOURCE_TYPES.includes(type))
+    : resourceTypesOf(config);
+  // A SEARCH TERM, MATCHED THE WAY THE LIBRARY'S OWN SEARCH MATCHES IT — title,
+  // abstract and summary, in SQL. Not a post-filter over the page: the scan
+  // pages until it has `cap` rows, so filtering afterwards would page in two
+  // hundred rows about anything and hand over the four that were about the
+  // topic, reporting a full read.
+  const search = typeof scope.search === "string" && scope.search.trim() !== ""
+    ? scope.search.trim()
+    : undefined;
   // A VIDEO WE HOLD NO TRANSCRIPT FOR IS A TITLE AND A BLURB.
   //
   // `sourceMaterial` builds a video's block out of its transcript — its own
@@ -276,13 +360,40 @@ export function collectCandidates(store, config) {
   // first pass over videos reads 200 rows of which about nine have anything
   // to quote.
   const TIMED = new Set(["YOUTUBE_VIDEO", "YOUTUBE", "VIDEO", "PODCAST"]);
+  // THE SKIPS ARE COLLECTED, NOT JUST APPLIED.
+  //
+  // This returned a boolean and the scan dropped the row on the floor. On the
+  // library it was built against that is 500 videos a pass — held, wanted,
+  // correctly skipped, and reported nowhere: not in `rows`, not in `backlog`,
+  // not in `unusable`. A reader asking why an hour-long interview never
+  // produced a claim had no answer available anywhere in the system.
+  const skipped = [];
   const quotable = (row) => {
     if (!TIMED.has(String(row?.type ?? "").toUpperCase())) return true;
     if (typeof store.getTranscript !== "function") return true;
-    try { return (store.getTranscript(row.id)?.text ?? "") !== ""; } catch { return false; }
+    let held = "";
+    try {
+      held = store.getTranscript(row.id)?.text ?? "";
+    } catch (cause) {
+      skipped.push({ row, reason: `transcript unreadable: ${String(cause?.message ?? cause)}` });
+      return false;
+    }
+    if (held !== "") return true;
+    skipped.push({ row, reason: "no transcript stored" });
+    return false;
   };
-  const cap = bounded(config.insightMaxRows, 20, 600, INSIGHT_DEFAULTS.insightMaxRows);
-  const since = typeof config.insightLastRun?.watermark === "string" ? config.insightLastRun.watermark : "";
+  const cap = Number.isFinite(Number(scope.maxRows)) && Number(scope.maxRows) > 0
+    ? bounded(scope.maxRows, 20, 600, INSIGHT_DEFAULTS.insightMaxRows)
+    : bounded(config.insightMaxRows, 20, 600, INSIGHT_DEFAULTS.insightMaxRows);
+  // A WINDOW REPLACES THE WATERMARK, it does not narrow it further.
+  //
+  // "Read the last week" from somebody looking at a table that has not moved
+  // since December means the last week, not "the last week of whatever is
+  // still above the watermark" — which on a drained library is nothing at all,
+  // and would answer a deliberate request with the skip reason for an idle one.
+  const since = typeof scope.since === "string" && scope.since !== ""
+    ? scope.since
+    : (typeof config.insightLastRun?.watermark === "string" ? config.insightLastRun.watermark : "");
 
   // OLDEST first, filtered in SQL.
   //
@@ -319,6 +430,7 @@ export function collectCandidates(store, config) {
     for (;;) {
       const page = store.query({
         type,
+        search,
         sortBy: "createdAt",
         sortOrder: "asc",
         createdAfter: since === "" ? undefined : since,
@@ -391,7 +503,7 @@ export function collectCandidates(store, config) {
       // lower bound — `truncated` already says the slice was capped.
     }
   }
-  return { rows, backlog, truncated };
+  return { rows, backlog, truncated, skipped };
 }
 
 /**
@@ -481,9 +593,13 @@ export const EXTRACTION_PROMPT = [
   "",
   "\"entities\" — the two to five proper names the claim is about: companies, models, laboratories, agencies, people. Spelled as the sources spell them.",
   "",
+  "\"speaker\" — WHO SAID THE QUOTE, on each piece of evidence, and only when the source block itself makes it plain: an interviewer naming their guest, a speaker introducing themselves, a transcript line attributing a sentence, an article quoting somebody by name. Give the name as the source gives it, and a role after it where the source states one — \"Jensen Huang, Nvidia\". OMIT THE FIELD when the source does not say. A written article speaking in its own voice has no speaker, and an hour of conversation between two people whose names appear nowhere in the block has no speaker either. Do not infer one from the channel, the title, or who you believe was probably talking: a name under a sentence is an attribution, and a wrong attribution is worse than none.",
+  "",
+  "\"gloss\" — ONE SENTENCE saying what the claim MEANS for somebody following this industry: the consequence, the thing that changes, or what it is evidence of. Not a translation of the statement and not a restatement of it in other words — a reader who has just read the statement learns nothing from either. Write it in {LANGUAGE}. Where the claim's significance genuinely depends on something the sources do not establish, omit the field rather than speculating: an omitted gloss is honest, an invented one is this program asserting something no source says, under a provenance badge.",
+  "",
   "Return ONE JSON object and nothing else. No prose before it, no prose after it, no code fence:",
   "",
-  "{\"claims\":[{\"statement\":\"<one sentence, specific enough to be wrong>\",\"kind\":\"finding\",\"layer\":\"compute\",\"entities\":[\"…\",\"…\"],\"evidence\":[{\"source\":\"S1\",\"stance\":\"supports\",\"quote\":\"<copied character for character out of [S1]>\"},{\"source\":\"S3\",\"stance\":\"contradicts\",\"quote\":\"<copied character for character out of [S3]>\"}]}]}",
+  "{\"claims\":[{\"statement\":\"<one sentence, specific enough to be wrong>\",\"kind\":\"finding\",\"layer\":\"compute\",\"gloss\":\"<one sentence on what it means; omit if the sources do not support one>\",\"entities\":[\"…\",\"…\"],\"evidence\":[{\"source\":\"S1\",\"stance\":\"supports\",\"quote\":\"<copied character for character out of [S1]>\",\"speaker\":\"<who said it, omit if the block does not say>\"},{\"source\":\"S3\",\"stance\":\"contradicts\",\"quote\":\"<copied character for character out of [S3]>\"}]}]}",
   "",
   "--- SOURCES ---",
   "{SOURCES}",
@@ -594,7 +710,18 @@ export function buildExtractionPrompt(cluster, options = {}) {
   // string replacement reads `$&` or `$'` in it as a back-reference and
   // silently rewrites the very block the quotes are checked against.
   const prompt = EXTRACTION_PROMPT
-    .replace("{LANGUAGE}", () => language)
+    // replaceAll, NOT replace, AND THE GUARD BELOW IS WHY THIS COST ONE LINE
+    // RATHER THAN AN AFTERNOON. `{LANGUAGE}` appeared once, so `replace` was
+    // correct — until the gloss rule needed the language named a second time.
+    // The first was substituted, the second survived, and the model would have
+    // been shown the literal text "{LANGUAGE}" inside an instruction about
+    // what language to write in. Nothing about the answer would have looked
+    // wrong: it would simply have written the gloss in whatever language it
+    // felt like, on some passes, for ever.
+    //
+    // The assertion three lines below caught it on the first run. That is the
+    // entire return on a guard whose failure message reads as paranoid.
+    .replaceAll("{LANGUAGE}", () => language)
     .replace("{SOURCES}", () => labelled.join("\n\n"));
   if (prompt.includes("{LANGUAGE}") || prompt.includes("{SOURCES}")) {
     throw new Error("EXTRACTION_PROMPT still holds an unsubstituted placeholder; the model would be shown the template instead of the sources");
@@ -763,7 +890,14 @@ export function parseClaims(answer, labels, options = {}) {
         fault = `claim ${at} evidence ${position + 1} carries an empty quote`;
         break;
       }
-      evidence.push({ label, resourceId, stance, quote });
+      // SPEAKER IS OPTIONAL AND NEVER FATAL, like the layer. An attribution
+      // the source did not make is worse than none, so the prompt asks the
+      // model to omit it — and a claim must not be discarded for taking that
+      // instruction. Bounded because it is rendered inline on a card: a
+      // "speaker" that came back as a paragraph is not a name.
+      const said = typeof row?.speaker === "string" ? row.speaker.trim() : "";
+      const speaker = said !== "" && said.length <= MAX_SPEAKER_CHARS ? said : "";
+      evidence.push({ label, resourceId, stance, quote, speaker });
     }
     if (fault !== "") { reject(fault); continue; }
 
@@ -772,9 +906,18 @@ export function parseClaims(answer, labels, options = {}) {
     // under 未归层, which is a true statement about it. Rejecting the claim
     // for a missing layer would throw away the evidence with the label.
     const layer = typeof raw?.layer === "string" ? raw.layer.trim().toLowerCase() : "";
+    // THE GLOSS IS OPTIONAL AND NEVER FATAL, for the layer's reason and one
+    // more: it is the only field on a claim that is NOT checkable against a
+    // quote. The statement is verified, the quote is verified character for
+    // character, the speaker is required to be stated in the block — the gloss
+    // is a reading, and the card has to present it as one. Rejecting a claim
+    // for a missing gloss would throw away verified evidence over the one
+    // field that carries no evidence.
+    const said = typeof raw?.gloss === "string" ? raw.gloss.trim() : "";
     claims.push({
       statement, kind,
       layer: INSIGHT_LAYERS.includes(layer) ? layer : null,
+      gloss: said !== "" && said.length <= MAX_GLOSS_CHARS ? said : "",
       entities: readEntities(raw?.entities), evidence,
     });
     // The prompt asks for at most three. A prompt limit is a request, not a
@@ -980,6 +1123,11 @@ function evidenceRowsFor(claim, now, opposing) {
     quote: row.quote,
     sourceKey: row.sourceKey,
     resourceType: row.resourceType,
+    // CARRIED, NOT DROPPED. This function is the one place a verified claim
+    // becomes rows for the store, so a field the extractor produced and this
+    // map does not list is a field that reaches the database on no path at
+    // all — silently, with every count still correct.
+    speaker: row.speaker,
     addedAt: now,
   }));
 }
@@ -1048,6 +1196,18 @@ export async function reconcileClaim(insightStore, chat, claim, options) {
       id: target.id,
       statement: target.statement,
       kind: target.kind,
+      // THE INCOMING CLAIM'S READING, ON A MERGE. `upsertInsight` COALESCEs
+      // both of these, so passing the new one can only FILL a hole: a target
+      // that already has a gloss keeps it, and a target that never had one
+      // gets the reading the pass just produced rather than staying blank
+      // for ever because it happened to be created first.
+      //
+      // The layer is here for the same reason and was already missing: this
+      // call omitted it entirely, so a claim merged into an unplaced target
+      // left that target unplaced no matter how many later passes could place
+      // it. Under 未归层 for ever, with nothing reporting anything.
+      layer: claim.layer ?? undefined,
+      gloss: claim.gloss,
       entities: Array.isArray(target.entities) ? target.entities : [],
       status: target.status,
       simhash: target.simhash,
@@ -1076,6 +1236,7 @@ export async function reconcileClaim(insightStore, chat, claim, options) {
     statement: claim.statement,
     kind: claim.kind,
     layer: claim.layer,
+    gloss: claim.gloss,
     entities: claim.entities,
     status: "candidate",
     simhash: hash,
@@ -1165,7 +1326,7 @@ function rescoreOne(insightStore, id, config, now, recount) {
  * @param insightStore - the insight store over the same handle.
  * @param chat - the chat entry point, or undefined when none is routed.
  * @param logger - Cordis logger.
- * @param options - `{ now }`, pinned by tests.
+ * @param options - `{ now }`, pinned by tests, and `{ onProgress }`.
  * @returns the run summary, or `{ ran: false, reason }`.
  */
 export async function insightPassOnce(store, insightStore, chat, logger, options = {}) {
@@ -1175,7 +1336,53 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
   const config = readInsightConfig(store);
   if (chat === undefined) return { ran: false, reason: "no model routed" };
 
-  const { rows, backlog, truncated } = collectCandidates(store, config);
+  /**
+   * Say where the pass has got to.
+   *
+   * A pass is five stages and up to twenty model calls over several minutes,
+   * and until this existed it reported exactly twice: `running: true` at the
+   * top and the summary at the bottom. Everything between was a spinner with
+   * no number on it, which is indistinguishable from a button that did
+   * nothing — and that is what a reader pressing 立即跑一次 actually saw.
+   *
+   * NEVER THROWS OUT OF HERE. The listener writes a setting, the setting
+   * writes SQLite, and a failed write mid-pass must not lose the extraction
+   * that was already paid for. Progress is a courtesy; the run is the work.
+   * @param phase - which stage.
+   * @param done - units finished in this stage.
+   * @param total - units this stage will do, or 0 when it cannot be known yet.
+   */
+  const say = (phase, done, total) => {
+    try {
+      options.onProgress?.({ phase, done, total });
+    } catch (cause) {
+      logger?.warn?.(`swarm: insight progress listener failed: ${String(cause?.message ?? cause)}`);
+    }
+  };
+
+  say("reading", 0, 0);
+  // The scope, when the reader asked for one. Absent on every scheduled pass.
+  const { rows, backlog, truncated, skipped } = collectCandidates(store, config, options.scope ?? {});
+
+  // THE LEDGER, BUILT AS THE PASS GOES AND WRITTEN ONCE AT THE END.
+  //
+  // Keyed by resource id so the later, more specific verdict wins: the scan
+  // says "no transcript", the clusterer says "unusable", the extractor says
+  // "extracted, 2 claims", and a source reaches at most one of the three.
+  const ledger = new Map();
+  const note = (row, state, reason, claims) => {
+    if (row === undefined || row === null) return;
+    ledger.set(String(row.id), {
+      resourceId: String(row.id),
+      title: String(row.title ?? ""),
+      resourceType: String(row.type ?? ""),
+      durationSeconds: row.durationSeconds,
+      state,
+      reason: reason ?? "",
+      claims: claims ?? 0,
+    });
+  };
+  for (const entry of skipped ?? []) note(entry.row, "no-transcript", entry.reason);
   if (rows.length < MIN_PASS_ROWS) {
     return {
       ran: false,
@@ -1188,11 +1395,18 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
   const rowsById = new Map();
   for (const row of rows) {
     const item = itemForRow(row);
-    if (item === undefined) continue;
+    if (item === undefined) {
+      // Counted in `unusable` since this pass was written, and NAMED here for
+      // the first time. "17 unusable" is a number nobody can act on; a title
+      // beside it is a feed to go and look at.
+      note(row, "unusable", "no title or body the clusterer could use");
+      continue;
+    }
     items.push(item);
     rowsById.set(String(row.id), row);
   }
 
+  say("clustering", 0, rows.length);
   const clusters = clusterItems(items, {
     windowDays: bounded(config.insightWindowDays, 1, 30, INSIGHT_DEFAULTS.insightWindowDays),
     maxBits: bounded(config.insightDuplicateBits, 0, 12, INSIGHT_DEFAULTS.insightDuplicateBits),
@@ -1225,6 +1439,15 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     .map((row) => String(row.createdAt ?? ""))
     .reduce((latest, value) => (value > latest ? value : latest), "");
   const binned = rows.length - reached.size;
+  for (const row of rows) {
+    if (reached.has(String(row.id))) continue;
+    // NOT A LOSS, and the reason says so. The watermark does not cover a
+    // binned row, so it comes back next pass — but a reader who cannot see
+    // WHICH rows these are cannot tell a ceiling doing its job from one set
+    // far too low, which is what `binned`'s own note asks for and could not
+    // give.
+    note(row, "binned", "over this pass's cluster ceiling; it returns next pass");
+  }
 
   const failures = [];
   const droppedReasons = {};
@@ -1236,7 +1459,14 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
   let droppedCount = 0;
   let rejectedCount = 0;
 
+  // Reported one AHEAD of the model call rather than behind it: each of these
+  // takes seconds, and a counter that moves only on completion sits on 0/20
+  // for the whole first call — the exact stretch a reader is watching to find
+  // out whether anything is happening at all.
+  let clusterAt = 0;
   for (const cluster of clusters) {
+    say("extracting", clusterAt, clusters.length);
+    clusterAt += 1;
     const entries = cluster.members
       .map((member) => rowsById.get(String(member?.id)))
       .filter((row) => row !== undefined)
@@ -1248,6 +1478,15 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     try {
       const result = await extractClaims(chat, cluster, { zh: config.insightChinese === true, entries });
       extracted += 1;
+      // EVERY MEMBER OF THE CLUSTER GETS THE CLUSTER'S VERDICT, and the count
+      // is the cluster's, not each row's. A cluster is what the model is shown
+      // — several articles about one story, in one call — so "which of these
+      // four the sentence came from" is a question this stage does not answer
+      // and must not pretend to. `read` for a cluster that produced nothing is
+      // the commonest honest outcome on a quiet week and is not a fault.
+      for (const entry of entries) {
+        note(entry.row, result.claims.length > 0 ? "extracted" : "read", "", result.claims.length);
+      }
       claimCount += result.parsed;
       verified += result.claims.length;
       droppedCount += result.dropped.length;
@@ -1256,7 +1495,9 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
       for (const reason of result.rejected) tally(rejectedReasons, reason);
       kept.push(...result.claims);
     } catch (cause) {
-      failures.push(`${cluster.id}: ${String(cause?.message ?? cause)}`);
+      const reason = String(cause?.message ?? cause);
+      failures.push(`${cluster.id}: ${reason}`);
+      for (const entry of entries) note(entry.row, "failed", reason);
     }
   }
 
@@ -1270,7 +1511,10 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
   let evidenceSkipped = 0;
   let conflicted = 0;
 
+  let claimAt = 0;
   for (const claim of kept) {
+    say("reconciling", claimAt, kept.length);
+    claimAt += 1;
     try {
       const outcome = await reconcileClaim(insightStore, chat, claim, { now, config, budget });
       touched.add(outcome.insightId);
@@ -1309,7 +1553,10 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     const web = options.web;
     const stale = shiftIso(now, -CORROBORATE_AFTER_MINUTES);
     const queue = insightStore.dueForCorroboration?.({ before: stale, limit: wantCorroboration }) ?? [];
+    let queueAt = 0;
     for (const id of queue) {
+      say("corroborating", queueAt, queue.length);
+      queueAt += 1;
       // One refusal ends the stage for this pass. Carrying on to the next
       // claim sends a second request to the service that just said no, which
       // is the behaviour rate limits exist to stop and the behaviour that gets
@@ -1368,12 +1615,30 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     before: shiftIso(now, -RESCORE_AFTER_MINUTES),
     limit: RESCORE_SWEEP,
   });
-  for (const id of new Set([...touched, ...due])) {
+  const sweep = new Set([...touched, ...due]);
+  let sweepAt = 0;
+  for (const id of sweep) {
+    say("rescoring", sweepAt, sweep.size);
+    sweepAt += 1;
     try {
       if (rescoreOne(insightStore, id, config, now, touched.has(id))) rescored += 1;
     } catch (cause) {
       failures.push(`rescore ${id}: ${String(cause?.message ?? cause)}`);
     }
+  }
+
+  // THE LEDGER IS COMMITTED LAST, AFTER THE CLAIMS IT ACCOUNTS FOR.
+  //
+  // And its failure is caught here rather than allowed out. A ledger is a
+  // record OF the work, not the work: a broken account of a pass must not
+  // discard the claims that pass already wrote and paid for. It is logged
+  // rather than swallowed, because a ledger that silently stops being written
+  // is a screen that quietly goes stale while every other number stays right.
+  const batch = now;
+  try {
+    insightStore.recordPass?.(batch, [...ledger.values()]);
+  } catch (cause) {
+    logger?.warn?.(`swarm: recording the pass ledger failed: ${String(cause?.message ?? cause)}`);
   }
 
   logger?.info?.(
@@ -1384,6 +1649,13 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
 
   return {
     ran: true,
+    // The ledger's key, so the page can ask for THIS pass's account rather
+    // than for whatever the newest batch happens to be by the time it asks.
+    batch,
+    // Sources held and wanted, skipped before the model saw them. Reported
+    // beside `rows` because on a video-heavy library it is the larger number,
+    // and it was previously invisible at every layer.
+    skipped: (skipped ?? []).length,
     rows: rows.length,
     // Rows the clusterer could not use at all — no title, no usable text. A
     // pass reading two hundred rows and clustering nine is not a pass that
@@ -1477,7 +1749,7 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
  * @param options - `{ markSkips }`.
  * @returns the outcome, as `insightPassOnce` reports it.
  */
-export async function runInsightPass(store, insightStore, chat, logger, { markSkips = false, web } = {}) {
+export async function runInsightPass(store, insightStore, chat, logger, { markSkips = false, web, scope } = {}) {
   const key = markSkips ? "insightLastRun" : "insightLastManualRun";
   const carried = readInsightConfig(store).insightLastRun?.watermark;
   const stamp = () => ({ date: localDate(), at: new Date().toISOString() });
@@ -1487,20 +1759,78 @@ export async function runInsightPass(store, insightStore, chat, logger, { markSk
     store.setSetting(key, watermark === undefined ? value : { ...value, watermark });
   };
 
-  note({ ...stamp(), running: true });
+  // A SCOPE ON THE SCHEDULED PASS IS REFUSED, NOT IGNORED.
+  //
+  // The scheduled pass carries the watermark: it reads the rows above it and
+  // then declares them read. Narrow that scan and the rows the filter excluded
+  // are watermarked past unread and never offered again — the exact loss
+  // `collectCandidates` records in its own comment, at 20,508 rows, reported as
+  // a success. Silently dropping the scope would leave a caller believing they
+  // had scoped a run that drained the library instead, so this throws.
+  if (markSkips && scope !== undefined && scope !== null && Object.keys(scope).length > 0) {
+    throw new Error("a scheduled insight pass cannot be scoped: it carries the watermark");
+  }
+
+  const startedAt = new Date().toISOString();
+  // THE SCOPE TRAVELS WITH THE RECORD. A run that read one week of videos about
+  // inference cost and found nothing is a different fact from a full pass that
+  // found nothing, and the page cannot tell them apart from the numbers.
+  const scopeNote = scope === undefined || scope === null || Object.keys(scope).length === 0
+    ? undefined
+    : scope;
+  note({ ...stamp(), running: true, startedAt, scope: scopeNote });
+
+  // WHERE IT HAS GOT TO, WRITTEN WHERE THE PAGE ALREADY LOOKS.
+  //
+  // Not a second setting and not an event stream: `/insights/status` reads
+  // this record every time the tab polls, so a phase written into it is a
+  // phase on screen with no new route, no socket and nothing to keep in sync.
+  //
+  // `startedAt` is carried forward through every stamp rather than re-read,
+  // because `stamp()` moves `at` on each write — a reader computing "running
+  // for N minutes" against `at` would watch the elapsed time reset to zero
+  // every time the pass made progress, which is the opposite of what a
+  // progress display is for.
+  //
+  // THROTTLED, because the rescore sweep can turn over a hundred ids in a
+  // second and each stamp is a SQLite write. A phase CHANGE always goes
+  // through: those are the four moments a reader is actually waiting on, and
+  // dropping one to a timer would hide the whole corroboration stage on a
+  // pass that had little to do.
+  const PROGRESS_MIN_MS = 750;
+  let saidAt = 0;
+  let saidPhase = "";
+  const onProgress = ({ phase, done, total }) => {
+    const at = Date.now();
+    if (phase === saidPhase && at - saidAt < PROGRESS_MIN_MS) return;
+    saidAt = at;
+    saidPhase = phase;
+    note({ ...stamp(), running: true, startedAt, scope: scopeNote, phase, done, total });
+  };
+
   try {
-    const result = await insightPassOnce(store, insightStore, chat, logger, { web });
+    const result = await insightPassOnce(store, insightStore, chat, logger, { web, onProgress, scope });
     if (result.ran) {
-      note({ ...stamp(), ...result });
+      const settled = { ...stamp(), ...result, scope: scopeNote };
+      note(settled);
+      // THE FIGURES SURVIVE THE NEXT PRESS. Written only on a run that ran, so
+      // a skip, a failure and the `running` marker all leave it alone — which
+      // is the whole point: those three are what wipe the record they share a
+      // key with. `kind` travels with it because "200 rows, an hour ago" reads
+      // differently once you know it was a one-week manual slice.
+      //
+      // Deliberately NOT carrying the watermark: `note`'s merge is what puts
+      // one on `insightLastRun`, and this key is never read by the drain.
+      store.setSetting("insightLastGoodRun", { ...settled, kind: markSkips ? "scheduled" : "manual" });
       return result;
     }
     logger?.info?.(`swarm: insight pass skipped — ${result.reason}`);
-    note({ ...stamp(), skipped: result.reason, backlog: result.backlog });
+    note({ ...stamp(), skipped: result.reason, backlog: result.backlog, scope: scopeNote });
     return result;
   } catch (cause) {
     const error = String(cause?.message ?? cause);
     logger?.warn?.(`swarm: insight pass failed: ${error}`);
-    note({ ...stamp(), error });
+    note({ ...stamp(), error, scope: scopeNote });
     return { ran: false, reason: error, failed: true };
   }
 }

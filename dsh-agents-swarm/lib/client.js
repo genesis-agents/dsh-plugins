@@ -1097,6 +1097,25 @@ window.__ModuleLoader__.load({
 			`.swm-spin{animation:swm-spin 900ms linear infinite;transform-origin:50% 50%}`,
 			`@keyframes swm-pulse{0%,100%{opacity:1}50%{opacity:.45}}`,
 			`.swm-live{animation:swm-pulse 1600ms ease-in-out infinite}`,
+			// A BAR FOR WORK WHOSE SIZE IS NOT KNOWN YET.
+			//
+			// A DETERMINATE BAR PARKED AT A CONSTANT IS A LIE, and it was one: the
+			// insight pass's first two stages cannot count their own work — the
+			// rows have not been read yet — so the fill was hardcoded at 35% and
+			// simply sat there. A reader watching a bar hold one position for
+			// ninety seconds concludes the thing is stuck, which is the precise
+			// opposite of what a progress display is for, and worse than the
+			// nothing it replaced.
+			//
+			// A stripe that TRAVERSES says "working, size unknown" and cannot be
+			// mistaken for a percentage, because it never rests anywhere.
+			`@keyframes swm-crawl{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}`,
+			`.swm-crawl{width:32%;animation:swm-crawl 1600ms cubic-bezier(.4,0,.2,1) infinite}`,
+			// Held still rather than hidden: the bar is the only thing on that row
+			// saying a pass is in flight, so removing it under reduced motion would
+			// take the state with it. Parked at the left edge at full width, which
+			// reads as "running" without traversing.
+			`@media (prefers-reduced-motion:reduce){.swm-crawl{width:100%;animation:none}}`,
 			// THE SHAPE OF AN ANSWER THAT HAS NOT ARRIVED YET. Every screen-level
 			// wait in this file drew the SAME dashed box as "there is nothing here"
 			// and as "the read failed", so the three states a person most needs to
@@ -3005,19 +3024,55 @@ window.__ModuleLoader__.load({
 				jsx("circle", { cx: 7, cy: 12, r: 2.4, fill: "currentColor", stroke: "none", key: "a" }),
 				jsx("path", { d: "M12.4 8.2 A 5.6 5.6 0 0 1 12.4 15.8", key: "b" }),
 				jsx("path", { d: "M16.2 5.2 A 10.2 10.2 0 0 1 16.2 18.8", key: "c" })
+			],
+
+			// ── THE TWO HALVES OF 洞察 ────────────────────────────────────────
+			// The strip that chooses between them was five words in a grey track
+			// with nothing to look at, one row under a tab bar where every entry
+			// carries a mark — so the one control on the screen that says WHICH
+			// KIND of insight you are reading was the only navigation in the
+			// panel drawn without any. They live in this table rather than in a
+			// second one beside the strip: the marks answer to the same 24-unit
+			// grid, the same stroke and the same "say what it DOES" rule, and a
+			// second table is a second place for those to drift.
+
+			// The library half: plates below, a spark above. Deliberately built
+			// out of the two marks it sits between — `sources`' stacked plates
+			// and `insights`' spark — because that is literally what this half
+			// is, a claim lifted off the corpus. Two plates rather than three;
+			// the third turns to a smear at 14px under a spark.
+			insightLibrary: [
+				jsx("path", { d: "M12 2.6 L13.2 6.3 L16.9 7.5 L13.2 8.7 L12 12.4 L10.8 8.7 L7.1 7.5 L10.8 6.3 Z", key: "a" }),
+				jsx("path", { d: "M3.5 12.6 L12 16.6 L20.5 12.6", key: "b" }),
+				jsx("path", { d: "M3.5 16.6 L12 20.6 L20.5 16.6", key: "c" })
+			],
+			// The topic half: a target. A mission is one question somebody aimed
+			// at, asked once and answered once, and concentric rings round a
+			// centre is the one drawing every reader already decodes as "at ONE
+			// thing" — which is the whole distinction from the half beside it.
+			// Not a flag or a pin: those say "a place", and this says "a mark
+			// that was hit".
+			insightMissions: [
+				jsx("circle", { cx: 12, cy: 12, r: 8.2, key: "a" }),
+				jsx("circle", { cx: 12, cy: 12, r: 3.6, key: "b" }),
+				jsx("circle", { cx: 12, cy: 12, r: 1.3, fill: "currentColor", stroke: "none", key: "c" })
 			]
 		};
 
 		/**
 		* One tab mark.
 		* @param id - the tab whose mark to draw.
+		* @param size - edge length in pixels; 15 suits the tab bar's 15px row.
+		*   The segmented strip under it is set at 13, and a 15px mark beside 13px
+		*   type is a mark that outranks its own label.
 		* @returns the svg, or null for a tab with no mark.
 		*/
-		function TabIcon({ id }) {
+		function TabIcon({ id, size }) {
 			const parts = TAB_ICONS[id];
 			if (parts === undefined) return null;
+			const edge = Number.isFinite(size) ? size : 15;
 			return jsx("svg", {
-				width: 15, height: 15, viewBox: "0 0 24 24", fill: "none",
+				width: edge, height: edge, viewBox: "0 0 24 24", fill: "none",
 				stroke: "currentColor", strokeWidth: 1.7,
 				strokeLinecap: "round", strokeLinejoin: "round",
 				"aria-hidden": "true",
@@ -3110,6 +3165,28 @@ window.__ModuleLoader__.load({
 			{ id: "policy", type: "POLICY", en: "Policy", zh: "政策", hue: PALETTE.indigo },
 			{ id: "news", type: "NEWS", en: "News", zh: "新闻", hue: PALETTE.green }
 		];
+
+		/**
+		* What one RESOURCE_TYPE is called, in the 信源 tab's own words.
+		*
+		* DERIVED FROM {@link KINDS} RATHER THAN TYPED AGAIN, and the whole point
+		* of the filter that reads it is that it matches the source library — so
+		* a second table naming YOUTUBE_VIDEO one thing here and another there
+		* would defeat the change that asked for it.
+		*
+		* FALLS BACK TO THE RAW ID, on purpose. `KINDS` is the six the 信源 tab
+		* pages by; RESOURCE_TYPES holds nine, and PROJECT / EVENT / RSS have no
+		* Chinese name anywhere in this product. Showing the id is honest and
+		* stays in step; inventing three translations here would put words on a
+		* screen that no other screen uses.
+		* @param type - a RESOURCE_TYPES member.
+		* @param zh - Chinese.
+		* @returns the label.
+		*/
+		function resourceTypeLabel(type, zh) {
+			if (zh !== true) return type;
+			return KINDS.find((one) => one.type === type)?.zh ?? type;
+		}
 
 		/** Sort orders the resources endpoint accepts. */
 		const SORTS = [
@@ -8594,6 +8671,32 @@ window.__ModuleLoader__.load({
 		* @param key - React key.
 		* @returns the card.
 		*/
+		/**
+		* 强度, and why the number it replaces was not information.
+		*
+		* Every card carried a bare `0.47` in its corner. It has no scale a
+		* reader was shown, no comparison and no unit, so asked what it meant
+		* nobody using this tab could say — which makes it decoration on a screen
+		* whose entire argument is that it does not decorate.
+		*
+		* THE BAND IS COMPUTED ON THE HOST, not here. `strengthOf` sits beside
+		* `scoreInsight`, which produced the number it bands, and a threshold
+		* table that exists in two files disagrees with itself the first time
+		* either copy moves — a card labelled 高 on one screen and 中 on another,
+		* out of one number, with nothing throwing. The page renders what it is
+		* handed and the pane's 口径 footer states the cuts.
+		*
+		* THE NUMBER STAYS, quieter, beside the band. A band is what a reader
+		* compares two cards with; the score is what somebody debugging the
+		* ranking needs, and dropping it would take the only handle on the
+		* arithmetic off the screen.
+		*/
+		const INSIGHT_STRENGTH_FACES = {
+			high: { zh: "强", en: "High", hue: TONE.danger },
+			medium: { zh: "中", en: "Medium", hue: TONE.warn },
+			low: { zh: "弱", en: "Low", hue: TONE.muted }
+		};
+
 		function InsightCard({ row, zh, onPin, busy, onOpenMoment }, key) {
 			const kind = INSIGHT_KIND_FACES[row.kind] ?? null;
 			const face = INSIGHT_STATUS_FACES[row.effectiveStatus] ?? INSIGHT_STATUS_FACES.candidate;
@@ -8649,6 +8752,19 @@ window.__ModuleLoader__.load({
 								size: "xs", tone: TONE.accent, label: zh ? "人工判定" : "your verdict"
 							}, "pinned"),
 							jsx("span", { style: { flex: 1 } }, "spacer"),
+							// NOTHING AT ALL FOR AN UNSCORED CARD, and that is the honest
+							// answer rather than 弱. `rank_score` defaults to 0 and the
+							// rescore sweep is a background job, so a brand-new card and a
+							// weak one carry the same zero — printing 弱 over the first is
+							// a verdict nobody reached. The Host answers null for those.
+							INSIGHT_STRENGTH_FACES[row.strength] === undefined ? null : Chip({
+								size: "xs",
+								tone: INSIGHT_STRENGTH_FACES[row.strength].hue,
+								pill: true,
+								label: zh
+									? `强度 ${INSIGHT_STRENGTH_FACES[row.strength].zh}`
+									: INSIGHT_STRENGTH_FACES[row.strength].en
+							}, "strength"),
 							jsx("span", {
 								title: zh ? `排序分 ${Number(row.rankScore ?? 0).toFixed(2)} = ${breakdown}` : `rank ${Number(row.rankScore ?? 0).toFixed(2)} = ${breakdown}`,
 								style: { font: FONT.micro, color: INK.quiet, flex: "none", fontFamily: MONO },
@@ -8675,6 +8791,35 @@ window.__ModuleLoader__.load({
 						style: { font: FONT.baseStrong, lineHeight: LEAD.tight, color: INK.primary, margin: 0 },
 						children: String(row.statement ?? "")
 					}, "statement"),
+					// 中文解读 — WHAT THE CLAIM MEANS, and the only line on this card
+					// that is not checkable against a quote.
+					//
+					// SO IT IS DRAWN AS A READING AND NOT AS A FACT. The statement is
+					// verified, every quote is verified character for character, the
+					// speaker has to be stated in the block the model was shown — this
+					// one is an interpretation, and putting it in the same ink at the
+					// same weight as the sentence above it would quietly promote it to
+					// the same standing. A tinted panel with its own label is the
+					// cheapest honest frame: a reader can see where the evidence stops.
+					//
+					// ABOVE THE QUOTES, because it explains the claim and the quotes
+					// support it — a reading printed after its own evidence reads as a
+					// conclusion drawn from it, which is the opposite of what it is.
+					typeof row.gloss !== "string" || row.gloss === "" ? null : jsxs("div", {
+						style: {
+							display: "flex", alignItems: "flex-start", gap: SPACE.sm,
+							padding: `${SPACE.sm} ${SPACE.md}`,
+							background: SURFACE.hover, borderRadius: RADIUS.md,
+							font: FONT.body, color: INK.secondary, lineHeight: LEAD.roomy
+						},
+						children: [
+							jsx("span", {
+								style: { flex: "none", font: FONT.microStrong, color: INK.quiet, paddingTop: "2px" },
+								children: zh ? "解读" : "Reading"
+							}, "label"),
+							jsx("span", { style: { minWidth: 0 }, children: row.gloss }, "text")
+						]
+					}, "gloss"),
 					...evidence.slice(0, 3).map((piece, at) => InsightQuote({ piece, zh, onOpenMoment }, `q${at}`)),
 					jsxs("div", {
 						style: {
@@ -8808,6 +8953,36 @@ window.__ModuleLoader__.load({
 							marginTop: SPACE.xs, font: FONT.micro, color: INK.secondary
 						},
 						children: [
+							// WHO SAID IT, FIRST ON THE ROW.
+							//
+							// A quote with a name on it and a quote without are different
+							// weights of evidence, and until now the card drew them
+							// identically: "Jensen Huang said X on the record" and "an
+							// outlet's prose asserts X" both arrived as an italic sentence
+							// over a publisher's domain.
+							//
+							// AHEAD OF THE TIMESTAMP because it is the more important of
+							// the two — a reader deciding whether to open a source wants to
+							// know whose sentence it is before they want to know at what
+							// second — and because it is absent most of the time. The
+							// prompt requires the block itself to state the speaker and
+							// asks the model to omit the field otherwise, so a name here
+							// is a real attribution, never an inference from the channel.
+							typeof piece?.speaker !== "string" || piece.speaker === "" ? null : jsx("span", {
+								title: zh ? "来源里指明的说话人" : "the speaker named in the source",
+								style: {
+									display: "inline-flex", alignItems: "center",
+									flex: "none", height: CONTROL.dot, padding: `0 ${SPACE.sm}`,
+									borderRadius: RADIUS.md,
+									border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
+									background: tint(TONE.accent, TINT.soft),
+									color: `rgb(${TONE.accent})`,
+									font: FONT.microStrong,
+									maxWidth: "220px", overflow: "hidden",
+									textOverflow: "ellipsis", whiteSpace: "nowrap"
+								},
+								children: piece.speaker
+							}, "speaker"),
 							// ▶ 6:40 IS THE CONTROL, so it leads and it looks like one.
 							// A claim off a talk is sourced to a second, and pressing it
 							// opens the library's own reader there — with the transcript
@@ -8929,6 +9104,699 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @returns the pane.
 		*/
+		/**
+		* What the pass is doing, in the order it does it.
+		*
+		* Named after the WORK rather than after the function that does it —
+		* "正在找第二来源" is what corroboration is for, and a reader waiting on a
+		* progress row is waiting to find out whether the wait is reasonable, which
+		* is a question only the work can answer. `extracting` and `corroborating`
+		* are the two that cost model calls and web fetches, and they are the two
+		* that take the minutes.
+		*
+		* THE INTERVALS ARE HERE SO A MISSING PHASE STILL RENDERS. A build of the
+		* Host older than the progress stamps sends `{running: true}` with no
+		* `phase`, and the row falls back to 正在跑 rather than to an empty string
+		* under a spinner — the failure this whole change exists to remove.
+		*/
+		const INSIGHT_PHASE_FACES = {
+			reading: { zh: "正在读信源", en: "Reading the library" },
+			clustering: { zh: "正在归并同题", en: "Grouping by story" },
+			extracting: { zh: "正在抽主张", en: "Extracting claims" },
+			reconciling: { zh: "正在合并去重", en: "Reconciling claims" },
+			corroborating: { zh: "正在找第二来源", en: "Looking for a second source" },
+			rescoring: { zh: "正在重新排序", en: "Rescoring" }
+		};
+
+		/**
+		* Every interval the picker offers, in minutes, with 0 meaning off.
+		*
+		* Anything under the Host's floor is filtered out at the call site against
+		* the floor the Host itself reports, so this list can gain a value without
+		* the page and the validator disagreeing about whether it is legal.
+		*/
+		const INSIGHT_INTERVALS = [0, 30, 60, 120, 240, 480, 720, 1440];
+
+		/**
+		* One interval, said the way somebody would say it out loud.
+		* @param minutes - the interval; 0 is off.
+		* @param zh - Chinese.
+		* @returns the label.
+		*/
+		function intervalLabel(minutes, zh) {
+			if (minutes <= 0) return zh ? "关闭" : "Off";
+			if (minutes < 60) return zh ? `每 ${minutes} 分钟` : `Every ${minutes} min`;
+			if (minutes === 1440) return zh ? "每天一次" : "Once a day";
+			const hours = minutes / 60;
+			return zh ? `每 ${hours} 小时` : `Every ${hours} h`;
+		}
+
+		/**
+		* ONE FORM, ONE METRIC — and the three that were in the first one.
+		*
+		* The scope dialog was assembled out of controls borrowed from three
+		* different places and it showed: `SELECT_STYLE` is a TOOLBAR filter,
+		* 28px tall at 12px in `INK.secondary`; `SEARCH_STYLE` is a PAGE-LEVEL
+		* search box, 42px at 14px in `INK.primary`; the type chips were 11px.
+		* Stacked in one dialog that is four rows of the same thing, the window
+		* said 接着上次继续 in small grey type and 200 in large black type one row
+		* apart, and a reader correctly read that as the fonts being broken.
+		*
+		* Both borrowed recipes are RIGHT WHERE THEY LIVE. A filter beside a
+		* heading should be quieter than the heading; a search box that is the
+		* widest thing on a pane should be bigger than the rows under it. Neither
+		* is a form field, and a form field is what all four of these are.
+		*
+		* THE LADDER IS THE FILE'S OWN: 13 strong names the field, 13 regular is
+		* what you type into it, 11 explains it. Three steps that already exist,
+		* rather than a fourth invented here.
+		*
+		* AND NO `textTransform: uppercase`, NO `TRACK_WIDE`. Both were on the
+		* labels, copied from the section eyebrows further up the pane. Uppercase
+		* does nothing whatever to 时间范围 — CJK has no case — so on the half of
+		* this product that is Chinese the rule was pure letter-spacing, which
+		* loosens 汉字 into something that reads as damaged. A caption idiom
+		* borrowed from a Latin reference has to be checked in both languages
+		* before it becomes a constant.
+		*/
+		const FORM_LABEL = { font: FONT.bodyStrong, color: INK.primary, margin: 0 };
+		/** The sentence under a field. One step below what it explains. */
+		const FORM_HINT = { font: FONT.micro, color: INK.quiet };
+		/**
+		* Every control in a form: select, text, number, alike.
+		*
+		* `boxSizing` and `width: 100%` are on the recipe rather than at each call
+		* site, because a form whose select is 100% and whose input is `auto` is
+		* the same defect one property down.
+		*/
+		const FORM_CONTROL = {
+			appearance: "none", boxSizing: "border-box",
+			width: "100%", height: CONTROL.md,
+			padding: `0 ${SPACE.sm}`,
+			border: `1px solid ${LINE.rule}`, borderRadius: RADIUS.md,
+			background: "transparent", color: INK.primary,
+			font: FONT.body
+		};
+
+		/**
+		* One line saying what a run was narrowed to, or nothing.
+		*
+		* Nothing for an unscoped run, deliberately: "全部" on every ordinary pass
+		* is a label that is on screen a hundred times for every one time it means
+		* something, and a reader stops seeing it exactly when it starts to matter.
+		* @param scope - the scope recorded on the run, or undefined.
+		* @param zh - Chinese.
+		* @returns the clause, or an empty string.
+		*/
+		function scopeWords(scope, zh) {
+			if (scope === null || typeof scope !== "object") return "";
+			const parts = [];
+			const days = Number(scope.days);
+			if (Number.isFinite(days) && days > 0) {
+				parts.push(zh ? `最近 ${days} 天` : `last ${days}d`);
+			}
+			if (typeof scope.search === "string" && scope.search !== "") {
+				parts.push(zh ? `含「${scope.search}」` : `“${scope.search}”`);
+			}
+			if (Array.isArray(scope.types) && scope.types.length > 0) {
+				parts.push(scope.types.join("/"));
+			}
+			const rows = Number(scope.maxRows);
+			if (Number.isFinite(rows) && rows > 0) parts.push(zh ? `${rows} 行` : `${rows} rows`);
+			return parts.join(" · ");
+		}
+
+		/**
+		* The windows a scoped run may read over.
+		*
+		* `days: 0` means "carry on from the watermark", which is what every run
+		* did before this dialog existed and is still the default: a drain that
+		* walks forward is the pass's normal shape, and a window is the exception
+		* somebody asks for.
+		*/
+		const INSIGHT_WINDOWS = [
+			{ days: 0, zh: "接着上次继续", en: "Carry on from the last pass" },
+			{ days: 1, zh: "最近 24 小时", en: "The last 24 hours" },
+			{ days: 3, zh: "最近 3 天", en: "The last 3 days" },
+			{ days: 7, zh: "最近一周", en: "The last week" },
+			{ days: 30, zh: "最近 30 天", en: "The last 30 days" }
+		];
+
+		/**
+		* The dialog behind 运行分析.
+		*
+		* WHY THE BUTTON GREW A FORM. 立即跑一次 named a mechanism and asked for
+		* nothing: it read whatever the settings happened to say, over whatever was
+		* above the watermark, and the reader who pressed it could neither say what
+		* they wanted read nor find out afterwards what had been. "Run" is not a
+		* request anybody actually has — "read this week's videos about inference
+		* cost" is.
+		*
+		* EVERY FIELD HERE NARROWS THE SCAN AND NOTHING ELSE. There is no field for
+		* what the model looks for or how hard it looks: those are the pass's own
+		* terms, they are stated at the foot of this pane, and a dialog that
+		* appeared to move them would be four controls with one real one among them.
+		*
+		* AND THE ONE THAT IS NOT HERE: video length. The library stores no
+		* duration — `resources` has title, abstract, url, published_at and the raw
+		* blob, and nothing that says an hour — so a 时长 filter would be a control
+		* that silently matched everything. It is left out rather than drawn dead.
+		* @param open - whether to render.
+		* @param onClose - dismiss without running.
+		* @param onRun - called with the scope; the caller posts it.
+		* @param status - `/insights/status`, for the type vocabulary and defaults.
+		* @param zh - Chinese.
+		*/
+		function InsightRunDialog({ open, onClose, onRun, status, zh }) {
+			const [days, setDays] = useState(0);
+			const [search, setSearch] = useState("");
+			const [types, setTypes] = useState([]);
+			const [maxRows, setMaxRows] = useState(0);
+
+			// THE FORM RESETS TO THE SETTINGS EVERY TIME IT OPENS, not once at
+			// mount. A dialog carrying last time's answer is a dialog that runs a
+			// scope nobody re-read — and this one spends model calls.
+			useEffect(() => {
+				if (open !== true) return;
+				setDays(0);
+				setSearch("");
+				setTypes(Array.isArray(status?.insightResourceTypes) ? [...status.insightResourceTypes] : []);
+				setMaxRows(Number(status?.insightMaxRows ?? 200));
+			}, [open, status]);
+
+			const vocabulary = Array.isArray(status?.resourceTypes) && status.resourceTypes.length > 0
+				? status.resourceTypes
+				: (Array.isArray(status?.insightResourceTypes) ? status.insightResourceTypes : []);
+			const configuredRows = Number(status?.insightMaxRows ?? 200);
+
+			const field = (title, hint, body, key) => jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
+				children: [
+					jsx("div", { style: FORM_LABEL, children: title }, "t"),
+					body,
+					(hint ?? "") === "" ? null : jsx("div", { style: FORM_HINT, children: hint }, "h")
+				]
+			}, key);
+
+			return jsx(SwarmModal, {
+				open, onClose, zh,
+				title: zh ? "运行一次分析" : "Run an analysis",
+				note: zh
+					? "从信源库里读一批还没读过的材料，抽出可以核验的主张。这一次只影响这一次，不改定时的口径。"
+					: "Read a batch of material out of the library and extract checkable claims. This run only; it does not change the schedule's own terms.",
+				children: jsxs("form", {
+					style: { display: "flex", flexDirection: "column", gap: SPACE.lg },
+					onSubmit: (event) => {
+						event.preventDefault();
+						onRun?.({
+							days: days > 0 ? days : undefined,
+							search: search.trim() === "" ? undefined : search.trim(),
+							types: types.length === vocabulary.length ? undefined : types,
+							maxRows: maxRows === configuredRows ? undefined : maxRows
+						});
+					},
+					children: [
+						field(
+							zh ? "时间范围" : "Window",
+							zh
+								? "默认接着上一次读到的地方往下读。选一个窗口就改成只读那段时间里进来的材料 —— 手动跑不会推进定时的水位，所以窗口不会让定时漏读。"
+								: "By default this carries on from where the last pass stopped. A window reads that period instead. A manual run never advances the schedule's watermark, so a window cannot make the scheduled pass skip anything.",
+							jsx("select", {
+								value: String(days),
+								className: "swm-focus",
+								style: { ...FORM_CONTROL, cursor: "pointer" },
+								onChange: (event) => { setDays(Number(event.target.value)); },
+								children: INSIGHT_WINDOWS.map((one) => jsx("option", {
+									value: String(one.days), children: zh ? one.zh : one.en
+								}, String(one.days)))
+							}),
+							"days"
+						),
+						field(
+							zh ? "主题" : "Topic",
+							zh
+								? "只读标题、摘要或简介里出现这个词的材料。留空就是不筛。"
+								: "Only material whose title, abstract or summary carries this word. Empty reads everything.",
+							jsx("input", {
+								type: "search",
+								value: search,
+								placeholder: zh ? "例如：推理成本、具身智能…" : "e.g. inference cost, robotics…",
+								className: "swm-focus",
+								style: FORM_CONTROL,
+								onChange: (event) => { setSearch(event.target.value); }
+							}),
+							"search"
+						),
+						vocabulary.length === 0 ? null : field(
+							zh ? "信源类型" : "Source types",
+							zh
+								? "没有转录的视频会被跳过 —— 只有标题和简介的视频抽不出可以核验的引语。"
+								: "Videos with no stored transcript are skipped: a title and a blurb cannot produce a checkable quote.",
+							jsx("div", {
+								style: { display: "flex", flexWrap: "wrap", gap: SPACE.xs },
+								// THE CHIP IS THE INDICATOR, so there is exactly one of them.
+								//
+								// A native checkbox inside a pill that ALSO turns violet is two
+								// controls' worth of state for one boolean, and they do not even
+								// agree on a design language: the box is the browser's, in the
+								// browser's blue, on the browser's own baseline, beside a chip
+								// drawn from this file's accent tokens. It is the same "emoji in
+								// a row of stroked marks" fault TAB_ICONS opens by naming.
+								//
+								// THE INPUT IS STILL THERE, just not drawn. `opacity: 0` over the
+								// chip's own box keeps the label association, the space bar, the
+								// tab stop and the announced checked state — a chip rebuilt as a
+								// `div` with an `onClick` looks identical and is unreachable
+								// without a mouse.
+								children: vocabulary.map((type) => {
+									const on = types.includes(type);
+									return jsxs("label", {
+										style: {
+											position: "relative",
+											display: "inline-flex", alignItems: "center", gap: SPACE.xs,
+											height: CONTROL.sm, padding: `0 ${SPACE.md}`,
+											borderRadius: RADIUS.pill,
+											border: `1px solid ${on ? tint(TONE.accent, TINT.ring) : LINE.rule}`,
+											background: on ? tint(TONE.accent, TINT.soft) : "transparent",
+											// The unchosen ones sit at the form's own ink rather than
+											// at a third grey: a row where every chip is a different
+											// weight of grey reads as a row that is half disabled.
+											color: on ? `rgb(${TONE.accent})` : INK.secondary,
+											font: FONT.body, cursor: "pointer",
+											transition: `background ${MOTION.fast},color ${MOTION.fast},border-color ${MOTION.fast}`
+										},
+										children: [
+											jsx("input", {
+												type: "checkbox",
+												checked: on,
+												className: "swm-focus",
+												style: {
+													position: "absolute", inset: 0, margin: 0,
+													width: "100%", height: "100%",
+													opacity: 0, cursor: "pointer",
+													borderRadius: RADIUS.pill
+												},
+												onChange: () => {
+													setTypes((was) => (was.includes(type)
+														? was.filter((one) => one !== type)
+														: [...was, type]));
+												}
+											}, "box"),
+											// A TICK ONLY WHEN IT IS ON, and no reserved slot for one
+											// when it is off: a 14px gap held open beside every
+											// unchosen chip makes the row look like it failed to
+											// render half its icons.
+											!on ? null : jsx("span", {
+												style: { flex: "none", display: "inline-flex" },
+												"aria-hidden": "true",
+												children: jsx(Icon, { name: "check", size: ICON.xs })
+											}, "tick"),
+											jsx("span", { children: type }, "name")
+										]
+									}, type);
+								})
+							}),
+							"types"
+						),
+						field(
+							zh ? "读取上限" : "Rows to read",
+							zh
+								? `这一次最多读多少行。定时用的是 ${configuredRows} 行。读得越多，这一次花的模型调用越多。`
+								: `How many rows this run may read. The schedule uses ${configuredRows}. More rows is more model calls.`,
+							jsx("input", {
+								type: "number",
+								min: 20,
+								max: 600,
+								step: 10,
+								value: String(maxRows),
+								className: "swm-focus",
+								style: { ...FORM_CONTROL, fontVariantNumeric: "tabular-nums" },
+								onChange: (event) => { setMaxRows(Number(event.target.value)); }
+							}),
+							"rows"
+						),
+						jsxs("div", {
+							style: { display: "flex", alignItems: "center", gap: SPACE.sm, justifyContent: "flex-end" },
+							children: [
+								jsx("button", {
+									type: "button",
+									className: "swm-ctl swm-focus", style: controlStyle(),
+									onClick: () => { onClose?.(); },
+									children: zh ? "取消" : "Cancel"
+								}, "cancel"),
+								jsx("button", {
+									type: "submit",
+									// REFUSED WITH NO TYPE TICKED rather than quietly reading
+									// everything: the route rejects an empty list for the same
+									// reason, and a form that submits the opposite of what it
+									// shows is worse than one that will not submit.
+									disabled: vocabulary.length > 0 && types.length === 0,
+									className: "swm-ctl swm-focus",
+									style: {
+										...controlStyle(vocabulary.length > 0 && types.length === 0),
+										border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
+										background: tint(TONE.accent, TINT.soft),
+										color: `rgb(${TONE.accent})`
+									},
+									children: zh ? "开始运行" : "Run"
+								}, "go")
+							]
+						}, "actions")
+					]
+				})
+			}, "rundialog");
+		}
+
+		/**
+		* What a pass concluded about one source, in the order of concern.
+		*
+		* THE ORDER IS THE HOST'S, not this table's: `PASS_STATES` decides how the
+		* rows are sorted and this only says how each one is drawn. Two orderings
+		* of six states is two answers to "which of these matters most", and the
+		* one that matters is the one the query already applied.
+		*
+		* FOUR OF THE SIX ARE NOT FAULTS and are toned accordingly. A pass that
+		* reads a cluster and finds nothing worth keeping did its job; a row over
+		* the ceiling comes back next pass. Colouring all six as problems would
+		* make a healthy quiet week look like a broken one — the opposite error
+		* to the one this panel exists to fix, and just as expensive.
+		*/
+		const PASS_STATE_FACES = {
+			failed: { zh: "抽取失败", en: "Extraction failed", hue: TONE.danger },
+			"no-transcript": { zh: "没有转录", en: "No transcript", hue: TONE.warn },
+			unusable: { zh: "没有正文", en: "No usable text", hue: TONE.warn },
+			binned: { zh: "超出上限", en: "Over the ceiling", hue: TONE.muted },
+			read: { zh: "读了没抽到", en: "Read, nothing kept", hue: TONE.neutral },
+			extracted: { zh: "抽出了主张", en: "Claims extracted", hue: TONE.success }
+		};
+
+		/**
+		* A duration in whole seconds, said the way a person reads one.
+		* @param seconds - the stored length, or anything else.
+		* @returns "1:12" / "44 min", or an empty string when it is not known.
+		*/
+		function formatLength(seconds) {
+			const total = Number(seconds);
+			// EMPTY FOR UNKNOWN, never "0 min". Most rows in an existing library
+			// have no length — the column is newer than they are — and a confident
+			// zero beside a title reads as a video of no duration.
+			if (!Number.isFinite(total) || total <= 0) return "";
+			const hours = Math.floor(total / 3600);
+			const minutes = Math.round((total % 3600) / 60);
+			return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}` : `${minutes} min`;
+		}
+
+		/**
+		* WHAT THE LAST PASS DID TO EACH SOURCE IT LOOKED AT.
+		*
+		* THE FOUR FIGURES ABOVE THIS ANSWER "HOW MANY" FOR A QUESTION WHOSE ONLY
+		* USEFUL FORM IS "WHICH ONE". 200 扫过 / 16 抽出主张 is either a healthy
+		* quiet week or a hundred and ninety videos silently dropped for want of a
+		* transcript, and until the Host kept a ledger those two were
+		* indistinguishable from every screen in this product.
+		*
+		* Measured on the library this was built against: 523 videos held, 23
+		* transcripts. Five hundred sources were held, wanted, correctly skipped —
+		* and reported nowhere at all.
+		*
+		* SHUT BY DEFAULT, and it is the only section in this pane that is. The
+		* rule elsewhere in this file is that a section arriving shut is a section
+		* the reader has to discover, and that is the right rule for CONTENT.
+		* This is an account of the machinery: a reader who is not asking "why did
+		* that video produce nothing" does not want two hundred rows of
+		* bookkeeping between the run's figures and the claims. The summary line
+		* stays visible while shut, so the question can still be asked.
+		* @param zh - Chinese.
+		* @param onOpenMoment - opens a source in the library's own reader.
+		* @param tick - bumped by the pane when a pass ends, to re-read.
+		*/
+		function PassLedger({ zh, onOpenMoment, tick }) {
+			const [open, setOpen] = useState(false);
+			const [data, setData] = useState(null);
+			const [error, setError] = useState("");
+
+			// FETCHED WHETHER OR NOT IT IS OPEN, because the summary line is the
+			// part that has to be true while shut — a fold that loads its counts
+			// only once opened shows nothing where its one useful sentence goes.
+			// Shut it asks for one row; the two hundred are the open cost.
+			useEffect(() => {
+				let alive = true;
+				fetch(`${apiBase()}/insights/ledger?take=${open ? 200 : 1}`)
+					.then(missionData)
+					.then((payload) => { if (alive) { setData(payload); setError(""); } })
+					.catch((cause) => { if (alive) setError(String(cause?.message ?? cause)); });
+				return () => { alive = false; };
+			}, [open, tick]);
+
+			// A SECONDARY PANEL MAY NOT TAKE THE SCREEN WHEN IT FAILS.
+			//
+			// This returned `ErrorBox`, which is the pane-level shape — a tall
+			// bordered box with an icon, built for "the claims could not be
+			// read". Handed a failure of the BOOKKEEPING it put 300px of red
+			// between the run's figures and the claims themselves, and pushed the
+			// content this tab exists for below the fold. The content loaded
+			// perfectly; the account of it did not.
+			//
+			// The rule is about rank, not about errors: a panel that is secondary
+			// when it works is secondary when it breaks, and its failure gets one
+			// muted line where its summary would have been.
+			//
+			// A ROUTE THAT DOES NOT EXIST GETS NOTHING AT ALL, which is a
+			// different fact and the commonest one here. The page is served fresh
+			// on every request while the Host is loaded into a running process,
+			// so a browser newer than the plugin is the NORMAL state after an
+			// edit — not an edge case. A Host with no ledger route has no ledger
+			// concept, so there is nothing to report about it; reporting it as a
+			// fault would put a red box on every screen between an edit and a
+			// restart. Every new route this page learns to call has to degrade
+			// this way or the tab breaks itself on the way to being improved.
+			const missing = /no such route|not found|HTTP 404/i.test(error);
+			if (error !== "" && missing) return null;
+			if (error !== "") {
+				return jsx("div", {
+					style: {
+						font: FONT.micro, color: INK.quiet,
+						padding: `${SPACE.xs} ${SPACE.md}`,
+						border: `1px solid ${LINE.hair}`, borderRadius: RADIUS.lg
+					},
+					children: zh ? `本次采集 · 读不到（${error}）` : `This pass · could not be read (${error})`
+				}, "ledgererr");
+			}
+			// NOTHING AT ALL BEFORE THE FIRST PASS, rather than an empty panel. A
+			// library that has never run already says so in four dashes and an
+			// empty state one screen up; a second box saying it again is another
+			// thing to read carrying no new fact.
+			if (data === null || data.batch === null || data.batch === undefined) return null;
+
+			const counts = data.counts ?? {};
+			const states = Array.isArray(data.states) ? data.states : Object.keys(counts);
+			const looked = states.reduce((total, one) => total + Number(counts[one] ?? 0), 0);
+			// The ones that cost the library something. Counted separately because
+			// the summary line has to say whether there is anything to open this
+			// for, and "17 produced nothing" is that sentence.
+			const lost = Number(counts.failed ?? 0)
+				+ Number(counts["no-transcript"] ?? 0)
+				+ Number(counts.unusable ?? 0);
+
+			return jsxs("section", {
+				style: {
+					display: "flex", flexDirection: "column", gap: SPACE.sm,
+					border: `1px solid ${LINE.hair}`, borderRadius: RADIUS.lg,
+					background: SURFACE.card, padding: `${SPACE.sm} ${SPACE.md}`
+				},
+				children: [
+					jsxs("button", {
+						type: "button",
+						className: "swm-focus",
+						"aria-expanded": open,
+						onClick: () => { setOpen((was) => !was); },
+						style: {
+							appearance: "none", background: "none", border: "none", padding: 0, margin: 0,
+							width: "100%", textAlign: "left", cursor: "pointer",
+							display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap"
+						},
+						children: [
+							jsx("span", {
+								style: { flex: "none", display: "inline-flex", alignItems: "center", color: INK.quiet },
+								"aria-hidden": "true",
+								children: jsx(Icon, { name: open ? "chevronDown" : "chevronRight", size: ICON.sm })
+							}, "fold"),
+							jsx("span", {
+								style: { font: FONT.bodyStrong, color: INK.primary },
+								children: zh ? "本次采集" : "This pass"
+							}, "title"),
+							jsx("span", {
+								style: { font: FONT.micro, color: INK.quiet, fontFamily: MONO },
+								children: zh ? `看了 ${looked} 个信源` : `${looked} sources`
+							}, "n"),
+							// THE ONE SENTENCE THAT MUST BE TRUE WHILE SHUT. A reader who
+							// never opens this still learns whether the last pass lost
+							// anything, which is the whole reason the ledger exists.
+							lost === 0 ? null : jsx("span", {
+								style: { font: FONT.micro, color: `rgb(${TONE.warn})` },
+								children: zh ? `其中 ${lost} 个没能抽出主张` : `${lost} produced nothing`
+							}, "lost"),
+							jsx("span", { style: { flex: 1 } }, "spacer"),
+							jsx("span", {
+								title: formatStamp(data.batch),
+								style: { font: FONT.micro, color: INK.quiet },
+								children: formatAgo(data.batch, zh)
+							}, "when")
+						]
+					}, "head"),
+
+					// THE COUNTS, ALWAYS. Six cells rather than the four the run's own
+					// figures carry, and they answer a different question: those are
+					// about the CLAIMS, these are about the SOURCES.
+					jsx("div", {
+						style: {
+							display: "grid",
+							gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))",
+							gap: SPACE.xs
+						},
+						children: states.map((one) => {
+							const face = PASS_STATE_FACES[one] ?? null;
+							const value = Number(counts[one] ?? 0);
+							return jsxs("div", {
+								style: {
+									// NO GAP, matching the run's four figures directly above: a
+									// number and its own caption are one object, and the leading
+									// each step already carries is the space between them. A raw
+									// pixel here would also be the sixth raw `gap` in the file,
+									// which the token ratchet correctly refuses.
+									display: "flex", flexDirection: "column", minWidth: 0,
+									// A ZERO IS DRAWN, NOT OMITTED. A missing 抽取失败 column and
+									// a 抽取失败 0 column say different things, and the first says
+									// it by accident.
+									opacity: value === 0 ? OPACITY.quiet : 1
+								},
+								children: [
+									jsx("div", {
+										style: {
+											font: FONT.baseStrong, fontVariantNumeric: "tabular-nums",
+											color: value === 0 || face === null ? INK.secondary : `rgb(${face.hue})`
+										},
+										children: String(value)
+									}, "n"),
+									jsx("div", {
+										style: { font: FONT.micro, color: INK.quiet },
+										children: face === null ? one : (zh ? face.zh : face.en)
+									}, "l")
+								]
+							}, one);
+						})
+					}, "counts"),
+
+					// THE ROWS, ONLY WHEN ASKED FOR. Sorted by the Host into order of
+					// concern, so the failures are at the top rather than alphabetically
+					// among two hundred successes.
+					!open || !Array.isArray(data.rows) || data.rows.length === 0 ? null : jsx("div", {
+						style: {
+							display: "flex", flexDirection: "column",
+							maxHeight: "320px", overflowY: "auto",
+							borderTop: `1px solid ${LINE.hair}`, paddingTop: SPACE.xs
+						},
+						children: data.rows.map((entry) => {
+							const face = PASS_STATE_FACES[entry.state] ?? null;
+							const length = formatLength(entry.durationSeconds);
+							return jsxs("div", {
+								style: {
+									display: "flex", alignItems: "center", gap: SPACE.sm,
+									padding: `${SPACE.xs} 0`, font: FONT.micro, color: INK.secondary
+								},
+								children: [
+									jsx("span", {
+										style: {
+											flex: "none", width: "3px", alignSelf: "stretch", borderRadius: RADIUS.sm,
+											background: face === null ? LINE.hair : `rgb(${face.hue})`
+										}
+									}, "bar"),
+									// THE TITLE OPENS THE SOURCE. A ledger that names a video
+									// which produced nothing and offers no way to go and look at
+									// it is a list of complaints.
+									jsx("button", {
+										type: "button",
+										className: "swm-focus",
+										title: zh ? `在信源里打开：${entry.title}` : `open in the library: ${entry.title}`,
+										style: {
+											...clampBox(1), flex: 1, minWidth: 0, textAlign: "left",
+											appearance: "none", border: "none", background: "transparent",
+											padding: 0, cursor: "pointer", font: "inherit",
+											color: "var(--dsw-alias-label-link)"
+										},
+										onClick: () => { onOpenMoment?.({ resourceId: entry.resourceId, at: null }); },
+										children: entry.title === "" ? entry.resourceId : entry.title
+									}, "title"),
+									length === "" ? null : jsx("span", {
+										style: { flex: "none", color: INK.quiet, fontFamily: MONO },
+										children: length
+									}, "len"),
+									// THE REASON, NOT JUST THE STATE. "17 unusable" is a number
+									// nobody can act on; "no transcript stored" beside a title is
+									// a feed to go and look at.
+									entry.reason === "" ? null : jsx("span", {
+										style: { flex: "none", maxWidth: "34%", color: INK.quiet, ...clampBox(1) },
+										title: entry.reason,
+										children: entry.reason
+									}, "why"),
+									jsx("span", {
+										style: {
+											flex: "none",
+											color: face === null ? INK.quiet : `rgb(${face.hue})`
+										},
+										children: face === null ? entry.state : (zh ? face.zh : face.en)
+									}, "state"),
+									entry.claims === 0 ? null : jsx("span", {
+										style: { flex: "none", color: INK.quiet, fontFamily: MONO },
+										children: zh ? `${entry.claims} 条` : String(entry.claims)
+									}, "claims")
+								]
+							}, entry.resourceId);
+						})
+					}, "rows")
+				]
+			}, "ledger");
+		}
+
+		/**
+		* The four seats of the verdict strip, in the order work moves through them.
+		*
+		* 待判定 FIRST AND IT IS THE DEFAULT. A claim nobody has looked at is the
+		* only thing on this tab that needs a person, so the pane opens there —
+		* and the three decided seats exist so that a verdict is a MOVE rather
+		* than a colour: the card leaves the view when you press one, and there is
+		* exactly one place to find it again.
+		*
+		* NOT DERIVED FROM INSIGHT_STATUS_FACES, although three of the four ids
+		* match. That table describes what the PASS computed and calls `dormant`
+		* 休眠, which is a thing that happened to a card; here the same id means
+		* 搁置, which is a thing a person did. Same word in the database, two
+		* different sentences on screen, and reusing the table would put the
+		* pass's wording under the reader's own decision.
+		*/
+		const VERDICT_STRIP = [
+			{
+				id: "pending", zh: "待判定", en: "Unjudged", hue: TONE.accent,
+				hintZh: "还没有人看过的主张。判定之后它会从这里移走。",
+				hintEn: "Claims nobody has judged yet. A verdict moves the card out of this view."
+			},
+			{
+				id: "standing", zh: "成立", en: "Standing", hue: TONE.success,
+				hintZh: "你判定为成立的主张。",
+				hintEn: "Claims you marked as standing."
+			},
+			{
+				id: "contested", zh: "存疑", en: "Contested", hue: TONE.warn,
+				hintZh: "你判定为存疑的主张。",
+				hintEn: "Claims you marked as doubtful."
+			},
+			{
+				id: "dormant", zh: "搁置", en: "Shelved", hue: TONE.muted,
+				hintZh: "你搁置的主张。这里不会随着蜂群的判断改变而少掉东西。",
+				hintEn: "Claims you shelved. Nothing leaves this seat because the swarm changed its mind."
+			}
+		];
+
 		function LibraryInsightPane({ zh, onOpenMoment }) {
 			const [rows, setRows] = useState(null);
 			const [counts, setCounts] = useState({});
@@ -8939,7 +9807,41 @@ window.__ModuleLoader__.load({
 			const [busy, setBusy] = useState("");
 			const [search, setSearch] = useState("");
 			const [asked, setAsked] = useState("");
-			const [kind, setKind] = useState("");
+			// WHICH KIND OF SOURCE — where a claim came from, not what it says.
+			//
+			// THIS REPLACED A CLAIM-KIND CUT, it does not sit beside one. The old
+			// control offered 发布 / 资金 / 政策 / 研究发现 / 趋势转向 under the
+			// label 类型, in a tab whose first sibling is 信源 and whose dialog
+			// says 信源类型 — so the one word on the row was answering the wrong
+			// question. Keeping both and renaming them would have left two
+			// dropdowns on a row that has one search box, to cut a table that is
+			// usually forty rows long: the fix for an ambiguous control is the
+			// right control, not the ambiguous one with a longer label beside it.
+			//
+			// `?kind=` REMAINS ON THE ROUTE. It is a legitimate query and the
+			// store still filters by it; what is gone is a screen control nobody
+			// could read correctly. A filter the page does not offer is not a
+			// filter the API has to forget.
+			const [resourceType, setResourceType] = useState("");
+			// THE PANE OPENS ON THE INBOX. Not on "everything": a tab that shows
+			// every card it has ever held grows monotonically and is never done,
+			// which is what makes a reader stop opening it.
+			const [verdict, setVerdict] = useState("pending");
+			const [verdictCounts, setVerdictCounts] = useState({});
+			// WHICH LAYERS ARE FOLDED AWAY, held as the shut ones rather than the
+			// open ones so a layer that appears for the first time — the pass
+			// classifies a claim into 能源 on a Tuesday — arrives OPEN. Keyed by
+			// layer id and not by index: the group list is rebuilt from `rows` on
+			// every fetch and an index would move a fold onto whichever section
+			// happened to take that slot.
+			//
+			// SESSION-LOCAL, NOT PERSISTED. A fold is a reading position, not a
+			// setting, and a section that is still shut tomorrow because of a
+			// click today is a section a reader has to remember they hid.
+			const [shut, setShut] = useState(() => new Set());
+			// Whether the scope dialog is open. The button used to fire the run
+			// directly; it opens the form now, and the form fires it.
+			const [asking, setAsking] = useState(false);
 			// The moment a reader asks to arrive at is MissionsTab's business now.
 
 			// The same quarter second the mission search waits, and for the same
@@ -8955,7 +9857,12 @@ window.__ModuleLoader__.load({
 				let alive = true;
 				const params = new URLSearchParams({ take: "60" });
 				if (asked.trim() !== "") params.append("q", asked.trim());
-				if (kind !== "") params.append("kind", kind);
+				// Spelled out, never "type": the route refuses an unknown value and
+				// names the list it accepts, but a parameter called `type` carrying
+				// a claim kind would be a legal-looking request that answers an
+				// empty page.
+				if (resourceType !== "") params.append("resourceType", resourceType);
+				if (verdict !== "") params.append("verdict", verdict);
 				Promise.all([
 					fetch(`${apiBase()}/insights/list?${params.toString()}`).then(missionData),
 					fetch(`${apiBase()}/insights/status`).then(missionData)
@@ -8964,13 +9871,20 @@ window.__ModuleLoader__.load({
 						if (!alive) return;
 						setRows(Array.isArray(list.insights) ? list.insights : []);
 						setCounts(list.counts !== null && typeof list.counts === "object" ? list.counts : {});
+						// AN OLDER HOST SENDS NONE, and the strip then shows four zeros
+						// rather than vanishing: the seats are how a reader navigates now,
+						// and a navigation that disappears because a count is missing is
+						// the fault this file already paid for once with the source filter.
+						setVerdictCounts(list.verdictCounts !== null && typeof list.verdictCounts === "object"
+							? list.verdictCounts
+							: {});
 						setTotal(Number(list.total ?? 0));
 						setStatus(said);
 						setError("");
 					})
 					.catch((cause) => { if (alive) setError(String(cause?.message ?? cause)); });
 				return () => { alive = false; };
-			}, [asked, kind, tick]);
+			}, [asked, resourceType, verdict, tick]);
 
 			/** Hand one card a verdict, or hand it back to the pass. */
 			const pin = useCallback(async (id, wanted) => {
@@ -8992,11 +9906,75 @@ window.__ModuleLoader__.load({
 			}, []);
 
 			/** Run the pass now, rather than waiting for a timer that may be off. */
-			const runNow = useCallback(async () => {
+			const runNow = useCallback(async (scope) => {
 				setBusy("run");
 				setError("");
 				try {
-					const response = await fetch(`${apiBase()}/insights/run-now`, { method: "POST" });
+					// A BODY ONLY WHEN THERE IS SOMETHING IN IT. A bare POST is the
+					// run this route has always made, and the route reads a body only
+					// when one is announced — so an unscoped run stays byte for byte
+					// the request it was.
+					const asked = Object.fromEntries(
+						Object.entries(scope ?? {}).filter(([, value]) => value !== undefined)
+					);
+					const scoped = Object.keys(asked).length > 0;
+					const response = await fetch(`${apiBase()}/insights/run-now`, scoped
+						? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(asked) }
+						: { method: "POST" });
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? `HTTP ${response.status}`);
+					// THE ANSWER IS "STARTED", NOT "DONE", and this is where the button
+					// used to stop. `/insights/run-now` replies 202 in a few milliseconds
+					// and then works for minutes; `setBusy("")` in the `finally` below
+					// fires on that 202, so the label went 立即跑一次 → 正在跑… → 立即跑一次
+					// inside one frame and the screen never changed again. A reader
+					// pressing it saw a button flicker and nothing else — no rows, no
+					// numbers, no error — which is indistinguishable from a control that
+					// is not wired up.
+					//
+					// So the reply is read for what it actually says. `started: false`
+					// with `running: true` is the honest answer to a second press while
+					// the first pass is still going, and it must not be reported as a
+					// failure; either way there is now a pass to watch, and the effect
+					// below takes over from here.
+					setStatus((was) => ({
+						...(was ?? {}),
+						// Optimistic, and only until the first poll lands ~2.5s later.
+						// Without it the row shows nothing at all for one polling
+						// interval, which is the same silence one interval shorter.
+						manualRunInFlight: true
+					}));
+					setTick((value) => value + 1);
+				} catch (cause) {
+					setError(String(cause?.message ?? cause));
+				} finally {
+					setBusy("");
+				}
+			}, []);
+
+			/**
+			* Arm the schedule, or turn it off.
+			*
+			* THERE WAS NO WAY TO DO THIS FROM THE PAGE. The band said 定时未开启 in
+			* amber — correctly, `insightIntervalMinutes` defaults to 0 because a pass
+			* that starts spending model calls on upgrade is a bill nobody agreed to —
+			* and then offered nothing to press. The setting is real, validated and
+			* honoured; it simply lived in a config file, so the one screen that
+			* reports the schedule was the one place it could not be set.
+			*
+			* Written through `/config` rather than a route of its own, exactly as the
+			* podcast's schedule is: these are the settings the Host reads at every
+			* tick, and one writer for them means one whitelist to keep honest.
+			*/
+			const saveInterval = useCallback(async (minutes) => {
+				setBusy("schedule");
+				setError("");
+				try {
+					const response = await fetch(`${apiBase()}/config`, {
+						method: "PUT",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({ insightIntervalMinutes: minutes })
+					});
 					const payload = await response.json();
 					if (payload?.success !== true) throw new Error(payload?.error ?? `HTTP ${response.status}`);
 					setTick((value) => value + 1);
@@ -9006,6 +9984,58 @@ window.__ModuleLoader__.load({
 					setBusy("");
 				}
 			}, []);
+
+			// IS A PASS RUNNING RIGHT NOW, whoever started it.
+			//
+			// Three sources, because they fail differently. `manualRunInFlight` is
+			// THIS process holding a promise, which is the truth but dies with a
+			// restart; the two records carry a `running` stamp that survives a crash,
+			// which is how a pass that died mid-way is still visible instead of
+			// silently absent. A stale stamp with no process behind it is exactly the
+			// "started" that never finishes, and showing it is better than pretending
+			// the library is idle when its last pass never came back.
+			//
+			// `insightLastRun` is in the list as well as the manual one: the timer's
+			// pass writes the rows this tab is looking at, and a reader watching an
+			// empty table has the same question about it.
+			const runningRecord = status?.insightLastManualRun?.running === true
+				? status.insightLastManualRun
+				: (status?.insightLastRun?.running === true ? status.insightLastRun : null);
+			const passRunning = status?.manualRunInFlight === true || runningRecord !== null;
+
+			// WATCH IT WHILE IT RUNS. Every 2.5 seconds, and only while there is
+			// something to watch — an unconditional interval is a request every few
+			// seconds for as long as the tab is open, against a route that counts
+			// candidate rows.
+			//
+			// Only `status` is re-read here, not the list: the rows do not change
+			// until the pass writes them, and re-fetching 60 insights every 2.5
+			// seconds to watch a progress counter move is the wrong trade. The list
+			// is re-read once, below, when the pass ends.
+			useEffect(() => {
+				if (!passRunning) return undefined;
+				const timer = setInterval(() => {
+					fetch(`${apiBase()}/insights/status`)
+						.then(missionData)
+						.then((said) => { setStatus(said); })
+						.catch(() => {
+							// A dropped poll is not worth an error box over a pass that
+							// is still going; the next tick asks again.
+						});
+				}, 2500);
+				timer.unref?.();
+				return () => { clearInterval(timer); };
+			}, [passRunning]);
+
+			// AND RE-READ THE TABLE THE MOMENT IT STOPS. This is the payoff for the
+			// whole watch: the rows the pass just wrote arrive on screen by
+			// themselves, rather than sitting in the database behind a 刷新 the
+			// reader has no reason to believe they need to press.
+			const wasRunning = useRef(false);
+			useEffect(() => {
+				if (wasRunning.current && !passRunning) setTick((value) => value + 1);
+				wasRunning.current = passRunning;
+			}, [passRunning]);
 
 			// THE READER IS MOUNTED BY THE TAB, NOT BY THIS PANE.
 			//
@@ -9027,10 +10057,58 @@ window.__ModuleLoader__.load({
 			// facts, they want the last time this table changed.
 			const scheduled = status?.insightLastRun ?? null;
 			const manual = status?.insightLastManualRun ?? null;
-			const last = [scheduled, manual]
+			const records = [scheduled, manual]
 				.filter((one) => one !== null && one !== undefined)
-				.sort((a, b) => String(b?.at ?? "").localeCompare(String(a?.at ?? "")))[0] ?? null;
+				.sort((a, b) => String(b?.at ?? "").localeCompare(String(a?.at ?? "")));
+			// THE FIGURES COME FROM THE LAST PASS THAT ACTUALLY RAN, and the newest
+			// record is a different question.
+			//
+			// This took whichever record was newest and read `rows`, `claims`,
+			// `verified` and `backlog` off it. Two of the three things a record can
+			// be carry none of those: a skip is `{skipped: "…"}` and a failure is
+			// `{error: "…"}`. So the commonest outcome on a quiet library — "only 1
+			// new source since the last pass; 2 needed" — drew four big zeros where
+			// the last real pass's numbers had been, and the page reported that the
+			// library had read nothing and found nothing. It had done neither; it had
+			// declined to spend the money, which is the one thing the band never said.
+			// FROM ITS OWN KEY, because the records these were read out of do not
+			// keep it. `setSetting` writes whole values, so the `{running:true}`
+			// marker written before a pass starts REPLACES the summary of the pass
+			// before it — pressing 运行分析 on a band reading 200 / 13 / 12 / 0
+			// blanked all four for the duration of the run, and left them blank if
+			// that run skipped. `insightLastGoodRun` is written only by a pass that
+			// produced numbers, so the figures now survive the next press.
+			//
+			// The scan over the two records stays as a FALLBACK, for a library
+			// written by a build that predates the third key: without it every
+			// existing installation would show four dashes until its next
+			// successful pass.
+			const last = status?.insightLastGoodRun ?? records.find((one) => one?.ran === true) ?? null;
+			const newest = records[0] ?? null;
+			// WHY THE LAST ATTEMPT PRODUCED NOTHING, when it produced nothing. The
+			// reason is already recorded, already on the wire, and was rendered
+			// nowhere — which is how "I pressed the button and nothing happened"
+			// stays unanswerable while the answer sits in the response.
+			const outcome = newest === null || newest.ran === true || newest.running === true
+				? null
+				: (typeof newest.error === "string" && newest.error !== ""
+					? { tone: TONE.danger, zh: `上一次没有跑成：${newest.error}`, en: `The last run failed: ${newest.error}` }
+					: (typeof newest.skipped === "string" && newest.skipped !== ""
+						? { tone: TONE.warn, zh: `上一次跳过了：${newest.skipped}`, en: `The last run was skipped: ${newest.skipped}` }
+						: null));
 			const every = Number(status?.insightIntervalMinutes ?? 0);
+			// The pass rides the collection tick, so collection being off turns it
+			// off too — a schedule that is set, reported, and never honoured.
+			const collecting = Number(status?.collectIntervalMinutes ?? 0) > 0;
+			// WHETHER THE HOST CAN ACTUALLY FILTER BY SOURCE, and the list to
+			// offer. Two facts, because they are not the same one: the page has
+			// always owned a source vocabulary in `KINDS`, so it can always DRAW
+			// the control — but only a Host that sends `resourceTypes` honours
+			// `?resourceType=`, and one that ignores it answers the whole list
+			// while the dropdown says 新闻.
+			const sourceFilterLive = Array.isArray(status?.resourceTypes) && status.resourceTypes.length > 0;
+			const sourceTypes = sourceFilterLive ? status.resourceTypes : KINDS.map((one) => one.type);
+			const floor = Number(status?.insightMinIntervalMinutes ?? 30);
 
 			// GROUPED BY LAYER, IN STACK ORDER. Not by size and not by kind:
 			// energy under compute under models under what is built on them is
@@ -9092,7 +10170,23 @@ window.__ModuleLoader__.load({
 							flexWrap: "wrap", font: FONT.micro, color: INK.secondary
 						},
 						children: [
-							last === null ? null : jsx("div", {
+							// THE BOX IS ALWAYS DRAWN, EMPTY OR NOT, and that is a layout
+							// rule rather than a data one.
+							//
+							// It was `last === null ? null : …`, and the cell beside it
+							// carries `marginLeft: auto`. Remove the figures and the band
+							// becomes one right-aligned column of buttons with 900px of
+							// nothing to its left — which is exactly what a reader saw the
+							// moment they pressed the button, because pressing it wiped the
+							// record `last` was read from. Two bugs, one of them mine, and
+							// only one of them is about data: a band whose shape depends on
+							// whether a fetch has landed will collapse again the next time
+							// any of its four numbers is unavailable.
+							//
+							// Four dashes in the cells they will occupy is what an empty
+							// figure box looks like. It says the same thing the missing box
+							// said — nothing has run — without moving anything.
+							jsx("div", {
 								// ONE BOX, NO DIVIDERS BETWEEN THE FIGURES, A RULE INSTEAD. Spread out
 								// with air between them the four numbers read as four things scattered
 								// on a band; the reference draws ONE object divided into cells, and that
@@ -9110,10 +10204,10 @@ window.__ModuleLoader__.load({
 									borderRadius: RADIUS.lg, background: SURFACE.card
 								},
 								children: [
-									{ zh: "扫过", en: "rows read", value: last.rows ?? 0 },
-									{ zh: "抽出主张", en: "claims", value: last.claims ?? 0 },
-									{ zh: "通过核验", en: "verified", value: last.verified ?? 0 },
-									{ zh: "还没读到", en: "not yet read", value: last.backlog ?? 0, tone: TONE.warn }
+									{ zh: "扫过", en: "rows read", value: last?.rows },
+									{ zh: "抽出主张", en: "claims", value: last?.claims },
+									{ zh: "通过核验", en: "verified", value: last?.verified },
+									{ zh: "还没读到", en: "not yet read", value: last?.backlog, tone: TONE.warn }
 								].map((cell, index) => jsxs("div", {
 									style: {
 										display: "flex", flexDirection: "column", minWidth: 0,
@@ -9130,7 +10224,11 @@ window.__ModuleLoader__.load({
 												fontVariantNumeric: "tabular-nums",
 												color: cell.tone === undefined ? INK.primary : `rgb(${cell.tone})`
 											},
-											children: missionCompact(cell.value)
+											// A DASH FOR "NOT KNOWN", A ZERO FOR "ZERO". `?? 0` here read
+											// a library that has never run as one that read nothing and
+											// found nothing — four confident zeros over a pass that had
+											// not happened.
+											children: Number.isFinite(Number(cell.value)) ? missionCompact(cell.value) : "—"
 										}, "n"),
 										jsx("div", {
 											style: { font: FONT.micro, color: INK.secondary },
@@ -9162,38 +10260,109 @@ window.__ModuleLoader__.load({
 												onClick: () => { setTick((value) => value + 1); },
 												children: zh ? "刷新" : "Refresh"
 											}, "refresh"),
+											// REFUSED WHILE A PASS IS ACTUALLY RUNNING, not merely
+											// while this component is mid-request. `busy` cleared on
+											// the 202 — a few milliseconds in — so the button came
+											// straight back to full contrast under a pass with four
+											// minutes left to run, and pressing it again was answered
+											// `started: false` by a route that had correctly refused
+											// to start a second one. The reader saw a live button do
+											// nothing, twice.
 											jsx("button", {
 												type: "button",
-												disabled: busy !== "",
+												disabled: busy !== "" || passRunning,
 												className: "swm-ctl swm-focus",
 												style: {
-													...controlStyle(busy !== ""),
+													...controlStyle(busy !== "" || passRunning),
 													border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
 													background: tint(TONE.accent, TINT.soft),
 													color: `rgb(${TONE.accent})`
 												},
-												onClick: () => { void runNow(); },
-												children: busy === "run"
+												// IT OPENS A FORM, SO IT ENDS IN AN ELLIPSIS. That is the
+												// convention every dialog-opening control in every toolkit
+												// keeps, and it is the only thing on the button that says
+												// pressing it will not immediately spend money.
+												//
+												// AND IT IS NAMED AFTER THE OPERATION, WHICH TOOK TWO GOES.
+												//
+												// 立即跑一次 named a mechanism — run WHAT, once? — and
+												// said nothing about what pressing it produces. The first
+												// replacement, 抽取主张, went too far the other way: it
+												// named the OUTPUT, in the plainest possible words, which
+												// on a screen whose every other control is set in the
+												// register of an analyst's tool read as a description of
+												// the plumbing rather than as a thing you do.
+												//
+												// 运行分析 is the operation. It sits in the same register
+												// as 核验, 归类 and 定时 elsewhere in this tab, and it
+												// matches what the pane already calls the unit of work:
+												// the ledger below says 本次采集, the figures say 扫过 and
+												// 抽出主张. Those two stay exactly as they are — a COUNT
+												// of what came out is precise and belongs in plain words;
+												// a BUTTON is a verb and belongs in the product's own.
+												onClick: () => { setAsking(true); },
+												children: passRunning || busy === "run"
 													? (zh ? "正在跑…" : "Running…")
-													: (zh ? "立即跑一次" : "Run now")
+													: (zh ? "运行分析…" : "Run analysis…")
 											}, "run")
 										]
 									}, "actions"),
 									jsxs("div", {
 										style: { display: "flex", alignItems: "center", gap: SPACE.sm },
 										children: [
-											// A LIVE DOT ONLY WHEN THERE IS A SCHEDULE. A steady mark beside a
-											// table last written in August would be the page claiming to be live.
-											jsx("span", {
+											// THE CADENCE IS A CONTROL, NOT A LABEL.
+											//
+											// It was a pill reading 定时未开启 in amber, which is a page
+											// telling somebody their library is not running and then
+											// giving them nowhere to go. The setting exists, is
+											// validated, and is honoured on every tick; the only thing
+											// missing between "off" and "hourly" was somewhere to say so.
+											//
+											// A `select` rather than a toggle, because "on" is not one
+											// thing here: 30 minutes and once a day are different bills.
+											// And 关闭 stays in the list rather than becoming a separate
+											// switch — turning it off is the same decision as choosing
+											// how often, made in the same place.
+											//
+											// STILL AMBER WHEN IT IS OFF. Off is a legitimate choice and
+											// the default one, but a library whose pass never runs is
+											// the single most likely reason this tab is empty, and the
+											// colour is the only thing on the band that says so.
+											jsxs("label", {
 												style: {
 													display: "inline-flex", alignItems: "center", gap: SPACE.xs,
-													padding: `2px ${SPACE.sm}`, borderRadius: RADIUS.pill,
-													border: `1px solid ${LINE.hair}`,
-													color: every > 0 ? `rgb(${TONE.success})` : `rgb(${TONE.warn})`
+													font: FONT.micro, color: INK.secondary
 												},
-												children: every > 0
-													? (zh ? `每 ${every} 分钟` : `every ${every} min`)
-													: (zh ? "定时未开启" : "no schedule")
+												children: [
+													jsx("span", { children: zh ? "定时" : "Schedule" }, "t"),
+													jsx("select", {
+														value: String(every),
+														disabled: busy !== "",
+														"aria-label": zh ? "洞察定时间隔" : "Insight schedule",
+														style: {
+															...SELECT_STYLE,
+															height: CONTROL.sm,
+															color: every > 0 ? `rgb(${TONE.success})` : `rgb(${TONE.warn})`,
+															opacity: busy === "" ? 1 : OPACITY.disabled
+														},
+														onChange: (event) => { void saveInterval(Number(event.target.value)); },
+														children: INSIGHT_INTERVALS
+															// The Host refuses anything between 1 and its floor,
+															// so an entry it would refuse never reaches the list.
+															.filter((minutes) => minutes === 0 || minutes >= floor)
+															// A stored value the list does not carry — set by hand
+															// in the config — must still be selectable, or the
+															// control would silently show the wrong one and the
+															// first touch would change a setting nobody meant to
+															// change.
+															.concat(every > 0 && !INSIGHT_INTERVALS.includes(every) ? [every] : [])
+															.sort((a, b) => a - b)
+															.map((minutes) => jsx("option", {
+																value: String(minutes),
+																children: intervalLabel(minutes, zh)
+															}, String(minutes)))
+													}, "pick")
+												]
 											}, "cadence"),
 											last === null
 												? jsx("span", { children: zh ? "还没有跑过" : "never run" }, "never")
@@ -9207,6 +10376,175 @@ window.__ModuleLoader__.load({
 							}, "state")
 						]
 					}, "band"),
+
+					// The scope form. Mounted beside the band rather than inside the
+					// button's own row: `SwarmModal` renders a full-screen scrim, and a
+					// scrim nested inside a flex cell inherits that cell's stacking
+					// context — which is how an overlay ends up clipped by the toolbar
+					// that opened it.
+					jsx(InsightRunDialog, {
+						open: asking,
+						status,
+						zh,
+						onClose: () => { setAsking(false); },
+						onRun: (scope) => {
+							setAsking(false);
+							void runNow(scope);
+						}
+					}, "ask"),
+
+					// A PASS IS RUNNING AND HERE IS WHERE IT HAS GOT TO.
+					//
+					// This is the whole answer to "I pressed 立即跑一次 and it ended
+					// immediately — I cannot see whether it is running." It never
+					// ended: the route answers 202 in milliseconds and works for
+					// minutes, and the page had nothing that outlived the reply.
+					//
+					// A BAR AND A STAGE NAME, NOT A SPINNER. A spinner says only "wait",
+					// and a reader who has waited four minutes for a pass that makes up
+					// to twenty model calls needs to know whether it is moving. The five
+					// stages are the pass's own; `done/total` is real work finished, not
+					// a timer pretending to be one.
+					//
+					// SHOWN FOR THE SCHEDULED PASS TOO. It writes the same rows into the
+					// same table and takes the same minutes, and a reader who opens the
+					// tab mid-pass has exactly the same question about it.
+					!passRunning ? null : (() => {
+						const phase = runningRecord?.phase ?? "";
+						const face = INSIGHT_PHASE_FACES[phase] ?? null;
+						const done = Number(runningRecord?.done ?? 0);
+						const total = Number(runningRecord?.total ?? 0);
+						// Only when the stage knows its own size. `reading` does not —
+						// it has not counted the rows yet — and a bar that fills to an
+						// invented denominator is worse than no bar.
+						const sized = Number.isFinite(total) && total > 0 && Number.isFinite(done);
+						const share = sized ? Math.max(0, Math.min(1, done / total)) : 0;
+						const since = runningRecord?.startedAt ?? runningRecord?.at ?? null;
+						return jsxs("div", {
+							role: "status",
+							"aria-live": "polite",
+							style: {
+								display: "flex", flexDirection: "column", gap: SPACE.xs,
+								padding: `${SPACE.sm} ${SPACE.md}`,
+								border: `1px solid ${tint(TONE.info, TINT.ring)}`,
+								background: tint(TONE.info, TINT.soft),
+								borderRadius: RADIUS.lg,
+								font: FONT.micro, color: INK.secondary
+							},
+							children: [
+								jsxs("div", {
+									style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" },
+									children: [
+										jsx("span", {
+											style: { font: FONT.microStrong, color: `rgb(${TONE.info})` },
+											children: face === null
+												? (zh ? "正在跑" : "Running")
+												: (zh ? face.zh : face.en)
+										}, "phase"),
+										!sized ? null : jsx("span", {
+											style: { fontFamily: MONO, color: INK.quiet },
+											children: `${done} / ${total}`
+										}, "n"),
+										// WHAT THIS RUN WAS ASKED FOR, beside how far it has got.
+										// A scoped run that finds two claims is a different fact
+										// from a full pass that finds two, and the numbers alone
+										// cannot tell them apart — so the scope travels with the
+										// record and is said here rather than left for whoever
+										// remembers what they ticked four minutes ago.
+										scopeWords(runningRecord?.scope, zh) === "" ? null : jsx("span", {
+											style: { color: INK.quiet, fontFamily: MONO },
+											children: scopeWords(runningRecord?.scope, zh)
+										}, "scope"),
+										since === null ? null : jsx("span", {
+											style: { marginLeft: "auto", color: INK.quiet },
+											children: zh ? `已经跑了 ${formatAgo(since, zh)}` : `running for ${formatAgo(since, zh)}`
+										}, "for")
+									]
+								}, "line"),
+								// AN INDETERMINATE STAGE STILL DRAWS A TRACK. An empty rail
+								// under a stage name reads as a bar stuck at zero; a
+								// striped one reads as work with no count, which is what
+								// `reading` and `clustering` honestly are.
+								jsx("div", {
+									style: {
+										height: "3px", borderRadius: RADIUS.pill,
+										background: tint(TONE.info, TINT.ring), overflow: "hidden"
+									},
+									children: jsx("div", {
+										className: sized ? undefined : "swm-crawl",
+										style: sized
+											? {
+												height: "100%", borderRadius: RADIUS.pill,
+												background: `rgb(${TONE.info})`,
+												width: `${Math.round(share * 100)}%`,
+												transition: `width ${MOTION.slow}`
+											}
+											: {
+												// WIDTH COMES FROM THE CLASS, not from here: an inline
+												// declaration beats a stylesheet, and writing one would
+												// kill both the traverse and the reduced-motion rule
+												// while leaving the animation name in place looking
+												// like it worked. The same inline-beats-sheet trap this
+												// file records against `.swm-ctl`.
+												height: "100%", borderRadius: RADIUS.pill,
+												background: `rgb(${TONE.info})`
+											}
+									}, "fill")
+								}, "rail"),
+								// THE PASS DOES NOT PROMISE TO FINISH. A `running` stamp
+								// survives a crash on purpose, and a stamp with no process
+								// behind it is precisely the "started" that never ends —
+								// so the row says which of the two it is looking at rather
+								// than spinning for ever without comment.
+								status?.manualRunInFlight === true || runningRecord === null ? null : jsx("div", {
+									style: { color: INK.quiet },
+									children: zh
+										? "这是上一次记录下来的进度。如果长时间不动，可能是那次跑到一半被中断了。"
+										: "This is the last progress recorded. If it has not moved in a while, that pass was probably interrupted."
+								}, "stale")
+							]
+						}, "progress");
+					})(),
+
+					// WHY THE LAST ATTEMPT PRODUCED NOTHING. A skip is the commonest
+					// outcome on a quiet library and it is not a failure — the pass
+					// declined to spend model calls on one new article — but a reader
+					// who presses a button and sees the table unchanged is owed the
+					// sentence, and until now it was recorded, sent, and never drawn.
+					outcome === null ? null : jsx("div", {
+						style: {
+							padding: `${SPACE.sm} ${SPACE.md}`,
+							border: `1px solid ${tint(outcome.tone, TINT.ring)}`,
+							background: tint(outcome.tone, TINT.soft),
+							borderRadius: RADIUS.lg,
+							font: FONT.micro, color: `rgb(${outcome.tone})`
+						},
+						children: scopeWords(newest?.scope, zh) === ""
+							? (zh ? outcome.zh : outcome.en)
+							: `${zh ? outcome.zh : outcome.en}（${scopeWords(newest.scope, zh)}）`
+					}, "outcome"),
+
+					// A SCHEDULE NOTHING WILL HONOUR IS WORSE THAN NO SCHEDULE.
+					//
+					// The pass rides the collection tick — `startCollectionTimer`
+					// returns early when collection is off, and the insight pass is
+					// inside the timer it returns from. So 每 60 分钟 with collection
+					// off is a page reporting a cadence that will never fire, which it
+					// would otherwise do in the same confident green as a working one.
+					// The Host logs this at boot, into a file nobody reading this tab
+					// is going to open.
+					every <= 0 || collecting || status === null ? null : jsx("div", {
+						style: {
+							padding: `${SPACE.sm} ${SPACE.md}`,
+							border: `1px solid ${tint(TONE.warn, TINT.ring)}`,
+							background: tint(TONE.warn, TINT.soft),
+							borderRadius: RADIUS.lg,
+							font: FONT.micro, color: `rgb(${TONE.warn})`
+						},
+						children: zh
+							? "定时开着，但信源采集是关的 —— 洞察跑在采集的那一拍上，所以它不会自己跑。先在设置里把采集间隔打开。"
+							: "The schedule is armed but collection is off. The insight pass rides the collection tick, so it will not fire until a collection interval is set."
+					}, "unwired"),
 
 					error === "" ? null : jsx(ErrorBox, { message: error, zh }, "err"),
 
@@ -9223,20 +10561,90 @@ window.__ModuleLoader__.load({
 								style: { ...SEARCH_STYLE, height: CONTROL.md, flex: 1, minWidth: "180px" },
 								onChange: (event) => { setSearch(event.target.value); }
 							}, "search"),
+							// ONE CUT, AND IT IS THE ONE THIS TAB WAS MISSING.
+							//
+							// THE WORD WAS THE WHOLE BUG. This pane sits under a tab bar
+							// whose first entry is 信源, over a library paged BY source
+							// type, beside a dialog that says 信源类型 — and then offered a
+							// dropdown labelled 全部类型 which, opened, answered
+							// 发布 / 资金 / 政策 / 研究发现 / 趋势转向. Those are what a claim
+							// SAYS. A reader who reads 类型 in this tab expects
+							// NEWS / PAPER / YOUTUBE_VIDEO — where it CAME FROM.
+							//
+							// The two vocabularies are the most confusable pair in this
+							// feature and the codebase already carries a warning about
+							// them: both are plain strings, neither validates as the other,
+							// so mixing them up produces an empty page rather than an
+							// error. A control called 类型 in a tab that has both is that
+							// mix-up waiting to be made by a person instead of by code.
+							//
+							// SO IT IS REPLACED, NOT JOINED. Renaming the old one and
+							// adding this beside it would put two dropdowns on a row that
+							// has one search box, to cut a table that is usually forty rows
+							// long — and the fix for an ambiguous control is the right
+							// control, not the ambiguous one with a longer label next to
+							// it. `?kind=` is still a legal query and the store still
+							// serves it; what is gone is a screen control nobody could read
+							// correctly.
+							//
+							// THE CONTROL ALWAYS RENDERS, AND THAT COST A WHOLE FILTER ONCE.
+							//
+							// It was gated on the Host sending `resourceTypes` — "absent
+							// rather than drawn empty", which is the right instinct when
+							// there is another control on the row and exactly wrong when
+							// this IS the row. The claim-kind cut had just been replaced by
+							// this one, the running Host predated the field, and the tab
+							// shipped with no filter at all: a control removed and its
+							// replacement invisible, in one step.
+							//
+							// So the vocabulary FALLS BACK to `KINDS`, which this page has
+							// always owned — it is the six types the 信源 tab pages by, and
+							// matching that list is the entire point of this filter. The
+							// Host's list is still preferred where it arrives: it is
+							// authoritative and carries nine types to KINDS' six.
+							//
+							// REFUSED, NOT SILENT, ON A HOST THAT CANNOT FILTER. An older
+							// plugin ignores `?resourceType=` and answers the full list, so
+							// a live-looking dropdown would change nothing and report
+							// nothing — the "filter that looks like it works" this
+							// codebase keeps re-shipping, inverted. `resourceTypes` on the
+							// status payload is exactly the signal, because the Host that
+							// sends it is the Host that honours the query.
 							jsx("select", {
-								value: kind,
-								"aria-label": zh ? "类型" : "Kind",
-								style: SELECT_STYLE,
-								onChange: (event) => { setKind(event.target.value); },
+								value: resourceType,
+								disabled: !sourceFilterLive,
+								"aria-label": zh ? "来源类型" : "Source type",
+								title: sourceFilterLive
+									? undefined
+									: (zh
+										? "这个筛选需要重启 harness 后才生效 —— 当前后端还不认识这个参数。"
+										: "This filter needs the harness restarted; the running Host does not know the parameter yet."),
+								style: {
+									...SELECT_STYLE,
+									opacity: sourceFilterLive ? 1 : OPACITY.disabled,
+									cursor: sourceFilterLive ? "pointer" : "not-allowed"
+								},
+								onChange: (event) => { setResourceType(event.target.value); },
 								children: [
-									jsx("option", { value: "", children: zh ? "全部类型" : "All kinds" }, "all"),
-									...Object.entries(INSIGHT_KIND_FACES).map(([id, face]) => jsx("option", {
-										value: id, children: zh ? face.zh : face.en
+									jsx("option", { value: "", children: zh ? "全部来源" : "All sources" }, "all"),
+									...sourceTypes.map((id) => jsx("option", {
+										value: id, children: resourceTypeLabel(id, zh)
 									}, id))
 								]
-							}, "kind")
+							}, "source")
 						]
 					}, "tools"),
+
+					// THE PASS'S OWN ACCOUNT OF ITSELF, between the run's figures and
+					// the claims those figures are about. Not above the figures: this
+					// is bookkeeping, and bookkeeping does not outrank the headline.
+					// Not below the claims: a reader scrolling forty cards to find out
+					// why there are only forty will not scroll forty cards.
+					//
+					// `tick` rather than its own timer: the pane already re-reads when
+					// a pass ends, and a second poller against the same lifecycle is a
+					// second thing to keep in step.
+					jsx(PassLedger, { zh, onOpenMoment, tick }, "ledger"),
 
 					// A SECTION LABEL, NOT A THIRD 16px HEADING.
 					//
@@ -9265,26 +10673,112 @@ window.__ModuleLoader__.load({
 								style: { font: FONT.micro, color: INK.quiet, fontFamily: MONO },
 								children: zh ? `共 ${total} 条` : `${total} total`
 							}, "total"),
-							...Object.entries(INSIGHT_STATUS_FACES)
-								.filter(([id]) => Number(counts?.[id] ?? 0) > 0)
-								.map(([id, face]) => jsx("span", {
-									style: { font: FONT.micro, color: `rgb(${face.hue})` },
-									children: `${zh ? face.zh : face.en} ${counts[id]}`
-								}, id))
+							jsx("span", { style: { flex: 1 } }, "gap"),
+							// ── THE VERDICT STRIP, WHICH IS ALSO THE NAVIGATION ─────────
+							//
+							// A CARD A PERSON HAS JUDGED LEAVES THE LIST. That is the whole
+							// change: the pane opens on 待判定, and pressing 成立 / 存疑 /
+							// 搁置 moves the card out of the view you are in. What is left
+							// on screen is always and only what has not been looked at, so
+							// the tab drains instead of accumulating — and a reader can
+							// tell "I have read all of this" from "there is more" without
+							// remembering which cards they had already seen.
+							//
+							// IT REPLACES A ROW OF DEAD NUMBERS. This line already carried
+							// 候选 44 · 成立 2 in the pass's own colours and none of it was
+							// pressable: the counts named four groups a reader could see
+							// existed and could not go to. The strip is the same tally with
+							// the one thing it was missing.
+							//
+							// AND IT IS THE VERDICT, NOT THE STATUS. The old counts were
+							// `status` — the pass's opinion, which moves on every run.
+							// These are `pinned_status`, which is the reader's own and
+							// outranks it. Counting one while filtering the other is a
+							// number that is wrong without looking wrong, so both halves
+							// come from `verdictCounts`.
+							//
+							// A SEGMENTED TRACK WOULD BE THE THIRD ON THIS SCREEN — the
+							// panel's tab bar, then 信源洞察 / 主题洞察, then this — so it
+							// stays a line of text with a pressed state. Three raised
+							// tracks stacked in 120px is a page with no hierarchy left.
+							...VERDICT_STRIP.map((seat) => {
+								const on = verdict === seat.id;
+								const value = Number(verdictCounts?.[seat.id] ?? 0);
+								return jsx("button", {
+									type: "button",
+									className: "swm-focus",
+									"aria-pressed": on,
+									title: zh ? seat.hintZh : seat.hintEn,
+									style: {
+										appearance: "none", cursor: "pointer",
+										border: `1px solid ${on ? tint(seat.hue, TINT.ring) : "transparent"}`,
+										background: on ? tint(seat.hue, TINT.soft) : "transparent",
+										color: on ? `rgb(${seat.hue})` : INK.secondary,
+										// A HEIGHT, NOT A VERTICAL PADDING. `2px 8px` is what the
+										// card's own verdict buttons write and it is a raw value
+										// the token ratchet counts; `CONTROL.dot` is the 20px box
+										// this file already uses for a chip-sized control, and it
+										// makes every seat the same height whatever is in it.
+										borderRadius: RADIUS.md,
+										display: "inline-flex", alignItems: "center",
+										height: CONTROL.dot, padding: `0 ${SPACE.sm}`,
+										font: on ? FONT.microStrong : FONT.micro,
+										// THE WEIGHT SWAP DOES NOT REFLOW THE STRIP. `micro` and
+										// `microStrong` are 11px at one leading, so pressing a
+										// seat does not move the seats beside it — the trap
+										// `segmentStyle` records one screen over.
+										transition: `background ${MOTION.fast},color ${MOTION.fast}`
+									},
+									onClick: () => { setVerdict(seat.id); },
+									children: `${zh ? seat.zh : seat.en} ${value}`
+								}, seat.id);
+							})
 						]
 					}, "tally"),
 
 					rows.length !== 0 ? null : jsx("div", {
 						style: { font: FONT.small, color: INK.secondary },
-						children: total === 0 && asked.trim() === "" && kind === ""
-							? (zh
-								? "这个库还没有产出任何主张。按上面的「立即跑一次」让它读一遍。"
-								: "The library has produced no claims yet. Press Run now to have it read.")
-							: (zh ? "没有主张匹配这个条件。" : "No claim matches that.")
+						// EVERY ACTIVE CUT HAS TO BE LISTED HERE, or the pane blames the
+						// library for a filter. This read "这个库还没有产出任何主张" —
+						// a statement about the whole library — whenever the visible
+						// rows were zero and the two cuts it happened to know about were
+						// clear. A third cut added without touching this line makes the
+						// tab tell a reader their library is empty because they picked
+						// 论文 from a dropdown.
+						// AN EMPTY INBOX IS A GOOD OUTCOME AND HAS TO READ AS ONE.
+						//
+						// The three sentences below are three different facts and the pane
+						// used to have one of them. "Nothing left to judge" is the state
+						// this whole strip exists to produce — a reader who has worked
+						// through every card should be told they are DONE, not handed the
+						// same grey line that means "your library is empty" or "your
+						// filter matched nothing". Congratulating a filter and blaming a
+						// library are the two ways to get this wrong and both were live.
+						children: (() => {
+							const filtered = asked.trim() !== "" || resourceType !== "";
+							if (filtered) return zh ? "没有主张匹配这个条件。" : "No claim matches that.";
+							// Nothing anywhere, whatever the seat: the library really is
+							// empty and the only useful thing to say is how to fill it.
+							if (Object.values(verdictCounts ?? {}).every((one) => Number(one) === 0)) {
+								return zh
+									? "这个库还没有产出任何主张。按上面的「运行分析」让它读一遍。"
+									: "The library has produced no claims yet. Press Run analysis to have it read.";
+							}
+							if (verdict === "pending") {
+								return zh
+									? "都判定完了 —— 这里没有等着看的主张了。下一次分析跑完会有新的。"
+									: "All caught up: nothing here is waiting on you. The next analysis will bring more.";
+							}
+							const seat = VERDICT_STRIP.find((one) => one.id === verdict);
+							return zh
+								? `你还没有把任何主张标成「${seat?.zh ?? verdict}」。`
+								: `You have not marked any claim as ${seat?.en ?? verdict} yet.`;
+						})()
 					}, "empty"),
 
 					...ordered.map(([id, held]) => {
 						const face = INSIGHT_LAYER_FACES[id] ?? null;
+						const open = !shut.has(id);
 						return jsxs("section", {
 							style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
 							children: [
@@ -9293,10 +10787,45 @@ window.__ModuleLoader__.load({
 								// is a colour you have to look for, at a size that put the
 								// heading BELOW the cards it heads in the reading order the
 								// eye actually uses.
-								jsxs("div", {
+								//
+								// AND THE WHOLE BAR IS THE HANDLE. Six layers of claims is one
+								// scroll a reader cannot get out of: they came for 模型, and
+								// 算力底座's two cards and 应用's nineteen are between them and
+								// it with no way to put either aside. A chevron alone would be
+								// a 24px target beside a 700px bar that looks pressable and is
+								// not, so the bar IS the button — `MissionPanel` nests its fold
+								// inside the header row because that header also carries an
+								// `action` node, and this one carries nothing a press could
+								// land on by mistake.
+								//
+								// THE COUNT STAYS WHEN IT IS SHUT, which is the rule that makes
+								// this folding rather than hiding: a closed section still says
+								// how much is inside, so the reader is choosing not to look
+								// rather than not knowing there is anything to look at.
+								jsxs("button", {
+									type: "button",
+									className: "swm-focus",
+									"aria-expanded": open,
+									onClick: () => {
+										setShut((was) => {
+											// A new Set every time, because React compares by
+											// identity: mutating and returning the same one is a
+											// state change the renderer cannot see.
+											const next = new Set(was);
+											if (next.has(id)) next.delete(id); else next.add(id);
+											return next;
+										});
+									},
 									style: {
+										appearance: "none", background: "none", border: "none",
+										width: "100%", textAlign: "left", cursor: "pointer",
 										display: "flex", alignItems: "center", gap: SPACE.sm,
-										paddingBottom: SPACE.xs, borderBottom: `1px solid ${LINE.hair}`
+										padding: `0 0 ${SPACE.xs}`, margin: 0,
+										borderBottom: `1px solid ${LINE.hair}`,
+										// The rule under the heading is a border on the button
+										// now, so it needs the radius squared off at the top or
+										// the focus ring draws round a shape the bar is not.
+										borderRadius: 0
 									},
 									children: [
 										jsx("span", {
@@ -9306,6 +10835,19 @@ window.__ModuleLoader__.load({
 												background: face === null ? LINE.hair : `rgb(${face.hue})`
 											}
 										}, "bar"),
+										// THE CHEVRON IS THE STATE, and it is the only thing in the
+										// bar that moves. Rotating a right-pointing mark rather
+										// than swapping two glyphs would be the same picture; the
+										// file already owns both drawings and `MissionPanel` picks
+										// between them, so this does too.
+										jsx("span", {
+											style: {
+												flex: "none", display: "inline-flex", alignItems: "center",
+												color: INK.quiet
+											},
+											"aria-hidden": "true",
+											children: jsx(Icon, { name: open ? "chevronDown" : "chevronRight", size: ICON.sm })
+										}, "fold"),
 										jsx("span", {
 											// A DIVIDER, NOT A TITLE. This stood at FONT.largeStrong —
 											// 16/600, the SAME size and the same weight as the claim
@@ -9327,10 +10869,18 @@ window.__ModuleLoader__.load({
 										}, "n")
 									]
 								}, "head"),
-								...held.map((row) => InsightCard({
-									row, zh, busy: busy === row.id, onOpenMoment,
-									onPin: (wanted) => { void pin(row.id, wanted); }
-								}, row.id))
+								// UNMOUNTED RATHER THAN `display: none`. Nineteen InsightCards
+								// each carry their evidence, their quote and their three
+								// verdict controls; hiding them leaves all of that in the tree
+								// and in the tab order, so a reader tabbing past a folded
+								// section would walk through sixty controls that are not on
+								// the screen.
+								...(open
+									? held.map((row) => InsightCard({
+										row, zh, busy: busy === row.id, onOpenMoment,
+										onPin: (wanted) => { void pin(row.id, wanted); }
+									}, row.id))
+									: [])
 							]
 						}, `g-${id}`);
 					}),
@@ -9353,8 +10903,32 @@ window.__ModuleLoader__.load({
 								: `Standing needs ${status?.insightMinIndependent ?? "—"} independent sources; ${status?.insightDormantDays ?? "—"} days without new evidence goes dormant`,
 							zh
 								? "原话 逐字引用，写入前对着模型看过的那一段核过 —— 对不上的整条丢弃"
-								: "Quotes are verbatim and checked against the block the model was shown; one that does not match is dropped"
-						].map((line, at) => jsx("div", { children: line }, `r${at}`))
+								: "Quotes are verbatim and checked against the block the model was shown; one that does not match is dropped",
+							// THE LENGTH RULE, STATED FOR THE FIRST TIME. It has been
+							// enforced since videos were first collected — one watch-page
+							// lookup per new video, anything under the floor discarded —
+							// and appeared on no screen, in no setting and in no log a
+							// reader would open. A rule the library applies and cannot
+							// name is indistinguishable from a feed that stopped
+							// publishing.
+							zh
+								? `视频 只收长度在 ${Math.round(Number(status?.minVideoSeconds ?? 1200) / 60)} 分钟以上的，并且必须已经取到转录 —— 只有标题和简介抽不出可核验的引语`
+								: `Videos are kept only above ${Math.round(Number(status?.minVideoSeconds ?? 1200) / 60)} minutes, and only with a stored transcript: a title and a blurb cannot produce a checkable quote`,
+							// THE STRENGTH CUTS. A band a reader cannot see the scale of
+							// is the same decoration as the bare 0.47 it replaced — worse,
+							// because 强 sounds like a judgement somebody made rather than
+							// arithmetic anybody can check.
+							!Array.isArray(status?.strengthBands) || status.strengthBands.length === 0 ? null : (zh
+								? `强度 由排序分分档：${status.strengthBands.map((band) => `${({ high: "强", medium: "中", low: "弱" })[band.id] ?? band.id} ≥ ${band.floor}`).join("，")}。排序分 = 动量 0.35 + 可信 0.30 + 新鲜 0.20 + 相关 0.15`
+								: `Strength bands the rank score: ${status.strengthBands.map((band) => `${band.id} ≥ ${band.floor}`).join(", ")}. Rank = momentum 0.35 + credibility 0.30 + novelty 0.20 + relevance 0.15`),
+							// THE SPEAKER RULE, because a name under a sentence is an
+							// attribution and a reader is owed the terms it was made
+							// under. Most cards will carry none, and that absence is the
+							// rule working rather than the feature failing.
+							zh
+								? "说话人 只在来源本身指明时才写 —— 不从频道名或标题推断"
+								: "A speaker is recorded only where the source itself names one; never inferred from the channel or the title"
+						].filter((line) => line !== null).map((line, at) => jsx("div", { children: line }, `r${at}`))
 					}, "rules")
 				]
 			});
@@ -9553,15 +11127,44 @@ window.__ModuleLoader__.load({
 								// anybody asking, so it is what a reader opening this tab has
 								// something new to look at. A mission is a question you came
 								// here having already decided to ask.
-								{ id: "library", zh: "信源洞察", en: "From the library" },
-								{ id: "missions", zh: "主题洞察", en: "By topic" }
-							].map((one) => jsx("button", {
+								// `mark`, NOT `icon`. These name entries in TAB_ICONS, which is the
+								// panel's stroked-geometry vocabulary; `icon` everywhere else in
+								// this file names an ICON_PATHS glyph, and a guard in the token
+								// tests checks every one of those resolves. Two tables, two keys,
+								// so neither can quietly be read as the other.
+								{ id: "library", mark: "insightLibrary", zh: "信源洞察", en: "From the library" },
+								{ id: "missions", mark: "insightMissions", zh: "主题洞察", en: "By topic" }
+							].map((one) => jsxs("button", {
 								type: "button",
 								"aria-pressed": pane === one.id,
 								className: "swm-focus",
 								style: segmentStyle(pane === one.id),
 								onClick: () => { setPane(one.id); },
-								children: zh ? one.zh : one.en
+								children: [
+									// THE MARK IS TINTED ONLY ON THE CHOSEN ONE, and this is
+									// the same split `PublishTab` makes one screen over: the
+									// raised surface and the weight say CHOSEN, the hue says
+									// WHICH. Given to both segments the strip would carry two
+									// violet marks and the reader would have to read the
+									// weight to find out which half they are in — which is
+									// the state we are trying to make visible, not another
+									// thing to decode. `segmentStyle` already lays these out
+									// in a row with `SPACE.xs` between, so the mark needs no
+									// geometry of its own.
+									jsx("span", {
+										style: {
+											flex: "none", display: "inline-flex",
+											color: pane === one.id ? `rgb(${TONE.accent})` : "currentColor",
+											// Unselected marks sit back so the row reads as one
+											// chosen thing beside one unchosen one rather than as
+											// two icons of equal weight.
+											opacity: pane === one.id ? 1 : 0.65,
+											transition: `opacity ${MOTION.fast},color ${MOTION.fast}`
+										},
+										children: jsx(TabIcon, { id: one.mark, size: 14 })
+									}, "mark"),
+									jsx("span", { children: zh ? one.zh : one.en }, "label")
+								]
 							}, one.id))
 						}, "kinds"),
 						pane !== "library" ? null : jsx(LibraryInsightPane, { zh, onOpenMoment: setMoment }, "library"),

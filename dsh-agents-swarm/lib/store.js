@@ -53,6 +53,15 @@ CREATE TABLE IF NOT EXISTS resources (
   comment_count    INTEGER NOT NULL DEFAULT 0,
   source_type      TEXT,
   normalized_url   TEXT,
+  -- How long the recording is, for the types that have a length.
+  --
+  -- IT WAS ALREADY BEING FETCHED AND THROWN AWAY. dropShortVideos asks the
+  -- watch page for lengthSeconds on every NEW video — one request each,
+  -- deliberately budgeted — uses it to drop anything under the floor, and
+  -- then discards the number. So the library enforced a duration rule it
+  -- could not state, no screen could show a length, and no filter could name
+  -- one, while the cost of knowing had already been paid.
+  duration_seconds INTEGER,
   raw              TEXT NOT NULL,
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL
@@ -176,7 +185,32 @@ function withColumns(row) {
   // the row without it hands the page a list ordered by a field it cannot see,
   // so anything asking "what arrived since X" silently compares undefined.
   if (typeof row.created_at === "string") base.createdAt = row.created_at;
+  // Length is a COLUMN fact, not a snapshot one: it is learned from the watch
+  // page after the feed row was parsed, so `raw` never carries it. Served from
+  // `raw` alone every duration in the library would be invisible — the exact
+  // shape of the thumbnail bug this function was written for.
+  if (row.duration_seconds !== undefined && row.duration_seconds !== null) {
+    base.durationSeconds = Number(row.duration_seconds);
+  }
   return base;
+}
+
+/**
+ * A duration in whole seconds, or null for "not known".
+ *
+ * NULL AND ZERO ARE DIFFERENT ANSWERS and both reach here. A row collected
+ * before the column existed knows nothing about its length; a lookup that
+ * failed also knows nothing — and `dropShortVideos` keeps that video on
+ * purpose, because a network error is not evidence that something is short.
+ * Coercing either to 0 would make every one of them shorter than any floor a
+ * reader sets, so a length filter would quietly delete the back catalogue.
+ * @param value - the reported length.
+ * @returns whole seconds above zero, or null.
+ */
+function durationOrNull(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.round(parsed);
 }
 
 /** Coerce a possibly-decimal-string score to a number, or null. */
@@ -218,6 +252,14 @@ export class SourceStore {
     const resourceColumns = this.db.prepare("PRAGMA table_info(resources)").all();
     if (!resourceColumns.some((column) => column.name === "thumbnail_checked_at")) {
       this.db.exec("ALTER TABLE resources ADD COLUMN thumbnail_checked_at TEXT");
+    }
+    // In place rather than a version bump, for `cues`' reason: an existing
+    // library may be the only copy of a migrated corpus. Rows written before
+    // this column existed carry NULL — which is "not known", not "zero", and
+    // every reader below has to keep those apart or a filter on length would
+    // silently exclude the whole back catalogue.
+    if (!resourceColumns.some((column) => column.name === "duration_seconds")) {
+      this.db.exec("ALTER TABLE resources ADD COLUMN duration_seconds INTEGER");
     }
     // `key_moments` backed a panel that was removed: the reference's own key
     // moments are hardcoded placeholders, and the video description turned out
@@ -272,8 +314,8 @@ export class SourceStore {
       INSERT INTO resources (
         id, type, title, abstract, ai_summary, source_url, thumbnail_url, authors,
         categories, published_at, quality_score, trending_score, upvote_count,
-        comment_count, source_type, normalized_url, raw, created_at, updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        comment_count, source_type, normalized_url, duration_seconds, raw, created_at, updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         type = excluded.type, title = excluded.title, abstract = excluded.abstract,
         ai_summary = excluded.ai_summary, source_url = excluded.source_url,
@@ -288,6 +330,13 @@ export class SourceStore {
         quality_score = excluded.quality_score, trending_score = excluded.trending_score,
         upvote_count = excluded.upvote_count, comment_count = excluded.comment_count,
         source_type = excluded.source_type, normalized_url = excluded.normalized_url,
+        -- COALESCE, for the thumbnail's reason and one sharper. A length costs a
+        -- request and is only paid for on a video the library has never seen,
+        -- so the hourly re-write of a row it already holds carries no duration
+        -- at all. Plain assignment would erase the number on the next poll and
+        -- there would be no second chance to learn it: the lookup is gated on
+        -- the row being NEW.
+        duration_seconds = COALESCE(excluded.duration_seconds, resources.duration_seconds),
         raw = excluded.raw, updated_at = excluded.updated_at
     `).run(
       row.id,
@@ -306,6 +355,7 @@ export class SourceStore {
       Number.isFinite(row.commentCount) ? row.commentCount : 0,
       row.sourceType ?? null,
       normalized,
+      durationOrNull(row.durationSeconds),
       JSON.stringify(row),
       typeof row.createdAt === "string" ? row.createdAt : now,
       now,
@@ -340,7 +390,7 @@ export class SourceStore {
    * @param options - `{ type, search, sortBy, take, skip }`.
    * @returns `{ rows, total, hasMore }` in the upstream's envelope shape.
    */
-  query({ type, search, sortBy, sortOrder, createdAfter, take = 20, skip = 0 } = {}) {
+  query({ type, search, sortBy, sortOrder, createdAfter, minDurationSeconds, take = 20, skip = 0 } = {}) {
     const where = [];
     const params = [];
     if (typeof type === "string" && type !== "") {
@@ -360,6 +410,21 @@ export class SourceStore {
       where.push("created_at > ?");
       params.push(createdAfter);
     }
+    // A LENGTH FLOOR THAT KEEPS THE UNKNOWNS. `duration_seconds IS NULL` means
+    // nobody ever asked the watch page — every row collected before the column
+    // existed, every non-video, and every video whose lookup failed. Written as
+    // a plain `>= ?` SQLite drops all of them, so "only videos over 20 minutes"
+    // would return nothing at all on a library whose back catalogue predates
+    // this column, and would look exactly like a filter that works over a
+    // library with nothing in it.
+    //
+    // The floor therefore excludes only rows KNOWN to be shorter. A caller who
+    // wants "known to be long" has to say so, and none does yet.
+    const floor = Number(minDurationSeconds);
+    if (Number.isFinite(floor) && floor > 0) {
+      where.push("(duration_seconds IS NULL OR duration_seconds >= ?)");
+      params.push(Math.round(floor));
+    }
     const clause = where.length === 0 ? "" : `WHERE ${where.join(" AND ")}`;
     const order = SORTABLE[sortBy] ?? SORTABLE.publishedAt;
     // Ascending is opt-in and everything else keeps newest-first. A reader
@@ -371,7 +436,7 @@ export class SourceStore {
     const limit = Math.max(1, Math.min(100, Number(take) || 20));
     const offset = Math.max(0, Number(skip) || 0);
     const rows = this.db.prepare(
-      `SELECT raw, thumbnail_url, created_at FROM resources ${clause} ORDER BY ${order} IS NULL, ${order} ${direction} LIMIT ? OFFSET ?`,
+      `SELECT raw, thumbnail_url, created_at, duration_seconds FROM resources ${clause} ORDER BY ${order} IS NULL, ${order} ${direction} LIMIT ? OFFSET ?`,
     ).all(...params, limit, offset);
     return {
       rows: rows.map(withColumns),
@@ -386,7 +451,7 @@ export class SourceStore {
    * @returns the stored row, or undefined.
    */
   get(id) {
-    const row = this.db.prepare("SELECT raw, thumbnail_url, created_at FROM resources WHERE id = ?").get(id);
+    const row = this.db.prepare("SELECT raw, thumbnail_url, created_at, duration_seconds FROM resources WHERE id = ?").get(id);
     return row === undefined ? undefined : withColumns(row);
   }
 

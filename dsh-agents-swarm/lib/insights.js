@@ -1057,3 +1057,52 @@ export function statementsMatch(a, b, options = {}) {
   const near = (hashUsable && bits <= maxBits) || overlap >= minOverlap || sharedEntities >= 2;
   return { near, bits, overlap, sharedEntities };
 }
+
+/**
+ * The bands a rank score is read in, and what separates them.
+ *
+ * WHY A BAND AND NOT A NUMBER. Every card in the pane carried its rank as a
+ * bare `0.47` in the corner, and a bare 0.47 is not information: it has no
+ * scale a reader was shown, no comparison, and no unit. Asked what it meant,
+ * nobody using the tab could say — which makes it decoration on a screen whose
+ * entire argument is that it does not decorate.
+ *
+ * WHY IT IS DERIVED AND NOT ASKED FOR. The obvious alternative is to have the
+ * extractor return a strength, the way the reference radar does. It is the
+ * wrong trade here: a model asked "how important is this" answers from
+ * everything it knows, which for this pipeline is exactly the thing every
+ * other rule forbids — the quote rule, the "never assert what no source says"
+ * rule, and the verifier all exist to keep the model's own opinions out of the
+ * table. A band over `rank_score` is computed from four measured quantities
+ * (momentum, credibility, novelty, relevance), it moves when the evidence
+ * moves, and a reader who disagrees can be shown the arithmetic.
+ *
+ * THE THRESHOLDS ARE STATED ON THE SCREEN. They are a judgement, and a
+ * judgement a reader cannot see is indistinguishable from a number invented
+ * for the look of it — which is what this replaces. The pane's 口径 footer
+ * names them.
+ *
+ * Measured against the library this was built on: a fresh multi-source claim
+ * lands around 0.55-0.7, a single-source candidate around 0.4-0.5, and a
+ * dormant one under 0.3. The cuts sit between those clusters rather than at
+ * round numbers chosen for tidiness.
+ */
+export const STRENGTH_BANDS = Object.freeze([
+  { id: "high", floor: 0.55 },
+  { id: "medium", floor: 0.38 },
+  { id: "low", floor: 0 },
+]);
+
+/**
+ * Which band a score falls in.
+ * @param score - a rank score, 0..1.
+ * @returns "high" | "medium" | "low", or null when there is no score to band.
+ */
+export function strengthOf(score) {
+  const value = Number(score);
+  // NULL, NOT "low". A card that has never been scored — `scored_at` is NULL
+  // and `rank_score` defaults to 0 — is not a weak claim, it is an unmeasured
+  // one, and a page that prints 低 over it reports a verdict nobody reached.
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return STRENGTH_BANDS.find((band) => value >= band.floor)?.id ?? "low";
+}
