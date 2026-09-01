@@ -8345,11 +8345,13 @@ window.__ModuleLoader__.load({
 							}, "rank")
 						]
 					}, "top"),
-					// THE CLAIM, AT THE SIZE THE REFERENCE SETS IT. It was FONT.bodyMedium
-					// — the same 13px as the fields around it — which made the one
-					// sentence the card exists to carry indistinguishable from its meta.
+					// THE CLAIM, AT THE SIZE THE REFERENCE SETS IT: 16px semibold, with
+					// the line opened up. It was 13px and then 14px — the same size as
+					// the fields around it — which left the one sentence the card exists
+					// to carry indistinguishable from its own metadata. A card whose
+					// every line is the same size has no first line.
 					jsx("p", {
-						style: { font: FONT.baseStrong, color: INK.primary, margin: 0 },
+						style: { font: FONT.largeStrong, lineHeight: 1.45, color: INK.primary, margin: 0 },
 						children: String(row.statement ?? "")
 					}, "statement"),
 					...evidence.slice(0, 3).map((piece, at) => InsightQuote({ piece, zh, onOpenMoment }, `q${at}`)),
@@ -8446,8 +8448,13 @@ window.__ModuleLoader__.load({
 					// the fields around it. See SERIF.
 					jsx("p", {
 						style: {
-							margin: 0, font: FONT.base, fontFamily: SERIF,
-							fontStyle: "italic", color: INK.secondary,
+							// 16px AND A 1.65 LINE. `font` is a shorthand and resets the
+							// leading, so the longhand has to come after it — the same trap
+							// COUNT_CHIP's docblock records one screen over. Set at 14 on
+							// the token's own tight leading, a three-line quote read as a
+							// block of grey rather than as somebody talking.
+							margin: 0, font: FONT.large, fontFamily: SERIF,
+							lineHeight: 1.65, fontStyle: "italic", color: INK.secondary,
 							// A QUOTE OFF A PAPER RUNS LONG AND OFTEN CARRIES AN IDENTIFIER
 							// WITH NO SPACES IN IT, which pushes the card past its column.
 							overflowWrap: "anywhere"
@@ -8783,8 +8790,14 @@ window.__ModuleLoader__.load({
 						// its own pixels there drifts a step at a time. Four figures with
 						// a full step between them read as a strip without the rules.
 						style: {
-							display: "flex", flexWrap: "wrap", gap: SPACE.xl,
-							padding: CARD_PAD, border: `1px solid ${LINE.hair}`,
+							// A GRID THAT FILLS THE WIDTH, not a flex row huddled at the
+							// left. Four figures with 24px between them inside 20px of
+							// padding stood over a hundred pixels tall and left two thirds
+							// of the band empty — a slab of air for four small numbers, on
+							// a pane whose whole job is the list under it.
+							display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))",
+							gap: SPACE.sm, padding: `${SPACE.md} ${SPACE.lg}`,
+							border: `1px solid ${LINE.hair}`,
 							borderRadius: RADIUS.lg, background: SURFACE.card
 						},
 						children: [
@@ -8794,12 +8807,12 @@ window.__ModuleLoader__.load({
 							{ zh: "还没读到", en: "not yet read", value: last.backlog ?? 0, tone: TONE.warn }
 						].map((cell) => jsxs("div", {
 							style: {
-								display: "flex", flexDirection: "column", gap: SPACE.xs, minWidth: "96px"
+								display: "flex", flexDirection: "column", minWidth: 0
 							},
 							children: [
 								jsx("div", {
 									style: {
-										font: FONT.largeStrong,
+										font: FONT.baseStrong,
 										// TABULAR, because these four are read down a row and a 1 that
 										// is narrower than a 7 makes them look ragged rather than aligned.
 										fontVariantNumeric: "tabular-nums",
@@ -8849,9 +8862,13 @@ window.__ModuleLoader__.load({
 						style: { display: "flex", alignItems: "baseline", gap: SPACE.sm, flexWrap: "wrap" },
 						children: [
 							jsx("h3", {
-								style: { font: FONT.baseStrong, margin: 0, color: INK.primary },
-								children: zh ? `主张 · 共 ${total} 条` : `Claims · ${total}`
+								style: { font: FONT.largeStrong, margin: 0, color: INK.primary },
+								children: zh ? "主张" : "Claims"
 							}, "title"),
+							jsx("span", {
+								style: { font: FONT.micro, color: INK.quiet, fontFamily: MONO },
+								children: zh ? `共 ${total} 条` : `${total} total`
+							}, "total"),
 							...Object.entries(INSIGHT_STATUS_FACES)
 								.filter(([id]) => Number(counts?.[id] ?? 0) > 0)
 								.map(([id, face]) => jsx("span", {
@@ -8875,18 +8892,32 @@ window.__ModuleLoader__.load({
 						return jsxs("section", {
 							style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
 							children: [
+								// A BAR, A NAME AND A COUNT, over a rule. This was a 12px
+								// uppercase letter-spaced word in the group's colour — which
+								// is a colour you have to look for, at a size that put the
+								// heading BELOW the cards it heads in the reading order the
+								// eye actually uses.
 								jsxs("div", {
-									style: { display: "flex", alignItems: "baseline", gap: SPACE.sm },
+									style: {
+										display: "flex", alignItems: "center", gap: SPACE.sm,
+										paddingBottom: SPACE.xs, borderBottom: `1px solid ${LINE.hair}`
+									},
 									children: [
 										jsx("span", {
 											style: {
-												font: FONT.smallStrong, letterSpacing: TRACK_WIDE,
-												textTransform: "uppercase",
-												color: face === null ? INK.secondary : `rgb(${face.hue})`
-											},
+												flex: "none", width: "3px", alignSelf: "stretch",
+												borderRadius: RADIUS.sm,
+												background: face === null ? LINE.hair : `rgb(${face.hue})`
+											}
+										}, "bar"),
+										jsx("span", {
+											style: { font: FONT.largeStrong, color: INK.primary },
 											children: face === null ? String(id) : (zh ? face.zh : face.en)
 										}, "name"),
-										jsx("span", { style: { ...COUNT_CHIP, flex: "none" }, children: String(held.length) }, "n")
+										jsx("span", {
+											style: { marginLeft: "auto", flex: "none", font: FONT.micro, color: INK.quiet, fontFamily: MONO },
+											children: zh ? `${held.length} 条` : String(held.length)
+										}, "n")
 									]
 								}, "head"),
 								...held.map((row) => InsightCard({
@@ -9136,7 +9167,12 @@ window.__ModuleLoader__.load({
 										placeholder: zh ? "按课题搜索…" : "Search by topic…",
 										"aria-label": zh ? "搜索任务" : "Search missions",
 										className: "swm-focus",
-										style: { ...SEARCH_STYLE, height: CONTROL.md, width: "100%", margin: `0 0 ${SPACE.md}` },
+										// NO `width: 100%` AND NO MARGIN OF ITS OWN. Both are left
+										// over from when this field WAS the row: at full width it
+										// pushed 刷新 and 新建任务 onto a second line and left a band
+										// of dead space beside itself — a whole row of height spent
+										// on nothing, reading as a layout that had broken.
+										style: { ...SEARCH_STYLE, height: CONTROL.md, flex: 1, minWidth: "200px" },
 										onChange: (event) => { setSearch(event.target.value); }
 									}, "search"),
 										jsxs("div", {
