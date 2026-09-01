@@ -46,3 +46,28 @@ test("a cache hit is not evidence of a loop", () => {
       + "pages, so three cached fetches in a row read as a loop to a rule that cannot see the flag",
   );
 });
+
+test("the proxy does not relay this hop's own body handshake", () => {
+  // `expect: 100-continue` is a negotiation between a client and the server it
+  // is talking to — "may I send the body?" — answered with a 100 Continue
+  // before the body is written. The proxy IS that server for the leg carrying
+  // it, and Node's http server already answers it. Copied onto the outbound
+  // fetch it asks undici to conduct a handshake it does not implement: the
+  // request fails with a bare "fetch failed", which the proxy then reports as
+  // "cannot reach the library" — blaming the far end for a header the near end
+  // added.
+  //
+  // MEASURED AND NOT EXOTIC. Every .NET client sends it by default, and curl
+  // adds it for bodies over about a kilobyte. It broke every POST with a body
+  // from a .NET caller outright while the identical request without it
+  // answered 200.
+  const source = readFileSync(new URL("../lib/remote.js", import.meta.url), "utf8");
+  const block = /const HOP_BY_HOP = new Set\(\[([\s\S]*?)\]\);/.exec(source);
+  assert.notEqual(block, null, "HOP_BY_HOP is gone from lib/remote.js");
+  assert.match(block[1], /"expect"/, "the proxy relays expect: 100-continue, which undici cannot honour");
+  // The rest of the list is what makes this a hop-by-hop drop rather than one
+  // special case: losing any of these breaks a different transport promise.
+  for (const name of ["connection", "transfer-encoding", "host", "upgrade"]) {
+    assert.match(block[1], new RegExp(`"${name}"`), `${name} fell out of the hop-by-hop list`);
+  }
+});

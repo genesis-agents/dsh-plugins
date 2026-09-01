@@ -31,6 +31,25 @@ import { PLUGIN_CHANNEL, PLUGIN_VERSION, versionLabel } from "./version.js";
 const HOP_BY_HOP = new Set([
   "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
   "te", "trailer", "transfer-encoding", "upgrade", "host",
+  // `expect: 100-continue` IS THIS HOP'S HANDSHAKE AND MUST NOT BE RELAYED.
+  //
+  // It is a negotiation between a client and the server it is talking to —
+  // "may I send the body?" — answered with a 100 Continue before the body is
+  // written. This proxy IS that server for the leg that carries it, and Node's
+  // http server already answers it. Copying it onto the outbound `fetch` asks
+  // undici to conduct a handshake it does not implement, and the whole request
+  // fails with a bare "fetch failed" — which this file then reports as
+  // "cannot reach the library", blaming the far end for a header the near end
+  // added.
+  //
+  // MEASURED, and it is not exotic. Every .NET client sends it by default
+  // (`ServicePointManager.Expect100Continue` is true), and curl adds it for any
+  // body over about a kilobyte. So this broke every POST with a body from a
+  // .NET caller outright, and would have broken a large enough scope from
+  // anything — while the same request without the header, and every GET,
+  // worked perfectly. Diagnosed by sending one request twice, identical but
+  // for this header: 200 without it, 502 with it.
+  "expect",
 ]);
 
 /**
