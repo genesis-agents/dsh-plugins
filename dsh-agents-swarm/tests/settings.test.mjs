@@ -248,6 +248,19 @@ function captureFactory() {
     // The page builds absolute URLs from this (the RSS address it shows you).
     location: { origin: "http://127.0.0.1:3080", href: "http://127.0.0.1:3080/" },
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    // THE VIDEO READER LISTENS TO ITS PLAYER. `DetailView` talks to the
+    // YouTube iframe over `postMessage` and hears the position back on a
+    // `window` message listener — so without these the whole video branch
+    // throws on mount, which is why no test had ever mounted it.
+    listeners: new Map(),
+    addEventListener(name, fn) {
+      const held = this.listeners.get(name) ?? [];
+      held.push(fn);
+      this.listeners.set(name, held);
+    },
+    removeEventListener(name, fn) {
+      this.listeners.set(name, (this.listeners.get(name) ?? []).filter((one) => one !== fn));
+    },
   };
   const document = {
     documentElement: { lang: "zh-CN" },
@@ -500,8 +513,8 @@ const INSIGHTS = {
         quote: "And it's like it takes the exact same amount of compute.",
         sourceKey: "youtube.com", type: "YOUTUBE_VIDEO", resourceType: "YOUTUBE_VIDEO",
         title: "Why AI Demand Is Outrunning Compute Supply",
-        sourceUrl: "https://www.youtube.com/watch?v=abc123",
-        at: 1936, atUrl: "https://www.youtube.com/watch?v=abc123&t=1936s",
+        sourceUrl: "https://www.youtube.com/watch?v=zKr63omJg_c",
+        at: 1936, atUrl: "https://www.youtube.com/watch?v=zKr63omJg_c&t=1936s",
       }],
     },
     {
@@ -1589,6 +1602,16 @@ function stubFetch(overrides = {}) {
       return ok({ title: "Scaling test-time compute", markdown: "An abstract of the paper the quote came from.", text: "An abstract." });
     }
 
+    // THE ROW THE READER OPENS. `▶ 32:16` no longer leaves for youtube.com —
+    // it opens the library's own video reader, which needs the resource.
+    if (address.includes("/resources/vid-1")) {
+      return ok({
+        id: "vid-1", type: "YOUTUBE_VIDEO",
+        title: "Why AI Demand Is Outrunning Compute Supply",
+        sourceUrl: "https://www.youtube.com/watch?v=zKr63omJg_c",
+        publishedAt: "2026-08-30T12:00:00.000Z",
+      });
+    }
     if (address.includes("/insights/list")) return ok(INSIGHTS);
     if (address.includes("/insights/status")) return ok(INSIGHT_STATUS);
     if (address.includes("/missions/list")) {
@@ -2138,11 +2161,11 @@ test("a row that says running with nothing running it says so", async () => {
   assert.ok(!live.includes("本进程没有在跑它"), "a live mission is reported as an orphan");
 });
 
-test("a claim off a talk carries the second it was said at, and it opens there", async () => {
-  // THE SOURCE OF A SPOKEN CLAIM IS A SECOND, NOT A VIDEO. An hour of
-  // interview is not a citation of one sentence — it hands the reader the
-  // search problem back. The server matches the quote against the stored
-  // cues and hands down `atUrl`; this is the half that draws it.
+test("a claim off a talk opens the library's own reader at that second", async () => {
+  // THE SOURCE OF A SPOKEN CLAIM IS A SECOND, NOT A VIDEO — and not a tab on
+  // youtube.com either. The library holds this video, its transcript and the
+  // notes taken against it; a timestamp that leaves for the publisher hands
+  // all of that back and lands the reader somewhere they cannot ask anything.
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
   await view.act(() => { button(view.tree, "信源洞察").props.onClick(); });
@@ -2150,33 +2173,42 @@ test("a claim off a talk carries the second it was said at, and it opens there",
 
   // THE QUOTE IS DRAWN FULL. Every other field on the card is a machine's
   // judgement; the quote is the one thing a reader can check them against.
-  assert.ok(
-    text.includes("takes the exact same amount of compute"),
-    "the card does not carry the verbatim quote",
-  );
+  assert.ok(text.includes("takes the exact same amount of compute"), "the card does not carry the verbatim quote");
   assert.ok(text.includes("同规模开源 token"), "the claim itself is not on the card");
+  // AND THE TALK IS NAMED, not clipped to a monospace stub. That line was
+  // the only place the source appeared.
+  assert.ok(text.includes("Why AI Demand Is Outrunning Compute Supply"), "the video is not named on the card");
 
-  // ▶ 32:16, AND IT IS A LINK THAT OPENS THERE.
-  const jump = find(view.tree, (node) => node.type === "a"
-    && typeof node.props?.href === "string" && node.props.href.includes("t=1936s"));
-  assert.ok(jump, "the quote carries no link into the video at the second it was said");
-  assert.equal(textOf(jump).join("").includes("32:16"), true, `the timestamp is not written the way a player writes it: ${textOf(jump).join("")}`);
-  assert.equal(jump.props.target, "_blank", "the jump replaces the page the reader is on");
-
-  // AND A PAPER GETS NONE. There is no second to point at, and a link that
-  // claimed one would be pointing at nothing.
-  assert.ok(text.includes("factual inaccuracy"), "the paper-backed claim is missing");
+  // ▶ 32:16 IS A CONTROL, and it opens the reader rather than leaving.
+  const jump = find(view.tree, (node) => node.type === "button"
+    && textOf(node).some((piece) => piece.includes("32:16")));
+  assert.ok(jump, "the quote carries no way into the video at the second it was said");
   assert.equal(
     findAll(view.tree, (node) => node.type === "a"
-      && typeof node.props?.href === "string" && node.props.href.includes("t=")).length, 1,
-    "something other than the talk was given a timestamp",
+      && typeof node.props?.href === "string" && node.props.href.includes("t=1936s")).length, 0,
+    "the timestamp still leaves for youtube.com",
   );
 
-  // THE PASS'S OWN ARITHMETIC, as figures rather than as a sentence — and
-  // the backlog among them, because a table built from 200 rows out of
-  // 21117 is a different object from one built from all of them.
-  assert.ok(text.includes("21.1k") || text.includes("21117"), "the pane does not say how much of the library is unread");
-  assert.ok(text.includes("定时未开启"), "a table last written by a manual run reads as a live one");
+  await view.act(() => { jump.props.onClick(); });
+  const reader = textOf(view.tree).join(" ");
+  assert.ok(reader.includes("Why AI Demand Is Outrunning Compute Supply"), "the reader did not open on the video");
+  // THE CLOCK IS SEEDED, so the transcript highlights the right block on the
+  // first paint rather than jumping once the player answers.
+  const frame = find(view.tree, (node) => node.type === "iframe"
+    && String(node.props?.src ?? "").includes("youtube.com/embed/"));
+  assert.ok(frame, "the reader opened without a player");
+  // AND THE CLAIM LIST IS BEHIND IT, not under it: the reader takes the pane
+  // the way 信源 switches into its own, because a video beside its transcript
+  // needs the width.
+  assert.ok(!reader.includes("同规模开源 token"), "the reader opened over the top of the claim list rather than taking the pane");
+  assert.ok(reader.includes("返回"), "there is no way back to the claim that sent you");
+
+  // AND A PAPER GETS NO SUCH CONTROL. There is no second to arrive at.
+  assert.equal(
+    findAll(view.tree, (node) => node.type === "button"
+      && textOf(node).some((piece) => piece.includes("▶"))).length, 0,
+    "the reader is showing a claim's timestamp control over the top of itself",
+  );
 });
 
 test("洞察 is two kinds, and the strip is how you get between them", async () => {

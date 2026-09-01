@@ -6278,12 +6278,18 @@ window.__ModuleLoader__.load({
 		* upstream's `handleResourceClick` flips `viewMode` to `detail`, so the
 		* sidebar and the swarm tabs never move.
 		*/
-		function DetailView({ row, kind, zh, onBack }) {
+		// `startAt` OPENS IT AT A SECOND. A claim on the 信源洞察 pane names the
+		// moment its quote was spoken, and the only useful thing to do with that
+		// is arrive there — in this reader, beside the transcript and the notes,
+		// rather than on youtube.com with the library left behind.
+		function DetailView({ row, kind, zh, onBack, startAt }) {
 			const videoId = youTubeVideoId(row.sourceUrl);
 			const isVideo = videoId !== undefined;
 			const [tab, setTab] = useState(isVideo ? "transcript" : "chat");
 			const [collapsed, setCollapsed] = useState(false);
-			const [currentTime, setCurrentTime] = useState(0);
+			// SEEDED FROM `startAt`, so the transcript highlights the right block
+			// on the first paint rather than jumping to it once the player answers.
+			const [currentTime, setCurrentTime] = useState(Number.isFinite(startAt) ? startAt : 0);
 			const playerRef = useRef(null);
 			const frameRef = useRef(null);
 
@@ -6312,7 +6318,13 @@ window.__ModuleLoader__.load({
 					try {
 						const parsed = JSON.parse(event.data);
 						const seconds = parsed?.info?.currentTime;
-						if (typeof seconds === "number") setCurrentTime(seconds);
+						if (typeof seconds === "number") {
+							// THE PLAYER IS PLAYING, so the seek above has landed and does
+							// not need repeating — repeating it would drag the viewer back
+							// to the timestamp every 400ms while they tried to scrub.
+							if (seconds > 0) arrived.current = true;
+							setCurrentTime(seconds);
+						}
 					} catch {
 						// Not a player frame message.
 					}
@@ -6349,6 +6361,25 @@ window.__ModuleLoader__.load({
 					clearInterval(handshake);
 				};
 			}, [isVideo, row.id]);
+
+			// AND THE SEEK WAITS FOR THE PLAYER TO EXIST. `seekTo` sent before the
+			// iframe has loaded is dropped silently — the video then opens at zero
+			// and the reader looks like it ignored the timestamp that opened it.
+			// Sent once per mount, on a short retry, and stopped as soon as the
+			// player reports a position of its own.
+			const arrived = useRef(false);
+			useEffect(() => {
+				if (!isVideo || !Number.isFinite(startAt) || startAt <= 0) return undefined;
+				arrived.current = false;
+				const timer = setInterval(() => {
+					if (arrived.current) { clearInterval(timer); return; }
+					command("seekTo", [startAt, true]);
+				}, 400);
+				timer.unref?.();
+				const stop = setTimeout(() => { clearInterval(timer); }, 8000);
+				stop.unref?.();
+				return () => { clearInterval(timer); clearTimeout(stop); };
+			}, [isVideo, startAt, command, row.id]);
 
 			const seek = useCallback((seconds) => {
 				command("seekTo", [seconds, true]);
@@ -8263,7 +8294,7 @@ window.__ModuleLoader__.load({
 		* @param key - React key.
 		* @returns the card.
 		*/
-		function InsightCard({ row, zh, onPin, busy }, key) {
+		function InsightCard({ row, zh, onPin, busy, onOpenMoment }, key) {
 			const kind = INSIGHT_KIND_FACES[row.kind] ?? null;
 			const face = INSIGHT_STATUS_FACES[row.effectiveStatus] ?? INSIGHT_STATUS_FACES.candidate;
 			const evidence = Array.isArray(row.evidencePreview) ? row.evidencePreview : [];
@@ -8321,7 +8352,7 @@ window.__ModuleLoader__.load({
 						style: { font: FONT.baseStrong, color: INK.primary, margin: 0 },
 						children: String(row.statement ?? "")
 					}, "statement"),
-					...evidence.slice(0, 3).map((piece, at) => InsightQuote({ piece, zh }, `q${at}`)),
+					...evidence.slice(0, 3).map((piece, at) => InsightQuote({ piece, zh, onOpenMoment }, `q${at}`)),
 					jsxs("div", {
 						style: {
 							display: "flex", flexWrap: "wrap", alignItems: "center",
@@ -8397,7 +8428,7 @@ window.__ModuleLoader__.load({
 		* @param key - React key.
 		* @returns the quotation.
 		*/
-		function InsightQuote({ piece, zh }, key) {
+		function InsightQuote({ piece, zh, onOpenMoment }, key) {
 			const stance = INSIGHT_STANCE_FACES[piece?.stance] ?? INSIGHT_STANCE_FACES.context;
 			const title = typeof piece?.title === "string" && piece.title !== "" ? piece.title : null;
 			const url = typeof piece?.sourceUrl === "string" && piece.sourceUrl !== "" ? piece.sourceUrl : null;
@@ -8423,45 +8454,64 @@ window.__ModuleLoader__.load({
 						},
 						children: `“${String(piece?.quote ?? "")}”`
 					}, "quote"),
+					// WHO SAID IT, AND WHERE — legibly. This was one 10px mono line:
+					// a stance word, the video's title clipped to a stub at 42
+					// characters, the bare host, and the timestamp, all the same grey.
+					// Nothing on it said "this is a talk" and the one thing worth
+					// pressing looked like punctuation.
 					jsxs("div", {
 						style: {
 							display: "flex", flexWrap: "wrap", alignItems: "center",
 							rowGap: SPACE.xs, columnGap: SPACE.sm,
-							marginTop: SPACE.xs, font: FONT.nano, color: INK.quiet, fontFamily: MONO
+							marginTop: SPACE.xs, font: FONT.micro, color: INK.secondary
 						},
 						children: [
-							jsx("span", { style: { color: `rgb(${stance.hue})` }, children: zh ? stance.zh : stance.en }, "stance"),
-							// WHO SAID IT, which for us is the page it was said on: the
-							// extractor stores no speaker, and putting a name here that
-							// nothing recorded would be the card inventing an attribution.
-							title === null ? null : jsx(url === null ? "span" : "a", {
-								...(url === null ? {} : { href: url, target: "_blank", rel: "noreferrer noopener", className: "swm-prose-a" }),
-								title,
+							// ▶ 6:40 IS THE CONTROL, so it leads and it looks like one.
+							// A claim off a talk is sourced to a second, and pressing it
+							// opens the library's own reader there — with the transcript
+							// beside it — rather than handing the reader to youtube.com
+							// and leaving everything else behind.
+							at === null ? null : jsxs("button", {
+								type: "button",
+								className: "swm-focus",
+								title: zh ? "在信源里打开这段视频，并跳到这句话" : "open this video in the library, at this moment",
 								style: {
-									...clampBox(1), maxWidth: "42ch", minWidth: 0,
-									fontFamily: "inherit", color: url === null ? INK.quiet : "var(--dsw-alias-label-link)",
-									textDecoration: "none"
+									display: "inline-flex", alignItems: "center", gap: SPACE.xs,
+									flex: "none", appearance: "none", cursor: "pointer",
+									border: `1px solid ${tint(PALETTE.red, TINT.ring)}`,
+									background: tint(PALETTE.red, TINT.soft),
+									color: `rgb(${PALETTE.red})`,
+									borderRadius: RADIUS.md, padding: `1px ${SPACE.sm}`,
+									font: FONT.microStrong, fontVariantNumeric: "tabular-nums"
 								},
+								onClick: () => { onOpenMoment?.({ resourceId: piece.resourceId, at }); },
+								children: [
+									jsx("span", { "aria-hidden": "true", children: "▶" }, "mark"),
+									jsx("span", { children: formatMoment(at) }, "at")
+								]
+							}, "at"),
+							// THE TITLE, NOT A STUB. Two lines of the real thing tells a
+							// reader which talk this is; 42 characters of monospace does
+							// not, and that was the only place the source was named.
+							title === null ? null : jsx("span", {
+								title,
+								style: { ...clampBox(1), flex: 1, minWidth: "160px", color: INK.primary },
 								children: title
 							}, "who"),
-							piece?.sourceKey === undefined || piece.sourceKey === null || piece.sourceKey === ""
-								? null
-								: jsx("span", { children: String(piece.sourceKey) }, "host"),
-							// ▶ 38:08, AND IT OPENS THERE. This is the whole reason the
-							// moment is computed: the source of a spoken claim is a second
-							// in a video, not the video.
-							at === null || piece.atUrl === null || piece.atUrl === undefined ? null : jsx("a", {
-								href: piece.atUrl,
-								target: "_blank", rel: "noreferrer noopener",
+							jsx("span", {
+								style: { flex: "none", color: `rgb(${stance.hue})` },
+								children: zh ? stance.zh : stance.en
+							}, "stance"),
+							// AND THE WAY OUT TO THE PUBLISHER, kept but demoted: the
+							// in-app reader is the answer to "where did this come from",
+							// and the original page is the answer to "and is it still
+							// there", which is a different and rarer question.
+							url === null ? null : jsx("a", {
+								href: url, target: "_blank", rel: "noreferrer noopener",
 								className: "swm-focus",
-								title: zh ? "在视频里跳到这句话" : "open the video where this is said",
-								style: {
-									fontFamily: "inherit", color: `rgb(${PALETTE.blue})`,
-									textDecoration: "none",
-									borderBottom: `1px solid ${tint(PALETTE.blue, TINT.ring)}`
-								},
-								children: `▶ ${formatMoment(at)}`
-							}, "at")
+								style: { flex: "none", fontFamily: MONO, font: FONT.nano, color: INK.quiet, textDecoration: "none" },
+								children: `${String(piece?.sourceKey ?? "")} ↗`
+							}, "host")
 						]
 					}, "by")
 				]
@@ -8496,6 +8546,13 @@ window.__ModuleLoader__.load({
 			const [search, setSearch] = useState("");
 			const [asked, setAsked] = useState("");
 			const [kind, setKind] = useState("");
+			// THE MOMENT A READER ASKED TO ARRIVE AT: `{ resourceId, at }`, or null.
+			// The row is fetched when one is chosen rather than held for every card
+			// on the page — sixty claims would be sixty resource reads for a reader
+			// who opens none of them.
+			const [moment, setMoment] = useState(null);
+			const [opened, setOpened] = useState(null);
+			const [opening, setOpening] = useState("");
 
 			// The same quarter second the mission search waits, and for the same
 			// reason: `q` reaches a LIKE that cannot use an index.
@@ -8526,6 +8583,30 @@ window.__ModuleLoader__.load({
 					.catch((cause) => { if (alive) setError(String(cause?.message ?? cause)); });
 				return () => { alive = false; };
 			}, [asked, kind, tick]);
+
+			useEffect(() => {
+				if (moment === null) { setOpened(null); setOpening(""); return undefined; }
+				let alive = true;
+				setOpening(moment.resourceId);
+				fetch(`${apiBase()}/resources/${encodeURIComponent(moment.resourceId)}`)
+					.then(missionData)
+					.then((data) => {
+						if (!alive) return;
+						// THE ROUTE ANSWERS THE ROW ITSELF OR WRAPS IT; both shapes are
+						// read because guessing wrong here is a reader that opens on a
+						// blank panel with nothing saying why.
+						const row = data?.resource ?? data;
+						setOpened(row !== null && typeof row === "object" && typeof row.id === "string" ? row : null);
+						setOpening("");
+					})
+					.catch((cause) => {
+						if (!alive) return;
+						setError(String(cause?.message ?? cause));
+						setMoment(null);
+						setOpening("");
+					});
+				return () => { alive = false; };
+			}, [moment]);
 
 			/** Hand one card a verdict, or hand it back to the pass. */
 			const pin = useCallback(async (id, wanted) => {
@@ -8562,6 +8643,20 @@ window.__ModuleLoader__.load({
 				}
 			}, []);
 
+			// THE READER TAKES THE PANE, the way 信源 switches into its own: a
+			// video beside its transcript needs the width, and a drawer over a
+			// list of claims would give it a third of one. 返回 comes back to the
+			// claim that sent you, because the list has not moved.
+			if (opened !== null && moment !== null) {
+				return jsx(DetailView, {
+					row: opened,
+					kind: KINDS.find((one) => one.type === opened.type) ?? KINDS[0],
+					zh,
+					startAt: moment.at,
+					onBack: () => { setMoment(null); }
+				}, "reader");
+			}
+			if (opening !== "") return jsx(Skeleton, { rows: 6 }, "opening");
 			if (error !== "" && rows === null) return jsx(ErrorBox, { message: error, zh }, "err");
 			if (rows === null) return jsx(Skeleton, { rows: 5 }, "load");
 
@@ -8795,7 +8890,7 @@ window.__ModuleLoader__.load({
 									]
 								}, "head"),
 								...held.map((row) => InsightCard({
-									row, zh, busy: busy === row.id,
+									row, zh, busy: busy === row.id, onOpenMoment: setMoment,
 									onPin: (wanted) => { void pin(row.id, wanted); }
 								}, row.id))
 							]

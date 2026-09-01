@@ -61,6 +61,25 @@ function ramp() {
   return found;
 }
 
+test("the reader opens at the second it was asked for", () => {
+  // THE SEED AND THE SEEK ARE TWO HALVES AND BOTH ARE NEEDED. `currentTime`
+  // seeded from `startAt` is what makes the transcript highlight the right
+  // block on the FIRST paint; the `seekTo` is what moves the player. With
+  // only the seed the video plays from zero under a correctly-highlighted
+  // transcript, which is the most confusing of the three possible states.
+  const reader = code(body("function DetailView("));
+  assert.match(
+    reader, /useState\(Number\.isFinite\(startAt\) \? startAt : 0\)/u,
+    "the reader no longer seeds its clock from the moment it was opened at",
+  );
+  assert.match(reader, /command\("seekTo", \[startAt, true\]\)/u, "the player is never told to go there");
+  // AND THE RETRY STOPS. `seekTo` before the iframe has loaded is dropped
+  // silently, so it is repeated — and a repeat that never stopped would drag
+  // the viewer back to the timestamp every 400ms while they tried to scrub.
+  assert.match(reader, /if \(arrived\.current\) \{ clearInterval\(timer\); return; \}/u, "the seek retry never stops");
+  assert.match(reader, /if \(seconds > 0\) arrived\.current = true;/u, "nothing marks the player as having arrived");
+});
+
 test("one card, one hue, and the kind is still said in words", () => {
   // A COLUMN OF TWENTY SOURCES WAS TWENTY DIFFERENTLY-COLOURED OBJECTS.
   // The card took `hue(kind)` in three places — the thumbnail tile, the
