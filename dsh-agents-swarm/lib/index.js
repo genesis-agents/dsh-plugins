@@ -17,7 +17,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { SourceStore, RESOURCE_TYPES } from "./store.js";
-import { COLLECTORS, runCollector } from "./collect.js";
+import { COLLECTORS, DEFAULT_COLLECT_INTERVAL_MINUTES, runCollector } from "./collect.js";
 import { registerLibraryTool } from "./tool.js";
 import { resolveTranscript, listCaptionTracks, transcriptFromXml, fetchVideoDetails, supadataKeys } from "./transcript.js";
 import { translateBatch, isSupportedLanguage, BATCH_SIZE, TARGET_LANGUAGES } from "./translate.js";
@@ -261,7 +261,7 @@ const DEFAULT_JOBS = [
 // any of these feeds publish. It is on by default because a source library
 // that only holds what was migrated into it stops being a source library the
 // day after the migration.
-const DEFAULT_COLLECT_INTERVAL_MINUTES = 60;
+
 
 /** Shortest interval accepted, so a misconfiguration cannot hammer a provider. */
 const MIN_COLLECT_INTERVAL_MINUTES = 15;

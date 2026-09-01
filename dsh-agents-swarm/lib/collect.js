@@ -121,6 +121,24 @@ export function isShortFormVideo(url) {
   return /^https?:\/\/(?:www\.)?youtube\.com\/shorts\//i.test(String(url));
 }
 
+/**
+ * How often collection runs when nobody has said otherwise.
+ *
+ * LIVES HERE AND IS EXPORTED, because two files need to agree on it and one of
+ * them cannot import the other. index.js reads it as the fallback for the
+ * stored setting and the 洞察 router puts the effective value on the wire so
+ * the page can warn when the insight pass has no tick to ride.
+ *
+ * TYPED A SECOND TIME IT COST A FALSE ALARM. The router wrote its own fallback
+ * of 0, so an installation that had simply never touched the setting — which
+ * is every installation collecting happily at the default — reported
+ * "collectIntervalMinutes: 0", and the pane told its reader that collection was
+ * off and their schedule would never fire. The setting was unset, not zero, and
+ * unset means this number. A default is a fact about one system; written down
+ * twice it is two systems that agree until somebody edits one.
+ */
+export const DEFAULT_COLLECT_INTERVAL_MINUTES = 60;
+
 /** Below this a video is a clip, a trailer or an announcement. */
 export const MIN_VIDEO_SECONDS = 20 * 60;
 

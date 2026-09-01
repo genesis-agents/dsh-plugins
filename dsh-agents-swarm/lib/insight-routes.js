@@ -29,7 +29,7 @@
 
 import { INSIGHT_KINDS, INSIGHT_STATUSES, PASS_STATES, openInsightStore } from "./insight-store.js";
 import { RESOURCE_TYPES } from "./store.js";
-import { MIN_VIDEO_SECONDS } from "./collect.js";
+import { DEFAULT_COLLECT_INTERVAL_MINUTES, MIN_VIDEO_SECONDS } from "./collect.js";
 import { MIN_INSIGHT_INTERVAL_MINUTES, pickCandidates, readInsightConfig, runInsightPass, topUpTranscripts } from "./insight-extract.js";
 import { withMoments } from "./insight-moment.js";
 import { STRENGTH_BANDS, strengthOf } from "./insights.js";
@@ -807,7 +807,12 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
           // Read straight off the store rather than through `readConfig`:
           // importing index.js here would close a cycle — index.js is what
           // mounts this router.
-          collectIntervalMinutes: Number(store.getSetting("collectIntervalMinutes", 0)),
+          // THE SAME FALLBACK index.js USES, imported rather than retyped. This
+          // read `0`, so an installation that had never touched the setting —
+          // which is every installation collecting happily at the default —
+          // reported collection as OFF, and the pane told its reader their
+          // schedule would never fire. Unset is not zero; unset is this number.
+          collectIntervalMinutes: Number(store.getSetting("collectIntervalMinutes", DEFAULT_COLLECT_INTERVAL_MINUTES)),
           // The floor `writeConfig` enforces, so the picker offers what the
           // validator accepts instead of finding out by being refused. A page
           // that has to guess a bound is a page that guesses it wrong the

@@ -11,6 +11,7 @@
  */
 
 import { strict as assert } from "node:assert";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { join } from "node:path";
 
@@ -134,4 +135,35 @@ test("an hourly re-collection does not erase a length it did not fetch", (t) => 
   store.put({ ...row, durationSeconds: 4200 });
   store.put(row);
   assert.equal(store.get("v2").durationSeconds, 4200, "the next poll erased the length");
+});
+
+test("a setting's default is written down once", () => {
+  // COST A FALSE ALARM, TWICE REPORTED TO A PERSON. The 洞察 router wrote its
+  // own fallback of 0 for `collectIntervalMinutes`, so an installation that had
+  // never touched the setting — which is every installation collecting happily
+  // at the default — reported collection as OFF. The pane then warned that the
+  // insight schedule would never fire, and the answer to "why is nothing
+  // running" was a number this program had invented about itself.
+  //
+  // Unset is not zero. Unset is the default, and the default is one fact about
+  // one system: written down twice it is two systems that agree until somebody
+  // edits one.
+  const collect = readFileSync(new URL("../lib/collect.js", import.meta.url), "utf8");
+  const routes = readFileSync(new URL("../lib/insight-routes.js", import.meta.url), "utf8");
+  const index = readFileSync(new URL("../lib/index.js", import.meta.url), "utf8");
+  assert.match(collect, /export const DEFAULT_COLLECT_INTERVAL_MINUTES/, "the default has left its owning module");
+  for (const [name, source] of [["insight-routes.js", routes], ["index.js", index]]) {
+    assert.equal(
+      /const DEFAULT_COLLECT_INTERVAL_MINUTES\s*=/.test(source),
+      false,
+      `${name} declares its own copy of the collection default`,
+    );
+    assert.match(source, /DEFAULT_COLLECT_INTERVAL_MINUTES/, `${name} does not use the shared default at all`);
+  }
+  // And specifically: no reader of this setting may pass a literal fallback.
+  assert.equal(
+    /getSetting\("collectIntervalMinutes",\s*\d/.test(routes + index),
+    false,
+    "a reader of collectIntervalMinutes falls back to a typed-in number instead of the shared default",
+  );
 });
