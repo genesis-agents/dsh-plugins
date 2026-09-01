@@ -6549,3 +6549,82 @@ test("every row of the trace panel declares how it is laid out", () => {
     `a child of .swt-kv declares no display, so the 94px key column lays out its whole content and wraps it there: relative line(s) ${missing.join(", ")}`,
   );
 });
+
+test("every family stack draws both scripts, and no shorthand discards one", () => {
+  // 为什么还有这么多字体不一致的地方 — and the answer was not the type scale.
+  //
+  // A FAMILY STACK IS RESOLVED PER GLYPH. The scale fixes the size and the
+  // weight of a line; which typeface draws it is decided character by
+  // character, by walking the stack until a font is found that HAS that
+  // character. A stack with no Chinese member does not fail — it silently
+  // hands every Han glyph to the browser's generic fallback, which is a face
+  // that appears nowhere else in the design. Measured before this landed:
+  // MONO named none and was set at 35 sites, at least 16 of them mixed text;
+  // SERIF named none; and the UI stack listed 'Noto Sans', which has no CJK
+  // coverage and therefore never drew a single Chinese glyph.
+  // BY LINE, not by `declaration()`: these are template strings, not object
+  // literals, and a brace-matcher would stop inside a `${…}` substitution.
+  const line = (opening) => {
+    const at = SOURCE.indexOf(opening);
+    assert.notEqual(at, -1, `${opening} is gone from lib/client.js`);
+    return SOURCE.slice(at, SOURCE.indexOf("\n", at));
+  };
+  const stacks = [["MONO", line("const MONO =")], ["SERIF", line("const SERIF =")]];
+  for (const [name, value] of stacks) {
+    assert.match(
+      value,
+      /CJK_SANS|CJK_SERIF/,
+      `${name} names no Chinese face, so every Han glyph set in it falls through to the browser's generic fallback — a typeface used nowhere else on the page, and nothing reports it`,
+    );
+  }
+  // AND THE UI STACK, which is the one every step of the scale composes.
+  const ui = SOURCE.slice(SOURCE.indexOf("--dsw-font-family:"));
+  assert.match(
+    ui.slice(0, ui.indexOf("\n")),
+    /\$\{CJK_SANS\}/,
+    "the UI family stack spells its Chinese members out by hand again; they drifted from the constant last time and the copy carried 'Noto Sans', which draws no Chinese",
+  );
+  // ONE CHINESE FACE PER ROLE, NOT ONE PER SITE. Two stacks that each name
+  // their own Han face put two different Chinese typefaces on one screen,
+  // which is the defect wearing different clothes.
+  //
+  // EXCEPT INSIDE TYPE_FACES, which is the one place alternative stacks are
+  // the POINT: 黑体 deliberately puts the CJK superfamily first so that one
+  // typeface draws both scripts, which no system stack can do. Everywhere
+  // else, a quoted Han face outside the two constants is a copy that will
+  // drift — the last one carried 'Noto Sans', which draws no Chinese at all.
+  const faces = SOURCE.indexOf("const TYPE_FACES = [");
+  // AND NOT IN A COMMENT. The docblock above CJK_SANS quotes three of these
+  // names to explain WHY they are ordered as they are, and a substring count
+  // that reads prose reports the explanation as the defect.
+  const elsewhere = (SOURCE.slice(0, faces) + SOURCE.slice(SOURCE.indexOf("];", faces)))
+    .split("\n").filter((row) => !/^\s*(\*|\/\/|\/\*)/.test(row)).join("\n");
+  for (const face of ["'PingFang SC'", "'Microsoft YaHei'", "'Songti SC'", "'Noto Sans SC'"]) {
+    const spelled = elsewhere.split(face).length - 1;
+    assert.ok(spelled <= 1, `${face} is named at ${spelled} sites outside TYPE_FACES; the Chinese face belongs to CJK_SANS or CJK_SERIF and nowhere else`);
+  }
+
+  // AND THE SHORTHAND MAY NOT SIT ABOVE THE FAMILY IT RESETS.
+  //
+  // `font` sets a family of its own, so `{ fontFamily: MONO, font: FONT.nano }`
+  // renders in the UI face and the MONO is dropped — the same trap this file
+  // already guards for line-height on .swt-clock, one property over. Measured:
+  // one site, the publisher link under a claim's evidence, which is exactly
+  // the row a reader compares against the host on every other card.
+  const inverted = [];
+  const lines = SOURCE.split("\n");
+  lines.forEach((line, at) => {
+    const window = lines.slice(at, at + 6).join(" ");
+    const object = window.slice(0, window.indexOf("}") + 1);
+    const family = object.indexOf("fontFamily:");
+    const shorthand = object.search(/\bfont: /);
+    if (family >= 0 && shorthand >= 0 && family < shorthand && line.includes("fontFamily:")) {
+      inverted.push(`${at + 1}: ${line.trim().slice(0, 90)}`);
+    }
+  });
+  assert.deepEqual(
+    inverted,
+    [],
+    `a \`fontFamily\` is written above the \`font\` shorthand that resets it, so the face asked for is silently discarded:\n${inverted.join("\n")}`,
+  );
+});

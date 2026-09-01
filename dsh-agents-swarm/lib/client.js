@@ -571,7 +571,58 @@ window.__ModuleLoader__.load({
 		* rendered in the proportional face, and nothing said so. One name, and it
 		* is the one that carries its own fallbacks.
 		*/
-		const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+		/**
+		* THE CHINESE HALF OF EVERY STACK IN THIS FILE.
+		*
+		* A FAMILY STACK IS RESOLVED PER GLYPH, NOT PER ELEMENT, and that is the
+		* whole of why "字体不一致" survived a type scale. Every step of the scale
+		* fixes the SIZE and the WEIGHT of a line; which typeface actually draws
+		* it is decided character by character, by walking the stack until a font
+		* is found that HAS that character. So a sentence like
+		*
+		*   Roberto Cipollone 于 December 5, 2025 发表了论文
+		*
+		* is drawn by two different typefaces at one size, and no amount of
+		* tokenising sizes can make it look like one.
+		*
+		* WHAT CAN BE SPECIFIED IS WHICH TWO. Three things were wrong and all
+		* three were invisible because a fallback never reports itself:
+		*
+		*   - MONO named no CJK face at all, so Chinese inside a mono line fell
+		*     through to the generic `monospace` — the browser's default CJK
+		*     mono, a face that appears NOWHERE else on the page. Measured: 35
+		*     sites set MONO and at least 16 of them render mixed text.
+		*   - SERIF named none either, so a Chinese quote in the reading face
+		*     was drawn by the generic `serif`, for the same reason.
+		*   - and the UI stack listed `'Noto Sans'`, which has NO CJK coverage
+		*     and therefore never drew a single Chinese glyph, while
+		*     `'Microsoft YaHei'` — which ships Regular and Bold and nothing
+		*     between — sat ahead of the faces that do have the middle weights.
+		*     `FONT.largeStrong` is 600: the Latin half got a real Semibold and
+		*     the Chinese half got Bold, which is the mismatch on every
+		*     emphasised mixed line in this tab.
+		*
+		* SO THE ORDER IS BY WEIGHT COVERAGE. PingFang SC (macOS: six weights)
+		* and the Source Han / Noto Sans SC superfamily (nine) come before
+		* Microsoft YaHei (two), so any machine that has a face with real 500
+		* and 600 uses it, and YaHei is the floor rather than the default.
+		*/
+		const CJK_SANS = "'PingFang SC','Source Han Sans SC','Noto Sans SC','Microsoft YaHei','Hiragino Sans GB','Heiti SC'";
+
+		/** The same decision for the reading face: a Chinese SERIF, not a fallback. */
+		const CJK_SERIF = "'Songti SC','Source Han Serif SC','Noto Serif SC','SimSun','STSong'";
+
+		/**
+		* Mono where the text is DATA rather than prose.
+		*
+		* IT CARRIES THE UI'S OWN CHINESE, not a Chinese monospace. Han glyphs
+		* are full-width in every face, so they already align in columns and
+		* there is nothing for a mono CJK face to fix; what there is to fix is
+		* that the Chinese in a mono line should be the SAME Chinese as the line
+		* above it. The mono is for the Latin and the digits, which is what mono
+		* is ever for here — a host, an id, a timestamp, a tool argument.
+		*/
+		const MONO = `ui-monospace, SFMono-Regular, Menlo, Consolas, ${CJK_SANS}, monospace`;
 
 		/**
 		* A reading face, and it has exactly one caller.
@@ -588,7 +639,7 @@ window.__ModuleLoader__.load({
 		* here rather than inline at the one call site, so a second caller has
 		* something to reach for instead of pasting a stack.
 		*/
-		const SERIF = "Spectral, Georgia, \"Times New Roman\", serif";
+		const SERIF = `Spectral, Georgia, "Times New Roman", ${CJK_SERIF}, serif`;
 
 		/**
 		* A second, written the way a player writes it.
@@ -1364,7 +1415,7 @@ window.__ModuleLoader__.load({
 		*/
 		const SWM_THEME = [
 			".swm-page{",
-			"--dsw-font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei','Noto Sans',sans-serif;",
+			`--dsw-font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,${CJK_SANS},sans-serif;`,
 			"--dsw-alias-label-primary:#111827;",
 			"--dsw-alias-label-secondary:#4b5563;",
 			"--dsw-alias-label-tertiary:#9ca3af;",
@@ -1535,17 +1586,24 @@ window.__ModuleLoader__.load({
 			{
 				id: "system", zh: "系统默认", en: "System",
 				zhNote: "跟随本机界面字体", enNote: "whatever this machine draws its interface in",
-				stack: "ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei','Noto Sans',sans-serif"
+				// THE SAME STRING SWM_THEME DECLARES, and it is built from the same
+				// constant rather than typed out again — the two had already drifted:
+				// this one still carried `'Noto Sans'`, which draws no Chinese at all.
+				stack: `ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,${CJK_SANS},sans-serif`
 			},
 			{
 				id: "sans", zh: "黑体", en: "Sans",
 				zhNote: "思源黑体一系，中英同一族", enNote: "the Noto/Source grotesk, one family across both scripts",
-				stack: "'Source Han Sans SC','Noto Sans SC','PingFang SC','Microsoft YaHei','Segoe UI',ui-sans-serif,sans-serif"
+				// THE CJK FACE DRAWS BOTH SCRIPTS. That is the whole point of this
+				// option: Source Han / Noto Sans SC carry Latin as well, so a mixed
+				// line is ONE typeface instead of two — which the system stack cannot
+				// be, on any machine, however it is ordered.
+				stack: "'Source Han Sans SC','Noto Sans SC','PingFang SC',ui-sans-serif,sans-serif"
 			},
 			{
 				id: "serif", zh: "宋体", en: "Serif",
 				zhNote: "读长文更省力，界面会明显偏文档", enNote: "easier over long reports; the tab reads as a document",
-				stack: "Spectral,Georgia,'Source Han Serif SC','Noto Serif SC','Songti SC','SimSun',serif"
+				stack: `Spectral,Georgia,${CJK_SERIF},serif`
 			},
 			{
 				id: "mono", zh: "等宽", en: "Monospace",
@@ -8606,7 +8664,15 @@ window.__ModuleLoader__.load({
 							display: "flex", flexWrap: "wrap", alignItems: "center",
 							rowGap: SPACE.xs, columnGap: SPACE.md,
 							paddingTop: SPACE.sm, borderTop: `1px solid ${LINE.hair}`,
-							font: FONT.micro, color: INK.secondary, fontFamily: MONO
+							// NOT MONO, AND THE RULE IS THAT MONO DRESSES A VALUE, NEVER A
+							// LINE. This row reads "1 个独立来源 · 1 条证据 · 首见 2 小时前" —
+							// prose with numbers in it, not data — and setting the whole
+							// line in mono put its Chinese in a face used nowhere else on
+							// the page. What mono was wanted for here is that the digits
+							// line up down a column of cards, and that is what
+							// `tabular-nums` is: it evens the figures without touching the
+							// words.
+							font: FONT.micro, color: INK.secondary, fontVariantNumeric: "tabular-nums"
 						},
 						children: [
 							// INDEPENDENT SOURCES, NOT ARTICLES, and both are printed because
@@ -8804,7 +8870,11 @@ window.__ModuleLoader__.load({
 							url === null ? null : jsx("a", {
 								href: url, target: "_blank", rel: "noreferrer noopener",
 								className: "swm-focus",
-								style: { flex: "none", fontFamily: MONO, font: FONT.nano, color: INK.quiet, textDecoration: "none" },
+								// `font` FIRST. The shorthand sets a family of its own, so a
+								// `fontFamily` written ABOVE it is discarded — this line asked
+								// for mono and rendered in the UI face, which is why the host
+								// beside a claim did not match the host anywhere else.
+								style: { flex: "none", font: FONT.nano, fontFamily: MONO, color: INK.quiet, textDecoration: "none" },
 								children: `${String(piece?.sourceKey ?? "")} ↗`
 							}, "host")
 						]
@@ -22171,11 +22241,21 @@ window.__ModuleLoader__.load({
 			// set above made the whole set wait on `settings.section`, so a
 			// declaration that had not landed yet took the sidebar entry and
 			// the page down with it.
+			// NAMED AFTER THE PLUGIN, NOT AFTER ONE OF ITS PANES.
+			//
+			// This rail entry said 信源, which is the name of the pane it happened
+			// to open on — so the section that holds the typeface, the collection
+			// log and the keys announced itself as "feeds", and there was no
+			// reason for anybody to look inside it for a font. The shell offers
+			// exactly one settings slot (`settings.section`, a list, added beside
+			// Models and Appearance); a plugin cannot put a row inside DeepSeek's
+			// own 通用设置. So this entry IS the plugin's settings page, and it
+			// carries the plugin's own name — the same one the sidebar shows.
 			ctx.slots.inject("settings.section", () => ctx.slots.register({
 				name: "settings.section",
 				id: "swarm-sources",
 				order: 60,
-				label: () => (isChinese() ? "信源" : "Sources")
+				label: swarmLabel
 			}, SourcesSettings));
 		}
 		//#endregion
