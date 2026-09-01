@@ -6319,6 +6319,7 @@ test("a dimension's drawer says how it was researched, not only what it found", 
  * `new RegExp` have no backslashes to lose.
  */
 const NEWLINE = String.fromCharCode(10);
+const QUOTE = String.fromCharCode(34);
 const TAB = String.fromCharCode(9);
 const DECLARES = new RegExp("^" + TAB + TAB + "function ([A-Z]" + "\\w+)\\(", "u");
 const USES_HOOK = new RegExp("\\buse(State|Effect|LayoutEffect|Ref|Memo|Callback|SyncExternalStore)\\(", "u");
@@ -6369,5 +6370,89 @@ test("a component that holds a hook is never called as a plain function", () => 
     offenders,
     [],
     `a component holding a hook is called as a plain function, so its hooks join the caller's list and that count changes with the condition around it: ${offenders.join(", ")}`,
+  );
+});
+
+
+test("every row of the trace panel declares how it is laid out", () => {
+  // A 94px COLUMN THAT ATE ITS OWN SENTENCES, TWICE.
+  //
+  // `.swt-kv>div{display:grid;grid-template-columns:94px minmax(0,1fr)}`
+  // makes EVERY direct child of the panel a two-column row. That is right
+  // for a label/value pair and wrong for everything else: a child with no
+  // `dt` beside it lands its whole content in the 94px column and wraps
+  // there, eight characters to a line, while the rest of an 800px panel
+  // sits empty next to it.
+  //
+  // It was found once and fixed on THREE children. Two more — the
+  // degradation note and the row-number note — never got the override, and
+  // both were on screen wrapping inside 94px for as long as they existed.
+  // A fix applied by hand to the siblings someone happened to be looking at
+  // is not a fix; this is the rule those five were each obeying separately.
+  // SLICED BY INDENT, NOT BY `body()`. `body()` runs to the next brace at the
+  // MODULE's indent, which for a `const` nested inside a function is the end
+  // of that whole function — so the slice held every div after it too. That
+  // first reported four nested divs, and the depth filter added to silence
+  // them then made the whole check VACUOUS: the shallowest div in a slice that
+  // large is not a child of this list at all.
+  const all = SOURCE.split(NEWLINE);
+  const opensAt = all.findIndex((line) => line.includes('const summary = jsxs(' + QUOTE + 'dl' + QUOTE + ', {'));
+  assert.notEqual(opensAt, -1, "the trace panel's summary list is gone");
+  const indent = all[opensAt].length - all[opensAt].replace(RegExp('^' + TAB + '+', 'u'), '').length;
+  let closesAt = opensAt + 1;
+  while (closesAt < all.length) {
+    const line = all[closesAt];
+    const deep = line.length - line.replace(RegExp('^' + TAB + '+', 'u'), '').length;
+    if (line.trim() === '});' && deep === indent) break;
+    closesAt += 1;
+  }
+  assert.ok(closesAt < all.length, "the summary list never closes at its own indent");
+  const children = all.slice(opensAt, closesAt);
+  // DIRECT CHILDREN ONLY. `.swt-kv>div` is a CHILD combinator, so a div nested
+  // inside a row is laid out by its own parent and owes this nothing — and a
+  // scan that reads every line reports four of them and buries the two that
+  // matter.
+  //
+  // The direct children are the shallowest divs in the block, so the depth is
+  // measured rather than assumed: whatever indentation the file settles on,
+  // the rule is the same.
+  const depthOf = (line) => line.length - line.replace(RegExp('^' + TAB + '+', 'u'), '').length;
+  const depths = children
+    .filter((line) => line.includes('jsx(' + QUOTE + 'div' + QUOTE + ', {') || line.includes('jsxs(' + QUOTE + 'div' + QUOTE + ', {'))
+    .map(depthOf);
+  const outermost = depths.length === 0 ? 0 : Math.min(...depths);
+  const missing = [];
+  for (const [at, line] of children.entries()) {
+    if (depthOf(line) !== outermost) continue;
+    // A direct child opens a div and is not itself the `dl`.
+    const opensDiv = line.includes('jsx(' + QUOTE + 'div' + QUOTE + ', {')
+      || line.includes('jsxs(' + QUOTE + 'div' + QUOTE + ', {');
+    if (!opensDiv) continue;
+    // Its style block is the next few lines; a `dt`/`dd` pair needs no
+    // override because the grid is exactly what it wants.
+    // COMMENTS STRIPPED FIRST, and this is the sixth time this session that a
+    // check has matched the PROSE DESCRIBING a thing instead of the thing. The
+    // note above each of these styles says "`display: block`, for the reason
+    // the claim above carries" — so with the declaration deleted the comment
+    // still satisfied a plain `includes`, and the guard passed on the exact
+    // defect it was written for. Verified by deleting one.
+    const near = children.slice(at, at + 10)
+      .filter((row) => !row.trim().startsWith('//'))
+      .join(NEWLINE);
+    if (near.includes("jsx(\"dt\"")) continue;
+    if (near.includes("display:")) continue;
+    missing.push(String(at + 1));
+  }
+  // AND IT CANNOT BE VACUOUS. The claim carries `display: block` and has since
+  // the first time this was found; if the scan stops seeing it, the scan is
+  // reading the wrong lines and its silence means nothing.
+  assert.ok(
+    children.some((line) => line.includes('display: ' + QUOTE + 'block' + QUOTE)),
+    "the scan found no child declaring a display at all, so it is reading the wrong block and would pass on anything",
+  );
+  assert.deepEqual(
+    missing,
+    [],
+    `a child of .swt-kv declares no display, so the 94px key column lays out its whole content and wraps it there: relative line(s) ${missing.join(", ")}`,
   );
 });

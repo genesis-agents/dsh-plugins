@@ -9682,7 +9682,7 @@ window.__ModuleLoader__.load({
 								}, `${row.tool}-${row.at}-${at}`))
 							}, "list"),
 							jsx("div", {
-								style: { font: FONT.micro, marginTop: "6px", color: INK.secondary },
+								style: { font: FONT.micro, display: "block", marginTop: "6px", color: INK.secondary },
 								children: zh
 									? "工具调用只记了工具名、配额键和参数哈希，没有记检索词本身，所以这里给不出具体搜了什么。"
 									: "Tool calls are recorded with the tool, the pace key and a hash of the arguments — not the arguments — so the search terms themselves cannot be listed here."
@@ -10812,14 +10812,24 @@ window.__ModuleLoader__.load({
 						+ (zh ? `第 ${detail.stage.attempts} 次尝试` : `attempt ${detail.stage.attempts}`)
 						+ (detail.stage.durationMs === null || detail.stage.durationMs === undefined ? "" : ` · ${missionDuration(detail.stage.durationMs, zh)}`)),
 					(detail.stage?.degradeNote ?? "") === "" ? null : jsx("div", {
-						style: { font: FONT.small, marginTop: "4px", color: `rgb(${TONE.warn})` },
+						// `display: block`, for the reason the claim above carries: every direct
+						// child of `.swt-kv` is made a two-column grid whose first column is 94px,
+						// and a sentence with no `dt` beside it wraps INSIDE that column while the
+						// rest of the panel sits empty. Three siblings were given this override
+						// when it was first found; these two were not.
+						style: { font: FONT.small, display: "block", marginTop: "4px", color: `rgb(${TONE.warn})` },
 						children: detail.stage.degradeNote
 					}, "degrade"),
 					// A position, said to be a position. The trajectory is assembled
 					// from bounded windows over three tables, so `seq` slides when the
 					// oldest end falls off; the `ref` above is what survives.
 					jsx("div", {
-						style: { font: FONT.micro, marginTop: "6px", color: INK.secondary },
+						// `display: block`, for the reason the claim above carries: every direct
+						// child of `.swt-kv` is made a two-column grid whose first column is 94px,
+						// and a sentence with no `dt` beside it wraps INSIDE that column while the
+						// rest of the panel sits empty. Three siblings were given this override
+						// when it was first found; these two were not.
+						style: { font: FONT.micro, display: "block", marginTop: "6px", color: INK.secondary },
 						children: zh
 							? `第 ${detail.seq} 行 —— 这是当前这份快照里的位置，不是身份；身份是上面那个 ref。`
 							: `Row ${detail.seq} — a position in this snapshot, not an identity. The identity is the ref above.`
