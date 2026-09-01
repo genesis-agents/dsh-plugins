@@ -2025,6 +2025,8 @@ test("the missions pane says what it is, and can be searched", async () => {
   // left where they had always been, so the screen carried two of each,
   // forty pixels apart, doing the same thing. Counted rather than found,
   // because `button()` returns the first match and would have passed.
+  // AND THEY ARE THE MISSION HALF'S, so 信源洞察 does not carry a second 刷新
+  // over a different list beside its own.
   for (const label of ["刷新", "新建任务"]) {
     const found = findAll(view.tree, (node) => node.type === "button"
       && textOf(node).some((piece) => piece.includes(label)));
@@ -2240,6 +2242,12 @@ test("洞察 is two kinds, and the strip is how you get between them", async () 
   await view.act(() => { button(view.tree, "信源洞察").props.onClick(); });
   const library = text();
   assert.ok(!library.includes(RUNNING.topic), "the missions are still listed under 信源洞察");
+  assert.ok(!library.includes("新建任务"), "新建任务 is offered under 信源洞察, where it starts nothing");
+  assert.equal(
+    findAll(view.tree, (node) => node.type === "button"
+      && textOf(node).some((piece) => piece.includes("刷新"))).length, 1,
+    "two 刷新 buttons on one screen, refreshing two different lists",
+  );
   assert.ok(library.includes("信源洞察"), "the library pane did not mount");
   await view.act(() => { button(view.tree, "主题洞察").props.onClick(); });
   assert.ok(text().includes(RUNNING.topic), "there is no way back to the missions");

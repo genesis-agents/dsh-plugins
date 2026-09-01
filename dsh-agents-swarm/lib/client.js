@@ -9083,46 +9083,7 @@ window.__ModuleLoader__.load({
 												: "A swarm of agents researches one question end to end: dimensions, evidence, verification, and a report that cites what it rests on."
 										}, "note")
 									]
-								}, "words"),
-								jsxs("div", {
-									style: { display: "flex", alignItems: "center", gap: SPACE.sm, flex: "none" },
-									children: [
-										jsx("button", {
-											type: "button",
-											className: "swm-ctl swm-focus", style: controlStyle(),
-											onClick: () => { setTick((value) => value + 1); },
-											children: zh ? "刷新" : "Refresh"
-										}, "refresh"),
-										// THE ONE THING ON THIS SCREEN THAT MAKES SOMETHING, and it is
-										// beside the pane's name rather than at the end of a filter row.
-										// A tinted `controlStyle` rather than a tenth button geometry: the
-										// accent wash and ring are the same pair every chip in this file
-										// wears, spread over the control the row's other button already is.
-										//
-										// IT IS STILL NOT IN THE PAGE HEADER, which is where the brief put
-										// it. That header is the shell's — it serves all five tabs, TABS
-										// carries no action for any of them, and B14 wrote the reason down:
-										// a slot with one tab's button in it either shows on the four tabs
-										// it means nothing on, or teaches the header to know which tab is
-										// open and hold that tab's state.
-										jsxs("button", {
-											type: "button",
-											className: "swm-ctl swm-focus",
-											style: {
-												...controlStyle(),
-												display: "inline-flex", alignItems: "center", gap: SPACE.xs,
-												border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
-												background: tint(TONE.accent, TINT.soft),
-												color: `rgb(${TONE.accent})`
-											},
-											onClick: () => { setStartOpen(true); },
-											children: [
-												jsx(Icon, { name: "plus", size: ICON.xs }, "glyph"),
-												jsx("span", { children: zh ? "新建任务" : "New mission" }, "label")
-											]
-										}, "new")
-									]
-								}, "actions")
+								}, "words")
 							]
 						}, "head"),
 						// THE STATUS CHIPS ARE GONE. 全部 / 运行中 / 已完成 / 未签署 /
@@ -9155,20 +9116,70 @@ window.__ModuleLoader__.load({
 						// between the halves, which put a control for one of them where it read
 						// as a control for both.
 						...(pane !== "missions" ? [] : [
-							// SEARCH IS ITS OWN ROW, and full width, because it is the control a
-							// reader with forty runs reaches for first. `/missions/list` has taken a
-							// `search` since it was written and no screen ever sent one, so a person
-							// looking for the licensing run from three weeks ago had the status
-							// chips and their own scrolling.
-							jsx("input", {
-								type: "search",
-								value: search,
-								placeholder: zh ? "按课题搜索…" : "Search by topic…",
-								"aria-label": zh ? "搜索任务" : "Search missions",
-								className: "swm-focus",
-								style: { ...SEARCH_STYLE, height: CONTROL.md, width: "100%", margin: `0 0 ${SPACE.md}` },
-								onChange: (event) => { setSearch(event.target.value); }
-							}, "search"),
+							// THE SEARCH AND THE TWO ACTIONS, on one row. All three are about the
+							// mission list: 刷新 re-reads it, 新建任务 adds to it, and the field
+							// narrows it. None of them means anything with 信源洞察 open, which has
+							// its own 刷新 over a different list and its own 立即跑一次 over a pass.
+							// Two 刷新 buttons on one screen refreshing two different things is a
+							// control whose effect depends on which half you happen to be looking at.
+							jsxs("div", {
+								style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", margin: `0 0 ${SPACE.md}` },
+								children: [
+									// SEARCH IS ITS OWN ROW, and full width, because it is the control a
+									// reader with forty runs reaches for first. `/missions/list` has taken a
+									// `search` since it was written and no screen ever sent one, so a person
+									// looking for the licensing run from three weeks ago had the status
+									// chips and their own scrolling.
+									jsx("input", {
+										type: "search",
+										value: search,
+										placeholder: zh ? "按课题搜索…" : "Search by topic…",
+										"aria-label": zh ? "搜索任务" : "Search missions",
+										className: "swm-focus",
+										style: { ...SEARCH_STYLE, height: CONTROL.md, width: "100%", margin: `0 0 ${SPACE.md}` },
+										onChange: (event) => { setSearch(event.target.value); }
+									}, "search"),
+										jsxs("div", {
+											style: { display: "flex", alignItems: "center", gap: SPACE.sm, flex: "none" },
+											children: [
+												jsx("button", {
+													type: "button",
+													className: "swm-ctl swm-focus", style: controlStyle(),
+													onClick: () => { setTick((value) => value + 1); },
+													children: zh ? "刷新" : "Refresh"
+												}, "refresh"),
+												// THE ONE THING ON THIS SCREEN THAT MAKES SOMETHING, and it is
+												// beside the pane's name rather than at the end of a filter row.
+												// A tinted `controlStyle` rather than a tenth button geometry: the
+												// accent wash and ring are the same pair every chip in this file
+												// wears, spread over the control the row's other button already is.
+												//
+												// IT IS STILL NOT IN THE PAGE HEADER, which is where the brief put
+												// it. That header is the shell's — it serves all five tabs, TABS
+												// carries no action for any of them, and B14 wrote the reason down:
+												// a slot with one tab's button in it either shows on the four tabs
+												// it means nothing on, or teaches the header to know which tab is
+												// open and hold that tab's state.
+												jsxs("button", {
+													type: "button",
+													className: "swm-ctl swm-focus",
+													style: {
+														...controlStyle(),
+														display: "inline-flex", alignItems: "center", gap: SPACE.xs,
+														border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
+														background: tint(TONE.accent, TINT.soft),
+														color: `rgb(${TONE.accent})`
+													},
+													onClick: () => { setStartOpen(true); },
+													children: [
+														jsx(Icon, { name: "plus", size: ICON.xs }, "glyph"),
+														jsx("span", { children: zh ? "新建任务" : "New mission" }, "label")
+													]
+												}, "new")
+											]
+										}, "actions")
+								]
+							}, "tools"),
 							state !== "error" ? null : ErrorBox({
 								title: zh ? "任务列表加载失败" : "Could not load the missions",
 								message: error,
