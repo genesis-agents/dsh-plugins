@@ -210,3 +210,23 @@ test("a type with few candidates keeps them, instead of losing every one to a bi
   const papers = picked.filter((row) => row.type === "PAPER").map((row) => row.createdAt);
   assert.deepEqual([...papers].sort(), papers, "the papers were not taken oldest first");
 });
+
+test("the list's flat evidence gets a moment, not only the item's nested one", async () => {
+  // TWO SHAPES. `/insights/list` returns `evidencePreview` FLAT — `type`,
+  // `title`, `sourceUrl` on the row itself — and `/insights/item/<id>` nests
+  // the resource. Reading only the nested form left every row of the LIST with
+  // a null moment, which is the shape the pane renders; and the test above
+  // happened to use the nested one, so it stayed green while the page stayed
+  // empty. Measured against the real library: five of ten video quotes resolve
+  // to a second, and the page showed none of them.
+  const flat = [{
+    resourceId: "v1", stance: "supports",
+    quote: "So the economics just instantly flip.",
+    sourceKey: "youtube.com", type: "YOUTUBE_VIDEO",
+    title: "Why AI Demand Is Outrunning Compute Supply",
+    sourceUrl: "https://www.youtube.com/watch?v=abc123",
+  }];
+  const out = withMoments(flat, () => ({ cues: CUES }));
+  assert.equal(out[0].at, 757, "the list's own evidence shape resolves to no moment");
+  assert.equal(out[0].atUrl, "https://www.youtube.com/watch?v=abc123&t=757s");
+});

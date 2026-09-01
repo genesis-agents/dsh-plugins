@@ -147,8 +147,14 @@ export function withMoments(rows, transcriptOf) {
   if (!Array.isArray(rows) || rows.length === 0) return rows;
   const seen = new Map();
   return rows.map((row) => {
-    const type = String(row?.resourceType ?? row?.resource?.type ?? "").toUpperCase();
-    const url = row?.resource?.sourceUrl ?? "";
+    // TWO SHAPES, AND ONLY ONE OF THEM WAS READ. The list route's
+    // `evidencePreview` is FLAT — `type`, `title`, `sourceUrl` on the row — and
+    // the item route's `evidence` nests the resource. Reading only the nested
+    // form left the list, which is the shape the pane actually renders, with a
+    // null moment on every row; and the unit test happened to use the nested
+    // one, so it stayed green while the page stayed empty.
+    const type = String(row?.type ?? row?.resourceType ?? row?.resource?.type ?? "").toUpperCase();
+    const url = row?.sourceUrl ?? row?.resource?.sourceUrl ?? "";
     // THE TYPE GATE IS FIRST because it is free. Reading a transcript for
     // every arXiv abstract on the page would be one query per row for a
     // column that is empty on all of them.
