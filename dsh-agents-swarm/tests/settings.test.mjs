@@ -118,8 +118,36 @@ async function render(Component, props = {}) {
       if (f.slots.length <= at) f.slots[at] = { current: initial };
       return f.slots[at];
     },
-    useEffect: (fn) => { effects.push(fn); },
-    useLayoutEffect: (fn) => { effects.push(fn); },
+    // THE DEPENDENCY ARRAY, WHICH THIS HARNESS USED TO THROW AWAY.
+    //
+    // `useEffect: (fn) => effects.push(fn)` re-runs EVERY effect on EVERY
+    // pass. Two consequences, and the second is the one that matters:
+    //
+    //   - a component whose effect fetches and setStates the parsed body
+    //     never settles, because each parse is a new object. The settle
+    //     loop below then hit its pass cap and RETURNED QUIETLY, so the
+    //     test read a tree from a component that, in this harness, was
+    //     still looping.
+    //   - and therefore a real runaway effect — the kind that hangs the
+    //     browser — is indistinguishable from the harness's own churn.
+    //     Both look like "still dirty", and neither was reported.
+    //
+    // MEASURED: with the array honoured, the mission board and both its
+    // drawers settle in three passes against the live payload; without it,
+    // MissionDimensionDrawer set state on all twenty.
+    useEffect: (fn, deps) => {
+      const f = frame;
+      const at = f.cursor++;
+      const had = f.slots[at];
+      const same = had !== undefined
+        && Array.isArray(had.deps) && Array.isArray(deps)
+        && had.deps.length === deps.length
+        && had.deps.every((value, i) => Object.is(value, deps[i]));
+      // No array means every pass, as React does. An empty one means once.
+      f.slots[at] = { deps: Array.isArray(deps) ? [...deps] : null };
+      if (!same) effects.push(fn);
+    },
+    useLayoutEffect: (fn, deps) => { react.useEffect(fn, deps); },
     useSyncExternalStore: (_subscribe, snapshot) => snapshot(),
   };
 
@@ -155,6 +183,15 @@ async function render(Component, props = {}) {
       await new Promise((resolve) => setImmediate(resolve));
       if (!dirty) break;
     }
+    // NOT AN ASSERTION, AND HERE IS WHY IT CANNOT BE. "Still dirty after
+    // twenty passes" is what a runaway effect looks like — and it is also
+    // what a POLLING component looks like, because a poll never settles by
+    // design. PodcastFormat watches a job; it sets state on every pass here
+    // and is completely correct on a page.
+    //
+    // So the cap stays a cap. What changed above is the half that was
+    // wrong either way: the dependency array is honoured now, so an effect
+    // runs when React would run it rather than on every pass.
     return tree;
   };
   await settle();
