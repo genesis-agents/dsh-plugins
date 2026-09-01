@@ -2054,3 +2054,87 @@ test("the freshness floor and the watermark are different questions", (t) => {
   const wide = collectCandidates(store, config, { maxAgeDays: 3650 });
   assert.deepEqual(wide.rows.map((row) => row.id), ["archive"]);
 });
+
+/* ── novelty is about the event, not about our ingestion ───────────────── */
+
+test("an old source ingested today is not novel", () => {
+  // MEASURED ON THE LIVE TAB: a 2009-to-Frontier supercomputer comparison read
+  // 强度 强 at 0.65, which is exactly `0.30 credibility + 0.20 novelty + 0.15
+  // relevance` with each maxed — momentum is 0 because one source cannot have
+  // momentum. Novelty was `1 - days(firstSeenAt, now)/window` and `firstSeenAt`
+  // is when THIS LIBRARY first saw the claim, so an archive harvested three
+  // hours ago scored the maximum and rode 20% of the rank to the top.
+  const now = "2026-09-01T12:00:00.000Z";
+  const seenToday = "2026-09-01T09:00:00.000Z";
+  assert.equal(scoreNovelty({ publishedAt: "2009-06-01T00:00:00.000Z", firstSeenAt: seenToday, now }), 0);
+  assert.ok(scoreNovelty({ publishedAt: "2026-08-30T00:00:00.000Z", firstSeenAt: seenToday, now }) > 0.6);
+});
+
+test("an undated source falls back to when we saw it, never to zero", () => {
+  // A source with no publication date is not old, it is undated: the feed did
+  // not say. Scoring it 0 would bury every row from every feed that omits the
+  // field, permanently and invisibly.
+  const now = "2026-09-01T12:00:00.000Z";
+  const seen = "2026-09-01T09:00:00.000Z";
+  assert.ok(scoreNovelty({ publishedAt: "", firstSeenAt: seen, now }) > 0.9);
+  assert.ok(scoreNovelty({ publishedAt: undefined, firstSeenAt: seen, now }) > 0.9);
+  assert.ok(scoreNovelty({ publishedAt: "not a date", firstSeenAt: seen, now }) > 0.9);
+});
+
+test("a publication date in the future is bad data, not news", () => {
+  // Feeds carry them: a scheduled post, a timezone mistake, an outright wrong
+  // field. `daysBetween` is signed, so `1 - (-40)/7` clamps to the MAXIMUM and
+  // one malformed row would hold the top of the list for as long as its date
+  // is ahead of us.
+  const now = "2026-09-01T12:00:00.000Z";
+  const seen = "2026-05-01T00:00:00.000Z";
+  const scored = scoreNovelty({ publishedAt: "2026-10-11T00:00:00.000Z", firstSeenAt: seen, now, windowDays: 7 });
+  assert.ok(scored < 0.001, `a future date scored ${scored}; it should fall back to firstSeenAt`);
+  // A few hours ahead is a timezone, not a lie, and stays trusted.
+  assert.ok(scoreNovelty({ publishedAt: "2026-09-01T20:00:00.000Z", firstSeenAt: seen, now }) > 0.9);
+});
+
+test("the earliest publication wins, because that is when the claim entered the world", () => {
+  // The LATEST would measure activity, which is what momentum is for: a claim
+  // first published six months ago and picked up again today is persistent,
+  // not new, and the two scores exist to tell those apart.
+  const now = "2026-09-01T12:00:00.000Z";
+  const scored = scoreInsight(
+    { firstSeenAt: now, lastSeenAt: now, independentCount: 2 },
+    [
+      { stance: "supports", resourceType: "NEWS", resource: { publishedAt: "2026-03-01T00:00:00.000Z" } },
+      { stance: "supports", resourceType: "NEWS", resource: { publishedAt: "2026-09-01T00:00:00.000Z" } },
+    ],
+    { now, windowDays: 7 },
+  );
+  assert.equal(scored.novelty, 0, "the later pickup was treated as the claim's own age");
+});
+
+test("evidence reaches the score from both shapes", () => {
+  // An evidence row arrives joined to its live resource or flat, and a reader
+  // of only one of them silently scores every card as undated — the same trap
+  // `resourceTypeOf` documents one function down.
+  const now = "2026-09-01T12:00:00.000Z";
+  const flat = scoreInsight(
+    { firstSeenAt: now, lastSeenAt: now, independentCount: 1 },
+    [{ stance: "supports", resourceType: "NEWS", publishedAt: "2009-06-01T00:00:00.000Z" }],
+    { now, windowDays: 7 },
+  );
+  assert.equal(flat.novelty, 0, "a flat evidence row's publication date was ignored");
+});
+
+test("the three cards from the screenshot now sort below this week's material", () => {
+  const now = "2026-09-01T12:00:00.000Z";
+  const seenToday = "2026-09-01T09:00:00.000Z";
+  const card = (publishedAt) => scoreInsight(
+    { firstSeenAt: seenToday, lastSeenAt: seenToday, independentCount: 1 },
+    [{ stance: "supports", resourceType: "PAPER", resource: { publishedAt } }],
+    { now, windowDays: 7, dormantDays: 21, preferredResourceTypes: ["PAPER", "NEWS"] },
+  );
+  const archived = card("2009-06-01T00:00:00.000Z");
+  const fresh = card("2026-08-30T00:00:00.000Z");
+  assert.ok(archived.rank < fresh.rank, `archived ${archived.rank} did not sort below fresh ${fresh.rank}`);
+  // And it is no longer strong: one source caps it at medium, and its rank has
+  // fallen out of the high band anyway.
+  assert.equal(strengthOf(archived.rank, { independentCount: 1, minIndependent: 2 }), "medium");
+});

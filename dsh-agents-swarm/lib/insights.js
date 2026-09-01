@@ -883,6 +883,26 @@ export const CREDIBILITY_WEIGHTS = Object.freeze({
  */
 export const SCORE_WEIGHTS = Object.freeze({ momentum: 0.35, credibility: 0.30, novelty: 0.20, relevance: 0.15 });
 
+/**
+ * When the earliest of these sources was published, or an empty string.
+ *
+ * THE LADDER IS `resource.publishedAt` THEN `publishedAt`, mirroring
+ * `resourceTypeOf` one function down and for its reason: an evidence row
+ * reaches this from two shapes — joined to its live resource, or flat — and a
+ * reader of only one of them silently scores every card as undated.
+ * @param rows - evidence rows.
+ * @returns the earliest ISO stamp found, or "".
+ */
+function earliestPublication(rows) {
+  let earliest = "";
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const at = firstText(row?.resource?.publishedAt, row?.publishedAt);
+    if (at === "" || !parsesAsDate(at)) continue;
+    if (earliest === "" || at < earliest) earliest = at;
+  }
+  return earliest;
+}
+
 /** The resource type of one evidence row, whatever shape the caller has. */
 function resourceTypeOf(row) {
   // `resourceType` is the denormalised column and the answer that survives a
@@ -898,18 +918,43 @@ function credibilityWeight(type) {
 }
 
 /**
- * How new a claim is: 1 the day it is first seen, 0 a window later.
- * @param input - `{ firstSeenAt, now, windowDays }`, windowDays default 7.
+ * How new a claim is — by when the thing HAPPENED, not by when we noticed.
+ *
+ * IT USED TO MEASURE OUR INGESTION. `1 - days(firstSeenAt, now)/window`, and
+ * `firstSeenAt` is when this library first saw the claim, so a 2009
+ * supercomputer comparison extracted three hours ago scored 1 — the maximum —
+ * and rode 20% of the rank straight to the top of the tab. Measured on the live
+ * library: three such cards, all reading 0.65, which is exactly
+ * `0.30 credibility + 0.20 novelty + 0.15 relevance` with each maxed and
+ * momentum at 0 because one source cannot have momentum.
+ *
+ * A DATE IN THE FUTURE IS BAD DATA, NOT NEWS. Feeds carry them — a scheduled
+ * post, a timezone mistake, an outright wrong field — and `daysBetween` is
+ * signed, so `1 - (-40)/7` clamps to the maximum. Trusting it would let one
+ * malformed row hold the top of the list for as long as its date is in front of
+ * us. Anything more than a day ahead falls back to when we saw it, which is a
+ * claim we can actually stand behind.
+ *
+ * FALLS BACK TO `firstSeenAt`, NEVER TO ZERO. A source with no publication date
+ * is not old, it is undated: the feed did not say. Scoring it 0 would bury
+ * every row from every feed that omits the field, permanently and invisibly.
+ * @param input - `{ publishedAt, firstSeenAt, now, windowDays }`; `publishedAt`
+ *   is the earliest publication among the rows backing the claim.
  * @returns 0..1.
  */
 export function scoreNovelty(input = {}) {
-  const { firstSeenAt, now } = input;
+  const { firstSeenAt, publishedAt, now } = input;
   // 0, not 1, when a stamp will not parse. `daysBetween` answers 0 for an
   // unparseable pair, and `1 - 0/7` is the MAXIMUM — a corrupt row would pin
   // itself to the top of the default sort forever and never go dormant.
-  if (!parsesAsDate(firstSeenAt) || !parsesAsDate(now)) return 0;
+  if (!parsesAsDate(now)) return 0;
   const windowDays = Number.isFinite(input.windowDays) && input.windowDays > 0 ? input.windowDays : 7;
-  return clamp01(1 - daysBetween(firstSeenAt, now) / windowDays);
+  const published = parsesAsDate(publishedAt) && daysBetween(publishedAt, now) > -1
+    ? publishedAt
+    : "";
+  const at = published !== "" ? published : firstSeenAt;
+  if (!parsesAsDate(at)) return 0;
+  return clamp01(1 - daysBetween(at, now) / windowDays);
 }
 
 /**
@@ -987,6 +1032,12 @@ export function scoreInsight(insight, evidence, options = {}) {
   const supporting = rows.filter((row) => row?.stance === "supports");
 
   const novelty = scoreNovelty({
+    // THE EARLIEST publication among the rows that support it, because that is
+    // when the claim entered the world. The LATEST would be measuring activity,
+    // which is what momentum is for — a claim first published six months ago
+    // and picked up again today is persistent, not new, and the two scores
+    // exist to tell those apart.
+    publishedAt: earliestPublication(supporting),
     firstSeenAt: insight?.firstSeenAt,
     now: options.now,
     windowDays: options.windowDays,

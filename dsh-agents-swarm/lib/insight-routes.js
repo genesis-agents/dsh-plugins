@@ -30,7 +30,7 @@
 import { INSIGHT_KINDS, INSIGHT_STATUSES, PASS_STATES, openInsightStore } from "./insight-store.js";
 import { RESOURCE_TYPES } from "./store.js";
 import { DEFAULT_COLLECT_INTERVAL_MINUTES, MIN_VIDEO_SECONDS } from "./collect.js";
-import { MIN_INSIGHT_INTERVAL_MINUTES, pickCandidates, readInsightConfig, runInsightPass, topUpTranscripts } from "./insight-extract.js";
+import { MIN_INSIGHT_INTERVAL_MINUTES, pickCandidates, readInsightConfig, rescoreOne, runInsightPass, topUpTranscripts } from "./insight-extract.js";
 import { withMoments } from "./insight-moment.js";
 import { STRENGTH_BANDS, strengthOf } from "./insights.js";
 import { mergeIdenticalEvidence, runReclassifyPass } from "./insight-reclassify.js";
@@ -644,6 +644,41 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
       // error. A pass that finds nothing and says nothing is the exact bug
       // this codebase keeps hitting.
       sendJson(res, 202, { success: true, data: { started: true, running: true } });
+      return true;
+    }
+
+    // ── rescore every card, with no pass attached ───────────────────────
+    //
+    // A ROUTE BECAUSE A SCORING CHANGE IS RETROACTIVE AND THE SWEEP IS NOT.
+    // Scores are stored, not computed on read — the list orders by them and an
+    // ORDER BY over an expression cannot use an index — so changing what
+    // novelty MEANS leaves every existing row carrying the old meaning. The
+    // rescore sweep repairs them at `RESCORE_SWEEP` per pass on a
+    // `RESCORE_AFTER_MINUTES` clock, which is correct for decay and far too
+    // patient for a redefinition: until it catches up the tab is sorted by two
+    // different formulas at once, with nothing on screen to say which card is
+    // which.
+    //
+    // NO MODEL CALLS. This is arithmetic over rows the library already holds.
+    if (req.method === "POST" && path === "/insights/rescore") {
+      const config = readInsightConfig(store);
+      const now = new Date().toISOString();
+      let scored = 0;
+      let failed = 0;
+      // Synchronous and answered when done, unlike run-now: scoring 72 cards is
+      // milliseconds, and a 202 for work that finishes before the response
+      // would be a progress display nobody could ever observe.
+      for (const row of insights.list({ take: 100, verdict: undefined }).insights) {
+        try {
+          // `touched: false` — this is a recomputation, not new evidence, so it
+          // must not look like the claim was seen again.
+          if (rescoreOne(insights, row.id, config, now, false)) scored += 1;
+        } catch (cause) {
+          failed += 1;
+          logger?.warn?.(`swarm: rescoring ${row.id} failed: ${String(cause?.message ?? cause)}`);
+        }
+      }
+      sendJson(res, 200, { success: true, data: { scored, failed } });
       return true;
     }
 

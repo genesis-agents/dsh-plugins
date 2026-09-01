@@ -1328,7 +1328,7 @@ function tally(into, reason) {
  * @param recount - whether the counts need recomputing first.
  * @returns whether a row changed.
  */
-function rescoreOne(insightStore, id, config, now, recount) {
+export function rescoreOne(insightStore, id, config, now, recount) {
   // Counts before scores: `scoreMomentum` reads `independentCount`, so scoring
   // first ranks the card on the evidence it had before this pass ran.
   // `addEvidence` recounts inside its own transaction, so this is belt and
