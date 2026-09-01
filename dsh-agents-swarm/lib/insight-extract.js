@@ -35,7 +35,7 @@
 
 import { assembleMaterial, detectLanguage } from "./podcast.js";
 import { localDate } from "./publish-schedule.js";
-import { EVIDENCE_STANCES, INSIGHT_KINDS } from "./insight-store.js";
+import { EVIDENCE_STANCES, INSIGHT_KINDS, INSIGHT_LAYERS } from "./insight-store.js";
 import { corroborateOne } from "./insight-corroborate.js";
 import {
   MIN_QUOTE_CHARS,
@@ -470,11 +470,20 @@ export const EXTRACTION_PROMPT = [
   "  shift   — a change of direction, position, or strategy",
   "Pick the closest one.",
   "",
+  "\"layer\" is WHERE IN THE STACK the claim sits, and it is a different question from \"kind\". Exactly one of:",
+  "  energy      — power, generation, grid, cooling, siting, the electricity a data centre needs",
+  "  compute     — chips, interconnect, data centres, capacity, capex, the cost of a unit of compute",
+  "  model       — training, architecture, weights, licences, benchmarks, what a model can do",
+  "  application — products built on models, adoption, workflows, what somebody uses it for",
+  "  cross       — a relationship BETWEEN layers, and only when that relationship is the claim",
+  "Use \"cross\" sparingly and only when it is right: \"open weights do not reduce compute demand\" is about the link between the model layer and the compute layer, and filing it under either loses exactly what makes it worth reading. A claim that merely mentions two layers is not cross-layer; pick the one it is ABOUT.",
+  "If none of the five fits — the claim is not about this stack at all — omit the field. An omitted layer is honest; a wrong one sends a reader to the wrong section for ever.",
+  "",
   "\"entities\" — the two to five proper names the claim is about: companies, models, laboratories, agencies, people. Spelled as the sources spell them.",
   "",
   "Return ONE JSON object and nothing else. No prose before it, no prose after it, no code fence:",
   "",
-  "{\"claims\":[{\"statement\":\"<one sentence, specific enough to be wrong>\",\"kind\":\"finding\",\"entities\":[\"…\",\"…\"],\"evidence\":[{\"source\":\"S1\",\"stance\":\"supports\",\"quote\":\"<copied character for character out of [S1]>\"},{\"source\":\"S3\",\"stance\":\"contradicts\",\"quote\":\"<copied character for character out of [S3]>\"}]}]}",
+  "{\"claims\":[{\"statement\":\"<one sentence, specific enough to be wrong>\",\"kind\":\"finding\",\"layer\":\"compute\",\"entities\":[\"…\",\"…\"],\"evidence\":[{\"source\":\"S1\",\"stance\":\"supports\",\"quote\":\"<copied character for character out of [S1]>\"},{\"source\":\"S3\",\"stance\":\"contradicts\",\"quote\":\"<copied character for character out of [S3]>\"}]}]}",
   "",
   "--- SOURCES ---",
   "{SOURCES}",
@@ -758,7 +767,16 @@ export function parseClaims(answer, labels, options = {}) {
     }
     if (fault !== "") { reject(fault); continue; }
 
-    claims.push({ statement, kind, entities: readEntities(raw?.entities), evidence });
+    // THE LAYER IS OPTIONAL AND NEVER FATAL. `kind` is required because a
+    // claim with no kind cannot be filed at all; a claim with no layer files
+    // under 未归层, which is a true statement about it. Rejecting the claim
+    // for a missing layer would throw away the evidence with the label.
+    const layer = typeof raw?.layer === "string" ? raw.layer.trim().toLowerCase() : "";
+    claims.push({
+      statement, kind,
+      layer: INSIGHT_LAYERS.includes(layer) ? layer : null,
+      entities: readEntities(raw?.entities), evidence,
+    });
     // The prompt asks for at most three. A prompt limit is a request, not a
     // constraint, and a model that returns eleven claims must cost the same
     // downstream as one that returns three.
@@ -1057,6 +1075,7 @@ export async function reconcileClaim(insightStore, chat, claim, options) {
   const id = insightStore.upsertInsight({
     statement: claim.statement,
     kind: claim.kind,
+    layer: claim.layer,
     entities: claim.entities,
     status: "candidate",
     simhash: hash,

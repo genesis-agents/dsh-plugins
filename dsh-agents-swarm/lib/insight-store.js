@@ -735,6 +735,55 @@ export class InsightStore {
    * @param record - `{ id?, statement, kind, entities?, status?, simhash, firstSeenAt?, lastSeenAt?, supersedes? }`.
    * @returns the insight's id.
    */
+  /**
+   * Rewrite one claim's own words and where it sits, and nothing else.
+   *
+   * NOT `upsertInsight`, THOUGH IT LOOKS LIKE ONE. That method is the
+   * EXTRACTOR's write: it takes entities, a status and two timestamps, and a
+   * caller who only has a new sentence would have to invent the rest or read
+   * them back and hand them in again — which is how a re-classification ends
+   * up resetting `first_seen_at` and telling every card it was found today.
+   *
+   * THE SIMHASH MOVES WITH THE STATEMENT. It is computed over the sentence
+   * and it is what near-duplicate detection reads; leaving it behind would
+   * make the next pass compare new claims against the words this row used to
+   * have. The caller computes it, because `simhash` lives in insights.js and
+   * this module must not import from there — see the file's own note on the
+   * import direction.
+   * @param id - the claim.
+   * @param patch - `{ statement, simhash, layer }`; each is optional.
+   * @returns false when there is no such row.
+   */
+  reclassifyInsight(id, patch) {
+    const statement = typeof patch?.statement === "string" ? patch.statement.trim() : "";
+    const simhash = typeof patch?.simhash === "string" ? patch.simhash.trim().toLowerCase() : "";
+    // BOTH OR NEITHER. A statement written without its hash leaves the row
+    // saying one thing and deduplicating as another, which is silent and
+    // permanent; the pair is refused rather than half-applied.
+    if ((statement === "") !== (simhash === "")) {
+      throw new Error("reclassifyInsight needs the statement and its simhash together, or neither");
+    }
+    if (statement !== "" && !/^[0-9a-f]{16}$/u.test(simhash)) {
+      throw new Error(`simhash must be sixteen lowercase hex characters; got ${JSON.stringify(patch?.simhash ?? null)}`);
+    }
+    const layer = INSIGHT_LAYERS.includes(patch?.layer) ? patch.layer : null;
+    if (statement === "" && layer === null) return false;
+    return this.db.prepare(`
+      UPDATE insights SET
+        statement = COALESCE(?, statement),
+        simhash   = COALESCE(?, simhash),
+        layer     = COALESCE(?, layer),
+        updated_at = ?
+      WHERE id = ?
+    `).run(
+      statement === "" ? null : statement,
+      statement === "" ? null : simhash,
+      layer,
+      new Date().toISOString(),
+      String(id),
+    ).changes > 0;
+  }
+
   upsertInsight(record) {
     const statement = String(record?.statement ?? "").trim();
     if (statement === "") throw new Error("an insight needs a statement; got an empty one");
@@ -764,12 +813,16 @@ export class InsightStore {
     const id = typeof record?.id === "string" && record.id !== "" ? record.id : newInsightId();
     this.db.prepare(`
       INSERT INTO insights (
-        id, statement, kind, entities, status, simhash,
+        id, statement, kind, layer, entities, status, simhash,
         first_seen_at, last_seen_at, supersedes, updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         statement = excluded.statement,
         kind = excluded.kind,
+        -- COALESCE, so a re-extraction that could not place the claim does
+        -- not erase a layer an earlier pass — or a person — established.
+        -- The other direction is fine: a pass that DOES place it wins.
+        layer = COALESCE(excluded.layer, insights.layer),
         entities = excluded.entities,
         simhash = excluded.simhash,
         supersedes = excluded.supersedes,
@@ -782,7 +835,12 @@ export class InsightStore {
         -- counts, scores and pinned_status are untouched: recount, applyScores
         -- and setStatus own them, and each is the only writer of its columns.
     `).run(
-      id, statement, record.kind, entitiesJson(record?.entities), status, simhash,
+      id, statement, record.kind,
+      // NULL RATHER THAN A GUESS. A claim the extractor could not place has
+      // no layer, and the pane groups those under their own heading — which
+      // is also how a reader sees how much of the table predates the field.
+      INSIGHT_LAYERS.includes(record?.layer) ? record.layer : null,
+      entitiesJson(record?.entities), status, simhash,
       firstSeenAt, lastSeenAt,
       typeof record?.supersedes === "string" && record.supersedes !== "" ? record.supersedes : null,
       now,

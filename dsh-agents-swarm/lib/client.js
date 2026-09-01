@@ -8263,6 +8263,29 @@ window.__ModuleLoader__.load({
 		* interesting row on the page — it is the thing the library disagrees
 		* with itself about — and colouring it red would file it with the errors.
 		*/
+		/**
+		* WHERE IN THE STACK, which is the question this pane is grouped by.
+		*
+		* THREE VOCABULARIES, THREE QUESTIONS, and grouping by the wrong one is
+		* what made the sections unreadable. `kind` is what a claim is ABOUT —
+		* something shipped, money moved, a result measured. `status` is how far
+		* it has GOT — nobody has corroborated it, two independent sources have,
+		* something contradicts it. Neither is a DOMAIN, and grouping by `kind`
+		* put a data centre's capex beside a model's licence because both
+		* happened to be measurements.
+		*
+		* THE COLOURS ARE THE REFERENCE'S. Amber for energy, blue for the compute
+		* floor, violet for models, green for what is built on them, grey for the
+		* claims that are about the relationship between two layers.
+		*/
+		const INSIGHT_LAYER_FACES = {
+			energy: { zh: "能源", en: "Energy", hue: PALETTE.amber },
+			compute: { zh: "算力底座", en: "Compute", hue: PALETTE.blue },
+			model: { zh: "模型", en: "Model", hue: PALETTE.violet },
+			application: { zh: "应用", en: "Application", hue: PALETTE.green },
+			cross: { zh: "跨层", en: "Cross-layer", hue: PALETTE.slate }
+		};
+
 		const INSIGHT_STATUS_FACES = {
 			candidate: { zh: "候选", en: "Candidate", icon: "circle", hue: TONE.neutral },
 			standing: { zh: "成立", en: "Standing", icon: "check", hue: TONE.success },
@@ -8312,7 +8335,11 @@ window.__ModuleLoader__.load({
 			// mind to know what they are looking at. A rule down the left in the
 			// group's colour carries it, and squaring that corner is what makes the
 			// rule read as the card's edge rather than as a stripe inside it.
-			const edge = kind === null ? TONE.neutral : kind.hue;
+			// THE EDGE IS THE LAYER'S, because the layer is what the cards are
+			// grouped under — an edge in the KIND's colour would put three colours
+			// inside one section and none of them would mean the section.
+			const layer = INSIGHT_LAYER_FACES[row.layer] ?? null;
+			const edge = layer === null ? TONE.neutral : layer.hue;
 			return jsxs("article", {
 				style: {
 					...CARD_STYLE, marginBottom: 0,
@@ -8678,15 +8705,27 @@ window.__ModuleLoader__.load({
 				.sort((a, b) => String(b?.at ?? "").localeCompare(String(a?.at ?? "")))[0] ?? null;
 			const every = Number(status?.insightIntervalMinutes ?? 0);
 
-			// GROUPED BY KIND, biggest first. The reference groups by its own
-			// stack layer; `kind` is the classification this pass actually makes.
+			// GROUPED BY LAYER, IN STACK ORDER. Not by size and not by kind:
+			// energy under compute under models under what is built on them is
+			// the order the thing itself has, and a reader who knows the stack
+			// knows where to look before they have read a word. Sorting by count
+			// would move the sections about every time the pass runs.
+			//
+			// 未归层 LAST, AND ONLY WHEN IT HAS ROWS. Every claim written before
+			// the extractor was asked for a layer has none, and saying so is both
+			// honest and useful — it is how a reader sees how much of the table
+			// predates the classification.
 			const groups = new Map();
 			for (const row of rows) {
-				const held = groups.get(row.kind) ?? [];
+				const key = INSIGHT_LAYER_FACES[row.layer] === undefined ? "" : row.layer;
+				const held = groups.get(key) ?? [];
 				held.push(row);
-				groups.set(row.kind, held);
+				groups.set(key, held);
 			}
-			const ordered = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
+			const STACK = ["energy", "compute", "model", "application", "cross", ""];
+			const ordered = STACK
+				.filter((key) => (groups.get(key) ?? []).length > 0)
+				.map((key) => [key, groups.get(key)]);
 
 			return jsxs("div", {
 				style: { display: "flex", flexDirection: "column", gap: SPACE.lg },
@@ -8899,7 +8938,7 @@ window.__ModuleLoader__.load({
 					}, "empty"),
 
 					...ordered.map(([id, held]) => {
-						const face = INSIGHT_KIND_FACES[id] ?? null;
+						const face = INSIGHT_LAYER_FACES[id] ?? null;
 						return jsxs("section", {
 							style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
 							children: [
@@ -8923,7 +8962,9 @@ window.__ModuleLoader__.load({
 										}, "bar"),
 										jsx("span", {
 											style: { font: FONT.largeStrong, color: INK.primary },
-											children: face === null ? String(id) : (zh ? face.zh : face.en)
+											children: face !== null
+												? (zh ? face.zh : face.en)
+												: (zh ? "未归层" : "Unplaced")
 										}, "name"),
 										jsx("span", {
 											style: { marginLeft: "auto", flex: "none", font: FONT.micro, color: INK.quiet, fontFamily: MONO },
