@@ -2062,7 +2062,7 @@ test("a slow first read draws the shape of what is coming, not a dashed box", as
   assert.ok(blocks.length >= 6, `${blocks.length} skeleton blocks is not the shape of three cards`);
   // Laid out in the grid the list itself uses, so nothing moves sideways at
   // the moment the answer lands.
-  assert.match(String(status.props.style?.gridTemplateColumns), /minmax\(340px/, "the placeholder is not laid out in the grid it becomes");
+  assert.match(String(status.props.style?.gridTemplateColumns), /minmax\(280px/, "the placeholder is not laid out in the grid it becomes");
 });
 
 test("opening a mission shows its twelve stages, its cost and its tail", async () => {

@@ -2738,7 +2738,7 @@ test("the mission list is a grid, and its placeholder is laid out in the same on
   assert.equal(SOURCE.split("const MISSION_LIST_GRID").length - 1, 1, "a second grid definition is declared; two copies is how a list and its skeleton stop agreeing");
   assert.match(
     declaration("const MISSION_LIST_GRID = {"),
-    /gridTemplateColumns: "repeat\(auto-fill, minmax\(340px, 1fr\)\)"/,
+    /gridTemplateColumns: "repeat\(auto-fill, minmax\(280px, 1fr\)\)"/,
     "the list grid lost its minimum, or took auto-fit — with auto-fit a filter matching one mission draws one card as wide as the window, which is the column layout this replaced",
   );
   // Counted in VALUE position, because the name also appears in the docblock
@@ -5499,7 +5499,7 @@ test("a card carries the reference's air, and the panel stops taking it back", (
   assert.match(card, /marginBottom: SPACE\.lg/, "two stacked cards no longer stand at the reference's `space-y-4`");
   // AND THE GAP IS NOT THE MARGIN. `gap` is the space between a card's own
   // columns — the thumbnail and the text in the 信源 feed — and widening it
-  // with the padding would push a 340px grid card's text off its own image.
+  // with the padding would push a 280px grid card's text off its own image.
   assert.match(card, /gap: SPACE\.lg/, "the card's internal column gap moved with its padding; they are different distances between different things");
   // THE OVERRIDE MAY NOT COME BACK. Spreading CARD_STYLE and re-declaring
   // `padding` is the one way to make a token change land nowhere: the object

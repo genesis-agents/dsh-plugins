@@ -7790,9 +7790,13 @@ window.__ModuleLoader__.load({
 		* the screen, which is the one thing a list of runs must not do — the
 		* whole value of it is how many you can compare at once.
 		*
-		* 340px AND NOT 320. `MissionListRow`'s meta line joins five pieces into
-		* one string; below 340 it wraps to four lines and the card stops being
-		* a card.
+		* 280px, AND IT USED TO BE 340 FOR A REASON THAT IS GONE. The note here
+		* read: "`MissionListRow`'s meta line joins five pieces into one string;
+		* below 340 it wraps to four lines and the card stops being a card."
+		* There is no meta line any more — the card states its figures as
+		* glyph-and-value pairs that wrap on their own — so the floor was
+		* protecting a sentence nothing prints, and paying for it in one fewer
+		* column across every window.
 		*
 		* `auto-fill` RATHER THAN `auto-fit`. With `auto-fit` an empty track
 		* collapses, so a filter matching one mission draws one card as wide as
@@ -7805,8 +7809,18 @@ window.__ModuleLoader__.load({
 		* grid definition is how they stop agreeing.
 		*/
 		const MISSION_LIST_GRID = {
-			display: "grid", gap: SPACE.lg, alignItems: "stretch",
-			gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))"
+			// 280, NOT 340. A card in this grid used to be a topic and one grey
+			// line, and 340 was the width that gave that sentence somewhere to
+			// sit. The card says considerably more now — a tile, a row of chips,
+			// what the run set out to establish, four figures and its age — and at
+			// 340 those wrap into a tall block that fits three to a row, which is
+			// a list of forty runs read four screens at a time.
+			//
+			// Narrower is also how the reference does it: its own grid runs four
+			// across at about 305, and it is the count across that makes a grid
+			// scannable rather than the size of any one cell.
+			display: "grid", gap: SPACE.md, alignItems: "stretch",
+			gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))"
 		};
 
 		/**
@@ -7927,48 +7941,56 @@ window.__ModuleLoader__.load({
 				children: jsxs("div", {
 					style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: SPACE.sm },
 					children: [
-						// THE TILE, THE WAY EVERY CARD IN THE REFERENCE'S GRID OPENS. Not
-						// decoration: forty cards of pure text are forty identical grey
-						// rectangles, and the tile is what gives the eye somewhere to land
-						// before it starts reading.
-						jsx("div", {
-							style: {
-								flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
-								width: "44px", height: "44px", borderRadius: RADIUS.lg,
-								color: `rgb(${TONE.accent})`, background: tint(TONE.accent, TINT.soft),
-								boxShadow: `inset 0 0 0 1px ${tint(TONE.accent, TINT.ring)}`
-							},
-							children: jsx(Icon, { name: "sparkles", size: ICON.md })
-						}, "tile"),
-						// WHAT KIND OF RUN THIS WAS, AS LABELS RATHER THAN AS A SENTENCE. The
-						// tier, the language and the attempt were three clauses inside one grey
-						// middot line, where they read as statistics. They are what a reader
-						// tells two cards apart by, so they are chips.
+						// THE TILE AND THE LABELS SHARE A LINE. The tile opens the card the way
+						// every card in the reference's grid opens — forty cards of pure text
+						// are forty identical grey rectangles, and it is what gives the eye
+						// somewhere to land before it starts reading — but on a line of its own
+						// it cost 44 pixels of card height to say nothing that changes per row.
+						// Beside the chips it does the same work in no height at all.
 						jsxs("div", {
-							style: { display: "flex", alignItems: "center", gap: SPACE.xs, flexWrap: "wrap" },
+							style: { display: "flex", alignItems: "center", gap: SPACE.sm, minWidth: 0 },
 							children: [
-								Chip({
-									label: missionFace(MISSION_TIER_FACES, mission.depth, zh),
-									tone: missionHue(MISSION_TIER_FACES, mission.depth)
-								}, "tier"),
-								(mission.language ?? "") === "" ? null : Chip({ label: String(mission.language) }, "lang"),
-								// The mission's STATE, so it takes the pill shape rather than the
-								// chip's. It was drawn at `1px 7px` on a 5px radius here and at
-								// `1px 8px` on a 6px one in the header of the screen this row opens.
-								//
-								// AND A MARK BESIDE THE WORD. 已取消 and 未知 are both TONE.neutral
-								// and 失败 and 未知（已结束） are both TONE.danger, so in a scanned
-								// list the colour narrows the answer to two and the glyph finishes
-								// it. A running mission gets the spinner, which is the one row in
-								// the list that is still moving.
-								Chip({ tone: face.hue, pill: true, icon: face.icon, label: face.label }, "pill"),
-								// A SECOND RUN IS A DIFFERENT DOCUMENT, and it is the reason two
-								// cards in this grid share a topic.
-								Number(mission.runCount ?? 1) <= 1 ? null : Chip({
-									label: zh ? `第 ${mission.runCount} 次` : `run ${mission.runCount}`
-								}, "run")
+								jsx("div", {
+									style: {
+										flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
+										width: "28px", height: "28px", borderRadius: RADIUS.md,
+										color: `rgb(${TONE.accent})`, background: tint(TONE.accent, TINT.soft),
+										boxShadow: `inset 0 0 0 1px ${tint(TONE.accent, TINT.ring)}`
+									},
+									children: jsx(Icon, { name: "sparkles", size: ICON.sm })
+								}, "tile"),
+								// WHAT KIND OF RUN THIS WAS, AS LABELS RATHER THAN AS A SENTENCE.
+								// The tier, the language and the attempt were three clauses inside
+								// one grey middot line, where they read as statistics. They are what
+								// a reader tells two cards apart by, so they are chips.
+								jsxs("div", {
+									style: { display: "flex", alignItems: "center", gap: SPACE.xs, flexWrap: "wrap", minWidth: 0 },
+									children: [
+										Chip({
+											label: missionFace(MISSION_TIER_FACES, mission.depth, zh),
+											tone: missionHue(MISSION_TIER_FACES, mission.depth)
+										}, "tier"),
+										(mission.language ?? "") === "" ? null : Chip({ label: String(mission.language) }, "lang"),
+										// The mission's STATE, so it takes the pill shape rather than
+										// the chip's. It was drawn at `1px 7px` on a 5px radius here
+										// and at `1px 8px` on a 6px one in the header of the screen
+										// this row opens.
+										//
+										// AND A MARK BESIDE THE WORD. 已取消 and 未知 are both
+										// TONE.neutral and 失败 and 未知（已结束） are both TONE.danger,
+										// so in a scanned list the colour narrows the answer to two and
+										// the glyph finishes it. A running mission gets the spinner,
+										// which is the one row in the list that is still moving.
+										Chip({ tone: face.hue, pill: true, icon: face.icon, label: face.label }, "pill"),
+										// A SECOND RUN IS A DIFFERENT DOCUMENT, and it is the reason two
+										// cards in this grid share a topic.
+										Number(mission.runCount ?? 1) <= 1 ? null : Chip({
+											label: zh ? `第 ${mission.runCount} 次` : `run ${mission.runCount}`
+										}, "run")
+									]
+								}, "chips")
 							]
-						}, "chips"),
+						}, "head"),
 						// The topic is the control, the way a 信源 card's title is: a whole card
 						// wrapped in one button puts flow content inside phrasing content and
 						// hands a screen reader one enormous label.
@@ -8025,7 +8047,23 @@ window.__ModuleLoader__.load({
 									jsx(Icon, { name: figure.icon, size: ICON.xs }, "glyph"),
 									jsx("span", { children: figure.text }, "text")
 								]
-							}, figure.icon))
+							}, figure.icon)).concat([
+								// THE AGE, ON THE SAME LINE. It had a rule and a row of its own — the
+								// way the reference closes a card — and that cost twenty-five pixels
+								// of every card in the grid to separate one figure from four others
+								// it belongs with. Pushed to the right end of the same line it is
+								// still the last thing read and costs no height at all.
+								//
+								// AND THE AGE IS THE QUESTION A LIST IS READ FOR. A column of forty
+								// 08-30 10:30 stamps is not something anybody sorts by eye. The exact
+								// stamp stays on the same element: an interval cannot be matched
+								// against a log line, and a stamp cannot be scanned.
+								jsx("span", {
+									title: formatStamp(mission.startedAt),
+									style: { marginLeft: "auto", flex: "none", color: INK.quiet },
+									children: formatAgo(mission.startedAt, zh)
+								}, "age")
+							])
 						}, "figures"),
 						// A row that says running while nothing is running it is the
 						// symptom of a process that died mid-mission. Named here
@@ -8037,10 +8075,11 @@ window.__ModuleLoader__.load({
 								? "这一条写着运行中，但本进程没有在跑它 —— 多半是上次进程退出时留下的，打开后可以继续或重跑。"
 								: "This row says running, but this process is not running it — most likely left behind by an earlier exit. Open it to resume or rerun."
 						}, "stale"),
-						mission.errorMessage === null || mission.errorMessage === undefined || mission.errorMessage === "" ? null : jsx("div", {
-							style: { font: FONT.small, color: INK.secondary },
-							children: (mission.failureCode === null || mission.failureCode === undefined ? "" : `${mission.failureCode} · `) + mission.errorMessage
-						}, "error"),
+						// THE ERROR IS THE BLURB NOW, four rows up. It was printed here,
+						// UNDER the figures it invalidates, so a run that died read as a
+						// run that cost 190k tokens and then, as an afterthought, failed.
+						// A card has one sentence about itself and on a failed run that
+						// sentence is the failure.
 						// Delete. There was no way to remove a mission at all — no
 						// route, no store method, no button — so the list only ever
 						// grew, and the first thing anybody wants to do with a run
@@ -8073,21 +8112,6 @@ window.__ModuleLoader__.load({
 									: (zh ? "删除" : "Delete")
 							}, "delete")
 						}, "actions"),
-						// A RULE, AND THE AGE UNDER IT. The reference closes every card in its
-						// grid this way, and the reason it works is that the age is the one
-						// fact on the card that is about the card rather than about the run.
-						//
-						// THE EXACT STAMP IS STILL HERE, on hover: a relative age cannot be
-						// matched against a log line and an absolute one cannot be scanned, and
-						// `title` is what lets one element carry both.
-						jsx("div", {
-							style: { paddingTop: SPACE.sm, borderTop: `1px solid ${LINE.hair}` },
-							children: jsx("span", {
-								title: formatStamp(mission.startedAt),
-								style: { font: FONT.micro, color: INK.quiet },
-								children: formatAgo(mission.startedAt, zh)
-							}, "age")
-						}, "foot"),
 						trouble === "" ? null : jsx("div", {
 							style: { font: FONT.small, color: `rgb(${TONE.danger})` },
 							children: trouble
