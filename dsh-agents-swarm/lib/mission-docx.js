@@ -252,6 +252,15 @@ export function imageSize(bytes, mime) {
 
 /** Twips of text across A4 inside the margins this file sets: 11906 - 2 * 1134. */
 const TEXT_WIDTH_TWIPS = 9638;
+/** …and down it: 16838 - 2 * 1134. */
+const TEXT_HEIGHT_TWIPS = 14570;
+/**
+ * The most of a page's text height one figure may take.
+ *
+ * The same fraction, for the same reason, as mission-pdf.js's — the two
+ * exports of one report must not disagree about how big its pictures are.
+ */
+const FIGURE_SHARE = 0.4;
 /** English Metric Units per twip. 914400 per inch, 1440 twips per inch. */
 const EMU_PER_TWIP = 635;
 /** …and per CSS pixel, at the 96dpi a page's declared size is in. */
@@ -271,11 +280,24 @@ const EMU_PER_PIXEL = 9525;
  * @returns the paragraph XML.
  */
 function picture(id, at, size, alt) {
-  const capacity = TEXT_WIDTH_TWIPS * EMU_PER_TWIP;
-  const natural = Math.max(1, Math.round(size.width * EMU_PER_PIXEL));
-  const scale = natural > capacity ? capacity / natural : 1;
-  const cx = Math.round(natural * scale);
-  const cy = Math.max(1, Math.round(size.height * EMU_PER_PIXEL * scale));
+  // FITTED TO A BOX, NEVER STRETCHED TO ONE. Scaled by WIDTH ALONE this was
+  // measured, on a real report, drawing a 500×749 portrait photograph at three
+  // quarters of a page's height — which pushes it onto a page of its own and
+  // leaves the page before it mostly blank. A figure is evidence beside an
+  // argument; past about two fifths of the text height nothing else fits on
+  // the page with it, so it is beside nothing.
+  //
+  // Never scaled UP either: a 150px favicon blown out to the column is a
+  // blurred rectangle where a small mark belongs.
+  const width = TEXT_WIDTH_TWIPS * EMU_PER_TWIP;
+  const height = TEXT_HEIGHT_TWIPS * EMU_PER_TWIP * FIGURE_SHARE;
+  const natural = {
+    cx: Math.max(1, Math.round(size.width * EMU_PER_PIXEL)),
+    cy: Math.max(1, Math.round(size.height * EMU_PER_PIXEL)),
+  };
+  const scale = Math.min(1, width / natural.cx, height / natural.cy);
+  const cx = Math.max(1, Math.round(natural.cx * scale));
+  const cy = Math.max(1, Math.round(natural.cy * scale));
   const described = xml(alt === "" ? `figure ${at}` : alt);
   return `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="80"/></w:pPr><w:r><w:drawing>`
     + `<wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">`

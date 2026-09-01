@@ -31,6 +31,16 @@ const PAGE = { width: 595.28, height: 841.89, margin: 56.7 };
 const SIZE = { h1: 19, h2: 15.5, h3: 13, h4: 11.5, body: 10.5, code: 9, caption: 9 };
 /** Multiplied by the size for the baseline-to-baseline step. CJK wants more. */
 const LEADING = 1.62;
+/**
+ * The most of a page's text height one figure may take.
+ *
+ * TWO FIFTHS, AND IT IS A JUDGEMENT RATHER THAN A MEASUREMENT. A figure is
+ * evidence beside an argument; at much more than this it stops being beside
+ * anything, because nothing else fits on the page with it. The exact fraction
+ * matters less than there being one — scaled by width alone, a portrait
+ * photograph took three quarters of a page and left the page before it blank.
+ */
+const FIGURE_SHARE = 0.4;
 
 /**
  * Characters that may not open a line.
@@ -717,22 +727,25 @@ export function reportToPdf(markdown, { title = "", language = "zh", figures = [
     y -= style.before;
 
     if (block.kind === "image") {
-      // SCALED TO THE COLUMN, AND NEVER UP. The same rule the .docx applies,
-      // and the same reason: a 2400px chart at its own size runs off the page,
-      // and a 200px thumbnail blown up to the column is a blurred rectangle.
-      const natural = block.figure.width * 0.75;
-      const scale = natural > column ? column / natural : 1;
-      const width = natural * scale;
-      const height = block.figure.height * 0.75 * scale;
-      // A PICTURE TALLER THAN A PAGE IS SHRUNK, not clipped: PDF has no
-      // mechanism for continuing an image onto the next page, so the choice is
-      // between a smaller chart and half a chart.
+      // FITTED TO A BOX, NEVER STRETCHED TO ONE. Scaled by WIDTH ALONE this
+      // was measured, on a real report, drawing a 500×749 portrait photograph
+      // at 375×562pt — 77% of a page's text height — which pushed it onto a
+      // page of its own and left two thirds of the page before it blank. A
+      // reader looking at that sees a broken export, not a big picture.
+      //
+      // The height cap is what fixes it, and it is a fraction of the text
+      // height rather than a number of points so that it holds if the page
+      // size ever changes. Never scaled UP either: a 150px favicon blown out
+      // to the column is a blurred rectangle where a small mark belongs.
+      const natural = { width: block.figure.width * 0.75, height: block.figure.height * 0.75 };
       const capacity = PAGE.height - PAGE.margin * 2;
-      const fit = height > capacity ? capacity / height : 1;
-      room(height * fit);
-      y -= height * fit;
-      const left = PAGE.margin + (column - width * fit) / 2;
-      ops.push(`q ${(width * fit).toFixed(2)} 0 0 ${(height * fit).toFixed(2)} ${left.toFixed(2)} ${y.toFixed(2)} cm /I${block.figure.object} Do Q`);
+      const scale = Math.min(1, column / natural.width, (capacity * FIGURE_SHARE) / natural.height);
+      const width = natural.width * scale;
+      const height = natural.height * scale;
+      room(height);
+      y -= height;
+      const left = PAGE.margin + (column - width) / 2;
+      ops.push(`q ${width.toFixed(2)} 0 0 ${height.toFixed(2)} ${left.toFixed(2)} ${y.toFixed(2)} cm /I${block.figure.object} Do Q`);
       y -= style.after;
       continue;
     }

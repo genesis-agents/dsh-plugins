@@ -235,6 +235,31 @@ test("a picture is in the file, drawn, and its transparency with it", { skip: FO
   assert.match(contentOf(read), new RegExp(`/I${main[0]} Do`, "u"), "the picture is embedded and never drawn");
 });
 
+test("a figure is fitted to a box rather than stretched to one", { skip: FOUND === null && "no CJK font on this machine" }, () => {
+  // SCALED BY WIDTH ALONE, a 500×749 portrait photograph came out at 375 by
+  // 562pt — three quarters of a page's text height. Measured on a real
+  // report: it took a page of its own and left the page before it two
+  // thirds blank, which reads as a broken export rather than a big picture.
+  const bytes = makePng(500, 749, false);
+  const read = readPdf(reportToPdf(REPORT, { language: "zh", figures: [{ ...figure(), bytes }] }));
+  const placed = /q ([\d.]+) 0 0 ([\d.]+) [\d.]+ [\d.]+ cm \/I\d+ Do Q/u.exec(contentOf(read));
+  assert.ok(placed, "the picture is never placed");
+  // A4 less 56.7pt margins, two fifths of the text height.
+  const ceiling = (841.89 - 56.7 * 2) * 0.4;
+  assert.ok(Number(placed[2]) <= ceiling + 0.5, `the figure stands ${placed[2]}pt against a ceiling of ${ceiling.toFixed(1)}`);
+  assert.equal(
+    Math.round((Number(placed[1]) / Number(placed[2])) * 1000),
+    Math.round((500 / 749) * 1000),
+    "the cap squashed the picture instead of scaling it",
+  );
+
+  // AND A SMALL ONE IS LEFT ALONE. A 150px mark blown out to the column is
+  // a blurred rectangle where something small belongs.
+  const mark = readPdf(reportToPdf(REPORT, { language: "zh", figures: [{ ...figure(), bytes: makePng(150, 150, false) }] }));
+  const kept = /q ([\d.]+) 0 0 ([\d.]+) [\d.]+ [\d.]+ cm \/I\d+ Do Q/u.exec(contentOf(mark));
+  assert.equal(Number(kept[1]).toFixed(2), (150 * 0.75).toFixed(2), "a small figure was stretched to the column");
+});
+
 test("what cannot be drawn falls back to the line the .md prints", { skip: FOUND === null && "no CJK font on this machine" }, () => {
   // THE SAME RULE THE .docx FOLLOWS. A figure with no bytes, an undecodable
   // header or a format with no PDF filter is a sentence, not a blank frame.

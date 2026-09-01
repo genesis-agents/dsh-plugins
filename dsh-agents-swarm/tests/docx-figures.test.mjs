@@ -160,6 +160,27 @@ test("a picture wider than the page is scaled down, and a small one is left alon
   // chart squashed to fit is a chart that lies about its own axes.
   assert.equal(Number(extent[2]), Math.round(capacity / 2), "the picture was scaled without keeping its shape");
 
+  // AND A TALL ONE IS CAPPED BY HEIGHT, WHICH IS THE HALF THAT WAS MISSING.
+  // Measured on a real report: a 500×749 portrait photograph, scaled by
+  // width alone, came out at three quarters of a page's text height — so it
+  // took a page of its own and left the page before it mostly blank. A
+  // figure is evidence beside an argument; past about two fifths of the
+  // page nothing else fits with it, so it is beside nothing.
+  const tall = Buffer.from(PNG);
+  tall.writeUInt32BE(500, 16);
+  tall.writeUInt32BE(749, 20);
+  const portrait = unzip(reportToDocx(REPORT, { figures: [figure({ bytes: tall })] }))["word/document.xml"].toString("utf8");
+  const stood = /<wp:extent cx="(\d+)" cy="(\d+)"\/>/u.exec(portrait);
+  // 14570 twips of text down A4 inside 1134-twip margins, two fifths of it.
+  const ceiling = Math.round(14570 * 635 * 0.4);
+  assert.ok(Number(stood[2]) <= ceiling, `a portrait figure stands ${stood[2]} EMU tall against a ceiling of ${ceiling}`);
+  assert.ok(Number(stood[1]) < capacity, "a portrait figure was widened to the column it did not need");
+  assert.equal(
+    Math.round((Number(stood[1]) / Number(stood[2])) * 1000),
+    Math.round((500 / 749) * 1000),
+    "the height cap squashed the picture instead of scaling it",
+  );
+
   const small = unzip(reportToDocx(REPORT, { figures: [figure()] }))["word/document.xml"].toString("utf8");
   const asIs = /<wp:extent cx="(\d+)" cy="(\d+)"\/>/u.exec(small);
   assert.equal(Number(asIs[1]), 3 * 9525, "a picture narrower than the column was stretched to it");
