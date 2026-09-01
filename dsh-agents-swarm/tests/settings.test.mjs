@@ -1910,7 +1910,29 @@ function card(tree, topic) {
 }
 
 /** Open a mission from the list and settle. */
+/**
+ * Put the 洞察 tab on its 主题洞察 half.
+ *
+ * IT LANDS ON 信源洞察 NOW. That is the standing half — it accrues without
+ * anybody asking — while a mission is a question you arrived having already
+ * decided to ask, so the library is what a reader opening this tab has
+ * something new to look at. Every test that is about MISSIONS has to say so.
+ *
+ * Silent when the strip is not there: several of these render the board or the
+ * detail view directly rather than through the tab.
+ */
+async function missionsPane(view) {
+  const strip = find(view.tree, (node) => node.type === "button"
+    // BOTH ARMS. These tests render the tab in English too, and a helper that
+    // knew only the Chinese label left every `zh: false` test on the wrong
+    // half with nothing on screen saying why.
+    && textOf(node).some((piece) => piece.includes("主题洞察") || piece.includes("By topic")));
+  if (strip === undefined || strip === null) return;
+  await view.act(() => { strip.props.onClick(); });
+}
+
 async function open(view, topic) {
+  await missionsPane(view);
   await view.act(() => { button(view.tree, topic).props.onClick(); });
   return textOf(view.tree).join(" ");
 }
@@ -1931,6 +1953,7 @@ async function pane(view, label) {
 test("the tab offers a topic, a tier, and a way to start", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
+  await missionsPane(view);
   // THE FORM IS BEHIND A CONTROL NOW, and pressing it is part of what this
   // test asserts rather than a step around it: the starter used to be a
   // permanently expanded card above every mission, so "there is somewhere to
@@ -1959,6 +1982,7 @@ test("the tab offers a topic, a tier, and a way to start", async () => {
 test("starting a mission sends the topic and the tier, then opens it", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
+  await missionsPane(view);
   await view.act(() => { button(view.tree, "新建任务").props.onClick(); });
   const box = find(view.tree, (node) => node.props?.["aria-label"] === "任务课题");
   await view.act(() => { box.props.onChange({ target: { value: "推理时序扩展的三条技术路线" } }); });
@@ -1985,7 +2009,9 @@ test("starting a mission sends the topic and the tier, then opens it", async () 
 
 test("a mission row says how it ended and what it cost", async () => {
   stubFetch();
-  const { tree } = await render("MissionsTab", { zh: true });
+  const view = await render("MissionsTab", { zh: true });
+  await missionsPane(view);
+  const { tree } = view;
   const row = textOf(card(tree, RUNNING.topic)).join(" ");
   assert.ok(row.includes("运行中"), "the row does not say what state it is in");
   assert.ok(row.includes("标准"), "the row does not say which tier it is running at");
@@ -2006,6 +2032,7 @@ test("the missions pane says what it is, and can be searched", async () => {
   // what it is for, and the one control that makes something belong.
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
+  await missionsPane(view);
   const text = textOf(view.tree).join(" ");
   assert.ok(text.includes("洞察"), "the pane does not name itself");
   assert.ok(
@@ -2064,7 +2091,9 @@ test("a mission card is a card, not a title with a grey sentence under it", asyn
   // opens each card with a tile, labels what kind of run it was, says what
   // the run set out to establish, and gives each figure its own glyph.
   stubFetch();
-  const { tree } = await render("MissionsTab", { zh: true });
+  const view = await render("MissionsTab", { zh: true });
+  await missionsPane(view);
+  const { tree } = view;
   const running = card(tree, RUNNING.topic);
   const row = textOf(running).join(" ");
 
@@ -2106,7 +2135,9 @@ test("a mission card is a card, not a title with a grey sentence under it", asyn
 
 test("a running mission says how far along it is, and a settled one does not", async () => {
   stubFetch();
-  const { tree } = await render("MissionsTab", { zh: true });
+  const view = await render("MissionsTab", { zh: true });
+  await missionsPane(view);
+  const { tree } = view;
   // THE LIST ROUTE CARRIES NO `progress`. `listMissions` attaches a verified
   // count and a spend sum to the raw row and nothing else, so the row's bar is
   // the ordinal of the stage it says it is on out of the twelve the catalogue
@@ -2153,7 +2184,9 @@ test("the mission header states its four figures once each", async () => {
 
 test("a row that says running with nothing running it says so", async () => {
   stubFetch();
-  const { tree } = await render("MissionsTab", { zh: true });
+  const view = await render("MissionsTab", { zh: true });
+  await missionsPane(view);
+  const { tree } = view;
   // One process, so a `running` row absent from `live` cannot have another
   // owner: it is a mission an exit left behind. Drawn identically to a live one
   // it is a clock that never moves and no explanation anywhere.
@@ -2170,6 +2203,7 @@ test("a claim off a talk opens the library's own reader at that second", async (
   // all of that back and lands the reader somewhere they cannot ask anything.
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
+  await missionsPane(view);
   await view.act(() => { button(view.tree, "信源洞察").props.onClick(); });
   const text = textOf(view.tree).join(" ");
 
@@ -2225,6 +2259,7 @@ test("洞察 is two kinds, and the strip is how you get between them", async () 
   // table, seven routes and a whole extraction pass, and no screen at all.
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
+  await missionsPane(view);
   const text = () => textOf(view.tree).join(" ");
   assert.ok(text().includes("主题洞察") && text().includes("信源洞察"), "the two kinds are not offered");
   // ASSERTED ON THE CONTROL, NOT THE WORDS. 运行中 and 已取消 are also what a
@@ -2261,6 +2296,7 @@ test("an empty search and an empty library are different sentences", async () =>
   // them to look at the wrong thing entirely.
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
+  await missionsPane(view);
   const box = find(view.tree, (node) => node.props?.["aria-label"] === "搜索任务");
   await view.act(() => { box.props.onChange({ target: { value: "没有这样的课题" } }); });
   await view.tick(400);
@@ -2283,6 +2319,7 @@ test("a failed read says what failed, where, and offers to do it again", async (
     return upstream(url, init);
   };
   const view = await render("MissionsTab", { zh: true });
+  await missionsPane(view);
   const text = textOf(view.tree).join(" ");
   assert.ok(text.includes("任务列表加载失败"), "a failed list read does not say that it failed");
   assert.ok(text.includes("connect ECONNREFUSED 127.0.0.1:3080"), "the reason the read failed is not on the screen");
@@ -2301,6 +2338,7 @@ test("a slow first read draws the shape of what is coming, not a dashed box", as
   // answer to.
   globalThis.fetch = () => new Promise(() => {});
   const view = await render("MissionsTab", { zh: true });
+  await missionsPane(view);
   // THE WORD SURVIVES THE REDRAW, on the container. A pile of grey divs
   // announces nothing at all, and "加载中…" was the only thing a screen reader
   // ever got out of this state — losing it is a regression the page cannot
@@ -2950,6 +2988,7 @@ test("the trajectory reads in English too, every string paired", async () => {
   // exactly the readers who cannot read the first arm.
   stubFetch();
   const view = await render("MissionsTab", { zh: false });
+  await missionsPane(view);
   await view.act(() => { button(view.tree, RUNNING.topic).props.onClick(); });
   await pane(view, "Trajectory");
   let text = textOf(view.tree).join(" ");
@@ -3284,6 +3323,7 @@ test("a pane with nothing in it says which nothing", async () => {
 test("the create form waits behind a control, and closes the way it opened", async () => {
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
+  await missionsPane(view);
   assert.ok(
     !find(view.tree, (node) => node.props?.role === "dialog"),
     "the dialog is open before anyone asked for it, which is the expanded card with a scrim over it",
@@ -3509,6 +3549,7 @@ test("everything added here reads in English too", async () => {
   // table-shaped screen spent on a cast list.
 
   const list = await render("MissionsTab", { zh: false });
+  await missionsPane(list);
   await list.act(() => { button(list.tree, "New mission").props.onClick(); });
   const dialog = textOf(find(list.tree, (node) => node.props?.role === "dialog")).join(" ");
   assert.ok(dialog.includes("New mission"), "the dialog has no English title");

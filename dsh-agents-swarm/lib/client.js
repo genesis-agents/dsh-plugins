@@ -8617,7 +8617,7 @@ window.__ModuleLoader__.load({
 		* @param zh - whether to write Chinese.
 		* @returns the pane.
 		*/
-		function LibraryInsightPane({ zh }) {
+		function LibraryInsightPane({ zh, onOpenMoment }) {
 			const [rows, setRows] = useState(null);
 			const [counts, setCounts] = useState({});
 			const [total, setTotal] = useState(0);
@@ -8628,13 +8628,7 @@ window.__ModuleLoader__.load({
 			const [search, setSearch] = useState("");
 			const [asked, setAsked] = useState("");
 			const [kind, setKind] = useState("");
-			// THE MOMENT A READER ASKED TO ARRIVE AT: `{ resourceId, at }`, or null.
-			// The row is fetched when one is chosen rather than held for every card
-			// on the page — sixty claims would be sixty resource reads for a reader
-			// who opens none of them.
-			const [moment, setMoment] = useState(null);
-			const [opened, setOpened] = useState(null);
-			const [opening, setOpening] = useState("");
+			// The moment a reader asks to arrive at is MissionsTab's business now.
 
 			// The same quarter second the mission search waits, and for the same
 			// reason: `q` reaches a LIKE that cannot use an index.
@@ -8665,30 +8659,6 @@ window.__ModuleLoader__.load({
 					.catch((cause) => { if (alive) setError(String(cause?.message ?? cause)); });
 				return () => { alive = false; };
 			}, [asked, kind, tick]);
-
-			useEffect(() => {
-				if (moment === null) { setOpened(null); setOpening(""); return undefined; }
-				let alive = true;
-				setOpening(moment.resourceId);
-				fetch(`${apiBase()}/resources/${encodeURIComponent(moment.resourceId)}`)
-					.then(missionData)
-					.then((data) => {
-						if (!alive) return;
-						// THE ROUTE ANSWERS THE ROW ITSELF OR WRAPS IT; both shapes are
-						// read because guessing wrong here is a reader that opens on a
-						// blank panel with nothing saying why.
-						const row = data?.resource ?? data;
-						setOpened(row !== null && typeof row === "object" && typeof row.id === "string" ? row : null);
-						setOpening("");
-					})
-					.catch((cause) => {
-						if (!alive) return;
-						setError(String(cause?.message ?? cause));
-						setMoment(null);
-						setOpening("");
-					});
-				return () => { alive = false; };
-			}, [moment]);
 
 			/** Hand one card a verdict, or hand it back to the pass. */
 			const pin = useCallback(async (id, wanted) => {
@@ -8725,20 +8695,17 @@ window.__ModuleLoader__.load({
 				}
 			}, []);
 
-			// THE READER TAKES THE PANE, the way 信源 switches into its own: a
-			// video beside its transcript needs the width, and a drawer over a
-			// list of claims would give it a third of one. 返回 comes back to the
-			// claim that sent you, because the list has not moved.
-			if (opened !== null && moment !== null) {
-				return jsx(DetailView, {
-					row: opened,
-					kind: KINDS.find((one) => one.type === opened.type) ?? KINDS[0],
-					zh,
-					startAt: moment.at,
-					onBack: () => { setMoment(null); }
-				}, "reader");
-			}
-			if (opening !== "") return jsx(Skeleton, { rows: 6 }, "opening");
+			// THE READER IS MOUNTED BY THE TAB, NOT BY THIS PANE.
+			//
+			// `DetailView` is built to BE a tab's body — 信源 returns it straight
+			// from the tab and the frame hands that the whole height. Returned from
+			// inside this pane it sat in a flex column under a header and a strip,
+			// resolved `height: 100%` against nothing, and collapsed: the PDF and
+			// the assistant were squashed into the top 250px with three quarters of
+			// the page blank under them.
+			//
+			// So the moment goes UP, and MissionsTab early-returns the reader the
+			// same way it already early-returns MissionDetail.
 			if (error !== "" && rows === null) return jsx(ErrorBox, { message: error, zh }, "err");
 			if (rows === null) return jsx(Skeleton, { rows: 5 }, "load");
 
@@ -8781,57 +8748,15 @@ window.__ModuleLoader__.load({
 					// WHAT THIS IS AND WHEN IT LAST RAN, in one line each. A standing
 					// table with no "as of" is a table a reader has to guess the age
 					// of, and the guess is always "now".
-					jsxs("div", {
-						style: { display: "flex", alignItems: "flex-start", gap: SPACE.md, flexWrap: "wrap" },
-						children: [
-							jsxs("div", {
-								style: { flex: 1, minWidth: "220px" },
-								children: [
-									// THE PANE'S NAME AT 20px, not at the 14px of a field label. The
-									// reference opens its page with a title you can read across the room;
-									// this said 信源洞察 in the same weight as the sentence under it, so the
-									// pane began with no beginning.
-									jsx("div", {
-										style: { font: FONT.title, color: INK.primary },
-										children: zh ? "信源洞察" : "Library insight"
-									}, "name"),
-									jsx("p", {
-										style: { font: FONT.small, color: INK.secondary, margin: `2px 0 0` },
-										children: zh
-											? "把信源库读成一组能站住的主张：每条都带原话、独立来源计数，和一个你可以推翻的判定。"
-											: "The library read as standing claims: each with its verbatim quote, a count of independent sources, and a verdict you can overrule."
-									}, "note")
-								]
-							}, "words"),
-							jsxs("div", {
-								style: { display: "flex", alignItems: "center", gap: SPACE.sm, flex: "none" },
-								children: [
-									jsx("button", {
-										type: "button",
-										className: "swm-ctl swm-focus", style: controlStyle(busy !== ""),
-										disabled: busy !== "",
-										onClick: () => { setTick((value) => value + 1); },
-										children: zh ? "刷新" : "Refresh"
-									}, "refresh"),
-									jsx("button", {
-										type: "button",
-										disabled: busy !== "",
-										className: "swm-ctl swm-focus",
-										style: {
-											...controlStyle(busy !== ""),
-											border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
-											background: tint(TONE.accent, TINT.soft),
-											color: `rgb(${TONE.accent})`
-										},
-										onClick: () => { void runNow(); },
-										children: busy === "run"
-											? (zh ? "正在跑…" : "Running…")
-											: (zh ? "立即跑一次" : "Run now")
-									}, "run")
-								]
-							}, "actions")
-						]
-					}, "head"),
+						// NO SECOND HEADER. This pane opened with its own name, its own
+						// subtitle and its own pair of buttons — directly under the tab's name,
+						// the tab's subtitle and the strip that had just said which pane you
+						// were on. 信源洞察 appeared twice, six lines apart, at two sizes.
+						//
+						// AND THAT IS THE ROOT OF THE TYPE BEING INCONSISTENT, not a font choice:
+						// two blocks each built as "the top of a page", each sized in isolation,
+						// stacked. One header per screen — the tab names the pane, the strip says
+						// which half, and what belongs to a half travels with that half.
 
 					// THE RUN, AS FIGURES RATHER THAN AS A SENTENCE.
 					//
@@ -8850,6 +8775,35 @@ window.__ModuleLoader__.load({
 							flexWrap: "wrap", font: FONT.micro, color: INK.secondary
 						},
 						children: [
+							jsx("span", { style: { flex: 1 } }, "spacer"),
+								jsxs("div", {
+									style: { display: "flex", alignItems: "center", gap: SPACE.sm, flex: "none" },
+									children: [
+										jsx("button", {
+											type: "button",
+											className: "swm-ctl swm-focus", style: controlStyle(busy !== ""),
+											disabled: busy !== "",
+											onClick: () => { setTick((value) => value + 1); },
+											children: zh ? "刷新" : "Refresh"
+										}, "refresh"),
+										jsx("button", {
+											type: "button",
+											disabled: busy !== "",
+											className: "swm-ctl swm-focus",
+											style: {
+												...controlStyle(busy !== ""),
+												border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
+												background: tint(TONE.accent, TINT.soft),
+												color: `rgb(${TONE.accent})`
+											},
+											onClick: () => { void runNow(); },
+											children: busy === "run"
+												? (zh ? "正在跑…" : "Running…")
+												: (zh ? "立即跑一次" : "Run now")
+										}, "run")
+									]
+								}, "actions")
+							,
 							// A LIVE DOT ONLY WHEN THERE IS A SCHEDULE. A steady mark beside a
 							// table last written in August would be the page claiming to be live.
 							jsx("span", {
@@ -9037,7 +8991,7 @@ window.__ModuleLoader__.load({
 									]
 								}, "head"),
 								...held.map((row) => InsightCard({
-									row, zh, busy: busy === row.id, onOpenMoment: setMoment,
+									row, zh, busy: busy === row.id, onOpenMoment,
 									onPin: (wanted) => { void pin(row.id, wanted); }
 								}, row.id))
 							]
@@ -9076,7 +9030,13 @@ window.__ModuleLoader__.load({
 			// answers it in a report. 信源洞察 is the opposite shape — nobody asked,
 			// it persists across passes, and it accrues evidence. They were never
 			// the same list and the second had no screen at all.
-			const [pane, setPane] = useState("missions");
+			const [pane, setPane] = useState("library");
+			// A SOURCE A CLAIM POINTED AT, and the second in it to arrive at.
+			// Held here rather than inside the pane because `DetailView` is built
+			// to BE a tab's body: it needs the frame's whole height, which is
+			// something only this level can give it.
+			const [moment, setMoment] = useState(null);
+			const [openedSource, setOpenedSource] = useState(null);
 			// WHAT THE READER TYPED, AND WHAT HAS BEEN ASKED FOR. Two states, not
 			// one: `/missions/list` has taken a `search` since it was written and
 			// nothing ever sent one, and wiring the field straight to the query would
@@ -9164,6 +9124,39 @@ window.__ModuleLoader__.load({
 				return () => { clearTimeout(timer); };
 			}, [live, tick]);
 
+			// The row is fetched when one is chosen rather than held for every card
+			// on the page — sixty claims would be sixty resource reads for a reader
+			// who opens none of them.
+			useEffect(() => {
+				if (moment === null) { setOpenedSource(null); return undefined; }
+				let alive = true;
+				fetch(`${apiBase()}/resources/${encodeURIComponent(moment.resourceId)}`)
+					.then(missionData)
+					.then((data) => {
+						if (!alive) return;
+						// The route answers the row itself or wraps it; both shapes are
+						// read, because guessing wrong here is a reader that opens on a
+						// blank panel with nothing saying why.
+						const row = data?.resource ?? data;
+						setOpenedSource(row !== null && typeof row === "object" && typeof row.id === "string" ? row : null);
+					})
+					.catch(() => { if (alive) setMoment(null); });
+				return () => { alive = false; };
+			}, [moment]);
+
+			// THE READER TAKES THE TAB, the way 信源 switches into its own: a video
+			// beside its transcript needs the width and the height, and 返回 comes
+			// back to the claim that sent you because the list has not moved.
+			if (moment !== null && openedSource !== null) {
+				return jsx(DetailView, {
+					row: openedSource,
+					kind: KINDS.find((one) => one.type === openedSource.type) ?? KINDS[0],
+					zh,
+					startAt: moment.at,
+					onBack: () => { setMoment(null); }
+				}, "reader");
+			}
+
 			if (openId !== "") {
 				return jsx(MissionDetail, {
 					missionId: openId,
@@ -9243,8 +9236,12 @@ window.__ModuleLoader__.load({
 							role: "group",
 							"aria-label": zh ? "洞察类型" : "Kind of insight",
 							children: [
-								{ id: "missions", zh: "主题洞察", en: "By topic" },
-								{ id: "library", zh: "信源洞察", en: "From the library" }
+								// 信源洞察 FIRST. It is the standing one — it accrues without
+								// anybody asking, so it is what a reader opening this tab has
+								// something new to look at. A mission is a question you came
+								// here having already decided to ask.
+								{ id: "library", zh: "信源洞察", en: "From the library" },
+								{ id: "missions", zh: "主题洞察", en: "By topic" }
 							].map((one) => jsx("button", {
 								type: "button",
 								"aria-pressed": pane === one.id,
@@ -9254,7 +9251,7 @@ window.__ModuleLoader__.load({
 								children: zh ? one.zh : one.en
 							}, one.id))
 						}, "kinds"),
-						pane !== "library" ? null : jsx(LibraryInsightPane, { zh }, "library"),
+						pane !== "library" ? null : jsx(LibraryInsightPane, { zh, onOpenMoment: setMoment }, "library"),
 						// EVERYTHING HERE IS THE MISSIONS HALF, and it used to render whatever
 						// was selected — so 信源洞察 drew the library pane and then the mission
 						// cards under it, which is two answers to one question.
