@@ -596,7 +596,42 @@ export function clusterItems(items, options = {}) {
     if (left !== right) return left > right ? -1 : 1;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
-  return clusters.slice(0, maxClusters);
+  // THE CALLER'S FRONT-OF-QUEUE ITEM IS ALWAYS KEPT, WHATEVER ITS CLUSTER'S SIZE.
+  //
+  // Largest-first spends the budget on the biggest stories, which is right —
+  // and on its own it strands the tail for ever. The caller advances a
+  // watermark past what it read, and a slice of mostly-unrelated sources
+  // produces roughly one cluster per source, so the kept clusters are
+  // singletons and the tie-break makes them the NEWEST ones. Measured on a
+  // 200-row slice: 20 rows reached a cluster, 180 were binned, and every one of
+  // those 180 was older than the watermark the pass then wrote. Read once,
+  // discarded, never offered again, under three true-looking numbers.
+  //
+  // BY ID, CHOSEN BY THE CALLER, and that is not fussiness. An item's `at` is
+  // `publishedAt || createdAt` — deliberately, since the clustering window is
+  // about when the EVENT happened — while the watermark advances on
+  // `createdAt`, which is when this library learned of it. A two-year-old paper
+  // harvested this morning is old by one and new by the other. Reserving "the
+  // oldest cluster" by the field this function happens to hold would guarantee
+  // the wrong row, so the caller names the one row that must be read: the front
+  // of ITS queue, in ITS order.
+  //
+  // One slot of the budget, and it is the difference between a queue and a leak.
+  const wanted = firstText(options.ensureItemId);
+  if (clusters.length <= maxClusters || wanted === "") return clusters.slice(0, maxClusters);
+  const kept = clusters.slice(0, maxClusters);
+  const holds = (cluster) => cluster.members.some((member) => firstText(member?.id) === wanted);
+  if (kept.some(holds)) return kept;
+  const home = clusters.find(holds);
+  // The item may have been dropped before clustering — no usable title, or
+  // trimmed out of a runaway cluster. Nothing to reserve, and inventing a slot
+  // for a row that is not there would just shrink the budget.
+  if (home === undefined) return kept;
+  // Drop the last of the largest-first selection to make room: the smallest and
+  // newest of the kept set, which is the cheapest slot to spend on the
+  // guarantee. The ceiling itself is not widened — a guarantee that quietly
+  // bought another model call would be a bill nobody agreed to.
+  return [home, ...kept.slice(0, maxClusters - 1)];
 }
 
 /* ── stage 4: quote verification ───────────────────────────────────────── */

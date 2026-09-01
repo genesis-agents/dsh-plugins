@@ -1598,6 +1598,13 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     windowDays: bounded(config.insightWindowDays, 1, 30, INSIGHT_DEFAULTS.insightWindowDays),
     maxBits: bounded(config.insightDuplicateBits, 0, 12, INSIGHT_DEFAULTS.insightDuplicateBits),
     maxClusters: bounded(config.insightMaxClusters, 1, 60, INSIGHT_DEFAULTS.insightMaxClusters),
+    // THE FRONT OF THE QUEUE, IN THIS FUNCTION'S ORDER. `rows` is sorted by
+    // `createdAt` ascending and the watermark advances on the same field, so
+    // this is the one row that must be read for the drain to move at all.
+    // Without it a correct watermark converts silent loss into no progress:
+    // the contiguous read prefix would be empty and the pass would re-read the
+    // same slice for ever.
+    ensureItemId: rows.length === 0 ? undefined : String(rows[0].id),
   });
 
   // The watermark covers the rows that REACHED A SURVIVING CLUSTER, and only
@@ -1621,9 +1628,33 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
   for (const cluster of clusters) {
     for (const member of cluster.members) reached.add(String(member?.id));
   }
+  // THE WATERMARK MAY ONLY COVER ROWS THAT WERE ACTUALLY READ, AND ONLY
+  // CONTIGUOUSLY FROM THE OLDEST.
+  //
+  // It was the MAX createdAt among rows that reached a surviving cluster, on
+  // the argument that binned rows "simply come back next pass". They did not.
+  // The ceiling keeps the largest clusters and breaks ties NEWEST-first, so on
+  // a slice of unrelated sources the survivors are the newest rows — the max
+  // therefore lands at the end of the slice and every binned row, all of them
+  // older, falls below it. Measured on a 200-row slice: 180 binned, 180 of
+  // them at or under the watermark the pass then wrote. Read once, discarded,
+  // never offered again, with three healthy-looking numbers over the loss.
+  //
+  // A watermark is a promise that everything before it has been read, so it
+  // may only advance across an unbroken run of read rows. The first row that
+  // was NOT read stops it — everything from there on comes back, which is what
+  // "comes back next pass" was supposed to mean.
+  //
+  // STRICTLY BEFORE THE FIRST UNREAD ROW'S TIMESTAMP, not up to it: the scan
+  // filters with `created_at > ?`, so two rows sharing an instant where one was
+  // binned would see the binned one skipped by a watermark equal to that
+  // instant. Rows are already oldest-first here.
+  const firstUnread = rows.find((row) => !reached.has(String(row.id)));
+  const ceiling = firstUnread === undefined ? null : String(firstUnread.createdAt ?? "");
   const watermark = rows
     .filter((row) => reached.has(String(row.id)))
     .map((row) => String(row.createdAt ?? ""))
+    .filter((at) => ceiling === null || at < ceiling)
     .reduce((latest, value) => (value > latest ? value : latest), "");
   const binned = rows.length - reached.size;
   for (const row of rows) {

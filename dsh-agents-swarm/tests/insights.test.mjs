@@ -1869,3 +1869,93 @@ test("a busy route still reads the body before it refuses", async (t) => {
 
   release();
 });
+
+/* ── the ceiling is a queue, not a leak ────────────────────────────────── */
+//
+// MEASURED BEFORE THE FIX, on a 200-row slice of unrelated sources: 20 rows
+// reached a surviving cluster, 180 were binned, and all 180 sat at or under the
+// watermark the pass then wrote. Read once, discarded, never offered again —
+// with `rows: 200, clusters: 20, binned: 180` reported over the loss, all three
+// of them true. The comment above the watermark claimed binned rows "simply
+// come back next pass"; they came back only when the survivors happened to be
+// the oldest, and the ceiling's tie-break makes them the newest.
+
+/** A slice of sources that share no vocabulary, so clustering cannot collapse them. */
+function unrelatedSlice(count) {
+  const word = (n) => "w" + n.toString(36) + "x" + ((n * 7919) % 99991).toString(36);
+  const rows = [];
+  for (let at = 0; at < count; at += 1) {
+    rows.push({
+      id: "r" + String(at).padStart(4, "0"),
+      type: "NEWS",
+      title: `${word(at * 3)} ${word(at * 3 + 1)} ${word(at * 3 + 2)}`,
+      abstract: Array.from({ length: 12 }, (_, k) => word(at * 100 + k)).join(" "),
+      sourceType: `Outlet ${at}`,
+      // DISTINCT INSTANTS, because the watermark is a timestamp and this
+      // fixture is about the ceiling, not about ties. Rows sharing an instant
+      // with an unread row correctly stop the watermark dead — that is a real
+      // and separate hazard on a bulk-seeded library, and giving it to this
+      // test would have it fail for the wrong reason.
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 0) + at * 1000).toISOString(),
+      publishedAt: "2026-01-01T00:00:00.000Z",
+    });
+  }
+  return rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/** The watermark exactly as insightPassOnce computes it. */
+function watermarkOf(rows, reached) {
+  const firstUnread = rows.find((row) => !reached.has(String(row.id)));
+  const ceiling = firstUnread === undefined ? null : String(firstUnread.createdAt ?? "");
+  return rows
+    .filter((row) => reached.has(String(row.id)))
+    .map((row) => String(row.createdAt ?? ""))
+    .filter((at) => ceiling === null || at < ceiling)
+    .reduce((latest, value) => (value > latest ? value : latest), "");
+}
+
+test("no row is watermarked past without having been read", () => {
+  const rows = unrelatedSlice(200);
+  const items = rows.map(itemForRow).filter((one) => one !== undefined);
+  const clusters = clusterItems(items, { windowDays: 7, maxBits: 3, maxClusters: 20, ensureItemId: String(rows[0].id) });
+  const reached = new Set(clusters.flatMap((c) => c.members.map((m) => String(m.id))));
+  assert.ok(reached.size < rows.length, "the fixture clustered everything; the ceiling never bit");
+
+  const watermark = watermarkOf(rows, reached);
+  const stranded = rows.filter((row) => !reached.has(String(row.id)) && String(row.createdAt) <= watermark);
+  assert.equal(stranded.length, 0, `${stranded.length} unread rows are below the watermark and will never be offered again`);
+});
+
+test("the oldest row is always read, so the queue cannot starve", () => {
+  // A correct watermark on its own converts silent loss into no progress: if
+  // the front of the queue is never among the clusters kept, the contiguous
+  // prefix is empty and the pass re-reads the same slice for ever. One slot of
+  // the cluster budget is reserved for the oldest, which is what makes the
+  // drain monotone.
+  const rows = unrelatedSlice(200);
+  const items = rows.map(itemForRow).filter((one) => one !== undefined);
+  const clusters = clusterItems(items, { windowDays: 7, maxBits: 3, maxClusters: 20, ensureItemId: String(rows[0].id) });
+  const reached = new Set(clusters.flatMap((c) => c.members.map((m) => String(m.id))));
+  assert.ok(reached.has(String(rows[0].id)), "the oldest row was not read; the watermark cannot advance at all");
+  assert.ok(watermarkOf(rows, reached) !== "", "the watermark did not move, so the next pass re-reads this slice");
+});
+
+test("the ceiling is still honoured, and still prefers the big stories", () => {
+  // The reservation costs exactly one slot. A guarantee that quietly widened
+  // the budget would be a bill nobody agreed to, paid one model call at a time.
+  const rows = unrelatedSlice(120);
+  const items = rows.map(itemForRow).filter((one) => one !== undefined);
+  const clusters = clusterItems(items, { windowDays: 7, maxBits: 3, maxClusters: 12, ensureItemId: String(rows[0].id) });
+  assert.equal(clusters.length, 12, `the ceiling was widened to ${clusters.length}`);
+  assert.ok(clusters.some((c) => c.members.some((m) => String(m.id) === String(rows[0].id))), "the oldest is missing");
+});
+
+test("a slice small enough to fit is returned untouched", () => {
+  const rows = unrelatedSlice(5);
+  const items = rows.map(itemForRow).filter((one) => one !== undefined);
+  const clusters = clusterItems(items, { windowDays: 7, maxBits: 3, maxClusters: 20, ensureItemId: String(rows[0].id) });
+  const reached = new Set(clusters.flatMap((c) => c.members.map((m) => String(m.id))));
+  assert.equal(reached.size, rows.length, "a slice under the ceiling lost rows anyway");
+  // Everything was read, so the watermark may cover the whole slice.
+  assert.equal(watermarkOf(rows, reached), String(rows[rows.length - 1].createdAt));
+});
