@@ -516,6 +516,29 @@ export class SourceStore {
   }
 
   /**
+   * Videos waiting on a transcript, oldest first.
+   *
+   * OLDEST FIRST, matching the insight scan's own drain order. A backlog worked
+   * from the newest end leaves the tail permanently unread, which is the exact
+   * trade `collectCandidates` documents at length and reverses for the same
+   * reason: rows nothing ever reaches are rows nobody knows are missing.
+   * @param limit - how many to name.
+   * @returns `[{ id, title, type, sourceUrl }]`.
+   */
+  videosWithoutTranscript(limit = 20) {
+    const take = Math.max(1, Math.min(200, Number(limit) || 20));
+    return this.db.prepare(`
+      SELECT r.id, r.title, r.type, r.source_url AS sourceUrl
+        FROM resources r
+        LEFT JOIN transcripts t ON t.resource_id = r.id
+       WHERE r.type IN ('YOUTUBE_VIDEO','YOUTUBE','VIDEO','PODCAST')
+         AND (t.resource_id IS NULL OR t.text = '')
+       ORDER BY r.created_at ASC
+       LIMIT ?
+    `).all(take);
+  }
+
+  /**
    * Read a cached transcript.
    * @param resourceId - the video's resource id.
    * @returns `{ language, text, fetchedAt }`, or undefined.

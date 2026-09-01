@@ -2024,7 +2024,18 @@ export async function runInsightPass(store, insightStore, chat, logger, { markSk
       return result;
     }
     logger?.info?.(`swarm: insight pass skipped — ${result.reason}`);
-    note({ ...stamp(), skipped: result.reason, backlog: result.backlog, scope: scopeNote });
+    // THE SKIP RECORD CHERRY-PICKED TWO FIELDS AND DROPPED THE REST, which
+    // is how the top-up report vanished a second time after being carefully
+    // added to the early return that produces it. `reason` and `backlog` were
+    // the only things a skip could carry when this was written; the transcript
+    // stage now puts the one actionable fact on that same object — that the
+    // provider is out of quota — and a hand-listed field set silently discards
+    // every field added after it.
+    //
+    // Spread the result and name the two overrides, so the next field to be
+    // added to a skip arrives on the record without anybody remembering this
+    // line exists.
+    note({ ...stamp(), ...result, ran: false, skipped: result.reason, backlog: result.backlog, scope: scopeNote });
     return result;
   } catch (cause) {
     const error = String(cause?.message ?? cause);

@@ -30,7 +30,7 @@
 import { INSIGHT_KINDS, INSIGHT_STATUSES, PASS_STATES, openInsightStore } from "./insight-store.js";
 import { RESOURCE_TYPES } from "./store.js";
 import { MIN_VIDEO_SECONDS } from "./collect.js";
-import { MIN_INSIGHT_INTERVAL_MINUTES, pickCandidates, readInsightConfig, runInsightPass } from "./insight-extract.js";
+import { MIN_INSIGHT_INTERVAL_MINUTES, pickCandidates, readInsightConfig, runInsightPass, topUpTranscripts } from "./insight-extract.js";
 import { withMoments } from "./insight-moment.js";
 import { STRENGTH_BANDS, strengthOf } from "./insights.js";
 import { mergeIdenticalEvidence, runReclassifyPass } from "./insight-reclassify.js";
@@ -173,6 +173,11 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
    * was making.
    */
   let manualRunInFlight = false;
+  // The same shape for the transcript drain: one at a time, and its last
+  // report kept so `/insights/status` can say what it did. Two drains over one
+  // library would spend the budget twice on the same oldest rows.
+  let drainInFlight = false;
+  let lastDrain = null;
   // The same shape, for the refiling pass: one at a time, and its last
   // report kept so `/insights/status` can say what it did.
   let refileInFlight = false;
@@ -619,6 +624,92 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
       return true;
     }
 
+    // ── fetch transcripts, with no pass attached ────────────────────────
+    //
+    // A ROUTE OF ITS OWN BECAUSE IT IS A DIFFERENT JOB. The pass tops up as
+    // preparation for the reading it is about to do, so it tops up what THIS
+    // scan skipped — which is correct, and useless for draining a backlog: a
+    // scoped run narrows the scan, so a run scoped to a topic nobody wrote
+    // about skips nothing and therefore fetches nothing. That was tried, on
+    // the argument that it would drain the backlog at no model cost, and it
+    // fetched zero.
+    //
+    // Draining is not a pass with the reading removed. It is a queue with a
+    // budget, and it costs no model calls because no model is involved.
+    if (req.method === "POST" && path === "/insights/transcribe") {
+      if (transcribe === undefined) {
+        sendJson(res, 503, { success: false, error: "no transcript fetcher wired on this host" });
+        return true;
+      }
+      let limit = 20;
+      const hasBody = Number(req.headers?.["content-length"] ?? 0) > 0
+        || typeof req.headers?.["transfer-encoding"] === "string";
+      if (hasBody) {
+        // Read whatever the answer is going to be — the lesson from run-now,
+        // where returning before draining the stream reset the proxy's
+        // connection and surfaced as a 502 blaming the library.
+        let body;
+        try {
+          body = await readJson(req);
+        } catch (cause) {
+          sendJson(res, 400, { success: false, error: String(cause?.message ?? cause) });
+          return true;
+        }
+        if (body?.limit !== undefined && body.limit !== null && body.limit !== "") {
+          const many = Number(body.limit);
+          if (!Number.isInteger(many) || many < 1 || many > 200) {
+            sendJson(res, 400, { success: false, error: "limit must be a whole number between 1 and 200" });
+            return true;
+          }
+          limit = many;
+        }
+      }
+      // REFUSED ONLY AFTER THE BODY IS READ — and this route reproduced the
+      // exact fault it was written a few minutes after fixing. run-now
+      // answered its in-flight 202 before touching the request stream, the
+      // socket was torn down with a body still arriving, and the proxy in
+      // front reported the library as unreachable. Written fresh, this route
+      // put its own guard in the same wrong place.
+      //
+      // The rule, for every route here that takes a body: consume it first,
+      // whatever the answer is going to be. Caught by a probe that sent a
+      // deliberately invalid limit and got 202 instead of 400.
+      if (drainInFlight) {
+        sendJson(res, 202, { success: true, data: { started: false, running: true, reason: "a drain is already running" } });
+        return true;
+      }
+      const waiting = store.videosWithoutTranscript(limit);
+      if (waiting.length === 0) {
+        sendJson(res, 200, { success: true, data: { started: false, tried: 0, gained: 0, remaining: 0, reason: "every video already has one" } });
+        return true;
+      }
+      drainInFlight = true;
+      // Answered immediately, like run-now and for the same reason: 200 fetches
+      // against three free endpoints is minutes, and a request held open that
+      // long reads as a hang. The outcome arrives on `/insights/status`.
+      void topUpTranscripts(store, waiting.map((row) => ({ row, reason: "no transcript stored" })), {
+        transcribe,
+        limit,
+        logger,
+      })
+        .then((report) => {
+          lastDrain = {
+            at: new Date().toISOString(),
+            tried: report.tried,
+            gained: report.gained,
+            stopped: report.stopped,
+            remaining: store.countVideosWithoutTranscript(),
+          };
+        })
+        .catch((cause) => {
+          lastDrain = { at: new Date().toISOString(), tried: 0, gained: 0, stopped: String(cause?.message ?? cause), remaining: null };
+          logger?.warn?.(`swarm: transcript drain failed: ${String(cause?.message ?? cause)}`);
+        })
+        .finally(() => { drainInFlight = false; });
+      sendJson(res, 202, { success: true, data: { started: true, running: true, queued: waiting.length } });
+      return true;
+    }
+
     // ── what one pass actually did, source by source ────────────────────
     if (req.method === "GET" && path === "/insights/ledger") {
       const params = new URL(req.url, "http://local").searchParams;
@@ -683,6 +774,11 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
           // reader asking "why is the pass only reading a corner of this" wants
           // the size of the corner, not this tick's share of it.
           awaitingTranscript: store.countVideosWithoutTranscript?.() ?? null,
+          // Whether a drain is running here, and what the last one did. A
+          // number that is not moving and a fetcher that is not running look
+          // identical from the count alone.
+          transcriptDraining: drainInFlight,
+          lastTranscriptDrain: lastDrain,
           // What the NEXT pass would read, so the schedule can be judged
           // before it runs rather than by reading tomorrow's tab.
           waiting,

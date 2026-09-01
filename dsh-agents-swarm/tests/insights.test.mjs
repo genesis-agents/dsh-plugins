@@ -19,6 +19,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
 import { SourceStore } from "../lib/store.js";
+import { createInsightRoutes } from "../lib/insight-routes.js";
 import {
   CREDIBILITY_WEIGHTS,
   MIN_QUOTE_CHARS,
@@ -1342,7 +1343,12 @@ test("the figures of the last good run survive the next press", async (t) => {
   // A run with too little material: skips, and writes a skip record.
   await runInsightPass(store, insights, chat, undefined, { markSkips: false });
   const config = readInsightConfig(store);
-  assert.equal(config.insightLastManualRun.ran, undefined, "the fixture did not skip; this proves nothing");
+  // `ran` is now written as an explicit false rather than left absent: the
+  // skip record spreads the pass's whole result instead of cherry-picking two
+  // fields, which is what stopped it silently dropping every field added after
+  // it was written. Asserting "not true" rather than "absent" so this says
+  // what it means — the fixture skipped — instead of pinning a representation.
+  assert.notEqual(config.insightLastManualRun.ran, true, "the fixture did not skip; this proves nothing");
   assert.equal(config.insightLastGoodRun.rows, 200, "a skipped run wiped the last good figures");
   assert.equal(config.insightLastGoodRun.claims, 13);
 });
@@ -1754,4 +1760,106 @@ test("the scheduled pass gets a fetcher through the same seam", async (t) => {
     transcribe: async () => { asked += 1; return { language: "en", text: "spoken words long enough to matter here", cues: [] }; },
   });
   assert.ok(asked > 0, "the scheduled pass never reached the fetcher");
+});
+
+/* ── draining the backlog is its own job ───────────────────────────────── */
+
+test("a scoped run tops up only what its own scan skipped", async (t) => {
+  // THE TRICK THAT DID NOT WORK, kept as a guard because it is a reasonable
+  // thing to try again. A run scoped to a topic nobody wrote about was supposed
+  // to drain the transcript backlog at no model cost: the top-up runs before
+  // the "enough material" check, so it would fetch and then skip. It fetched
+  // ZERO — the scope narrows the SCAN, so a search matching nothing skips
+  // nothing, and there is nothing to top up.
+  //
+  // Draining is not a pass with the reading removed. It is a queue with a
+  // budget, which is why `/insights/transcribe` exists.
+  const { store, insights } = library(t);
+  store.put(resource("v1", { type: "YOUTUBE_VIDEO", title: "An hour on inference", sourceUrl: "https://youtu.be/aaaaaaaaaaa" }));
+  let asked = 0;
+  const chat = async function* () { yield { error: "no model here" }; };
+  await insightPassOnce(store, insights, chat, undefined, {
+    transcribe: async () => { asked += 1; return { language: "en", text: "words", cues: [] }; },
+    scope: { search: "zzqqxx-no-such-topic", transcribe: 60 },
+  });
+  assert.equal(asked, 0, "a scope that matches nothing still found videos to top up; the guard is stale");
+});
+
+test("the backlog is drained oldest first", (t) => {
+  // Matching the insight scan's own drain order, and for the reason it states
+  // at length: a queue worked from the newest end leaves the tail permanently
+  // unread, and rows nothing ever reaches are rows nobody knows are missing.
+  const { store } = library(t);
+  for (const [id, at] of [["new", "2026-09-01"], ["old", "2026-01-01"], ["mid", "2026-05-01"]]) {
+    store.put(resource(id, { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/" + id + "aaaaaaaa", createdAt: at + "T00:00:00.000Z" }));
+  }
+  assert.deepEqual(store.videosWithoutTranscript(2).map((row) => row.id), ["old", "mid"]);
+  // And an article is not a video waiting on one.
+  store.put(resource("article", { type: "NEWS" }));
+  assert.equal(store.videosWithoutTranscript(50).length, 3, "a non-video reached the transcript queue");
+});
+
+test("a video that has one is off the queue", (t) => {
+  const { store } = library(t);
+  store.put(resource("v", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/aaaaaaaaaaa" }));
+  assert.equal(store.videosWithoutTranscript(10).length, 1);
+  store.putTranscript("v", "en", "spoken words", [{ start: 0, text: "spoken words" }]);
+  assert.equal(store.videosWithoutTranscript(10).length, 0, "a transcribed video is still queued");
+  // An empty stored transcript is not a transcript: it would make the scan
+  // treat the video as readable and hand the model a blank block.
+  store.putTranscript("v", "en", "", []);
+  assert.equal(store.videosWithoutTranscript(10).length, 1, "an empty transcript counts as having one");
+});
+
+test("a busy route still reads the body before it refuses", async (t) => {
+  // THE SAME FAULT, TWICE, MINUTES APART. run-now answered its in-flight 202
+  // before touching the request stream: the client was still sending, the
+  // socket was torn down with a body in flight, and the proxy in front
+  // reported "cannot reach the library" as a 502 — the page blaming the
+  // library at the exact moment it was busiest. The drain route, written after
+  // that was fixed, put its own guard in the same wrong place and was caught
+  // by a probe sending a deliberately invalid limit and getting 202.
+  //
+  // The rule for every route here that takes a body: consume it first,
+  // whatever the answer is going to be. A 400 for a malformed request also
+  // beats a 202 that refuses it for an unrelated reason.
+  const { store } = library(t);
+  for (let at = 0; at < 4; at += 1) {
+    store.put(resource("v" + at, { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/" + at + "aaaaaaaaaa" }));
+  }
+  const answers = [];
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const handle = createInsightRoutes({
+    store,
+    chat: undefined,
+    logger: undefined,
+    sendJson: (res, code, body) => answers.push({ code, body }),
+    readJson: async (req) => JSON.parse(req.__body ?? "{}"),
+    // Held open so a drain is genuinely in flight for the second request.
+    transcribe: async () => { await held; return { language: "en", text: "words", cues: [] }; },
+  });
+  const post = async (body) => {
+    const before = answers.length;
+    const req = {
+      method: "POST",
+      url: "/insights/transcribe",
+      headers: body === undefined ? {} : { "content-length": String(Buffer.byteLength(body)) },
+      __body: body,
+    };
+    await handle(req, {}, "/insights/transcribe");
+    return answers[before];
+  };
+
+  const first = await post(JSON.stringify({ limit: 2 }));
+  assert.equal(first.code, 202, "the first drain did not start");
+  assert.equal(first.body.data.started, true);
+
+  // A drain is now in flight. A malformed body must still be read and refused
+  // on its own terms rather than swallowed by the busy answer.
+  const bad = await post(JSON.stringify({ limit: 9999 }));
+  assert.equal(bad.code, 400, "a busy route answered 202 without reading the body it was sent");
+  assert.match(String(bad.body.error), /between 1 and 200/);
+
+  release();
 });
