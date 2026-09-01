@@ -475,6 +475,70 @@ const SIGNED = {
   verifiedFindings: 24, spend: { tokens: 980000, calls: 61 },
 };
 
+/**
+ * 信源洞察's own fixtures: two standing claims, one off a talk and one off a
+ * paper.
+ *
+ * THE VIDEO ONE IS THE POINT. A paper's citation is the paper; a talk's is
+ * the SECOND, and `at`/`atUrl` are what the server computes by matching the
+ * quote against the stored cues. Without a video-backed row in here the
+ * whole moment path — the match, the link, the `▶ 38:08` — is exercised by
+ * nothing, and the pane's test passes on an empty list.
+ */
+const INSIGHTS = {
+  insights: [
+    {
+      id: "insight-video", kind: "shift", status: "standing", effectiveStatus: "standing",
+      pinnedStatus: null,
+      statement: "同规模开源 token 与前沿 token 耗算力完全相同",
+      entities: ["Gavin Baker", "Atreides Management"],
+      sourceCount: 3, independentCount: 2, contradictionCount: 0,
+      novelty: 0.9, relevance: 0.8, credibility: 0.7, momentum: 0.5, rankScore: 0.78,
+      firstSeenAt: "2026-08-30T09:00:00.000Z", lastSeenAt: "2026-08-31T09:00:00.000Z",
+      evidencePreview: [{
+        resourceId: "vid-1", stance: "supports",
+        quote: "And it's like it takes the exact same amount of compute.",
+        sourceKey: "youtube.com", type: "YOUTUBE_VIDEO", resourceType: "YOUTUBE_VIDEO",
+        title: "Why AI Demand Is Outrunning Compute Supply",
+        sourceUrl: "https://www.youtube.com/watch?v=abc123",
+        at: 1936, atUrl: "https://www.youtube.com/watch?v=abc123&t=1936s",
+      }],
+    },
+    {
+      id: "insight-paper", kind: "finding", status: "candidate", effectiveStatus: "candidate",
+      pinnedStatus: null,
+      statement: "多模态模型在长视频描述上出现时序不一致",
+      entities: [],
+      sourceCount: 1, independentCount: 1, contradictionCount: 0,
+      novelty: 1, relevance: 1, credibility: 1, momentum: 0, rankScore: 0.65,
+      firstSeenAt: "2026-08-24T12:33:38.031Z", lastSeenAt: "2026-08-24T12:33:38.031Z",
+      evidencePreview: [{
+        resourceId: "pap-1", stance: "supports",
+        quote: "However, these models suffer from factual inaccuracy.",
+        sourceKey: "arxiv.org", type: "PAPER", resourceType: "PAPER",
+        title: "Mitigating Object and Action Hallucinations",
+        sourceUrl: "https://arxiv.org/abs/2512.04356",
+        // A PAPER HAS NO SECOND TO POINT AT, and the pane must not draw one.
+        at: null, atUrl: null,
+      }],
+    },
+  ],
+  total: 2, hasMore: false,
+  counts: { candidate: 1, standing: 1, contested: 0, dormant: 0 },
+};
+
+/** What `/insights/status` answers: the config, and the last pass's arithmetic. */
+const INSIGHT_STATUS = {
+  insightIntervalMinutes: 0,
+  insightResourceTypes: ["YOUTUBE_VIDEO", "NEWS", "BLOG", "PAPER", "REPORT", "POLICY"],
+  insightWindowDays: 7, insightDormantDays: 21, insightMinIndependent: 2,
+  insightLastRun: null,
+  insightLastManualRun: {
+    date: "2026-08-31", at: "2026-08-31T12:35:23.804Z", ran: true,
+    rows: 200, claims: 9, verified: 9, backlog: 21117,
+  },
+};
+
 /** One page of `/missions/list`, `live` and all. */
 const missionPage = (rows, live) => ({
   missions: rows, total: rows.length, hasMore: false,
@@ -1496,7 +1560,13 @@ function stubFetch(overrides = {}) {
     // THE s11 DRAWER'S OWN ENDPOINT. Nothing stubbed it, so no test had ever
     // rendered MissionJudgement, and the foreword — a STRUCTURED object by
     // FOREWORD_SCHEMA — went out as a React child unchallenged.
-    if (address.includes("/insights")) {
+    // A MISSION'S OWN `/insights`, AND ONLY THAT. `/insights` as a bare
+    // substring also matches the LIBRARY's `/insights/list`, which is a
+    // different feature under a different prefix — this branch swallowed it
+    // and the 信源洞察 pane rendered against a judgement payload, which has
+    // no `insights` array, so the pane drew an empty list and its test
+    // passed on nothing.
+    if (address.includes("/missions/") && address.includes("/insights")) {
       return ok({
         reconcile: null,
         critique: null,
@@ -1519,6 +1589,8 @@ function stubFetch(overrides = {}) {
       return ok({ title: "Scaling test-time compute", markdown: "An abstract of the paper the quote came from.", text: "An abstract." });
     }
 
+    if (address.includes("/insights/list")) return ok(INSIGHTS);
+    if (address.includes("/insights/status")) return ok(INSIGHT_STATUS);
     if (address.includes("/missions/list")) {
       const query = address.includes("?") ? address.slice(address.indexOf("?") + 1) : "";
       const status = new URLSearchParams(query).get("status") ?? "";
@@ -2064,6 +2136,47 @@ test("a row that says running with nothing running it says so", async () => {
   assert.ok(orphan.includes("本进程没有在跑它"), "an orphaned row is indistinguishable from a live mission");
   const live = textOf(card(tree, RUNNING.topic)).join(" ");
   assert.ok(!live.includes("本进程没有在跑它"), "a live mission is reported as an orphan");
+});
+
+test("a claim off a talk carries the second it was said at, and it opens there", async () => {
+  // THE SOURCE OF A SPOKEN CLAIM IS A SECOND, NOT A VIDEO. An hour of
+  // interview is not a citation of one sentence — it hands the reader the
+  // search problem back. The server matches the quote against the stored
+  // cues and hands down `atUrl`; this is the half that draws it.
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await view.act(() => { button(view.tree, "信源洞察").props.onClick(); });
+  const text = textOf(view.tree).join(" ");
+
+  // THE QUOTE IS DRAWN FULL. Every other field on the card is a machine's
+  // judgement; the quote is the one thing a reader can check them against.
+  assert.ok(
+    text.includes("takes the exact same amount of compute"),
+    "the card does not carry the verbatim quote",
+  );
+  assert.ok(text.includes("同规模开源 token"), "the claim itself is not on the card");
+
+  // ▶ 32:16, AND IT IS A LINK THAT OPENS THERE.
+  const jump = find(view.tree, (node) => node.type === "a"
+    && typeof node.props?.href === "string" && node.props.href.includes("t=1936s"));
+  assert.ok(jump, "the quote carries no link into the video at the second it was said");
+  assert.equal(textOf(jump).join("").includes("32:16"), true, `the timestamp is not written the way a player writes it: ${textOf(jump).join("")}`);
+  assert.equal(jump.props.target, "_blank", "the jump replaces the page the reader is on");
+
+  // AND A PAPER GETS NONE. There is no second to point at, and a link that
+  // claimed one would be pointing at nothing.
+  assert.ok(text.includes("factual inaccuracy"), "the paper-backed claim is missing");
+  assert.equal(
+    findAll(view.tree, (node) => node.type === "a"
+      && typeof node.props?.href === "string" && node.props.href.includes("t=")).length, 1,
+    "something other than the talk was given a timestamp",
+  );
+
+  // THE PASS'S OWN ARITHMETIC, as figures rather than as a sentence — and
+  // the backlog among them, because a table built from 200 rows out of
+  // 21117 is a different object from one built from all of them.
+  assert.ok(text.includes("21.1k") || text.includes("21117"), "the pane does not say how much of the library is unread");
+  assert.ok(text.includes("定时未开启"), "a table last written by a manual run reads as a live one");
 });
 
 test("洞察 is two kinds, and the strip is how you get between them", async () => {
