@@ -1848,7 +1848,18 @@ test("a trajectory says how far into the run, not only what time it was", () => 
   // the `font` shorthand that would reset it.
   const clock = /\.swt-clock\{([^}]+)\}/.exec(TRACE_RULES);
   assert.ok(clock, ".swt-clock lost its rule, so the two-line slot is whatever flex gives it");
-  assert.ok(clock[1].includes("width:64px"), "the clock slot is 58px again, which clips `+11m 4s`");
+  // 74px, AND THE HISTORY IS THE POINT. This was 58, then 64 for `+11m 4s`,
+  // and 64 was still measured against the ENGLISH offset — eight monospace
+  // characters. The Chinese one is `+26 分 49 秒`: two CJK glyphs at 11px,
+  // about 70px, and it wrapped, so the column printed the offset over two
+  // lines with the wall clock stacked under that.
+  //
+  // The spaces around the units are gone (CJK needs none) and the width now
+  // holds `+180分49秒`, which is the widest a three-hour run can write.
+  assert.ok(clock[1].includes("width:74px"), "the clock slot is back under 74px, which wraps the Chinese offset onto two lines");
+  // AND IT MAY NOT WRAP. Without this the next string that outgrows the
+  // column silently becomes two lines again; with it, it clips, which shows.
+  assert.ok(clock[1].includes("white-space:nowrap"), "the clock slot may wrap again, which is how this defect arrived the first time");
   assert.ok(clock[1].includes("flex-direction:column"), "the offset and the wall clock are side by side in a 64px slot");
   assert.ok(
     clock[1].indexOf("line-height:") > clock[1].indexOf("font:"),

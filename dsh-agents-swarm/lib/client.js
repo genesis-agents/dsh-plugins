@@ -9964,7 +9964,15 @@ window.__ModuleLoader__.load({
 			const seconds = Math.round(ms / 1000);
 			if (seconds < 60) return `+${seconds}s`;
 			const minutes = Math.floor(seconds / 60);
-			return zh ? `+${minutes} 分 ${seconds % 60} 秒` : `+${minutes}m ${seconds % 60}s`;
+			// NO SPACES AROUND THE CHINESE UNITS. `+26 分 49 秒` is ten characters,
+			// two of them CJK at 11px, and the column that holds it is 64px wide —
+			// so it wrapped, and the trajectory printed its offset over two lines
+			// with the wall clock stacked under that. The English arm never did:
+			// `+26m 49s` is eight monospace characters and fits.
+			//
+			// CJK needs no space before a unit, so dropping them costs nothing and
+			// buys the two widest characters in the string room to sit on one line.
+			return zh ? `+${minutes}分${seconds % 60}秒` : `+${minutes}m ${seconds % 60}s`;
 		}
 
 		/**
@@ -10124,7 +10132,17 @@ window.__ModuleLoader__.load({
 			// six. The line-height comes AFTER the `font` shorthand, which sets
 			// one of its own — written before it, it is silently discarded and the
 			// two lines sit 32px apart in a 38px row.
-			".swt-clock{flex:none;width:64px;display:flex;flex-direction:column;justify-content:center;font:11px/16px var(--ds-font-family-code,monospace);line-height:13px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}",
+			// 74px AND `nowrap`, MEASURED AGAINST THE WIDEST OFFSET IT CAN HOLD.
+			//
+			// 64px was right for `13:26:59` alone — eight monospace characters. The
+			// offset line was added above it later and the width was never revisited:
+			// a three-hour run writes `+180分49秒`, which is six latin characters and
+			// two CJK at 11px, about 62px, and it wrapped inside 64.
+			//
+			// `nowrap` is the half that keeps this honest. Without it the next string
+			// that outgrows the column silently becomes two lines again; with it, it
+			// clips, which is visible.
+			".swt-clock{flex:none;width:74px;display:flex;flex-direction:column;white-space:nowrap;justify-content:center;font:11px/16px var(--ds-font-family-code,monospace);line-height:13px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}",
 			// 96px, up from 64. The slot now carries TWO marks — what kind of record
 			// this is, and who made it — because either one alone answers half of
 			// what a person scanning a hundred rows is asking.

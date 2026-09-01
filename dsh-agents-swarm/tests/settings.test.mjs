@@ -3356,7 +3356,9 @@ test("the stage drawer says what the step did, and how far into the run it did i
   const started = find(drawer.tree, (node) => node.key === "开始");
   assert.ok(started, "the drawer lost its 开始 row");
   assert.ok(
-    textOf(started).join(" ").includes("+13 分"),
+    // `+13分`, no space: CJK needs none before a unit, and the two spaces
+    // that used to be there are what pushed this string past its column.
+    textOf(started).join(" ").includes("+13分"),
     "the drawer's timings are absolute wall-clock only, so \"how far into the run did this step start\" is subtraction done by hand",
   );
 });
