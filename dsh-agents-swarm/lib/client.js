@@ -8278,6 +8278,17 @@ window.__ModuleLoader__.load({
 		* floor, violet for models, green for what is built on them, grey for the
 		* claims that are about the relationship between two layers.
 		*/
+		/**
+		* The source types that HAVE a timeline, which is not the same as the ones
+		* that got a timestamp.
+		*
+		* A paper has no second to point at and its card should say nothing about
+		* one. A talk has a second for every sentence anybody said in it — so a
+		* talk with no timestamp is a fact worth printing, and a paper with none
+		* is not.
+		*/
+		const TIMED_SOURCE = new Set(["YOUTUBE_VIDEO", "YOUTUBE", "VIDEO", "PODCAST"]);
+
 		const INSIGHT_LAYER_FACES = {
 			energy: { zh: "能源", en: "Energy", hue: PALETTE.amber },
 			compute: { zh: "算力底座", en: "Compute", hue: PALETTE.blue },
@@ -8524,12 +8535,49 @@ window.__ModuleLoader__.load({
 									jsx("span", { children: formatMoment(at) }, "at")
 								]
 							}, "at"),
-							// THE TITLE, NOT A STUB. Two lines of the real thing tells a
-							// reader which talk this is; 42 characters of monospace does
-							// not, and that was the only place the source was named.
-							title === null ? null : jsx("span", {
-								title,
-								style: { ...clampBox(1), flex: 1, minWidth: "160px", color: INK.primary },
+							// A TALK WHOSE QUOTE IS NOT FROM THE TALK. Measured on the real
+							// library: five of ten video-backed quotes resolve to a second
+							// and five do not, because those five were copied out of the
+							// video's DESCRIPTION rather than out of what anybody said.
+							//
+							// Left as an absence, a reader sees a timestamp on some cards
+							// and none on others and reads it as the feature being broken.
+							// Said out loud it is a fact about the quote — and a useful one,
+							// because a claim resting on a publisher's own blurb is weaker
+							// evidence than one resting on a sentence somebody said.
+							at !== null || !TIMED_SOURCE.has(String(piece?.type ?? "").toUpperCase()) ? null : jsx("span", {
+								title: zh
+									? "这句话在转录里找不到，多半引自视频简介，所以没有可跳转的时间点。"
+									: "this sentence is not in the transcript — most likely quoted from the video's description, so there is no moment to jump to.",
+								style: {
+									// THE MOMENT CONTROL'S OWN PADDING, so the two sit on one line
+									// at one height — and it costs no new hard-coded pixel.
+									flex: "none", padding: `0 ${SPACE.sm}`,
+									borderRadius: RADIUS.md, border: `1px solid ${LINE.hair}`,
+									font: FONT.nano, color: INK.quiet, lineHeight: 1.8
+								},
+								children: zh ? "来自简介" : "from the description"
+							}, "blurb"),
+							// THE TITLE IS THE WAY IN, for every kind of source and not only
+							// for the ones with a clock. A paper's card named its paper and
+							// then offered no way to reach it: the only link was a 10px
+							// `arxiv.org ↗` at the far end of the line, pointing at the
+							// publisher rather than at the copy this library holds and read.
+							//
+							// It opens the library's own reader — the document beside the
+							// assistant for a paper, the player beside the transcript for a
+							// talk — which is where ▶ 6:40 goes too, minus the second.
+							title === null ? null : jsx("button", {
+								type: "button",
+								title: zh ? `在信源里打开：${title}` : `open in the library: ${title}`,
+								className: "swm-focus",
+								style: {
+									...clampBox(1), flex: 1, minWidth: "160px", textAlign: "left",
+									appearance: "none", border: "none", background: "transparent",
+									padding: 0, cursor: "pointer", font: "inherit",
+									color: "var(--dsw-alias-label-link)"
+								},
+								onClick: () => { onOpenMoment?.({ resourceId: piece.resourceId, at }); },
 								children: title
 							}, "who"),
 							jsx("span", {
@@ -8908,11 +8956,27 @@ window.__ModuleLoader__.load({
 						]
 					}, "tools"),
 
+					// A SECTION LABEL, NOT A THIRD 16px HEADING.
+					//
+					// THREE DIFFERENT THINGS WERE THE SAME SIZE: this label, the group
+					// heading under it, and the claim inside that. Hierarchy is carried
+					// by size, so three levels sharing one size is three levels with no
+					// hierarchy — which is what made the pane read as a jumble rather
+					// than as a page with sections in it.
+					//
+					// The reference's own answer: a small tracked label over a rule,
+					// which names the section without competing with anything in it.
 					jsxs("div", {
-						style: { display: "flex", alignItems: "baseline", gap: SPACE.sm, flexWrap: "wrap" },
+						style: {
+							display: "flex", alignItems: "baseline", gap: SPACE.sm, flexWrap: "wrap",
+							paddingBottom: SPACE.xs, borderBottom: `1px solid ${LINE.hair}`
+						},
 						children: [
 							jsx("h3", {
-								style: { font: FONT.largeStrong, margin: 0, color: INK.primary },
+								style: {
+									font: FONT.microStrong, letterSpacing: TRACK_WIDE,
+									textTransform: "uppercase", margin: 0, color: INK.secondary
+								},
 								children: zh ? "主张" : "Claims"
 							}, "title"),
 							jsx("span", {

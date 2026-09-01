@@ -30,7 +30,7 @@
 import { INSIGHT_KINDS, INSIGHT_STATUSES, openInsightStore } from "./insight-store.js";
 import { pickCandidates, readInsightConfig, runInsightPass } from "./insight-extract.js";
 import { withMoments } from "./insight-moment.js";
-import { runReclassifyPass } from "./insight-reclassify.js";
+import { mergeIdenticalEvidence, runReclassifyPass } from "./insight-reclassify.js";
 
 /** The id shape `newInsightId` mints. Checked before an id reaches SQL. */
 const INSIGHT_ID = /^insight-[0-9A-Za-z]+-[0-9a-f]{8}$/;
@@ -462,7 +462,14 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
       // the process with it. `runInsightPass` is specified to settle every
       // path into a record, but this file cannot verify that and a catch costs
       // one line.
+      // AND THE EVIDENCE-IDENTITY MERGE AFTER IT. The pass's own de-duplication
+      // is a simhash over the STATEMENT, which catches the same claim
+      // re-extracted in the same words and misses it entirely when the wording
+      // moves — a translated claim and a freshly-extracted one are the same
+      // fact with two hashes. Two claims resting on an identical set of quotes
+      // are one claim whatever they say, and that test needs no threshold.
       void runInsightPass(store, insights, chat, logger, { markSkips: false, web })
+        .then(() => mergeIdenticalEvidence(insights, logger))
         .catch((cause) => { logger?.warn?.(`swarm: manual insight pass failed: ${String(cause?.message ?? cause)}`); })
         .finally(() => { manualRunInFlight = false; });
       // The outcome arrives on `/insights/status` as `insightLastManualRun`,

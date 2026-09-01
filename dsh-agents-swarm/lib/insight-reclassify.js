@@ -134,8 +134,11 @@ export async function runReclassifyPass({ insights, chat, config, logger }) {
   // makes the table look half-converted.
   const held = insights.list({ take: 500, sortBy: "recent" });
   const rows = (held?.insights ?? []).filter((row) => needsReclassifying(row, zh));
-  const report = { examined: rows.length, changed: 0, translated: 0, placed: 0, batches: 0, failures: [] };
-  if (rows.length === 0) return report;
+  const report = { examined: rows.length, changed: 0, translated: 0, placed: 0, merged: 0, batches: 0, failures: [] };
+  // NO EARLY RETURN. A table with nothing left to refile can still hold
+  // duplicates this pass created on an earlier run — that was the shape of the
+  // bug: rewriting statements moves their hashes, and the rows that drifted
+  // apart are exactly the ones a later "nothing to do" run would skip past.
 
   for (let at = 0; at < rows.length; at += BATCH) {
     const batch = rows.slice(at, at + BATCH);
@@ -161,6 +164,75 @@ export async function runReclassifyPass({ insights, chat, config, logger }) {
       }
     }
   }
-  logger?.info?.(`swarm: reclassified ${report.changed} of ${report.examined} claim(s); ${report.placed} placed, ${report.translated} rewritten`);
+  // AND THE DUPLICATES THIS PASS ITSELF CREATES. Rewriting a statement moves
+  // its simhash, so a claim translated here and the same claim extracted
+  // afresh in the target language are two rows that will never find each
+  // other by words. They are found by evidence instead — see below.
+  const merged = mergeIdenticalEvidence(insights, logger);
+  report.merged = merged.merged;
+  logger?.info?.(`swarm: reclassified ${report.changed} of ${report.examined} claim(s); ${report.placed} placed, ${report.translated} rewritten, ${merged.merged} merged`);
+  return report;
+}
+
+/**
+ * Two claims resting on exactly the same evidence are one claim.
+ *
+ * WHY THIS IS NEEDED, AND IT IS THE PASS ABOVE'S OWN FAULT. Near-duplicate
+ * detection is a simhash over the STATEMENT, and rewriting statements is
+ * precisely what that pass does — so a claim extracted in English and then
+ * translated, and the same claim extracted afresh in Chinese, end as two rows
+ * with two different wordings, two different hashes, and no reason for either
+ * to notice the other. Measured on the real library: a Mayfield claim appeared
+ * twice, same quote, same video, same second.
+ *
+ * BY EVIDENCE, NOT BY WORDS. The words are the pass's paraphrase and two
+ * paraphrases of one fact are allowed to differ; the evidence IS the fact. A
+ * signature of `resourceId|quote` over the whole set is exact, needs no model
+ * call and no threshold, and cannot merge two claims that merely resemble each
+ * other — which a loosened simhash could, and that is a merge nobody can undo.
+ *
+ * THE OLDEST SURVIVES. `first_seen_at` is the column that answers "since
+ * when", and keeping the newer row would reset it: a card standing since
+ * August would say it was first seen today.
+ * @param insights - the store.
+ * @param logger - optional.
+ * @returns `{ examined, merged }`.
+ */
+export function mergeIdenticalEvidence(insights, logger) {
+  const held = insights.list({ take: 500, sortBy: "recent" });
+  const rows = held?.insights ?? [];
+  const report = { examined: rows.length, merged: 0 };
+
+  const groups = new Map();
+  for (const row of rows) {
+    const full = insights.getWithEvidence(row.id);
+    const evidence = Array.isArray(full?.evidence) ? full.evidence : [];
+    // NO EVIDENCE IS NOT A SIGNATURE. Two claims that rest on nothing are not
+    // thereby the same claim, and grouping them would merge the whole tail of
+    // a table whose rows had lost their sources.
+    if (evidence.length === 0) continue;
+    const key = evidence
+      .map((piece) => `${piece?.resourceId ?? ""}|${String(piece?.quote ?? "").trim()}`)
+      .sort()
+      .join(" ");
+    const list = groups.get(key) ?? [];
+    list.push(full);
+    groups.set(key, list);
+  }
+
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    list.sort((left, right) => String(left.firstSeenAt ?? "").localeCompare(String(right.firstSeenAt ?? "")));
+    for (const doomed of list.slice(1)) {
+      // A PINNED VERDICT IS A PERSON'S DECISION and outranks this. Removing
+      // the row would throw it away silently, which is the one failure
+      // `pinned_status` exists to prevent.
+      if (doomed.pinnedStatus !== null && doomed.pinnedStatus !== undefined) continue;
+      if (insights.remove(doomed.id)) {
+        report.merged += 1;
+        logger?.info?.(`swarm: merged duplicate claim ${doomed.id} into ${list[0].id}`);
+      }
+    }
+  }
   return report;
 }
