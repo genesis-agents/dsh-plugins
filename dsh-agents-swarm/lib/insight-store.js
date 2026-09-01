@@ -317,6 +317,11 @@ function shapeInsight(row) {
     id: row.id,
     statement: row.statement,
     kind: row.kind,
+    // NULL FOR EVERY ROW WRITTEN BEFORE THE EXTRACTOR WAS ASKED FOR ONE, and
+    // the pane files those under their own heading rather than guessing at
+    // one — which is also how a reader sees how much of the table predates
+    // the field.
+    layer: row.layer ?? null,
     entities: entitiesOf(row.entities),
     status: row.status,
     pinnedStatus: pinned,
@@ -685,6 +690,7 @@ export class InsightStore {
       id: row.id,
       statement: row.statement,
       kind: row.kind,
+      layer: row.layer ?? null,
       status: row.status,
       pinnedStatus: row.pinned_status ?? null,
       effectiveStatus: row.pinned_status ?? row.status,
@@ -718,6 +724,7 @@ export class InsightStore {
       statement: row.statement,
       simhash: row.simhash,
       kind: row.kind,
+      layer: row.layer ?? null,
       // Parsed here, not handed over raw: `statementsMatch` counts shared
       // entities, and counting them over a JSON *string* returns 0 for every
       // pair forever — one of the prefilter's three tests would simply never
