@@ -20677,27 +20677,57 @@ window.__ModuleLoader__.load({
 							jsx("p", {
 								style: hint,
 								children: zh
-									? "YouTube 已加固 timedtext 接口，服务端直取多数视频会返回空。官方 Data API 的 captions.download 只授权视频所属频道，无法读第三方视频。因此需要 Supadata 密钥作为兜底 —— 免费通道优先，密钥只在它失败时才消耗。"
-									: "YouTube has hardened timedtext, so a server-side fetch returns an empty body for most videos, and the official Data API authorizes captions.download only for the owning channel. A Supadata key is the fallback; the free route is always tried first, so the key is spent only where it must be."
+									? "YouTube 已加固 timedtext 接口，服务端直取多数视频会返回空。官方 Data API 的 captions.download 只授权视频所属频道，无法读第三方视频。因此需要 Supadata 密钥作为兜底 —— 免费通道优先，密钥只在它失败时才消耗。一行一个，可以填多把：额度是它们的总和，每次从上一次的下一把开始试，某一把用完了就换下一把。"
+									: "YouTube has hardened timedtext, so a server-side fetch returns an empty body for most videos, and the official Data API authorizes captions.download only for the owning channel. A Supadata key is the fallback; the free route is always tried first, so the key is spent only where it must be. One per line, and as many as you like: the quota is their sum, each transcript starts one further along the list, and a key that is spent costs one request before the next is tried."
 							}),
 							jsxs("div", {
-								style: { display: "flex", gap: SPACE.sm, alignItems: "center" },
+								// TOP-ALIGNED, not centred: the field is three rows tall now
+								// and two buttons floating at its middle read as belonging to
+								// whichever line they happen to sit beside.
+								style: { display: "flex", gap: SPACE.sm, alignItems: "flex-start" },
 								children: [
-									jsx("input", {
-										type: "password",
+									// A TEXTAREA, BECAUSE THE VALUE IS A LIST. One-line and
+									// `type="password"`, four pasted keys were a single row of
+									// dots with no way to see that one of them had lost a
+									// character to the paste — and no way to edit the third
+									// without retyping all four.
+									//
+									// AND THAT MEANS THE KEYS ARE VISIBLE WHILE BEING TYPED,
+									// which the password field hid. It is the right trade here
+									// and the reason is what is on the other side of the box:
+									// this pane never receives a stored key back, so the only
+									// thing that can be on screen is what the person in front
+									// of it just pasted. It empties on save.
+									jsx("textarea", {
 										value: keyDraft,
+										rows: 3,
+										spellCheck: false,
+										"aria-label": zh ? "Supadata 密钥，一行一个" : "Supadata keys, one per line",
 										placeholder: config.supadataKeySet
-											? (zh ? "已配置（留空则保持不变）" : "Configured (leave blank to keep)")
-											: (zh ? "尚未配置" : "Not configured"),
+											? (zh ? `已配置 ${config.supadataKeyCount ?? 1} 把（留空则保持不变）` : `${config.supadataKeyCount ?? 1} configured (leave blank to keep)`)
+											: (zh ? "尚未配置，一行一个" : "Not configured — one per line"),
 										onChange: (event) => { setKeyDraft(event.target.value); },
-										className: "swm-focus", style: { ...SEARCH_STYLE, height: CONTROL.md, flex: 1 }
+										className: "swm-focus",
+										style: {
+											...SEARCH_STYLE, flex: 1, height: "auto", minWidth: 0,
+											fontFamily: MONO, resize: "vertical", lineHeight: 1.6
+										}
 									}, "key"),
 									jsx("button", {
 										type: "button",
 										disabled: busy || keyDraft.trim() === "",
 										className: "swm-ctl swm-focus", style: controlStyle(busy || keyDraft.trim() === ""),
 										onClick: () => {
-											void save({ supadataKey: keyDraft.trim() }, zh ? "密钥已保存。" : "Key saved.");
+											// NORMALISED TO ONE PER LINE ON THE WAY IN. The server
+											// splits on any whitespace, so a comma-separated paste
+											// works either way — but what is stored is what comes
+											// back out of a config file someone opens by hand, and
+											// four keys on four lines is the readable form of it.
+											const keys = keyDraft.split(/[\s,;]+/u).map((one) => one.trim()).filter((one) => one !== "");
+											void save(
+												{ supadataKey: [...new Set(keys)].join("\n") },
+												zh ? `已保存 ${new Set(keys).size} 把密钥。` : `Saved ${new Set(keys).size} key(s).`
+											);
 											setKeyDraft("");
 										},
 										children: zh ? "保存" : "Save"
@@ -20707,7 +20737,7 @@ window.__ModuleLoader__.load({
 											type: "button",
 											disabled: busy,
 											className: "swm-ctl swm-focus", style: controlStyle(busy),
-											onClick: () => { void save({ supadataKey: "" }, zh ? "密钥已清除。" : "Key cleared."); },
+											onClick: () => { void save({ supadataKey: "" }, zh ? "密钥已全部清除。" : "All keys cleared."); },
 											children: zh ? "清除" : "Clear"
 										}, "clear")
 										: null

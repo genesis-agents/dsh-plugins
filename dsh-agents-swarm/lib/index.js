@@ -19,7 +19,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { SourceStore, RESOURCE_TYPES } from "./store.js";
 import { COLLECTORS, runCollector } from "./collect.js";
 import { registerLibraryTool } from "./tool.js";
-import { resolveTranscript, listCaptionTracks, transcriptFromXml, fetchVideoDetails } from "./transcript.js";
+import { resolveTranscript, listCaptionTracks, transcriptFromXml, fetchVideoDetails, supadataKeys } from "./transcript.js";
 import { translateBatch, isSupportedLanguage, BATCH_SIZE, TARGET_LANGUAGES } from "./translate.js";
 import { admissibleUrl, fetchDocument, readableText, readArticle, displayModeOf, documentUrlOf } from "./proxy.js";
 import { sourceFeeds } from "./sources.js";
@@ -1133,7 +1133,14 @@ export function createHandler(store, logger, chat, web, ctx, missions) {
           jobs: config.jobs,
           transcriptLanguages: config.transcriptLanguages,
           collectIntervalMinutes: config.collectIntervalMinutes,
-          supadataKeySet: config.supadataKey !== "",
+          // WHETHER ONE IS SET, NEVER WHAT IT IS — and now also HOW MANY.
+          // The setting holds a list, so "configured" is no longer the whole
+          // of what the page needs to say: a person who pasted four keys and
+          // sees only 已配置 cannot tell that one of them was dropped by a
+          // stray character in the paste. The count is not a secret; the keys
+          // are, and they are still not sent.
+          supadataKeySet: supadataKeys(config.supadataKey).length > 0,
+          supadataKeyCount: supadataKeys(config.supadataKey).length,
           collectors: Object.keys(COLLECTORS),
           resourceTypes: RESOURCE_TYPES,
         },

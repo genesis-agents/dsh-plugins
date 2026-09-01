@@ -232,6 +232,47 @@ export async function fetchViaGens(videoId, base, language = "en") {
 }
 
 /**
+ * Split the configured Supadata secret into the keys it holds.
+ *
+ * ONE SETTING, MANY KEYS. A free Supadata key carries a small monthly
+ * quota, and a library of a few hundred videos exhausts one in an
+ * afternoon — after which every transcript on the tab fails with the same
+ * 429 and the only fix is to paste a new key over the old one. Several
+ * keys, tried in turn, is the difference between a quota that runs out and
+ * one that is a sum.
+ *
+ * STILL A STRING IN THE STORE. `supadataKey` is a settings value with a
+ * validator, a patch route and a redaction rule already written against
+ * its type; splitting the string here rather than storing an array keeps
+ * all three, and a single key remains a single key with no migration.
+ *
+ * Separated by newline, comma or whitespace, because a person pasting four
+ * keys will use whichever of the three their clipboard produced. Deduped,
+ * so the same key pasted twice does not get two turns at a spent quota.
+ * @param raw - the stored setting.
+ * @returns the keys, in the order they were written, without duplicates.
+ */
+export function supadataKeys(raw) {
+  if (typeof raw !== "string") return [];
+  return [...new Set(raw.split(/[\s,;]+/u).map((key) => key.trim()).filter((key) => key !== ""))];
+}
+
+/**
+ * Where the next transcript starts in the key list.
+ *
+ * ROUND-ROBIN, NOT ALWAYS-FIRST. Trying the list from the top every time
+ * spends the first key's whole quota before the second is touched, which
+ * is one key with extra steps — and it means the first key is the one that
+ * gets rate-limited under a burst while three others sit idle.
+ *
+ * Module-level and deliberately not persisted: it is a load-spreading hint,
+ * not a fact about the library, and a process restart losing it costs
+ * nothing. Every key is still tried before the chain gives up, so the
+ * cursor can never make a transcript fail that would otherwise have worked.
+ */
+let supadataCursor = 0;
+
+/**
  * Fetch a transcript through Supadata.
  *
  * The paid path, and the one the upstream falls back to for the same reason:
@@ -253,7 +294,15 @@ export async function fetchViaSupadata(videoId, apiKey, language = "en") {
   const response = await fetch(`https://api.supadata.ai/v1/transcript?${params.toString()}`, {
     headers: { "x-api-key": apiKey, accept: "application/json" },
   });
-  if (!response.ok) throw new Error(`supadata: HTTP ${response.status}`);
+  if (!response.ok) {
+    // THE STATUS RIDES ON THE ERROR. The rotation above has to tell a key
+    // that is out of quota (402, 429) from a video Supadata cannot serve to
+    // ANY key (400, 404): the first is worth another key and the second is
+    // worth stopping, and a message string is not something to branch on.
+    const spent = new Error(`supadata: HTTP ${response.status}`);
+    spent.status = response.status;
+    throw spent;
+  }
   const payload = await response.json();
   const content = payload?.content;
   // The provider answers either a cue array or one joined string.
@@ -303,7 +352,9 @@ export async function fetchTranscript(videoId, languages = DEFAULT_LANGUAGES) {
  * nothing when it works, so it is always tried, and the provider key is spent
  * only on videos it cannot serve. Results are cached by the caller.
  * @param videoId - the video id.
- * @param options - `{ apiKey, gensBase, languages }`.
+ * @param options - `{ apiKey, gensBase, languages }`. `apiKey` may hold
+ *   several keys separated by newlines, commas or spaces; they are tried in
+ *   turn, starting one further along the list on each call.
  * @returns `{ language, text, cues, via }`.
  * @throws an error naming every route that was tried and why it failed.
  */
@@ -328,14 +379,31 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
       failures.push(`gens: ${String(cause?.message ?? cause)}`);
     }
   }
-  if (typeof apiKey === "string" && apiKey.trim() !== "") {
-    try {
-      return { ...await fetchViaSupadata(videoId, apiKey.trim(), languages[0] ?? "en"), via: "supadata" };
-    } catch (cause) {
-      failures.push(`supadata: ${String(cause?.message ?? cause)}`);
-    }
-  } else {
+  // EVERY KEY, STARTING WHERE THE LAST CALL LEFT OFF. See `supadataKeys`
+  // and `supadataCursor`: the quota is the sum of the keys, so a key that
+  // answers 429 costs this video one wasted request and nothing more.
+  const keys = supadataKeys(apiKey);
+  if (keys.length === 0) {
     failures.push("supadata: no API key configured (Settings → Sources)");
+  } else {
+    const start = supadataCursor % keys.length;
+    supadataCursor = (start + 1) % keys.length;
+    for (let step = 0; step < keys.length; step += 1) {
+      const at = (start + step) % keys.length;
+      try {
+        return { ...await fetchViaSupadata(videoId, keys[at], languages[0] ?? "en"), via: "supadata" };
+      } catch (cause) {
+        // WHICH key failed, by position. The keys themselves must not reach
+        // a log or an error body — this string is handed to the browser —
+        // and "key 3 of 4" is what a person needs to know which one to
+        // replace without it ever being printed.
+        failures.push(`supadata key ${at + 1}/${keys.length}: ${String(cause?.message ?? cause)}`);
+        // A VIDEO SUPADATA WILL NOT SERVE IS NOT A KEY PROBLEM. 400 and 404
+        // are the same answer from every key in the list, so trying the
+        // other three spends three requests to be told the same thing.
+        if (cause?.status === 400 || cause?.status === 404) break;
+      }
+    }
   }
   throw new Error(failures.join("; "));
 }
