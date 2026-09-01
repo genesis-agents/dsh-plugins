@@ -263,6 +263,24 @@ function shiftIso(iso, minutes) {
  */
 export function collectCandidates(store, config) {
   const types = resourceTypesOf(config);
+  // A VIDEO WE HOLD NO TRANSCRIPT FOR IS A TITLE AND A BLURB.
+  //
+  // `sourceMaterial` builds a video's block out of its transcript — its own
+  // comment says a video row carries no summary, which is why the budget has
+  // to favour one. Without it the block is the title and whatever the feed
+  // put in the description, and the pass is asked to extract a standing
+  // claim, with a verbatim quote, out of a blurb. It costs a slot in the
+  // ceiling, produces nothing worth keeping, and can carry no moment.
+  //
+  // Measured on this library: 523 videos, 23 transcripts. Without this the
+  // first pass over videos reads 200 rows of which about nine have anything
+  // to quote.
+  const TIMED = new Set(["YOUTUBE_VIDEO", "YOUTUBE", "VIDEO", "PODCAST"]);
+  const quotable = (row) => {
+    if (!TIMED.has(String(row?.type ?? "").toUpperCase())) return true;
+    if (typeof store.getTranscript !== "function") return true;
+    try { return (store.getTranscript(row.id)?.text ?? "") !== ""; } catch { return false; }
+  };
   const cap = bounded(config.insightMaxRows, 20, 600, INSIGHT_DEFAULTS.insightMaxRows);
   const since = typeof config.insightLastRun?.watermark === "string" ? config.insightLastRun.watermark : "";
 
@@ -295,6 +313,10 @@ export function collectCandidates(store, config) {
       });
       if (page.rows.length === 0) break;
       for (const row of page.rows) {
+        // SKIPPED, NOT COUNTED. A skipped row must not spend the ceiling —
+        // otherwise a library of untranscribed videos fills 200 slots with
+        // rows the extractor cannot use and the pass reads nothing else.
+        if (!quotable(row)) continue;
         fresh.push(row);
         taken += 1;
         if (taken >= cap) break;

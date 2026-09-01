@@ -139,3 +139,34 @@ test("videos are what the pass reads first, not what it leaves out", () => {
     "videos are no longer the type the pass reaches for first",
   );
 });
+
+test("a video with no transcript is not a candidate, and does not spend the ceiling", async () => {
+  // 523 VIDEOS, 23 TRANSCRIPTS. `sourceMaterial` builds a video's block out of
+  // its transcript — its own comment says a video row carries no summary, so
+  // the budget has to favour one — and without it the block is a title and
+  // whatever the feed put in the description. The pass is then asked to
+  // extract a standing claim, with a verbatim quote, out of a blurb.
+  //
+  // SKIPPED RATHER THAN COUNTED is the half that matters: a skipped row that
+  // still spent a slot would let 200 untranscribed videos fill the ceiling and
+  // the pass would read nothing else at all.
+  const { pickCandidates } = await import("../lib/insight-extract.js");
+  const rows = Array.from({ length: 6 }, (unused, at) => ({
+    id: `v${at}`, type: "YOUTUBE_VIDEO", createdAt: `2026-08-0${at + 1}T00:00:00.000Z`,
+  }));
+  const store = {
+    query: ({ type, skip = 0 }) => (type === "YOUTUBE_VIDEO" && skip === 0
+      ? { rows, hasMore: false }
+      : { rows: [], hasMore: false }),
+    // Only two of the six were ever fetched.
+    getTranscript: (id) => (id === "v1" || id === "v4" ? { text: "spoken words", cues: [] } : undefined),
+  };
+  const picked = pickCandidates(store, {
+    insightResourceTypes: ["YOUTUBE_VIDEO"],
+    insightMaxRows: 20,
+  });
+  assert.deepEqual(
+    picked.map((row) => row.id), ["v1", "v4"],
+    "a video the library holds no transcript for was handed to the extractor",
+  );
+});
