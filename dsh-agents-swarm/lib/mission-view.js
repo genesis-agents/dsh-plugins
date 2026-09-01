@@ -3127,6 +3127,72 @@ export const FIGURE_BLOCK_RE = /^:::figure[ \t]+(\d{1,3})[ \t]*\r?\n:::[ \t]*\r?
  * @param lookups - `{ byIndex, cited, evidence, zh }`, all built by the caller.
  * @returns the pieces, in order, or null.
  */
+/**
+ * The smallest a page may draw a picture and still have it be a picture.
+ *
+ * MEASURED ON A REAL REPORT. Two of its seven figures were a site's own
+ * badges — "Influencers By State Badge-white background.jpg" at 150×154 and
+ * "Influencer Project Badge.png" at 100×100 — harvested off the page beside
+ * the article they decorate. Printed at their own size among four charts
+ * and photographs they are what the reader saw as 大小完全不一致: the sizes
+ * were not inconsistent, the OBJECTS were.
+ *
+ * THE PAGE'S DECLARED SIZE, NOT THE FILE'S. A badge is often a large PNG
+ * displayed small, and it is the displaying small that says what it is for.
+ * A page that declares no size is not judged: 0 means unknown, and a
+ * figure dropped on an unknown is a chart thrown away on a guess.
+ */
+const FIGURE_FLOOR_PX = 200;
+
+/**
+ * The figures a report should actually print, keyed by index.
+ *
+ * TWO RULES, AND BOTH CAME OFF THE SAME REPORT.
+ *
+ * ONE PER SOURCE PAGE. Its manifest held two figures off one Fortune
+ * article and two off one politics page — each pair sharing a citation, so
+ * each pair printed with nearly the same sentence under it, one after the
+ * other. That reads as the export having duplicated something. A page
+ * contributes its best picture to the argument it supports, not its whole
+ * image gallery, and the first by index is the one the assembler placed
+ * closest to the paragraph that cites it.
+ *
+ * AND NOTHING THE PAGE ITSELF DREW AS A BADGE. See FIGURE_FLOOR_PX.
+ *
+ * FILTERED HERE RATHER THAN AT COLLECTION, because the artefact is frozen:
+ * every report already on disk carries these rows, and a rule that only ran
+ * when a figure was first fetched would leave every existing report looking
+ * exactly as it does now. The manifest is not rewritten — indexes stay
+ * where they are, so a `:::figure 3` that drops out renders as nothing,
+ * which is what an unresolvable index has always done.
+ * @param rows - `artifact.figures`.
+ * @returns index → row, for the ones worth printing.
+ */
+function selectFigures(rows) {
+  const byIndex = new Map();
+  for (const row of asArray(rows)) {
+    const index = Number(row?.index);
+    if (!Number.isInteger(index) || byIndex.has(index)) continue;
+    const width = Number(row?.width);
+    const height = Number(row?.height);
+    if (width > 0 && height > 0 && Math.min(width, height) < FIGURE_FLOOR_PX) continue;
+    byIndex.set(index, row);
+  }
+  // SECOND PASS, so "the first by index" means the first of the ones that
+  // survived the floor rather than the first of all of them — otherwise a
+  // badge earlier in the manifest would take its page's one slot and the
+  // chart behind it would be dropped as the duplicate.
+  const seen = new Set();
+  const kept = new Map();
+  for (const [index, row] of [...byIndex.entries()].sort((a, b) => a[0] - b[0])) {
+    const document = typeof row?.documentId === "string" ? row.documentId : "";
+    if (document !== "" && seen.has(document)) continue;
+    if (document !== "") seen.add(document);
+    kept.set(index, row);
+  }
+  return kept;
+}
+
 function figureAttribution(index, { byIndex, cited, evidence, zh }) {
   const figure = byIndex.get(index);
   if (figure === undefined) return null;
@@ -3182,11 +3248,7 @@ export function figuresOfReport(artifact, { language = "zh" } = {}) {
     const index = Number(row?.index);
     if (Number.isInteger(index) && !cited.has(index)) cited.set(index, row);
   }
-  const byIndex = new Map();
-  for (const row of rows) {
-    const index = Number(row?.index);
-    if (Number.isInteger(index) && !byIndex.has(index)) byIndex.set(index, row);
-  }
+  const byIndex = selectFigures(rows);
   const out = [];
   for (const [index, row] of byIndex) {
     const parts = figureAttribution(index, { byIndex, cited, evidence, zh });
@@ -3228,11 +3290,7 @@ export function renderFigureTokens(markdown, artifact, { language = "zh" } = {})
     const index = Number(row?.index);
     if (Number.isInteger(index) && !cited.has(index)) cited.set(index, row);
   }
-  const byIndex = new Map();
-  for (const row of rows) {
-    const index = Number(row?.index);
-    if (Number.isInteger(index) && !byIndex.has(index)) byIndex.set(index, row);
-  }
+  const byIndex = selectFigures(rows);
 
   return source.replace(FIGURE_BLOCK_RE, (whole, digits) => {
     const parts = figureAttribution(Number(digits), { byIndex, cited, evidence, zh });
