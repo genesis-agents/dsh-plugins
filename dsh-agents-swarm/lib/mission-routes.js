@@ -62,6 +62,7 @@ import {
 } from "./mission-runtime.js";
 import { concurrencyCap } from "./mission-handlers.js";
 import { reportToDocx } from "./mission-docx.js";
+import { reportToPdf } from "./mission-pdf.js";
 import {
   COUNTING_VERIFY_STATE,
   FETCH_BACKED_VERIFY_STATES,
@@ -1457,7 +1458,7 @@ if (req.method === "GET" && (action === "facts.csv" || action === "citations.csv
     // version resolution, the same 404s, the same figure rendering and the
     // same bibliography. Split into two handlers they would drift, and the
     // one that drifts is the one nobody is looking at.
-    if (req.method === "GET" && (action === "report.md" || action === "report.docx")) {
+    if (req.method === "GET" && (action === "report.md" || action === "report.docx" || action === "report.pdf")) {
       const mission = missionOr404(id);
       if (mission === null) return true;
       const params = paramsOf(req);
@@ -1515,32 +1516,57 @@ if (req.method === "GET" && (action === "facts.csv" || action === "citations.csv
       // opening one touches no network — so the Word file keeps its `:::figure`
       // tokens through to `reportToDocx`, which turns each into the picture
       // with that same line of attribution underneath it as the caption.
-      const wants = action === "report.docx";
-      const markdown = (wants ? body : renderFigureTokens(body, artifact, { language: mission.language }))
+      // THREE FORMATS, TWO OF WHICH CARRY PICTURES. A .md cannot: our byte
+      // route is unreachable from a downloaded copy and a publisher URL in an
+      // `<img src>` would make every viewer of every copy fetch the publisher
+      // directly, which is the fan-out rule 4 exists to prevent. A .docx is a
+      // zip and a .pdf is a container; both carry the bytes inside themselves
+      // and reach no network when opened.
+      const rich = action === "report.docx" || action === "report.pdf";
+      const markdown = (rich ? body : renderFigureTokens(body, artifact, { language: mission.language }))
         + buildBibliography(artifact, { language: mission.language });
       // THE BYTES, READ FROM THE TABLE THE IMAGE ROUTE SERVES. Held figures
       // only — `figureBytes` returns nothing for a row whose state is not
       // `held` — so a figure the publisher declined is absent here for exactly
       // the reason it is absent on screen, and the Word file falls back to the
       // sentence rather than to a broken frame.
-      const figures = !wants ? [] : figuresOfReport(artifact, { language: mission.language })
+      const figures = !rich ? [] : figuresOfReport(artifact, { language: mission.language })
         .map((figure) => {
           const stored = figure.figureId === null ? undefined : missionStore.figureBytes(figure.figureId);
           return stored === undefined ? null : { ...figure, bytes: stored.bytes, mime: stored.mime };
         })
         .filter((figure) => figure !== null);
-      const extension = wants ? "docx" : "md";
+      const extension = action === "report.docx" ? "docx" : action === "report.pdf" ? "pdf" : "md";
       const filename = `${id}${artifact.version ? `-v${artifact.version}` : ""}.${extension}`;
-      // A REAL `.docx`, not HTML under a Word content type. See
-      // mission-docx.js for why that shortcut is refused: Word opens it, and
-      // every converter downstream gets a file whose extension lies.
-      const payload = action === "report.docx"
-        ? reportToDocx(markdown, { title: artifact.title ?? "", language: mission.language, figures })
-        : Buffer.from(markdown, "utf8");
+      // A REAL FILE IN EVERY CASE. See mission-docx.js and mission-pdf.js for
+      // why the two shortcuts are refused: HTML under a Word content type is a
+      // file whose extension lies, and `window.print()` is not an export at
+      // all — it is a dialog a person has to be standing in front of.
+      //
+      // THE PDF CAN FAIL FOR A REASON ABOUT THE MACHINE. It needs a CJK font to
+      // draw a Chinese sentence, and a host with none cannot be given one here.
+      // That is a 503 with the sentence that says so, not a page of empty boxes
+      // which would read as a broken report.
+      let payload;
+      try {
+        payload = action === "report.docx"
+          ? reportToDocx(markdown, { title: artifact.title ?? "", language: mission.language, figures })
+          : action === "report.pdf"
+            ? reportToPdf(markdown, { title: artifact.title ?? "", language: mission.language, figures })
+            : Buffer.from(markdown, "utf8");
+      } catch (cause) {
+        sendJson(res, 503, {
+          success: false,
+          error: String(cause?.message ?? cause),
+          data: { format: action, missionId: id, version: artifact.version ?? null },
+        });
+        return true;
+      }
       res.writeHead(200, {
         "content-type": action === "report.docx"
           ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          : "text/markdown; charset=utf-8",
+          : action === "report.pdf" ? "application/pdf"
+            : "text/markdown; charset=utf-8",
         "content-length": payload.length,
         "content-disposition": `attachment; filename="${filename}"`,
         "cache-control": "no-store",

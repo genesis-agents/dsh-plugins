@@ -15646,6 +15646,8 @@ window.__ModuleLoader__.load({
 						{ id: "report.docx", zh: "报告 .docx", en: "Report .docx", zhNote: "Word 能直接编辑的那一份，保留标题、加粗与列表", enNote: "editable in Word, with headings, emphasis and lists kept" },
 						{ id: "facts.csv", zh: "证据 .csv", en: "Evidence .csv", zhNote: "每条通过核验的发现一行，带原句、来源与时间", enNote: "one row per verified finding, with its quote, host and stamp" },
 						{ id: "citations.csv", zh: "引用 .csv", en: "Citations .csv", zhNote: "报告里引到的每一处出处", enNote: "every source the report cites" },
+						// A REAL PDF, WRITTEN BY US — see the note under this map.
+						{ id: "report.pdf", zh: "报告 .pdf", en: "Report .pdf", zhNote: "带图的排版稿，字体和图片都在文件里", enNote: "typeset, with the figures and the font inside the file" },
 						{ id: "report.json", zh: "全量 .json", en: "Everything .json", zhNote: "这次运行的完整投影，机器读的那一份", enNote: "the whole projection of this run, for a machine to read" }
 					].map((format) => ({
 						id: format.id,
@@ -15658,23 +15660,26 @@ window.__ModuleLoader__.load({
 						href: `${apiBase()}/missions/${encodeURIComponent(missionId)}/${format.id}`
 							+ (reportVersion > 0 ? `?version=${reportVersion}` : ""),
 						download: `${missionId}${shownVersion > 0 ? `-v${shownVersion}` : ""}.${format.id.split(".").pop()}`
-					})).concat([
-					// PDF IS THE PAGE, PRINTED. Not a fifth server route: a PDF writer of our
-					// own would have to embed a CJK font to render one sentence of this
-					// report and would still be worse at it than the engine already holding
-					// it on screen. The reference takes the same route — its own reference
-					// panel is full of `print:` rules and its server hands the page to a
-					// headless browser.
+					}))
+					// PDF WAS `window.print()` AND IS NOW A FILE.
 					//
-					// AN ACTION, NOT A LINK, so it sits outside the map above: the other four
-					// are a GET a browser can save, and this one is `window.print()` with the
-					// harness made invisible around the report.
-					{
-						id: "report.pdf",
-						label: zh ? "报告 .pdf" : "Report .pdf",
-						note: zh ? "走浏览器打印，版式与屏幕上的一致" : "through the browser's own print, laid out as it is on screen",
-						onSelect: () => { if (typeof window?.print === "function") window.print(); }
-					}])
+					// The note here read: "a PDF writer of our own would have to embed a
+					// CJK font to render one sentence of this report and would still be
+					// worse at it than the engine already holding it on screen." The first
+					// half is true — mission-font.js is exactly that, and it is the whole
+					// cost. The second was the mistake: the browser was not laying out the
+					// REPORT, it was laying out the SCREEN with the harness made invisible
+					// around it, which is a different document that happens to contain the
+					// same words.
+					//
+					// WHAT THAT COST, beyond the layout. The pictures never arrived — print
+					// CSS cannot fetch what the screen did not draw. The reader had to find
+					// "Save as PDF" inside a print dialog. The result differed by browser.
+					// And nothing that is not a person standing at a window could produce
+					// one, so no schedule and no script could ever have a copy.
+					//
+					// It is a GET like the other four now, which is why it moved INTO the
+					// map above rather than staying an action beside it.
 				}, "export")
 			].filter((entry) => entry !== null);
 
