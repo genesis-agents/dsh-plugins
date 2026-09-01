@@ -1924,7 +1924,7 @@ window.__ModuleLoader__.load({
 		*/
 		function Chip({ tone, label, icon, count, size, title, solid, outline, pill, onClick, className }, key) {
 			const hue = tone ?? TONE.neutral;
-			// THE DENSE STEP IS THE EXCEPTION NOW, AND IT HAS ONE CALLER. `size`
+			// THE DENSE STEP IS THE EXCEPTION, AND IT HAS A HANDFUL OF CALLERS. `size`
 			// used to read "sm is the big one", which is why the trajectory asked for
 			// "xs" and got the same 18px box every other chip got — a name that does
 			// nothing is worse than no name, because it looks like the request was
@@ -8632,14 +8632,21 @@ window.__ModuleLoader__.load({
 					jsxs("div", {
 						style: { display: "flex", alignItems: "center", gap: SPACE.xs, flexWrap: "wrap" },
 						children: [
-							Chip({ tone: face.hue, pill: true, icon: face.icon, label: zh ? face.zh : face.en }, "state"),
-							kind === null ? null : Chip({ tone: kind.hue, icon: kind.icon, label: zh ? kind.zh : kind.en }, "kind"),
+							// DENSE, BECAUSE A CHIP IS META. These drew at the default step —
+							// FONT.bodyStrong, 13/600 — which put 候选 and 资金 at the same
+							// weight as a section heading and two steps above everything else
+							// on their own row: the score beside them is 11, the meta line
+							// below is 11. A status and a classification are facts ABOUT the
+							// claim, and they were the loudest thing on the card after the
+							// claim itself.
+							Chip({ size: "xs", tone: face.hue, pill: true, icon: face.icon, label: zh ? face.zh : face.en }, "state"),
+							kind === null ? null : Chip({ size: "xs", tone: kind.hue, icon: kind.icon, label: zh ? kind.zh : kind.en }, "kind"),
 							// PINNED IS SAID, not just obeyed. `pinnedStatus` outranks the
 							// pass, so a card at 成立 because a person put it there and one
 							// the pass computed are the same colour and different facts —
 							// and the second reverts on the next run.
 							row.pinnedStatus === null || row.pinnedStatus === undefined ? null : Chip({
-								tone: TONE.accent, label: zh ? "人工判定" : "your verdict"
+								size: "xs", tone: TONE.accent, label: zh ? "人工判定" : "your verdict"
 							}, "pinned"),
 							jsx("span", { style: { flex: 1 } }, "spacer"),
 							jsx("span", {
@@ -8655,7 +8662,17 @@ window.__ModuleLoader__.load({
 					// to carry indistinguishable from its own metadata. A card whose
 					// every line is the same size has no first line.
 					jsx("p", {
-						style: { font: FONT.largeStrong, lineHeight: LEAD.tight, color: INK.primary, margin: 0 },
+						// 14/600, NOT 16. A card in a list is an ITEM, and 16 is the step
+						// the frame sets its own name in — so every claim was standing at
+						// page-title rank inside a scroll of forty of them, three steps
+						// above the 11px surrounding it and one ABOVE the section heading
+						// that is supposed to contain it.
+						//
+						// The ladder on this pane, top to bottom: 20 the run's four
+						// figures, which are its one headline · 14 the claim · 13 the
+						// section divider and the quotation · 11 everything that is a
+						// fact about a claim rather than the claim.
+						style: { font: FONT.baseStrong, lineHeight: LEAD.tight, color: INK.primary, margin: 0 },
 						children: String(row.statement ?? "")
 					}, "statement"),
 					...evidence.slice(0, 3).map((piece, at) => InsightQuote({ piece, zh, onOpenMoment }, `q${at}`)),
@@ -8760,12 +8777,18 @@ window.__ModuleLoader__.load({
 					// the fields around it. See SERIF.
 					jsx("p", {
 						style: {
-							// 16px AND A 1.65 LINE. `font` is a shorthand and resets the
-							// leading, so the longhand has to come after it — the same trap
-							// COUNT_CHIP's docblock records one screen over. Set at 14 on
-							// the token's own tight leading, a three-line quote read as a
-							// block of grey rather than as somebody talking.
-							margin: 0, font: FONT.large, fontFamily: SERIF,
+							// `font` IS A SHORTHAND AND RESETS THE LEADING, so the longhand
+							// has to come after it — the same trap COUNT_CHIP's docblock
+							// records one screen over.
+							//
+							// AND ONE STEP UNDER THE CLAIM IT SUPPORTS. This was FONT.large,
+							// the same 16 the claim itself stood at, so the quotation and
+							// the sentence it is evidence FOR were the same rank and a card
+							// read as two headlines. The serif, the italic and the marks
+							// already say "somebody else's words"; the size does not also
+							// have to, and at 16 in a 13px column it was the loudest thing
+							// on a screen it is not the subject of.
+							margin: 0, font: FONT.body, fontFamily: SERIF,
 							lineHeight: LEAD.read, fontStyle: "italic", color: INK.secondary,
 							// A QUOTE OFF A PAPER RUNS LONG AND OFTEN CARRIES AN IDENTIFIER
 							// WITH NO SPACES IN IT, which pushes the card past its column.
@@ -8833,7 +8856,13 @@ window.__ModuleLoader__.load({
 									display: "inline-flex", alignItems: "center",
 									flex: "none", height: CONTROL.dot, padding: `0 ${SPACE.sm}`,
 									borderRadius: RADIUS.md, border: `1px solid ${LINE.hair}`,
-									font: FONT.nano, color: INK.quiet
+									// 11, WITH THE REST OF THE META. This and the publisher link
+									// below were the only two things on the card at 10 — every
+									// other fact about a claim, the score and the source count
+									// included, stands at 11 — so a reader saw two sizes of small
+									// print on one row with nothing distinguishing them. Quieter
+									// than the meta is what INK.quiet is for.
+									font: FONT.micro, color: INK.quiet
 								},
 								children: zh ? "来自简介" : "from the description"
 							}, "blurb"),
@@ -8874,7 +8903,7 @@ window.__ModuleLoader__.load({
 								// `fontFamily` written ABOVE it is discarded — this line asked
 								// for mono and rendered in the UI face, which is why the host
 								// beside a claim did not match the host anywhere else.
-								style: { flex: "none", font: FONT.nano, fontFamily: MONO, color: INK.quiet, textDecoration: "none" },
+								style: { flex: "none", font: FONT.micro, fontFamily: MONO, color: INK.quiet, textDecoration: "none" },
 								children: `${String(piece?.sourceKey ?? "")} ↗`
 							}, "host")
 						]
@@ -9278,7 +9307,16 @@ window.__ModuleLoader__.load({
 											}
 										}, "bar"),
 										jsx("span", {
-											style: { font: FONT.largeStrong, color: INK.primary },
+											// A DIVIDER, NOT A TITLE. This stood at FONT.largeStrong —
+											// 16/600, the SAME size and the same weight as the claim
+											// statements underneath it. A heading that does not outrank
+											// its own contents is not a heading, and on a screen that
+											// also carried 主张 at 11/600 it meant three heading
+											// treatments at 11, 13 and 16 with no rule saying which was
+											// which. The claim is the thing a reader came to read; this
+											// says where one group of them ends and the next begins, and
+											// it already has a coloured bar to do that with.
+											style: { font: FONT.bodyStrong, color: INK.primary },
 											children: face !== null
 												? (zh ? face.zh : face.en)
 												: (zh ? "未归层" : "Unplaced")
@@ -9481,50 +9519,26 @@ window.__ModuleLoader__.load({
 					children: [
 						// THE PANE SAYS WHAT IT IS BEFORE IT SAYS WHAT IS IN IT.
 						//
-						// This opened on a row of seven status chips. That is a filter — an
-						// answer to a question nobody had asked yet — standing where the
-						// reference puts the pane's own name, what it is for, and the one
-						// control that makes something. A reader arriving here was reading a
-						// toolbar before they had been told what it was a toolbar for.
-						jsxs("div", {
-							style: {
-								display: "flex", alignItems: "flex-start", gap: SPACE.md,
-								flexWrap: "wrap", margin: `0 0 ${SPACE.md}`
-							},
-							children: [
-								jsx("div", {
-									style: {
-										flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
-										// CONTROL.md, WHICH IS THE ONE THE BUTTONS BESIDE IT STAND AT.
-								// A hand-picked 40 here would be a fifth control height in a row
-								// that already has one, and off by six from everything level
-								// with it.
-								width: CONTROL.md, height: CONTROL.md, borderRadius: RADIUS.lg,
-										color: `rgb(${TONE.accent})`, background: tint(TONE.accent, TINT.soft),
-										boxShadow: `inset 0 0 0 1px ${tint(TONE.accent, TINT.ring)}`
-									},
-									children: jsx(Icon, { name: "sparkles", size: ICON.md })
-								}, "tile"),
-								jsxs("div", {
-									style: { flex: 1, minWidth: "180px" },
-									children: [
-										jsx("h1", {
-											style: { font: FONT.largeStrong, margin: 0, color: INK.primary },
-											children: zh ? "洞察" : "Insight"
-										}, "name"),
-										// WHAT A MISSION IS, IN ONE LINE. The tab's word alone does not
-										// say that pressing 新建任务 starts eight agents and spends a
-										// budget, which is the one thing worth knowing before pressing it.
-										jsx("p", {
-											style: { font: FONT.small, color: INK.secondary, margin: `2px 0 0` },
-											children: zh
-												? "一支智能体蜂群把一个课题查完：分维度、找证据、逐条核验，最后写成一份带出处的报告。"
-												: "A swarm of agents researches one question end to end: dimensions, evidence, verification, and a report that cites what it rests on."
-										}, "note")
-									]
-								}, "words")
-							]
-						}, "head"),
+						// NO HEADER HERE EITHER, AND THIS IS THE OUTER HALF OF THE SAME FAULT.
+						//
+						// This band drew a violet tile, 洞察 at `FONT.largeStrong`, and a
+						// sentence about what a mission is. Six lines above it the frame draws
+						// a violet tile, 智能体 at `FONT.largeStrong`, and `active.ledeZh` —
+						// which for this tab reads "蜂群针对一个课题跑完的调研任务：读了什么、
+						// 哪些引语通过了核验、最后签署的报告。" The two ledes are the same fact
+						// written twice by two authors, and the two names are set at the SAME
+						// step, so the page said an application and one of its tabs were peers.
+						//
+						// AND IT IS WHY THE HEADER READ AS A DIFFERENT TYPOGRAPHY FROM THE
+						// CARDS UNDER IT. Not a font: a block built as "the top of a page",
+						// sized in isolation, stacked on another one — two tiles, two 16/600
+						// names and two ledes, about 110px, before the first number on a pane
+						// whose whole job is the list below.
+						//
+						// The tab bar already says which tab you are on and the frame already
+						// says what it is for. What is NOT a repeat is which half of this tab
+						// you are in, and that is the strip below — so the strip is all that
+						// is left here.
 						// THE STATUS CHIPS ARE GONE. 全部 / 运行中 / 已完成 / 未签署 /
 						// 可继续 / 失败 / 已取消 was seven controls over a list that is
 						// usually one card long, and the one thing the row could not do
@@ -21120,8 +21134,18 @@ window.__ModuleLoader__.load({
 			},
 			{
 				id: "insights", en: "Insights", zh: "洞察",
-				ledeEn: "Missions the swarm ran against a topic: what it read, what verified, and the report it signed.",
-				ledeZh: "蜂群针对一个课题跑完的调研任务：读了什么、哪些引语通过了核验、最后签署的报告。",
+				// BOTH HALVES, BECAUSE THIS IS THE ONLY LEDE NOW. The tab used to
+				// draw a second header of its own with a second sentence saying the
+				// same thing in different words; that one is gone, and this one
+				// still described only the missions half — which is the half a
+				// reader no longer lands on.
+				// AND SHORT ENOUGH TO SURVIVE ITS OWN BOX. HERO_LEDE_STYLE is one
+				// line, `nowrap`, ellipsised at 62ch — the sentence it replaced was
+				// already being cut off at "最…" in the frame, so a longer one would
+				// have said less. What a mission costs is explained where it is
+				// decided, in the 新建任务 dialog, not in a line of chrome.
+				ledeEn: "Two kinds: claims read continuously out of the library, and missions run end to end against one topic.",
+				ledeZh: "两类：信源洞察持续从信源库里读出主张，主题洞察针对一个课题跑完调研。",
 				// No `soon`, and no empty text: this tab has a component of
 				// its own now, and both fields are read ONLY by the placeholder
 				// branch below. Left as they were, they would be a not-built
@@ -22282,6 +22306,9 @@ window.__ModuleLoader__.load({
 			TYPE_FACES, TYPE_SIZES, TYPE_KEY, TYPE_STYLE_ID, readTypePref, applyTypePref,
 			missionClock, missionSince, missionLatency, missionOkFace, missionRowTitle, missionRowState,
 			missionTraceSignature, missionFindingsSignature,
+			// The tab table itself: its ledes are the only place each tab says
+			// what it is for, now that no tab draws a header of its own.
+			TABS,
 			MISSION_ROLE_FACES, MISSION_TRACE_KINDS, MISSION_TRACE_TABS,
 			SourcesSettings, SwarmPage, PublishTab, ExploreTab,
 			MissionsTab, MissionStarter, MissionListRow, MissionDetail, MissionPanel,

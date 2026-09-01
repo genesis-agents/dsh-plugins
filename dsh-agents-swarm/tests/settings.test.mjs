@@ -2093,11 +2093,32 @@ test("the missions pane says what it is, and can be searched", async () => {
   const view = await render("MissionsTab", { zh: true });
   await missionsPane(view);
   const text = textOf(view.tree).join(" ");
-  assert.ok(text.includes("洞察"), "the pane does not name itself");
+  // THE NAME AND THE LEDE BELONG TO THE FRAME, NOT TO THIS TAB, and this
+  // guard used to require them HERE — which is what kept a second page
+  // header alive under the first one: a violet tile, 洞察 at the same step
+  // the app's own name is set in, and a sentence restating the frame's
+  // lede in different words. Two tiles and two 16/600 names, about 110px,
+  // before the first number on a pane whose whole job is the list below.
   assert.ok(
-    text.includes("分维度、找证据、逐条核验"),
-    "the pane does not say what a mission is, which is the thing worth knowing before starting one",
+    !text.includes("分维度、找证据、逐条核验"),
+    "the tab is restating the frame's lede again; the frame says what this tab is for, and saying it twice is what made the header read as its own typography",
   );
+  // AND WHAT THE TAB IS FOR IS STILL SAID, ONCE, WHERE THE FRAME SAYS IT —
+  // for BOTH halves, which the old lede did not: it described missions
+  // only, and missions are no longer the half a reader lands on.
+  const lede = exportsOf().TABS.find((one) => one.id === "insights");
+  for (const half of ["信源洞察", "主题洞察"]) {
+    assert.ok(lede.ledeZh.includes(half), `the frame's lede does not mention ${half}, so that half of the tab is unexplained`);
+  }
+  // ONE LINE, ELLIPSISED AT 62ch. A lede longer than its box says less
+  // than a short one: the sentence this replaced was already cut off at
+  // "最…" in the frame, and nobody reads the half that is not there.
+  assert.ok(
+    [...lede.ledeZh].length <= 45,
+    "the Chinese lede is longer than its own box; HERO_LEDE_STYLE is one nowrap line clipped at 62ch, so the tail is not on the screen",
+  );
+  // WHAT THE TAB DOES OWN is which half you are on.
+  assert.ok(text.includes("信源洞察") && text.includes("主题洞察"), "the strip that chooses between the halves is gone");
 
   // AND THE SEARCH IS WIRED TO THE ROUTE THAT HAS ALWAYS TAKEN IT.
   // `/missions/list` has accepted a `search` since it was written and no
@@ -4563,4 +4584,153 @@ test("the reader picks the face and the size, and the whole scale follows", asyn
     && node.props?.["aria-checked"] === true
     && textOf(node).some((piece) => piece.includes("宋体")));
   assert.ok(chosen, "the face on the document is not the one the control shows as chosen");
+});
+
+/**
+ * Every size on a rendered screen, with the text it draws.
+ *
+ * MEASURED FROM THE TREE, NOT FROM THE SOURCE. A source scan says which
+ * tokens the file MENTIONS; only walking a rendered tree says which ones a
+ * reader sees together, and "字体大小都不一致" is a statement about what is on
+ * one screen at one time. Both defects this found were invisible to a scan:
+ * each declaration was a legal token, and the fault was the RELATION between
+ * two of them.
+ * @param tree - a rendered tree.
+ * @returns `[{ size, weight, text }]`, one per string, in tree order.
+ */
+function typeOf(tree) {
+  const PX = {
+    "xxxxs-10": 10, "xxxs-11": 11, "xxs-12": 12, "xs-13": 13,
+    "s-14": 14, "base-16": 16, "l-20": 20, "xl-24": 24,
+  };
+  const out = [];
+  const walk = (node, held) => {
+    if (node === null || node === undefined) return;
+    if (Array.isArray(node)) { for (const one of node) walk(one, held); return; }
+    if (typeof node === "string" || typeof node === "number") {
+      const text = String(node).trim();
+      if (text !== "") out.push({ ...held, text });
+      return;
+    }
+    if (typeof node !== "object") return;
+    // A native select's options cannot be styled, so counting them would
+    // report the platform's type as ours.
+    if (node.type === "option") return;
+    let next = held;
+    const raw = node.props?.style?.font;
+    if (typeof raw === "string") {
+      const step = Object.keys(PX).find((key) => raw.includes(`--dsw-font-${key}`)
+        || raw.includes(`--dsw-font-${key.replace("-", "-strong-")}`)
+        || raw.includes(`--dsw-font-${key.replace("-", "-medium-")}`));
+      if (step !== undefined) {
+        next = {
+          size: PX[step],
+          weight: /-strong-|l-20/.test(raw) ? 600 : (/-medium-/.test(raw) ? 500 : (/xl-24/.test(raw) ? 700 : 400)),
+        };
+      }
+    }
+    walk(node.props?.children, next);
+  };
+  walk(tree, { size: null, weight: null });
+  return out;
+}
+
+test("a heading outranks what it heads, and a chip does not outrank a heading", async () => {
+  // 字体大小都不一致啊 — and it was true, in a way no token scan could see.
+  //
+  // MEASURED ON THE RENDERED 信源洞察 SCREEN, before this landed:
+  //
+  //   16/600  算力底座          ← a section heading
+  //   16/600  Mayfield已向AI…   ← a claim INSIDE that section
+  //   13/600  候选 · 资金        ← two chips
+  //   11/600  主张              ← another heading
+  //   11/400  1 个独立来源…      ← the meta under the claim
+  //
+  // Three heading treatments at 11, 13 and 16 with nothing saying which was
+  // which; a section heading at exactly the size and weight of its own
+  // contents; and two chips — facts ABOUT a claim — set two steps above
+  // everything else on their own row. Each declaration was a legal token.
+  // The fault was the RELATION between them, which is what a ladder is.
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  const rows = typeOf(view.tree).filter((row) => row.size !== null);
+  const rank = (row) => row.size * 10 + (row.weight >= 600 ? 1 : 0);
+
+  const find1 = (needle) => rows.find((row) => row.text.includes(needle));
+  const claim = find1("同规模开源");
+  assert.ok(claim, "no claim statement on the screen, so nothing here measured anything");
+
+  // THE CLAIM IS THE LARGEST THING ON ITS OWN CARD. Not on the screen: the
+  // pane's four figures are its one headline and legitimately outrank a row
+  // in the list under them. What may not outrank a claim is anything that is
+  // a fact ABOUT that claim — its chips, its score, its quotation, its
+  // stamps — and that is what this walks.
+  const card = find(view.tree, (node) => node.type === "article"
+    && textOf(node).some((piece) => piece.includes("同规模开源")));
+  assert.ok(card, "no claim card on the screen, so nothing here measured anything");
+  for (const row of typeOf(card).filter((one) => one.size !== null)) {
+    if (row.text === claim.text) continue;
+    assert.ok(
+      rank(row) < rank(claim),
+      `"${row.text.slice(0, 24)}" is set at ${row.size}/${row.weight}, at or above the claim's own ${claim.size}/${claim.weight} — a fact ABOUT a claim is standing level with the claim`,
+    );
+  }
+
+  // AND THE CLAIM IS NOT A PAGE TITLE. 16 is the step the frame sets its own
+  // name in; a card in a scrolling list of forty is an item.
+  assert.ok(
+    claim.size <= 14,
+    `the claim is set at ${claim.size}px, which is the frame's own heading step or above — every row in the list is standing at page-title rank`,
+  );
+
+  // AND A SECTION HEADING IS STRICTLY BELOW THE CLAIM AND STRICTLY ABOVE
+  // THE META. Equal to either one is the defect: equal above, and the
+  // heading and its contents are one rank; equal below, and the divider
+  // between two groups reads as another line of small print.
+  const heading = find1("算力底座") ?? find1("未归层");
+  const meta = find1("个独立来源");
+  if (heading !== undefined && meta !== undefined) {
+    assert.ok(
+      rank(heading) < rank(claim),
+      `the section heading is ${heading.size}/${heading.weight} and the claims under it are ${claim.size}/${claim.weight}; a heading at the rank of its own contents is not a heading`,
+    );
+    assert.ok(
+      rank(heading) > rank(meta),
+      `the section heading is ${heading.size}/${heading.weight}, at or below the meta line's ${meta.size}/${meta.weight}`,
+    );
+  }
+
+  // A CHIP IS META AND SITS WITH THE META. 成立 and 趋势转向 stood at 13/600
+  // — heavier than the score they share a line with, level with a section
+  // heading, one step under the claim itself. They are the fixture's own
+  // status and kind, named rather than searched for: the first version of
+  // this looked for 候选, which INSIGHTS does not contain, so the assertion
+  // silently skipped and the guard passed with the defect reinstated.
+  for (const label of ["成立", "趋势转向"]) {
+    const chip = find1(label);
+    assert.ok(chip, `the fixture no longer renders a ${label} chip, so this measured nothing`);
+    assert.ok(
+      chip.size === meta.size,
+      `the ${label} chip is ${chip.size}px and the meta beside it is ${meta.size}px; a fact ABOUT a claim does not get a size of its own`,
+    );
+  }
+
+  // AND THE LADDER HAS A CEILING, AT WHAT IT ACTUALLY COSTS TODAY. Five
+  // pairs over four sizes is a hierarchy; a ceiling set one above the
+  // measurement is a ceiling that permits the next regression, which is
+  // how a 10px stray survived here — every other fact about a claim stands
+  // at 11, and two of them at 10 is two sizes of small print on one row
+  // with nothing distinguishing them.
+  const pairs = new Set(rows.map((row) => `${row.size}/${row.weight}`));
+  assert.ok(
+    pairs.size <= 6,
+    `${pairs.size} distinct size/weight pairs on one screen: ${[...pairs].sort().join(" ")}`,
+  );
+  // FOUR SIZES. 11 meta · 13 section, controls and quotation · 14 the
+  // claim · 20 the run's four figures.
+  const sizes = new Set(rows.map((row) => row.size));
+  assert.ok(
+    sizes.size <= 4,
+    `${sizes.size} distinct sizes on one screen: ${[...sizes].sort((a, b) => a - b).join(" ")}`,
+  );
 });

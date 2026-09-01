@@ -5696,10 +5696,21 @@ test("a chip stands where the reference's chip stands, and the pill still agrees
   // small badges — 网络搜索 ×4, 网页抓取 ×3 — which is the same geometry as a
   // table row's chips and not a second one: a full-size chip there would
   // stand a histogram of eight tools taller than the findings under it.
+  //
+  // FOUR NOW, AND THE FOURTH IS THE SAME ARGUMENT MEASURED ON A RENDERED
+  // SCREEN. An insight card's top row is 候选 · 资金 · the rank score, and the
+  // score is 11px — so a 26px chip with a 13/600 label put two facts ABOUT a
+  // claim two steps above everything else on their own line, level with a
+  // section heading and one step under the claim itself. Walking the tree:
+  // 候选 came out at 13/600 while the meta under it was 11/400 and the group
+  // heading over it was 16/600, which is three "heading" treatments and no
+  // rule saying which is which. Dense is the geometry of a row whose other
+  // members are meta, and that is this row.
   const denseHomes = [
     "function MissionTaskBoard(",
     "function MissionTraceRow(",
     "function MissionDimensionDrawer(",
+    "function InsightCard(",
   ];
   const inside = denseHomes.reduce((sum, site) => sum + (code(body(site)).split('size: "xs"').length - 1), 0);
   const total = SOURCE.split('size: "xs"').length - 1;
