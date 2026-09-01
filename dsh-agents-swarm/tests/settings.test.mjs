@@ -1522,6 +1522,17 @@ function stubFetch(overrides = {}) {
     if (address.includes("/missions/list")) {
       const query = address.includes("?") ? address.slice(address.indexOf("?") + 1) : "";
       const status = new URLSearchParams(query).get("status") ?? "";
+      // THE SEARCH IS HONOURED, because the route honours it. A stub that
+      // answered the same page whatever was asked for made "no mission
+      // matches that" untestable — the pane would list four missions under
+      // a search for a topic none of them has, and the empty state that is
+      // supposed to appear never would.
+      const search = (new URLSearchParams(query).get("search") ?? "").trim();
+      if (search !== "" && Object.hasOwn(pages, status)) {
+        const held = pages[status];
+        const rows = held.missions.filter((row) => String(row.topic).includes(search));
+        return ok({ ...held, missions: rows, total: rows.length });
+      }
       if (!Object.hasOwn(pages, status)) {
         return {
           ok: false,
@@ -1914,6 +1925,17 @@ test("the missions pane says what it is, and can be searched", async () => {
   const box = find(view.tree, (node) => node.props?.["aria-label"] === "搜索任务");
   assert.ok(box, "the missions pane has no search box");
 
+  // ONE OF EACH ACTION, AND FOR ONE ROUND THERE WERE TWO. The heading row
+  // was inserted ABOVE the existing toolbar and its 刷新 and 新建任务 were
+  // left where they had always been, so the screen carried two of each,
+  // forty pixels apart, doing the same thing. Counted rather than found,
+  // because `button()` returns the first match and would have passed.
+  for (const label of ["刷新", "新建任务"]) {
+    const found = findAll(view.tree, (node) => node.type === "button"
+      && textOf(node).some((piece) => piece.includes(label)));
+    assert.equal(found.length, 1, `${found.length} × ${label} on the missions pane; there is one of it`);
+  }
+
   const asked = [];
   const inner = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
@@ -2044,44 +2066,54 @@ test("a row that says running with nothing running it says so", async () => {
   assert.ok(!live.includes("本进程没有在跑它"), "a live mission is reported as an orphan");
 });
 
-test("each chip lists a different set of missions", async () => {
+test("洞察 is two kinds, and the strip is how you get between them", async () => {
+  // SEVEN STATUS CHIPS WENT. 全部 / 运行中 / 已完成 / 未签署 / 可继续 / 失败 /
+  // 已取消 was seven controls over a list that is usually one card long,
+  // and the one thing the row could not do was say which KIND of 洞察 you
+  // are looking at — which is the split this pane actually has.
+  //
+  // 主题洞察 is a question somebody asked: a swarm runs it once and answers
+  // it in a report. 信源洞察 is the opposite shape — nobody asked, it
+  // persists across passes, and it accrues evidence. The second had a
+  // table, seven routes and a whole extraction pass, and no screen at all.
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
-  const listed = () => textOf(view.tree).join(" ");
-  const press = async (label) => {
-    await view.act(() => { chip(view.tree, label).props.onClick(); });
-    return listed();
-  };
+  const text = () => textOf(view.tree).join(" ");
+  assert.ok(text().includes("主题洞察") && text().includes("信源洞察"), "the two kinds are not offered");
+  // ASSERTED ON THE CONTROL, NOT THE WORDS. 运行中 and 已取消 are also what a
+  // mission's own status pill says, so a page-wide search for them finds the
+  // CARD and fails on a pane that has no filters left. The chips were the
+  // only `role="tab"` buttons here.
+  assert.equal(
+    findAll(view.tree, (node) => node.type === "button" && node.props?.role === "tab").length, 0,
+    "the status filter chips are still on the pane",
+  );
 
-  assert.ok(listed().includes(RUNNING.topic) && listed().includes(REFUSED.topic), "全部 is not showing everything");
-
-  let text = await press("未签署");
-  assert.ok(text.includes(REFUSED.topic), "未签署 lost the mission that was not signed");
-  assert.ok(!text.includes(RUNNING.topic), "未签署 kept a running mission: the chip changed the URL and nothing else");
-
-  text = await press("运行中");
-  assert.ok(text.includes(RUNNING.topic), "运行中 lost the running mission");
-  assert.ok(!text.includes(REFUSED.topic), "运行中 kept a terminal mission");
-
-  text = await press("全部");
-  assert.ok(text.includes(RUNNING.topic) && text.includes(REFUSED.topic), "going back to 全部 did not restore the list");
+  // THE MISSION LIST IS WHAT IT OPENS ON, because that is the one a
+  // reader arriving from the tab strip asked for.
+  assert.ok(text().includes(RUNNING.topic), "the pane does not open on the missions");
+  await view.act(() => { button(view.tree, "信源洞察").props.onClick(); });
+  const library = text();
+  assert.ok(!library.includes(RUNNING.topic), "the missions are still listed under 信源洞察");
+  assert.ok(library.includes("信源洞察"), "the library pane did not mount");
+  await view.act(() => { button(view.tree, "主题洞察").props.onClick(); });
+  assert.ok(text().includes(RUNNING.topic), "there is no way back to the missions");
 });
 
-test("an empty chip and an empty list are different sentences", async () => {
+test("an empty search and an empty library are different sentences", async () => {
+  // THE CHIP'S EMPTY AND THE LIBRARY'S EMPTY WERE ALREADY TWO SENTENCES,
+  // and the chips are gone. The distinction survives with a new left
+  // half: a search that matches nothing is a search to clear, and telling
+  // a person no mission has ever run while four sit behind a typo sends
+  // them to look at the wrong thing entirely.
   stubFetch();
   const view = await render("MissionsTab", { zh: true });
-  await view.act(() => { chip(view.tree, "已取消").props.onClick(); });
-  // A chip with nothing under it is a filter to undo, not a feature to fix.
-  // Telling a person no mission has ever run while four sit one chip away sends
-  // them to look at the wrong thing entirely.
+  const box = find(view.tree, (node) => node.props?.["aria-label"] === "搜索任务");
+  await view.act(() => { box.props.onChange({ target: { value: "没有这样的课题" } }); });
+  await view.tick(400);
   const note = emptyNote(view.tree);
-  assert.ok(note.includes("这个筛选下没有任务"), "an empty chip does not say it is the chip that is empty");
-  assert.ok(!note.includes("还没有跑过任何任务"), "an empty chip reports the whole list as empty");
-
-  stubFetch({ missionPages: { "": { missions: [], total: 0, hasMore: false, counts: {}, live: [] } } });
-  const cold = emptyNote((await render("MissionsTab", { zh: true })).tree);
-  assert.ok(cold.includes("还没有跑过任何任务"), "an empty list does not say it is empty");
-  assert.ok(cold.includes("开始调研"), "the empty state does not say what to do about it");
+  assert.ok(note.includes("没有任务匹配"), "an empty search does not say it is the search that is empty");
+  assert.ok(note.includes("清除搜索"), "the empty search does not offer to clear itself");
 });
 
 test("a failed read says what failed, where, and offers to do it again", async () => {

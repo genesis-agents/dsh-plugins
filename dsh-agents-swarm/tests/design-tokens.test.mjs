@@ -2880,7 +2880,12 @@ test("an empty screen names its next step, and two empties are two steps", () =>
   // same screen four inches up, and the list said so and then left you to find
   // it yourself.
   assert.match(list, /topicRef\.current\?\.focus\?\.\(\)/, "the cold empty list no longer puts the cursor in the topic field it tells you to write in");
-  assert.match(list, /setFilterId\(""\); \}/, "the filtered empty list no longer offers to clear the filter it is empty because of");
+  // THE FILTERED EMPTY WAS THE OTHER HALF, and the status chips it cleared
+  // are gone — seven controls over a list that is usually one card long.
+  // The distinction it protected is the one that matters and it survives:
+  // an empty SEARCH offers to clear itself, and an empty library offers the
+  // form. Two empties, two actions, which is what this test is named for.
+  assert.match(list, /setSearch\(""\); \}/, "the empty search no longer offers to clear the search it is empty because of");
   assert.match(code(SOURCE), /function MissionStarter\(\{ zh, onStarted, topicRef \}\)/, "the starter stopped taking the ref, so the call to action has nothing to focus");
   assert.match(code(SOURCE), /ref: topicRef/, "the ref is threaded to the starter and never attached to the field");
   // Three absences, three marks. Drawn identically — which is what the one

@@ -6809,21 +6809,6 @@ window.__ModuleLoader__.load({
 		*/
 		const MISSION_TAIL = 200;
 
-		/**
-		* The status chips. Every id is a member of the Host half's
-		* MISSION_STATUSES, because the route answers an unknown one with a 400
-		* naming the accepted values — which is the right answer, and not one
-		* worth provoking from a chip.
-		*/
-		const MISSION_FILTERS = [
-			{ id: "", en: "All", zh: "全部", hue: TONE.neutral },
-			{ id: "running", en: "Running", zh: "运行中", hue: TONE.info },
-			{ id: "completed", en: "Completed", zh: "已完成", hue: TONE.success },
-			{ id: "quality-failed", en: "Not signed", zh: "未签署", hue: TONE.warn },
-			{ id: "resumable", en: "Resumable", zh: "可继续", hue: TONE.accent },
-			{ id: "failed", en: "Failed", zh: "失败", hue: TONE.danger },
-			{ id: "cancelled", en: "Cancelled", zh: "已取消", hue: TONE.neutral }
-		];
 
 		/**
 		* The pill vocabulary, keyed by the code the projector computes.
@@ -8186,8 +8171,536 @@ window.__ModuleLoader__.load({
 			return zh ? `${Math.floor(days / 30)} 个月前` : `${Math.floor(days / 30)} mo ago`;
 		}
 
+		/**
+		* What a claim is ABOUT, in the five kinds the pass may emit.
+		*
+		* NOT A STACK LAYER. The reference dashboard this pane is modelled on
+		* groups by 能源 / 算力底座 / 模型 / 应用 / 跨层, which is that system's own
+		* taxonomy of the compute stack. We do not have one and inventing one
+		* here would be this pane asserting a classification the pass never made
+		* — the same refusal the references tab makes about 权威度. `kind` is
+		* what the extractor actually decides, and it is the honest grouping.
+		*/
+		const INSIGHT_KIND_FACES = {
+			launch: { zh: "发布", en: "Launch", icon: "sparkles", hue: PALETTE.violet },
+			funding: { zh: "资金", en: "Funding", icon: "exchange", hue: PALETTE.amber },
+			policy: { zh: "政策", en: "Policy", icon: "gavel", hue: PALETTE.blue },
+			finding: { zh: "研究发现", en: "Finding", icon: "scanSearch", hue: PALETTE.green },
+			shift: { zh: "趋势转向", en: "Shift", icon: "pulse", hue: PALETTE.indigo }
+		};
+
+		/**
+		* How far a claim has got, and the one a person can overrule.
+		*
+		* `contested` IS NOT A FAILURE and is drawn as its own tone rather than as
+		* danger. A standing claim with a contradiction against it is the most
+		* interesting row on the page — it is the thing the library disagrees
+		* with itself about — and colouring it red would file it with the errors.
+		*/
+		const INSIGHT_STATUS_FACES = {
+			candidate: { zh: "候选", en: "Candidate", icon: "circle", hue: TONE.neutral },
+			standing: { zh: "成立", en: "Standing", icon: "check", hue: TONE.success },
+			contested: { zh: "有争议", en: "Contested", icon: "exchange", hue: TONE.warn },
+			dormant: { zh: "休眠", en: "Dormant", icon: "pause", hue: TONE.muted }
+		};
+
+		/** What a piece of evidence does to the claim it hangs off. */
+		const INSIGHT_STANCE_FACES = {
+			supports: { zh: "支持", en: "Supports", hue: TONE.success },
+			contradicts: { zh: "反对", en: "Contradicts", hue: TONE.warn },
+			context: { zh: "背景", en: "Context", hue: TONE.neutral }
+		};
+
+		/**
+		* One claim the library is standing behind, or considering.
+		*
+		* THE QUOTE IS THE POINT OF THE CARD. Every other field is a judgement —
+		* the statement is the pass's paraphrase, the scores are its arithmetic,
+		* the kind is its classification — and the quote is the only thing on the
+		* card that is not. It is verbatim, checked against the block the model
+		* was shown, and it is what a reader uses to decide whether to believe
+		* the sentence above it. So it is drawn full, in the reading face, not
+		* clamped to a line of grey supporting text.
+		* @param row - one row from `/insights/list`.
+		* @param zh - whether to write Chinese.
+		* @param onPin - hand a verdict to the card, or null to clear one.
+		* @param busy - whether a verdict is in flight.
+		* @param key - React key.
+		* @returns the card.
+		*/
+		function InsightCard({ row, zh, onPin, busy }, key) {
+			const kind = INSIGHT_KIND_FACES[row.kind] ?? null;
+			const face = INSIGHT_STATUS_FACES[row.effectiveStatus] ?? INSIGHT_STATUS_FACES.candidate;
+			const entities = Array.isArray(row.entities) ? row.entities : [];
+			const evidence = Array.isArray(row.evidencePreview) ? row.evidencePreview : [];
+			// THE FOUR, AS ONE FIGURE AND FOUR. `rankScore` is the weighted blend
+			// the list is ordered by, so it is what the row is placed by and
+			// belongs on the row; the four it is made of go behind a title,
+			// because a reader who wants to know why this is at the top wants the
+			// breakdown and a reader who does not wants one number.
+			const scores = [
+				{ zh: "新颖", en: "novelty", value: row.novelty },
+				{ zh: "相关", en: "relevance", value: row.relevance },
+				{ zh: "可信", en: "credibility", value: row.credibility },
+				{ zh: "势头", en: "momentum", value: row.momentum }
+			];
+			const breakdown = scores
+				.map((one) => `${zh ? one.zh : one.en} ${Number(one.value ?? 0).toFixed(2)}`)
+				.join(" · ");
+
+			return jsxs("article", {
+				style: { ...CARD_STYLE, marginBottom: 0, display: "flex", flexDirection: "column", gap: SPACE.sm },
+				children: [
+					jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: SPACE.xs, flexWrap: "wrap" },
+						children: [
+							Chip({ tone: face.hue, pill: true, icon: face.icon, label: zh ? face.zh : face.en }, "state"),
+							kind === null ? null : Chip({ tone: kind.hue, icon: kind.icon, label: zh ? kind.zh : kind.en }, "kind"),
+							// PINNED IS SAID, not just obeyed. `pinnedStatus` outranks the
+							// pass, so a card sitting at 成立 because a person put it there
+							// and one the pass computed are the same colour and different
+							// facts — and the second reverts on the next run.
+							row.pinnedStatus === null || row.pinnedStatus === undefined ? null : Chip({
+								tone: TONE.accent,
+								label: zh ? "人工判定" : "your verdict"
+							}, "pinned"),
+							jsx("span", { style: { flex: 1 } }, "spacer"),
+							jsx("span", {
+								title: zh ? `排序分 ${Number(row.rankScore ?? 0).toFixed(2)} = ${breakdown}` : `rank ${Number(row.rankScore ?? 0).toFixed(2)} = ${breakdown}`,
+								style: { font: FONT.micro, color: INK.quiet, flex: "none", fontFamily: MONO },
+								children: Number(row.rankScore ?? 0).toFixed(2)
+							}, "rank")
+						]
+					}, "top"),
+					jsx("p", {
+						style: { font: FONT.bodyMedium, color: INK.primary, margin: 0 },
+						children: String(row.statement ?? "")
+					}, "statement"),
+					entities.length === 0 ? null : jsx("div", {
+						style: { display: "flex", flexWrap: "wrap", gap: SPACE.xs },
+						children: entities.slice(0, 6).map((name, at) => Chip({ label: String(name) }, `e${at}`))
+					}, "entities"),
+					// THE VERBATIM HALF. One per stance at most: a claim with nine
+					// supporting quotes does not need nine on the card, but a claim
+					// with a contradiction against it must show that one — it is the
+					// whole reason `contested` exists as a status.
+					...evidence.slice(0, 3).map((piece, at) => {
+						const stance = INSIGHT_STANCE_FACES[piece?.stance] ?? INSIGHT_STANCE_FACES.context;
+						return jsxs("blockquote", {
+							style: {
+								margin: 0, padding: `${SPACE.xs} 0 ${SPACE.xs} ${SPACE.md}`,
+								borderLeft: `2px solid ${tint(stance.hue, TINT.ring)}`
+							},
+							children: [
+								jsx("p", {
+									style: { margin: 0, font: FONT.body, color: INK.secondary },
+									children: `“${String(piece?.quote ?? "")}”`
+								}, "quote"),
+								jsxs("div", {
+									style: {
+										display: "flex", alignItems: "center", gap: SPACE.xs,
+										marginTop: "2px", font: FONT.nano, color: INK.quiet
+									},
+									children: [
+										jsx("span", { style: { color: `rgb(${stance.hue})` }, children: zh ? stance.zh : stance.en }, "stance"),
+										piece?.sourceKey === undefined || piece.sourceKey === null || piece.sourceKey === ""
+											? null
+											: jsx("span", { style: { fontFamily: MONO }, children: String(piece.sourceKey) }, "host")
+									]
+								}, "by")
+							]
+						}, `q${at}`);
+					}),
+					jsxs("div", {
+						style: {
+							display: "flex", flexWrap: "wrap", alignItems: "center",
+							rowGap: SPACE.xs, columnGap: SPACE.md,
+							paddingTop: SPACE.sm, borderTop: `1px solid ${LINE.hair}`,
+							font: FONT.micro, color: INK.secondary
+						},
+						children: [
+							// INDEPENDENT SOURCES, NOT ARTICLES, and the two are printed
+							// together because their difference is the whole claim about
+							// corroboration: six articles off one wire service is one
+							// source, and a card that said "6" would be saying the
+							// opposite of what it means.
+							jsx("span", {
+								title: zh
+									? "独立来源 / 证据条数。六篇转载同一条通稿算一个来源。"
+									: "independent sources / pieces of evidence. Six reprints of one wire story are one source.",
+								children: zh
+									? `${row.independentCount ?? 0} 个独立来源 · ${row.sourceCount ?? 0} 条证据`
+									: `${row.independentCount ?? 0} independent · ${row.sourceCount ?? 0} pieces`
+							}, "sources"),
+							Number(row.contradictionCount ?? 0) === 0 ? null : jsx("span", {
+								style: { color: `rgb(${TONE.warn})` },
+								children: zh ? `${row.contradictionCount} 条反对` : `${row.contradictionCount} against`
+							}, "against"),
+							jsx("span", {
+								title: formatStamp(row.firstSeenAt),
+								children: zh ? `首见 ${formatAgo(row.firstSeenAt, zh)}` : `first seen ${formatAgo(row.firstSeenAt, zh)}`
+							}, "first"),
+							jsx("span", { style: { flex: 1 } }, "gap"),
+							// THE VERDICT CONTROLS. Three buttons rather than a menu: the
+							// whole point of `pinned_status` is that it survives the next
+							// pass, and a control that decides that must not be one click
+							// deeper than the pass's own opinion.
+							...[
+								{ id: "standing", zh: "成立", en: "Standing" },
+								{ id: "contested", zh: "存疑", en: "Contest" },
+								{ id: "dormant", zh: "搁置", en: "Shelve" }
+							].map((choice) => jsx("button", {
+								type: "button",
+								disabled: busy,
+								className: "swm-focus",
+								style: {
+									appearance: "none", cursor: busy ? "default" : "pointer",
+									border: `1px solid ${row.pinnedStatus === choice.id ? tint(TONE.accent, TINT.ring) : LINE.hair}`,
+									background: row.pinnedStatus === choice.id ? tint(TONE.accent, TINT.soft) : "transparent",
+									color: row.pinnedStatus === choice.id ? `rgb(${TONE.accent})` : INK.secondary,
+									borderRadius: RADIUS.md, padding: `2px ${SPACE.sm}`, font: FONT.micro
+								},
+								// PRESSING THE ONE THAT IS ALREADY SET CLEARS IT. That is
+								// what hands the card back to the pass, and a separate
+								// "clear" button would be a fourth control for a state
+								// three of them already describe.
+								onClick: () => { onPin(row.pinnedStatus === choice.id ? null : choice.id); },
+								children: zh ? choice.zh : choice.en
+							}, choice.id))
+						]
+					}, "foot")
+				]
+			}, key);
+		}
+
+		/**
+		* 信源洞察: what the library itself is saying, as standing claims.
+		*
+		* THE DATA WAS ALREADY THERE. `insights`, `insight_evidence`, the pass in
+		* insights.js and seven routes have been in this plugin since before the
+		* missions were, and nothing had ever drawn them — eighteen claims with
+		* verified quotes sitting in a table with no way to read them. This pane
+		* is the reading.
+		*
+		* NOT A SECOND MISSION LIST. A mission is a question somebody asked, run
+		* once, answered in a report. A claim is the opposite shape: nobody asked
+		* for it, it persists across passes, and it accrues evidence — which is
+		* why the card is built around a quote and a verdict rather than around a
+		* score and a link.
+		* @param zh - whether to write Chinese.
+		* @returns the pane.
+		*/
+		function LibraryInsightPane({ zh }) {
+			const [rows, setRows] = useState(null);
+			const [counts, setCounts] = useState({});
+			const [total, setTotal] = useState(0);
+			const [status, setStatus] = useState(null);
+			const [error, setError] = useState("");
+			const [tick, setTick] = useState(0);
+			const [busy, setBusy] = useState("");
+			const [search, setSearch] = useState("");
+			const [asked, setAsked] = useState("");
+			const [kind, setKind] = useState("");
+
+			// The same quarter second the mission search waits, and for the same
+			// reason: `q` reaches a LIKE that cannot use an index.
+			useEffect(() => {
+				if (search === asked) return undefined;
+				const timer = setTimeout(() => { setAsked(search); }, 250);
+				timer.unref?.();
+				return () => { clearTimeout(timer); };
+			}, [search, asked]);
+
+			useEffect(() => {
+				let alive = true;
+				const params = new URLSearchParams({ take: "60" });
+				if (asked.trim() !== "") params.append("q", asked.trim());
+				if (kind !== "") params.append("kind", kind);
+				Promise.all([
+					fetch(`${apiBase()}/insights/list?${params.toString()}`).then(missionData),
+					fetch(`${apiBase()}/insights/status`).then(missionData)
+				])
+					.then(([list, said]) => {
+						if (!alive) return;
+						setRows(Array.isArray(list.insights) ? list.insights : []);
+						setCounts(list.counts !== null && typeof list.counts === "object" ? list.counts : {});
+						setTotal(Number(list.total ?? 0));
+						setStatus(said);
+						setError("");
+					})
+					.catch((cause) => { if (alive) setError(String(cause?.message ?? cause)); });
+				return () => { alive = false; };
+			}, [asked, kind, tick]);
+
+			/** Hand one card a verdict, or hand it back to the pass. */
+			const pin = useCallback(async (id, wanted) => {
+				setBusy(id);
+				try {
+					const response = await fetch(`${apiBase()}/insights/item/${encodeURIComponent(id)}/status`, {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({ status: wanted })
+					});
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? `HTTP ${response.status}`);
+					setTick((value) => value + 1);
+				} catch (cause) {
+					setError(String(cause?.message ?? cause));
+				} finally {
+					setBusy("");
+				}
+			}, []);
+
+			/** Run the pass now, rather than waiting for a timer that may be off. */
+			const runNow = useCallback(async () => {
+				setBusy("run");
+				setError("");
+				try {
+					const response = await fetch(`${apiBase()}/insights/run-now`, { method: "POST" });
+					const payload = await response.json();
+					if (payload?.success !== true) throw new Error(payload?.error ?? `HTTP ${response.status}`);
+					setTick((value) => value + 1);
+				} catch (cause) {
+					setError(String(cause?.message ?? cause));
+				} finally {
+					setBusy("");
+				}
+			}, []);
+
+			if (error !== "" && rows === null) return jsx(ErrorBox, { message: error, zh }, "err");
+			if (rows === null) return jsx(Skeleton, { rows: 5 }, "load");
+
+			// WHICHEVER RUN IS THE LATEST. The pass records a scheduled run and a
+			// manual one separately — deliberately, so a manual run cannot tell
+			// the timer a day is served — and the reader wants neither of those
+			// facts, they want the last time this table changed.
+			const scheduled = status?.insightLastRun ?? null;
+			const manual = status?.insightLastManualRun ?? null;
+			const last = [scheduled, manual]
+				.filter((one) => one !== null && one !== undefined)
+				.sort((a, b) => String(b?.at ?? "").localeCompare(String(a?.at ?? "")))[0] ?? null;
+			const every = Number(status?.insightIntervalMinutes ?? 0);
+
+			// GROUPED BY KIND, biggest first. The reference groups by its own
+			// stack layer; `kind` is the classification this pass actually makes.
+			const groups = new Map();
+			for (const row of rows) {
+				const held = groups.get(row.kind) ?? [];
+				held.push(row);
+				groups.set(row.kind, held);
+			}
+			const ordered = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
+
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: SPACE.lg },
+				children: [
+					// WHAT THIS IS AND WHEN IT LAST RAN, in one line each. A standing
+					// table with no "as of" is a table a reader has to guess the age
+					// of, and the guess is always "now".
+					jsxs("div", {
+						style: { display: "flex", alignItems: "flex-start", gap: SPACE.md, flexWrap: "wrap" },
+						children: [
+							jsxs("div", {
+								style: { flex: 1, minWidth: "220px" },
+								children: [
+									jsx("div", {
+										style: { font: FONT.baseStrong, color: INK.primary },
+										children: zh ? "信源洞察" : "Library insight"
+									}, "name"),
+									jsx("p", {
+										style: { font: FONT.small, color: INK.secondary, margin: `2px 0 0` },
+										children: zh
+											? "把信源库读成一组能站住的主张：每条都带原话、独立来源计数，和一个你可以推翻的判定。"
+											: "The library read as standing claims: each with its verbatim quote, a count of independent sources, and a verdict you can overrule."
+									}, "note")
+								]
+							}, "words"),
+							jsxs("div", {
+								style: { display: "flex", alignItems: "center", gap: SPACE.sm, flex: "none" },
+								children: [
+									jsx("button", {
+										type: "button",
+										className: "swm-ctl swm-focus", style: controlStyle(busy !== ""),
+										disabled: busy !== "",
+										onClick: () => { setTick((value) => value + 1); },
+										children: zh ? "刷新" : "Refresh"
+									}, "refresh"),
+									jsx("button", {
+										type: "button",
+										disabled: busy !== "",
+										className: "swm-ctl swm-focus",
+										style: {
+											...controlStyle(busy !== ""),
+											border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
+											background: tint(TONE.accent, TINT.soft),
+											color: `rgb(${TONE.accent})`
+										},
+										onClick: () => { void runNow(); },
+										children: busy === "run"
+											? (zh ? "正在跑…" : "Running…")
+											: (zh ? "立即跑一次" : "Run now")
+									}, "run")
+								]
+							}, "actions")
+						]
+					}, "head"),
+
+					// THE CADENCE, AND WHETHER THERE IS ONE. 0 is off, and it is off
+					// on this machine — a pane that said nothing would let a reader
+					// take a table last written in August for a live one.
+					jsxs("div", {
+						style: {
+							display: "flex", flexWrap: "wrap", alignItems: "center",
+							rowGap: SPACE.xs, columnGap: SPACE.md,
+							padding: CARD_PAD, borderRadius: RADIUS.lg,
+							background: SURFACE.subtle, font: FONT.small, color: INK.secondary
+						},
+						children: [
+							jsx("span", {
+								style: { color: every > 0 ? `rgb(${TONE.success})` : `rgb(${TONE.warn})` },
+								children: every > 0
+									? (zh ? `每 ${every} 分钟跑一次` : `every ${every} min`)
+									: (zh ? "定时未开启 —— 只有手动跑过" : "no schedule — manual runs only")
+							}, "cadence"),
+							last === null ? jsx("span", { children: zh ? "还没有跑过" : "never run" }, "never") : jsx("span", {
+								title: formatStamp(last.at),
+								children: zh ? `数据截至 ${formatAgo(last.at, zh)}` : `as of ${formatAgo(last.at, zh)}`
+							}, "asof"),
+							// THE RUN'S OWN ARITHMETIC. `backlog` is the one worth
+							// printing beside the rest: it is how much of the library
+							// the pass has not looked at, and a table built from 200
+							// rows out of 21000 is a different object from one built
+							// from all of them.
+							last === null ? null : jsx("span", {
+								children: zh
+									? `本次扫 ${last.rows ?? 0} 行 · 抽出 ${last.claims ?? 0} 条 · 核验 ${last.verified ?? 0} 条`
+									: `${last.rows ?? 0} rows · ${last.claims ?? 0} claims · ${last.verified ?? 0} verified`
+							}, "run"),
+							last === null || Number(last.backlog ?? 0) === 0 ? null : jsx("span", {
+								style: { color: `rgb(${TONE.warn})` },
+								title: zh
+									? "还没有被这个流程看过的信源条数。"
+									: "rows of the library this pass has not looked at yet.",
+								children: zh ? `积压 ${last.backlog}` : `${last.backlog} not yet read`
+							}, "backlog")
+						]
+					}, "cadence"),
+
+					error === "" ? null : jsx(ErrorBox, { message: error, zh }, "err"),
+
+					// SEARCH AND ONE CUT, on the row the reference puts them on.
+					jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" },
+						children: [
+							jsx("input", {
+								type: "search",
+								value: search,
+								placeholder: zh ? "按主张或实体搜索…" : "Search claims and entities…",
+								"aria-label": zh ? "搜索洞察" : "Search insights",
+								className: "swm-focus",
+								style: { ...SEARCH_STYLE, height: CONTROL.md, flex: 1, minWidth: "180px" },
+								onChange: (event) => { setSearch(event.target.value); }
+							}, "search"),
+							jsx("select", {
+								value: kind,
+								"aria-label": zh ? "类型" : "Kind",
+								style: SELECT_STYLE,
+								onChange: (event) => { setKind(event.target.value); },
+								children: [
+									jsx("option", { value: "", children: zh ? "全部类型" : "All kinds" }, "all"),
+									...Object.entries(INSIGHT_KIND_FACES).map(([id, face]) => jsx("option", {
+										value: id, children: zh ? face.zh : face.en
+									}, id))
+								]
+							}, "kind")
+						]
+					}, "tools"),
+
+					jsxs("div", {
+						style: { display: "flex", alignItems: "baseline", gap: SPACE.sm, flexWrap: "wrap" },
+						children: [
+							jsx("h3", {
+								style: { font: FONT.baseStrong, margin: 0, color: INK.primary },
+								children: zh ? `主张 · 共 ${total} 条` : `Claims · ${total}`
+							}, "title"),
+							...Object.entries(INSIGHT_STATUS_FACES)
+								.filter(([id]) => Number(counts?.[id] ?? 0) > 0)
+								.map(([id, face]) => jsx("span", {
+									style: { font: FONT.micro, color: `rgb(${face.hue})` },
+									children: `${zh ? face.zh : face.en} ${counts[id]}`
+								}, id))
+						]
+					}, "tally"),
+
+					rows.length !== 0 ? null : jsx("div", {
+						style: { font: FONT.small, color: INK.secondary },
+						children: total === 0 && asked.trim() === "" && kind === ""
+							? (zh
+								? "这个库还没有产出任何主张。按上面的「立即跑一次」让它读一遍。"
+								: "The library has produced no claims yet. Press Run now to have it read.")
+							: (zh ? "没有主张匹配这个条件。" : "No claim matches that.")
+					}, "empty"),
+
+					...ordered.map(([id, held]) => {
+						const face = INSIGHT_KIND_FACES[id] ?? null;
+						return jsxs("section", {
+							style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
+							children: [
+								jsxs("div", {
+									style: { display: "flex", alignItems: "baseline", gap: SPACE.sm },
+									children: [
+										jsx("span", {
+											style: {
+												font: FONT.smallStrong, letterSpacing: TRACK_WIDE,
+												textTransform: "uppercase",
+												color: face === null ? INK.secondary : `rgb(${face.hue})`
+											},
+											children: face === null ? String(id) : (zh ? face.zh : face.en)
+										}, "name"),
+										jsx("span", { style: { ...COUNT_CHIP, flex: "none" }, children: String(held.length) }, "n")
+									]
+								}, "head"),
+								...held.map((row) => InsightCard({
+									row, zh, busy: busy === row.id,
+									onPin: (wanted) => { void pin(row.id, wanted); }
+								}, row.id))
+							]
+						}, `g-${id}`);
+					}),
+
+					// THE RULES, AT THE FOOT, the way the reference closes with 口径 /
+					// 排序 / 原话. A reader who has just been shown eighteen machine-made
+					// claims is owed the terms they were made under.
+					jsx("div", {
+						style: {
+							paddingTop: SPACE.md, borderTop: `1px solid ${LINE.hair}`,
+							font: FONT.micro, color: INK.quiet,
+							display: "flex", flexDirection: "column", gap: SPACE.xs
+						},
+						children: [
+							zh
+								? `口径 只读 ${(status?.insightResourceTypes ?? []).join(" / ") || "—"}，窗口 ${status?.insightWindowDays ?? "—"} 天`
+								: `Scope: ${(status?.insightResourceTypes ?? []).join(" / ") || "—"}, a ${status?.insightWindowDays ?? "—"}-day window`,
+							zh
+								? `成立门槛 至少 ${status?.insightMinIndependent ?? "—"} 个独立来源；${status?.insightDormantDays ?? "—"} 天没有新证据转休眠`
+								: `Standing needs ${status?.insightMinIndependent ?? "—"} independent sources; ${status?.insightDormantDays ?? "—"} days without new evidence goes dormant`,
+							zh
+								? "原话 逐字引用，写入前对着模型看过的那一段核过 —— 对不上的整条丢弃"
+								: "Quotes are verbatim and checked against the block the model was shown; one that does not match is dropped"
+						].map((line, at) => jsx("div", { children: line }, `r${at}`))
+					}, "rules")
+				]
+			});
+		}
+
 		function MissionsTab({ zh }) {
-			const [filterId, setFilterId] = useState("");
+			// TWO KINDS OF 洞察, and this is which one is open.
+			//
+			// 主题洞察 is a question somebody asked: a swarm runs it once and
+			// answers it in a report. 信源洞察 is the opposite shape — nobody asked,
+			// it persists across passes, and it accrues evidence. They were never
+			// the same list and the second had no screen at all.
+			const [pane, setPane] = useState("missions");
 			// WHAT THE READER TYPED, AND WHAT HAS BEEN ASKED FOR. Two states, not
 			// one: `/missions/list` has taken a `search` since it was written and
 			// nothing ever sent one, and wiring the field straight to the query would
@@ -8233,7 +8746,6 @@ window.__ModuleLoader__.load({
 				let alive = true;
 				const ticket = ++requestId.current;
 				const params = new URLSearchParams({ take: String(PAGE_SIZE), skip: "0" });
-				if (filterId !== "") params.append("status", filterId);
 				// TRIMMED, because a trailing space is a different query to the route and
 				// the same question to the person who typed it.
 				if (asked.trim() !== "") params.append("search", asked.trim());
@@ -8253,7 +8765,7 @@ window.__ModuleLoader__.load({
 						setState("error");
 					});
 				return () => { alive = false; };
-			}, [filterId, asked, tick]);
+			}, [asked, tick]);
 
 			// A QUARTER SECOND OF QUIET BEFORE THE QUESTION IS ASKED. Long enough
 			// that a typed word is one request rather than five, short enough that
@@ -8384,181 +8896,160 @@ window.__ModuleLoader__.load({
 								}, "actions")
 							]
 						}, "head"),
-						// SEARCH IS ITS OWN ROW, and full width, because it is the control a
-						// reader with forty runs reaches for first. `/missions/list` has taken a
-						// `search` since it was written and no screen ever sent one, so a person
-						// looking for the licensing run from three weeks ago had the status
-						// chips and their own scrolling.
-						jsx("input", {
-							type: "search",
-							value: search,
-							placeholder: zh ? "按课题搜索…" : "Search by topic…",
-							"aria-label": zh ? "搜索任务" : "Search missions",
-							className: "swm-focus",
-							style: { ...SEARCH_STYLE, height: CONTROL.md, width: "100%", margin: `0 0 ${SPACE.md}` },
-							onChange: (event) => { setSearch(event.target.value); }
-						}, "search"),
-						jsxs("div", {
-							style: TOOLBAR_STYLE,
+						// THE STATUS CHIPS ARE GONE. 全部 / 运行中 / 已完成 / 未签署 /
+						// 可继续 / 失败 / 已取消 was seven controls over a list that is
+						// usually one card long, and the one thing the row could not do
+						// was the thing this pane needed it for: say which KIND of
+						// 洞察 you are looking at.
+						jsx("div", {
+							style: { ...SEGMENT_TRACK, margin: `0 0 ${SPACE.md}` },
+							role: "group",
+							"aria-label": zh ? "洞察类型" : "Kind of insight",
 							children: [
-								...MISSION_FILTERS.map((entry) => jsx("button", {
-									type: "button",
-									role: "tab",
-									"aria-selected": entry.id === filterId,
-									className: "swm-chip swm-focus", style: chipStyle(entry, entry.id === filterId),
-									onClick: () => { setFilterId(entry.id); },
-									children: entry.id === "" || counts[entry.id] === undefined
-										? (zh ? entry.zh : entry.en)
-										: `${zh ? entry.zh : entry.en} ${counts[entry.id]}`
-								}, entry.id === "" ? "all" : entry.id)),
-								jsx("span", { style: { flex: 1 } }, "spacer"),
-								jsx("button", {
+								{ id: "missions", zh: "主题洞察", en: "By topic" },
+								{ id: "library", zh: "信源洞察", en: "From the library" }
+							].map((one) => jsx("button", {
+								type: "button",
+								"aria-pressed": pane === one.id,
+								className: "swm-focus",
+								style: segmentStyle(pane === one.id),
+								onClick: () => { setPane(one.id); },
+								children: zh ? one.zh : one.en
+							}, one.id))
+						}, "kinds"),
+						pane !== "library" ? null : jsx(LibraryInsightPane, { zh }, "library"),
+						// EVERYTHING HERE IS THE MISSIONS HALF, and it used to render whatever
+						// was selected — so 信源洞察 drew the library pane and then the mission
+						// cards under it, which is two answers to one question.
+						//
+						// THE SEARCH BOX CAME WITH IT. It was above the strip that chooses
+						// between the halves, which put a control for one of them where it read
+						// as a control for both.
+						...(pane !== "missions" ? [] : [
+							// SEARCH IS ITS OWN ROW, and full width, because it is the control a
+							// reader with forty runs reaches for first. `/missions/list` has taken a
+							// `search` since it was written and no screen ever sent one, so a person
+							// looking for the licensing run from three weeks ago had the status
+							// chips and their own scrolling.
+							jsx("input", {
+								type: "search",
+								value: search,
+								placeholder: zh ? "按课题搜索…" : "Search by topic…",
+								"aria-label": zh ? "搜索任务" : "Search missions",
+								className: "swm-focus",
+								style: { ...SEARCH_STYLE, height: CONTROL.md, width: "100%", margin: `0 0 ${SPACE.md}` },
+								onChange: (event) => { setSearch(event.target.value); }
+							}, "search"),
+							state !== "error" ? null : ErrorBox({
+								title: zh ? "任务列表加载失败" : "Could not load the missions",
+								message: error,
+								endpoint: apiBase() + "/missions/list",
+								// THE SAME TICK THE TOOLBAR'S 刷新 NUDGES, deliberately. A
+								// retry that re-read the list some other way would be a
+								// second answer to "read the list again" a few lines from
+								// the first.
+								onRetry: () => { setTick((value) => value + 1); },
+								zh
+							}, "error"),
+							state !== "loading" ? null : SkeletonScreen({
+								zh,
+								// The same grid the list is laid out in, so nothing moves
+								// sideways when the answer lands.
+								style: MISSION_LIST_GRID,
+								children: [0, 1, 2].map((at) => jsxs("div", {
+									style: { ...CARD_STYLE, marginBottom: 0, flexDirection: "column", gap: SPACE.sm },
+									children: [
+										jsxs("div", {
+											style: { display: "flex", alignItems: "center", gap: SPACE.md },
+											children: [
+												Skeleton({ w: "58%", h: "15px" }, "topic"),
+												jsx("span", { style: { flex: 1 } }, "spacer"),
+												Skeleton({ w: "64px", h: "18px", r: RADIUS.pill }, "pill")
+											]
+										}, "head"),
+										Skeleton({ w: "76%", h: "12px" }, "meta")
+									]
+								}, "row" + at))
+							}, "loading"),
+							// TWO DIFFERENT EMPTIES, two different sentences, two
+							// different next steps. A chip with nothing under it is a
+							// filter to undo; a library with nothing in it is waiting for
+							// somebody to ask a question.
+							//
+							// THE COLD ARM NOW OPENS THE FORM RATHER THAN SCROLLING TO
+							// IT. When the starter was a card four inches up this same
+							// screen, the note said so and left the reader to go and find
+							// it; the form is behind 新建任务 now, so the only honest
+							// action here is the one that opens it — and the effect above
+							// puts the cursor in the topic field once it has.
+							// ONE ARM NOW, BECAUSE THERE IS ONE WAY TO BE EMPTY. The other
+							// said "no mission under this chip, try 全部" and offered to clear
+							// the filter — and the chips are gone. A search that matches
+							// nothing is its own sentence, below.
+							state !== "ready" || missions.length > 0 ? null : EmptyBox({
+								mark: asked.trim() === "" ? "sparkles" : "search",
+								title: asked.trim() === ""
+									? (zh ? "还没有跑过任何任务。" : "No mission has been run yet.")
+									: (zh ? `没有任务匹配“${asked.trim()}”。` : `No mission matches “${asked.trim()}”.`),
+								note: asked.trim() === ""
+									// "在上面" IS GONE WITH THE CARD IT POINTED AT. The form is
+									// behind 新建任务 now, so a sentence telling the reader to
+									// look up the page describes a screen that no longer
+									// exists — and this note's own button is what opens it.
+									? (zh ? "写一个课题，选一个档位，按“开始调研”。" : "Pick a topic, pick a tier, and press Start.")
+									: (zh ? `库里一共 ${known} 个任务。` : `The library holds ${known}.`),
+								action: jsx("button", {
 									type: "button",
 									className: "swm-ctl swm-focus", style: controlStyle(),
-									onClick: () => { setTick((value) => value + 1); },
-									children: zh ? "刷新" : "Refresh"
-								}, "refresh"),
-								// THE ONE THING ON THIS SCREEN THAT MAKES SOMETHING,
-								// and it is the last control in the row rather than a
-								// card above it. A tinted `controlStyle` rather than a
-								// tenth button geometry: the accent wash and ring are
-								// the same pair every chip in this file wears, spread
-								// over the control the row's other button already is.
-								//
-								// IT IS NOT IN THE PAGE HEADER, which is where the
-								// brief put it. That header is the shell's — it serves
-								// all five tabs, TABS carries no action for any of
-								// them, and B14 wrote the reason down: a slot with one
-								// tab's button in it either shows on the four tabs it
-								// means nothing on, or teaches the header to know
-								// which tab is open and hold that tab's state. This
-								// row is the list's own actions, and the state stays
-								// where the form's `onStarted` already lives.
-								jsx("button", {
-									type: "button",
-									className: "swm-ctl swm-focus",
-									style: {
-										...controlStyle(),
-										display: "inline-flex", alignItems: "center", gap: SPACE.xs,
-										border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
-										background: tint(TONE.accent, TINT.soft),
-										color: `rgb(${TONE.accent})`
-									},
-									onClick: () => { setStartOpen(true); },
-									children: [
-										jsx(Icon, { name: "plus", size: ICON.xs }, "glyph"),
-										jsx("span", { children: zh ? "新建任务" : "New mission" }, "label")
-									]
-								}, "new")
-							]
-						}, "toolbar"),
-						state !== "error" ? null : ErrorBox({
-							title: zh ? "任务列表加载失败" : "Could not load the missions",
-							message: error,
-							endpoint: apiBase() + "/missions/list",
-							// THE SAME TICK THE TOOLBAR'S 刷新 NUDGES, deliberately. A
-							// retry that re-read the list some other way would be a
-							// second answer to "read the list again" a few lines from
-							// the first.
-							onRetry: () => { setTick((value) => value + 1); },
-							zh
-						}, "error"),
-						state !== "loading" ? null : SkeletonScreen({
-							zh,
-							// The same grid the list is laid out in, so nothing moves
-							// sideways when the answer lands.
-							style: MISSION_LIST_GRID,
-							children: [0, 1, 2].map((at) => jsxs("div", {
-								style: { ...CARD_STYLE, marginBottom: 0, flexDirection: "column", gap: SPACE.sm },
+									// It OPENS the form rather than scrolling to it; the effect
+									// above puts the cursor in the topic field once the dialog
+									// has rendered. Optional chaining stays where the focus
+									// went, because this module is also executed in Node, where
+									// a ref's `current` stays null for ever.
+									onClick: asked.trim() === ""
+										? () => { setStartOpen(true); }
+										: () => { setSearch(""); },
+									children: asked.trim() === ""
+										? (zh ? "去写一个课题" : "Write a topic")
+										: (zh ? "清除搜索" : "Clear the search")
+								}, "cta")
+							}, "empty"),
+							missions.length === 0 ? null : jsxs("div", {
 								children: [
+									// A SECTION, not a stray sentence. The count was a 12px
+									// grey line floating between the toolbar and the cards
+									// with nothing beside it saying what it was counting —
+									// the only heading on this screen belonged to the form
+									// above it. The figure keeps its place on the right,
+									// where a count belongs, and gains a subject.
 									jsxs("div", {
-										style: { display: "flex", alignItems: "center", gap: SPACE.md },
+										style: {
+											display: "flex", alignItems: "baseline", justifyContent: "space-between",
+											gap: SPACE.md, margin: `0 0 ${SPACE.md}`
+										},
 										children: [
-											Skeleton({ w: "58%", h: "15px" }, "topic"),
-											jsx("span", { style: { flex: 1 } }, "spacer"),
-											Skeleton({ w: "64px", h: "18px", r: RADIUS.pill }, "pill")
+											jsx("h2", {
+												style: { font: FONT.baseStrong, margin: 0, color: INK.primary },
+												children: zh ? "我的任务" : "Missions"
+											}, "title"),
+											jsx("span", {
+												style: { font: FONT.small, color: INK.secondary },
+												children: (zh ? `共 ${total} 个任务` : `${total} mission(s)`)
+													+ (live.length === 0 ? "" : (zh ? ` · 本进程正在跑 ${live.length} 个` : ` · ${live.length} running in this process`))
+											}, "tally")
 										]
 									}, "head"),
-									Skeleton({ w: "76%", h: "12px" }, "meta")
+									jsx("div", { style: MISSION_LIST_GRID, children: missions.map((mission) => jsx(MissionListRow, {
+										mission, zh, live: live.includes(mission.id),
+										onOpen: (id) => { setOpenId(id); },
+										// The list refreshes on a tick rather than through a
+										// loader, so a delete nudges the tick instead of
+										// calling one that does not exist.
+										onRemoved: () => { setTick((value) => value + 1); }
+									}, mission.id)) }, "grid")
 								]
-							}, "row" + at))
-						}, "loading"),
-						// TWO DIFFERENT EMPTIES, two different sentences, two
-						// different next steps. A chip with nothing under it is a
-						// filter to undo; a library with nothing in it is waiting for
-						// somebody to ask a question.
-						//
-						// THE COLD ARM NOW OPENS THE FORM RATHER THAN SCROLLING TO
-						// IT. When the starter was a card four inches up this same
-						// screen, the note said so and left the reader to go and find
-						// it; the form is behind 新建任务 now, so the only honest
-						// action here is the one that opens it — and the effect above
-						// puts the cursor in the topic field once it has.
-						state !== "ready" || missions.length > 0 ? null : EmptyBox({
-							mark: filterId !== "" && known > 0 ? "search" : "sparkles",
-							title: filterId !== "" && known > 0
-								? (zh ? "这个筛选下没有任务。" : "No mission under this chip.")
-								: (zh ? "还没有跑过任何任务。" : "No mission has been run yet."),
-							note: filterId !== "" && known > 0
-								? (zh ? "换成“全部”看看。" : "Try All.")
-								// "在上面" IS GONE WITH THE CARD IT POINTED AT. The form
-								// is behind 新建任务 now, so a sentence telling the
-								// reader to look up the page describes a screen that
-								// no longer exists — and this note's own button is
-								// what opens it.
-								: (zh ? "写一个课题，选一个档位，按“开始调研”。" : "Pick a topic, pick a tier, and press Start."),
-							action: jsx("button", {
-								type: "button",
-								className: "swm-ctl swm-focus", style: controlStyle(),
-								onClick: filterId !== "" && known > 0
-									? () => { setFilterId(""); }
-									// It OPENS the form now rather than scrolling to
-									// it; the effect above puts the cursor in the topic
-									// field once the dialog has rendered. Optional
-									// chaining stays where the focus went, because this
-									// module is also executed in Node, where a ref's
-									// `current` stays null for ever.
-									: () => { setStartOpen(true); },
-								children: filterId !== "" && known > 0
-									? (zh ? "清除筛选" : "Clear the filter")
-									: (zh ? "去写一个课题" : "Write a topic")
-							}, "cta")
-						}, "empty"),
-						missions.length === 0 ? null : jsxs("div", {
-							children: [
-								// A SECTION, not a stray sentence. The count was a 12px
-								// grey line floating between the toolbar and the cards
-								// with nothing beside it saying what it was counting —
-								// the only heading on this screen belonged to the form
-								// above it. The figure keeps its place on the right,
-								// where a count belongs, and gains a subject.
-								jsxs("div", {
-									style: {
-										display: "flex", alignItems: "baseline", justifyContent: "space-between",
-										gap: SPACE.md, margin: `0 0 ${SPACE.md}`
-									},
-									children: [
-										jsx("h2", {
-											style: { font: FONT.baseStrong, margin: 0, color: INK.primary },
-											children: zh ? "我的任务" : "Missions"
-										}, "title"),
-										jsx("span", {
-											style: { font: FONT.small, color: INK.secondary },
-											children: (zh ? `共 ${total} 个任务` : `${total} mission(s)`)
-												+ (live.length === 0 ? "" : (zh ? ` · 本进程正在跑 ${live.length} 个` : ` · ${live.length} running in this process`))
-										}, "tally")
-									]
-								}, "head"),
-								jsx("div", { style: MISSION_LIST_GRID, children: missions.map((mission) => jsx(MissionListRow, {
-									mission, zh, live: live.includes(mission.id),
-									onOpen: (id) => { setOpenId(id); },
-									// The list refreshes on a tick rather than through a
-									// loader, so a delete nudges the tick instead of
-									// calling one that does not exist.
-									onRemoved: () => { setTick((value) => value + 1); }
-								}, mission.id)) }, "grid")
-							]
-						}, "rows"),
+							}, "rows"),
+						]),
 						// LAST IN THE FRAME, not first. The scrim is fixed and
 						// z-indexed so paint order is settled either way, but a
 						// dialog written above the list is a dialog that reads, in
@@ -20945,7 +21436,7 @@ window.__ModuleLoader__.load({
 			renderMarkdown, mergeBySentence, formatTime, displayModeOf, buildExport, stampFor,
 			missionFace, missionHue, missionIcon, missionPillFace, missionDuration, missionMeterLine,
 			missionVerifyRows, missionEventDetail, missionNoEvidence, missionActionNote,
-			missionTierLine, MISSION_FILTERS, MISSION_STAGE_FACES, MISSION_VERIFY_FACES,
+			missionTierLine, MISSION_STAGE_FACES, MISSION_VERIFY_FACES,
 			missionClock, missionSince, missionLatency, missionOkFace, missionRowTitle, missionRowState,
 			missionTraceSignature, missionFindingsSignature,
 			MISSION_ROLE_FACES, MISSION_TRACE_KINDS, MISSION_TRACE_TABS,
