@@ -7976,7 +7976,7 @@ window.__ModuleLoader__.load({
 								jsx("div", {
 									style: {
 										flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
-										width: "28px", height: "28px", borderRadius: RADIUS.md,
+										width: CONTROL.sm, height: CONTROL.sm, borderRadius: RADIUS.md,
 										color: `rgb(${TONE.accent})`, background: tint(TONE.accent, TINT.soft),
 										boxShadow: `inset 0 0 0 1px ${tint(TONE.accent, TINT.ring)}`
 									},
@@ -8188,6 +8188,13 @@ window.__ModuleLoader__.load({
 
 		function MissionsTab({ zh }) {
 			const [filterId, setFilterId] = useState("");
+			// WHAT THE READER TYPED, AND WHAT HAS BEEN ASKED FOR. Two states, not
+			// one: `/missions/list` has taken a `search` since it was written and
+			// nothing ever sent one, and wiring the field straight to the query would
+			// spend a request per keystroke against a route that scans every row —
+			// `topic LIKE '%…%'` cannot use an index, and its own comment says so.
+			const [search, setSearch] = useState("");
+			const [asked, setAsked] = useState("");
 			// The empty list's call to action puts the cursor in the starter's
 			// topic field. Held here rather than inside MissionStarter because
 			// the control and the field are in two different components.
@@ -8227,6 +8234,9 @@ window.__ModuleLoader__.load({
 				const ticket = ++requestId.current;
 				const params = new URLSearchParams({ take: String(PAGE_SIZE), skip: "0" });
 				if (filterId !== "") params.append("status", filterId);
+				// TRIMMED, because a trailing space is a different query to the route and
+				// the same question to the person who typed it.
+				if (asked.trim() !== "") params.append("search", asked.trim());
 				fetch(`${apiBase()}/missions/list?${params.toString()}`)
 					.then(missionData)
 					.then((data) => {
@@ -8243,7 +8253,17 @@ window.__ModuleLoader__.load({
 						setState("error");
 					});
 				return () => { alive = false; };
-			}, [filterId, tick]);
+			}, [filterId, asked, tick]);
+
+			// A QUARTER SECOND OF QUIET BEFORE THE QUESTION IS ASKED. Long enough
+			// that a typed word is one request rather than five, short enough that
+			// nobody waits for the list to catch up with them.
+			useEffect(() => {
+				if (search === asked) return undefined;
+				const timer = setTimeout(() => { setAsked(search); }, 250);
+				timer.unref?.();
+				return () => { clearTimeout(timer); };
+			}, [search, asked]);
 
 			// Re-read while this process is running something. The timer is
 			// unref'd because this module is also rendered in Node by
@@ -8279,6 +8299,105 @@ window.__ModuleLoader__.load({
 					// swap for exactly this reason.
 					style: { ...WIDE_STYLE, padding: "0 24px" },
 					children: [
+						// THE PANE SAYS WHAT IT IS BEFORE IT SAYS WHAT IS IN IT.
+						//
+						// This opened on a row of seven status chips. That is a filter — an
+						// answer to a question nobody had asked yet — standing where the
+						// reference puts the pane's own name, what it is for, and the one
+						// control that makes something. A reader arriving here was reading a
+						// toolbar before they had been told what it was a toolbar for.
+						jsxs("div", {
+							style: {
+								display: "flex", alignItems: "flex-start", gap: SPACE.md,
+								flexWrap: "wrap", margin: `0 0 ${SPACE.md}`
+							},
+							children: [
+								jsx("div", {
+									style: {
+										flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
+										// CONTROL.md, WHICH IS THE ONE THE BUTTONS BESIDE IT STAND AT.
+								// A hand-picked 40 here would be a fifth control height in a row
+								// that already has one, and off by six from everything level
+								// with it.
+								width: CONTROL.md, height: CONTROL.md, borderRadius: RADIUS.lg,
+										color: `rgb(${TONE.accent})`, background: tint(TONE.accent, TINT.soft),
+										boxShadow: `inset 0 0 0 1px ${tint(TONE.accent, TINT.ring)}`
+									},
+									children: jsx(Icon, { name: "sparkles", size: ICON.md })
+								}, "tile"),
+								jsxs("div", {
+									style: { flex: 1, minWidth: "180px" },
+									children: [
+										jsx("h1", {
+											style: { font: FONT.largeStrong, margin: 0, color: INK.primary },
+											children: zh ? "洞察" : "Insight"
+										}, "name"),
+										// WHAT A MISSION IS, IN ONE LINE. The tab's word alone does not
+										// say that pressing 新建任务 starts eight agents and spends a
+										// budget, which is the one thing worth knowing before pressing it.
+										jsx("p", {
+											style: { font: FONT.small, color: INK.secondary, margin: `2px 0 0` },
+											children: zh
+												? "一支智能体蜂群把一个课题查完：分维度、找证据、逐条核验，最后写成一份带出处的报告。"
+												: "A swarm of agents researches one question end to end: dimensions, evidence, verification, and a report that cites what it rests on."
+										}, "note")
+									]
+								}, "words"),
+								jsxs("div", {
+									style: { display: "flex", alignItems: "center", gap: SPACE.sm, flex: "none" },
+									children: [
+										jsx("button", {
+											type: "button",
+											className: "swm-ctl swm-focus", style: controlStyle(),
+											onClick: () => { setTick((value) => value + 1); },
+											children: zh ? "刷新" : "Refresh"
+										}, "refresh"),
+										// THE ONE THING ON THIS SCREEN THAT MAKES SOMETHING, and it is
+										// beside the pane's name rather than at the end of a filter row.
+										// A tinted `controlStyle` rather than a tenth button geometry: the
+										// accent wash and ring are the same pair every chip in this file
+										// wears, spread over the control the row's other button already is.
+										//
+										// IT IS STILL NOT IN THE PAGE HEADER, which is where the brief put
+										// it. That header is the shell's — it serves all five tabs, TABS
+										// carries no action for any of them, and B14 wrote the reason down:
+										// a slot with one tab's button in it either shows on the four tabs
+										// it means nothing on, or teaches the header to know which tab is
+										// open and hold that tab's state.
+										jsxs("button", {
+											type: "button",
+											className: "swm-ctl swm-focus",
+											style: {
+												...controlStyle(),
+												display: "inline-flex", alignItems: "center", gap: SPACE.xs,
+												border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
+												background: tint(TONE.accent, TINT.soft),
+												color: `rgb(${TONE.accent})`
+											},
+											onClick: () => { setStartOpen(true); },
+											children: [
+												jsx(Icon, { name: "plus", size: ICON.xs }, "glyph"),
+												jsx("span", { children: zh ? "新建任务" : "New mission" }, "label")
+											]
+										}, "new")
+									]
+								}, "actions")
+							]
+						}, "head"),
+						// SEARCH IS ITS OWN ROW, and full width, because it is the control a
+						// reader with forty runs reaches for first. `/missions/list` has taken a
+						// `search` since it was written and no screen ever sent one, so a person
+						// looking for the licensing run from three weeks ago had the status
+						// chips and their own scrolling.
+						jsx("input", {
+							type: "search",
+							value: search,
+							placeholder: zh ? "按课题搜索…" : "Search by topic…",
+							"aria-label": zh ? "搜索任务" : "Search missions",
+							className: "swm-focus",
+							style: { ...SEARCH_STYLE, height: CONTROL.md, width: "100%", margin: `0 0 ${SPACE.md}` },
+							onChange: (event) => { setSearch(event.target.value); }
+						}, "search"),
 						jsxs("div", {
 							style: TOOLBAR_STYLE,
 							children: [

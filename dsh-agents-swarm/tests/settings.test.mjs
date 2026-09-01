@@ -223,7 +223,19 @@ async function render(Component, props = {}) {
   // `act` is what makes this a test of the feature rather than of one frame:
   // a tab that renders and does not switch is the same to a static check and
   // not the same to anybody using it.
-  return { get tree() { return tree; }, act: async (fn) => { fn(); return settle(); } };
+  // AND `tick` IS FOR THE ONE THING `act` CANNOT DO: a component that waits
+  // on a real timer. `settle` drains microtasks, which is every promise the
+  // panes use — but a debounce is a `setTimeout`, and a test that only
+  // settled would assert that a debounced field never asks anything, which
+  // is the bug rather than the feature.
+  return {
+    get tree() { return tree; },
+    act: async (fn) => { fn(); return settle(); },
+    tick: async (ms) => {
+      await new Promise((wake) => { setTimeout(wake, ms); });
+      return settle();
+    },
+  };
 }
 
 /** Run the bundle's factory, capturing what it registers. */
@@ -1880,6 +1892,49 @@ test("a mission row says how it ended and what it cost", async () => {
   assert.ok(refused.includes("未签署"), "a quality-failed mission is drawn as a plain failure");
   assert.ok(refused.includes("quality_refused"), "the failure code is not on the row");
   assert.ok(refused.includes("The report cites nothing."), "the failure sentence is not on the row");
+});
+
+test("the missions pane says what it is, and can be searched", async () => {
+  // IT OPENED ON A ROW OF SEVEN STATUS CHIPS. That is a filter — an answer
+  // to a question nobody had asked yet — standing where the pane's own name,
+  // what it is for, and the one control that makes something belong.
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  const text = textOf(view.tree).join(" ");
+  assert.ok(text.includes("洞察"), "the pane does not name itself");
+  assert.ok(
+    text.includes("分维度、找证据、逐条核验"),
+    "the pane does not say what a mission is, which is the thing worth knowing before starting one",
+  );
+
+  // AND THE SEARCH IS WIRED TO THE ROUTE THAT HAS ALWAYS TAKEN IT.
+  // `/missions/list` has accepted a `search` since it was written and no
+  // screen ever sent one, so a person looking for one run among forty had
+  // the status chips and their own scrolling.
+  const box = find(view.tree, (node) => node.props?.["aria-label"] === "搜索任务");
+  assert.ok(box, "the missions pane has no search box");
+
+  const asked = [];
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes("/missions/list")) asked.push(String(url));
+    return inner(url, init);
+  };
+  try {
+    await view.act(() => { box.props.onChange({ target: { value: "  许可证  " } }); });
+    // A QUARTER SECOND OF QUIET FIRST. Wired straight to the query this
+    // would be a request per keystroke against a route whose own comment
+    // says its LIKE cannot use an index.
+    assert.equal(asked.length, 0, "the first keystroke went straight out as a request");
+    await view.tick(400);
+    assert.ok(asked.length > 0, "the search never reached the route");
+    // TRIMMED, because a trailing space is a different query to the route
+    // and the same question to the person who typed it.
+    assert.ok(
+      asked.some((url) => url.includes("search=%E8%AE%B8%E5%8F%AF%E8%AF%81")),
+      `the search was not sent, or not trimmed: ${asked.join(" ")}`,
+    );
+  } finally { globalThis.fetch = inner; }
 });
 
 test("a mission card is a card, not a title with a grey sentence under it", async () => {
