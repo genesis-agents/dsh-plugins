@@ -61,6 +61,39 @@ function ramp() {
   return found;
 }
 
+test("in the 信源 feed the colour is on the labels and the words are ink", () => {
+  // A COLUMN OF TWENTY SOURCES WAS TWENTY DIFFERENTLY-COLOURED SENTENCES.
+  // Every card drew its headline in `hue(kind)` — YouTube red, arXiv
+  // orange, a blue for the web — so the eye re-tuned on every row for a
+  // fact the tile beside it and the pill above it were both already
+  // stating, in that same hue.
+  //
+  // THE TAGS KEEP THEIRS. This guard is not "no colour in the feed"; it is
+  // that running prose is ink. Counted rather than matched, because the
+  // card has exactly two coloured marks and a third would be the headline
+  // coming back under another name.
+  const card = code(body("function ResourceCard("));
+  const tinted = [...card.matchAll(/color: hue\(kind\)/gu)].length;
+  assert.equal(
+    tinted, 2,
+    `${tinted} places in the card colour their text by source kind; the tile and the source pill are the two that may`,
+  );
+  // AND EACH OF THE TWO IS A MARK, not a run of words: both sit on a
+  // ground of the same hue. A coloured foreground with no background is a
+  // sentence wearing a label's clothes.
+  for (const hit of card.matchAll(/color: hue\(kind\)/gu)) {
+    const around = card.slice(Math.max(0, hit.index - 160), hit.index);
+    assert.match(
+      around, /background: hue\(kind, TINT\.soft\)/u,
+      "text is coloured by source kind without a ground under it, which is a headline rather than a label",
+    );
+  }
+  assert.match(
+    card, /padding: 0, textAlign: "left", cursor: "pointer",\s*\n\s*color: INK\.primary,/u,
+    "the card's headline is not drawn in ink",
+  );
+});
+
 test("the dark block declares exactly the hues the light block does", () => {
   const light = declared("light");
   const dark = declared("dark");

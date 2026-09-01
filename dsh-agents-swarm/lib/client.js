@@ -3753,10 +3753,21 @@ window.__ModuleLoader__.load({
 							jsx("button", {
 								type: "button",
 								onClick: () => { onOpen(row); },
+								// THE TITLE IS INK, NOT THE SOURCE'S COLOUR. Every card in the
+								// feed drew its headline in the hue of where it came from —
+								// YouTube red, arXiv orange, a blue for the web — so a column
+								// of twenty sources was twenty differently-coloured sentences
+								// and the eye had to re-tune on every row. The colour is doing
+								// no work there either: the tile beside it and the pill above
+								// it already carry the kind, in the same hue, and a reader who
+								// needs it has two places to find it.
+								//
+								// THE TAGS KEEP THEIR COLOURS, which is the whole point of the
+								// arrangement: colour marks the label, ink carries the words.
 								style: { font: FONT.baseStrong,
 									appearance: "none", border: "none", background: "transparent",
 									padding: 0, textAlign: "left", cursor: "pointer",
-									color: hue(kind),
+									color: INK.primary,
 									overflow: "hidden", display: "-webkit-box",
 									WebkitLineClamp: 2, WebkitBoxOrient: "vertical"
 								},
