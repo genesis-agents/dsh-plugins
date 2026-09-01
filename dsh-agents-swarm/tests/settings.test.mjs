@@ -787,7 +787,17 @@ const ARTIFACTS = {
       // marker has to draw: a number that leads somewhere and a number that
       // leads nowhere must not look the same.
       markdown: "# 开源推理模型的许可证走向\n\n三家实验室同期收敛到同一种做法[1]，第二家实验室报告了同样的曲线[2]。\n\n这一句引的是一个没有留下元数据的编号[9]。\n",
-      sections: [{ dimensionId: "d1", chapterIndex: 0, sectionType: "evidenced", heading: "训练侧", start: 0, end: 40 }],
+      // TWO SECTIONS, AND THEIR OFFSETS ARE REAL. One section meant the
+      // report had no chapter view at all — the mode strip only renders at
+      // two — so every test of reading one chapter at a time was unreachable
+      // from this fixture. The offsets split the markdown at its second blank
+      // line, so chapter one holds [1] and [2] and chapter two holds [9],
+      // which is the case a per-chapter reference list has to get right:
+      // [9] joins nothing, so chapter two cites no source we hold.
+      sections: [
+        { dimensionId: "d1", chapterIndex: 0, sectionType: "evidenced", heading: "训练侧", start: 0, end: 55, wordCount: 40, citationCount: 2 },
+        { dimensionId: "d2", chapterIndex: 1, sectionType: "interpretive", heading: "推理侧", start: 55, end: 78, wordCount: 20, citationCount: 1 },
+      ],
       citations: [
         { index: 1, url: "https://deepmind.google/discover/scaling", findingId: "f1", inlineQuote: "we observe the same scaling behaviour at test time" },
         // The second one joins on `findingId` and the frozen row it lands on
@@ -2525,6 +2535,46 @@ test("a board on a host that has not shipped work yet is still a board", async (
   const view = await render("MissionsTab", { zh: true });
   const tasks = await open(view, RUNNING.topic);
   assert.ok(tasks.includes("规划") && tasks.includes("采集"), "the board fell back to nothing");
+});
+
+test("a chapter carries its own sources, and nothing that belongs to the whole report", async () => {
+  // OPENING CHAPTER 8 GAVE YOU CHAPTER 8, then the report's conclusions,
+  // then a bar chart of where all 109 citations across all eight chapters
+  // came from. Two of those three are not about chapter 8, and printed under
+  // it they read as if they were.
+  //
+  // WHICH SOURCES ARE A CHAPTER'S IS READ OFF THE CHAPTER. s12 writes no
+  // per-section citation list, so the `[N]` markers in its own slice are the
+  // only record of which chapter leans on which source.
+  stubFetch();
+  const view = await render("MissionReport", { missionId: SIGNED.id, zh: true, onBack: null });
+  await view.act(() => { button(view.tree, "分章").props.onClick(); });
+  const list = textOf(view.tree).join(" ");
+
+  // THE CHAPTER LIST IS THE LIST. Not the list, then the conclusions, then a
+  // chart about a document none of these cards is.
+  assert.ok(!list.includes("结论与建议"), "the chapter index carries the whole report's conclusions");
+  assert.ok(!list.includes("向规划局"), "the chapter index carries the whole report's follow-up");
+
+  // OPEN ONE, and its sources are under it, named as its own.
+  const card = find(view.tree, (node) => node.type === "button"
+    && typeof node.props?.onClick === "function"
+    && String(node.key ?? "").startsWith("ch-"));
+  assert.ok(card, "the chapter index has no chapter to open");
+  await view.act(() => { card.props.onClick(); });
+  const chapter = textOf(view.tree).join(" ");
+
+  assert.ok(chapter.includes("第 1 章的参考文献"), "a chapter's sources are not named as that chapter's");
+  // THE REPORT'S NUMBERING, NOT A FRESH ONE. A chapter that cites [1] and
+  // [2] must show those numbers: renumbering them 1 and 2 of its own would
+  // stop them matching the markers in the prose that sent the reader here.
+  assert.ok(chapter.includes("[1]"), "the chapter's list dropped the citation its prose marks");
+  // AND STILL NOT THE WHOLE-DOCUMENT BLOCKS.
+  assert.ok(!chapter.includes("结论与建议"), "the report's conclusions are printed under one chapter");
+  assert.ok(
+    !/\d+ 处引用分布在/u.test(chapter),
+    "the whole report's host spread is printed under one chapter, where it reads as that chapter's",
+  );
 });
 
 test("the report closes with the leader's own words, and does not open with them", async () => {

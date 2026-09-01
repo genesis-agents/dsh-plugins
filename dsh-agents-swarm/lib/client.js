@@ -17102,7 +17102,7 @@ window.__ModuleLoader__.load({
 		 * @param zh - whether to write Chinese.
 		 * @returns the section, or null when there is nothing to cite.
 		 */
-		function MissionReferenceList({ references, zh }) {
+		function MissionReferenceList({ references, zh, label }) {
 			if (!Array.isArray(references) || references.length === 0) return null;
 
 			// ONLY WHAT THE HOST ITSELF DECLARES. The reference labels every citation
@@ -17131,7 +17131,12 @@ window.__ModuleLoader__.load({
 				children: [
 					jsx("h3", {
 						style: { font: FONT.baseStrong, margin: `0 0 ${SPACE.md}`, color: INK.primary },
-						children: zh ? `参考文献（${references.length}）` : `References (${references.length})`
+						// WHOSE LIST THIS IS. Under one chapter it holds that chapter's
+						// citations and not the report's, and a heading that says only
+						// 参考文献 makes a seven-entry list under chapter 8 read as the
+						// whole bibliography gone wrong rather than as the chapter's own.
+						children: (label === undefined || label === null || label === "" ? (zh ? "参考文献" : "References") : label)
+							+ (zh ? `（${references.length}）` : ` (${references.length})`)
 					}, "head"),
 					jsx("ol", {
 						style: {
@@ -17467,7 +17472,7 @@ window.__ModuleLoader__.load({
 			// two numbers, not a fresh 1 and 2 that no marker in the prose matches.
 			const citedIn = (text) => {
 				const found = new Set();
-				for (const hit of String(text).matchAll(/[(d+)]/gu)) found.add(Number(hit[1]));
+				for (const hit of String(text).matchAll(/\[(\d+)\]/gu)) found.add(Number(hit[1]));
 				return found;
 			};
 			// THE FIGURES THIS VERSION OF THE REPORT NAMES, in the order `:::figure N`
@@ -18058,7 +18063,17 @@ window.__ModuleLoader__.load({
 							!chosen ? null : (() => {
 								const mine = citedIn(readSlice);
 								const cited = references.filter((entry) => mine.has(entry.index));
-								return cited.length === 0 ? null : jsx(MissionReferenceList, { references: cited, zh }, "references");
+								// A CHAPTER THAT CITES NOTHING SAYS SO. Rendering nothing at
+								// all leaves a reader who has just read seven `[N]` markers
+								// in another chapter unable to tell "this one cites nothing"
+								// from "the list is broken here".
+								const named = zh ? `第 ${readAt + 1} 章的参考文献` : `Chapter ${readAt + 1} references`;
+								return cited.length > 0
+									? jsx(MissionReferenceList, { references: cited, zh, label: named }, "references")
+									: jsx("p", {
+										style: { font: FONT.small, color: INK.secondary, margin: `${SPACE.lg} 0 0` },
+										children: zh ? `第 ${readAt + 1} 章没有引用任何来源。` : `Chapter ${readAt + 1} cites no sources.`
+									}, "references");
 							})()
 						] : [
 							// 结论与建议 — the band the reference closes its report with, and the
