@@ -30,6 +30,7 @@
 import { INSIGHT_KINDS, INSIGHT_STATUSES, openInsightStore } from "./insight-store.js";
 import { pickCandidates, readInsightConfig, runInsightPass } from "./insight-extract.js";
 import { withMoments } from "./insight-moment.js";
+import { runReclassifyPass } from "./insight-reclassify.js";
 
 /** The id shape `newInsightId` mints. Checked before an id reaches SQL. */
 const INSIGHT_ID = /^insight-[0-9A-Za-z]+-[0-9a-f]{8}$/;
@@ -157,6 +158,10 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
    * was making.
    */
   let manualRunInFlight = false;
+  // The same shape, for the refiling pass: one at a time, and its last
+  // report kept so `/insights/status` can say what it did.
+  let refileInFlight = false;
+  let lastRefile = null;
 
   /** The search parameters of the request being answered. */
   const paramsOf = (req) => new URL(req.url ?? "/", "http://localhost").searchParams;
@@ -380,6 +385,57 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
     }
 
     // ── the pass ─────────────────────────────────────────────────────────
+    // ── file the claims already in the table ─────────────────────────────
+    //
+    // TWO THINGS CHANGED UNDER THE EXISTING ROWS AND NEITHER IS RETROACTIVE:
+    // the language a claim is written in, and `layer` — where in the stack it
+    // sits — which the extractor was not asked for until now. Re-running the
+    // pass does not fix them, because a pass reads the NEXT two hundred
+    // sources rather than the ones it has already read. Without this route
+    // the pane groups by a field every existing row leaves null, and every
+    // one of them lands under 未归层.
+    //
+    // SEPARATE FROM run-now ON PURPOSE. That one costs model calls to learn
+    // something new; this one costs them to re-file what is already known,
+    // and a person deciding to spend on the second is making a different
+    // decision. It is also idempotent: the rows it would pick are the ones
+    // still missing a layer or still in the wrong language, so running it
+    // twice does nothing the second time.
+    if (req.method === "POST" && path === "/insights/refile") {
+      if (chat === undefined) {
+        sendJson(res, 503, { success: false, error: "no model routed" });
+        return true;
+      }
+      if (refileInFlight) {
+        sendJson(res, 202, { success: true, data: { started: false, running: true } });
+        return true;
+      }
+      refileInFlight = true;
+      // Answered immediately, like run-now and for the same reason: forty
+      // claims is four model calls and a request held open reads as a hang.
+      void runReclassifyPass({
+        insights,
+        // A TEXT-IN, TEXT-OUT FACE over the streaming chat this file is
+        // handed. The reclassifier asks one question and reads one JSON
+        // object; giving it the stream would put the same eight lines of
+        // accumulation in a second module.
+        chat: async (prompt) => {
+          let answer = "";
+          for await (const chunk of chat({ prompt, context: "" })) {
+            if (typeof chunk?.text === "string") answer += chunk.text;
+          }
+          return answer;
+        },
+        config: readInsightConfig(store),
+        logger,
+      })
+        .then((report) => { lastRefile = report; })
+        .catch((cause) => { logger?.warn?.(`swarm: refiling claims failed: ${String(cause?.message ?? cause)}`); })
+        .finally(() => { refileInFlight = false; });
+      sendJson(res, 202, { success: true, data: { started: true, running: true } });
+      return true;
+    }
+
     if (req.method === "POST" && path === "/insights/run-now") {
       if (chat === undefined) {
         // 503, not 500: the page shows a different thing for "not configured"
@@ -435,6 +491,11 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
         success: true,
         data: {
           ...config,
+          // Whether the refiling pass is running, and what the last one did.
+          // A reader who presses 归类 and sees nothing change needs to know
+          // whether it is working or whether it found nothing to do.
+          insightRefiling: refileInFlight,
+          insightLastRefile: lastRefile,
           // What the NEXT pass would read, so the schedule can be judged
           // before it runs rather than by reading tomorrow's tab.
           waiting,
