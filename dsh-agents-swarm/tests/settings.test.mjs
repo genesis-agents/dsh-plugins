@@ -3896,3 +3896,51 @@ test("every row on the board offers something, and never a control the route wou
   assert.ok(text.includes("原因写在详情里"), "the un-rerunable stage's 操作 cell is empty, so the column has one shape on ten rows and another on two, for a reason nothing on screen gives");
   assert.ok(!text.includes("caps it froze"), "the pipeline's rerun refusal is printed on the row; a full sentence down a 12% column is not a table, which is why the drawer owns it");
 });
+
+test("clicking a dimension row opens its drawer rather than throwing", async () => {
+  // THE ROW IS THE ONLY WAY IN. The board mounts the dimension drawer from
+  // its own selection, so a throw anywhere in that drawer takes the whole
+  // pane down and reads, on screen, as the row refusing to open.
+  stubFetch();
+  const view = await render("MissionsTab", { zh: true });
+  await open(view, SIGNED.topic);
+  // `open` already lands on the task pane; asking for it again navigates away.
+  // EVERY clickable row, one after another. The board mounts a stage
+  // drawer for a pipeline row and a dimension drawer for a child, and a
+  // throw in either takes the pane down — so this opens all of them
+  // rather than guessing which key shape identifies a child.
+  const clickable = [];
+  const walk = (node) => {
+    if (node === null || node === undefined || typeof node !== "object") return;
+    if (Array.isArray(node)) { for (const c of node) walk(c); return; }
+    if (node.type === "tr" && typeof node.props?.onClick === "function") clickable.push(node);
+    walk(node.props?.children);
+  };
+  walk(view.tree);
+  if (clickable.length === 0) {
+    const kinds = new Map();
+    const count = (node) => {
+      if (node === null || node === undefined || typeof node !== "object") return;
+      if (Array.isArray(node)) { for (const c of node) count(c); return; }
+      const k = String(node.type);
+      kinds.set(k, (kinds.get(k) ?? 0) + 1);
+      count(node.props?.children);
+    };
+    count(view.tree);
+    assert.fail(`no clickable row; the tree holds ${[...kinds].map(([k, n]) => `${k}x${n}`).join(" ")}`);
+  }
+  // AND IT MUST ACTUALLY REACH A DIMENSION. Clicking rows that all open a
+  // STAGE drawer proves nothing about the dimension drawer, which is the
+  // one that was rebuilt — so this asserts a dimension drawer was seen.
+  let sawDimension = false;
+  for (const one of clickable) {
+    await view.act(() => { one.props.onClick(); });
+    const open = textOf(view.tree).join(" ");
+    assert.ok(open.length > 0, "the pane went blank when a row was opened");
+    if (open.includes("这个分数是怎么来的")
+      || open.includes("读不到这个维度")
+      || open.includes("看它搜了什么")) sawDimension = true;
+    await view.act(() => { one.props.onClick(); });
+  }
+  assert.ok(sawDimension, "no row on this board opened a DIMENSION drawer, so nothing here exercised the one that was rebuilt");
+});
