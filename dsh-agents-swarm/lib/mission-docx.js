@@ -184,7 +184,111 @@ function para(runsXml, style) {
  * @param zh - whether the notes it inserts are Chinese.
  * @returns the paragraphs.
  */
-function bodyOf(markdown, zh) {
+/** Word renders these; a .docx holding anything else is a red X in the page. */
+const DOCX_IMAGE_TYPES = Object.freeze({
+  "image/png": "png",
+  "image/jpeg": "jpeg",
+  // WEBP IS NOT HERE, AND THAT IS THE POINT OF THE LIST. Word before 2021
+  // draws a placeholder box for it, and every converter downstream — the
+  // ones that turn a .docx into a PDF on somebody else's machine — is older
+  // than that. A figure we cannot draw falls back to the sentence the .md
+  // export uses, which says what the picture was and where it came from.
+  "image/gif": "gif",
+});
+
+/**
+ * An image's pixel size, read out of its own header.
+ *
+ * THE STORED WIDTH IS OFTEN 0, and 0 means "the page declared no intrinsic
+ * size", not "small" — see the figures route. A drawing sized from it comes
+ * out as a zero-area rectangle, which Word draws as nothing at all, so the
+ * bytes are measured rather than trusted.
+ *
+ * Three formats, three headers, no decoding: PNG puts them in IHDR at a
+ * fixed offset, GIF in the logical screen descriptor, and JPEG in whichever
+ * SOFn marker the encoder chose, which is why that one is a walk.
+ * @param bytes - the file.
+ * @param mime - its type.
+ * @returns `{ width, height }` in pixels, or null when the header will not say.
+ */
+export function imageSize(bytes, mime) {
+  // PER FORMAT, NOT ONE FLOOR. A single `length < 24` reads as caution and is
+  // a bug: a GIF header is ten bytes and a JPEG can carry its frame at byte
+  // four, so the shared floor refused files it could have measured — and the
+  // caller reads null as "draw the sentence instead of the picture".
+  if (!Buffer.isBuffer(bytes) || bytes.length < 10) return null;
+  if (mime === "image/png") {
+    // 8 bytes of signature, then a length and "IHDR", then the two.
+    if (bytes.length < 24 || bytes.toString("latin1", 12, 16) !== "IHDR") return null;
+    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  }
+  if (mime === "image/gif") {
+    return { width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8) };
+  }
+  if (mime !== "image/jpeg") return null;
+  // MARKER BY MARKER. A JPEG's size lives in a start-of-frame segment whose
+  // position depends on how much EXIF the camera wrote, so there is no
+  // offset to read it from — and the standalone markers (D0-D9, 01) carry no
+  // length, so a walk that assumed every marker had one would desynchronise
+  // on the first restart marker and read a length out of image data.
+  let at = 2;
+  while (at + 8 < bytes.length) {
+    if (bytes[at] !== 0xff) { at += 1; continue; }
+    const marker = bytes[at + 1];
+    if (marker === 0xff) { at += 1; continue; }
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { at += 2; continue; }
+    const length = bytes.readUInt16BE(at + 2);
+    // C4 is the Huffman table, C8 is reserved and CC is arithmetic coding;
+    // the rest of C0-CF are the frame headers, and all of them put height
+    // and width at the same place.
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      return { height: bytes.readUInt16BE(at + 5), width: bytes.readUInt16BE(at + 7) };
+    }
+    if (length < 2) return null;
+    at += 2 + length;
+  }
+  return null;
+}
+
+/** Twips of text across A4 inside the margins this file sets: 11906 - 2 * 1134. */
+const TEXT_WIDTH_TWIPS = 9638;
+/** English Metric Units per twip. 914400 per inch, 1440 twips per inch. */
+const EMU_PER_TWIP = 635;
+/** …and per CSS pixel, at the 96dpi a page's declared size is in. */
+const EMU_PER_PIXEL = 9525;
+
+/**
+ * One inline picture, sized to fit the text column.
+ *
+ * SCALED DOWN, NEVER UP. A 2400px chart at its own size is two and a half
+ * pages wide and Word crops it at the margin rather than reflowing; a 200px
+ * thumbnail blown up to the full column is a blurred rectangle. Only the
+ * first needs correcting, so only the first is corrected.
+ * @param id - the relationship id of the image part.
+ * @param at - a document-unique number for the drawing's own name.
+ * @param size - `{ width, height }` in pixels.
+ * @param alt - the publisher's alt text, for a screen reader.
+ * @returns the paragraph XML.
+ */
+function picture(id, at, size, alt) {
+  const capacity = TEXT_WIDTH_TWIPS * EMU_PER_TWIP;
+  const natural = Math.max(1, Math.round(size.width * EMU_PER_PIXEL));
+  const scale = natural > capacity ? capacity / natural : 1;
+  const cx = Math.round(natural * scale);
+  const cy = Math.max(1, Math.round(size.height * EMU_PER_PIXEL * scale));
+  const described = xml(alt === "" ? `figure ${at}` : alt);
+  return `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="80"/></w:pPr><w:r><w:drawing>`
+    + `<wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">`
+    + `<wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${at}" name="Figure ${at}" descr="${described}"/>`
+    + `<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">`
+    + `<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">`
+    + `<pic:nvPicPr><pic:cNvPr id="${at}" name="Figure ${at}" descr="${described}"/><pic:cNvPicPr/></pic:nvPicPr>`
+    + `<pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`
+    + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>`
+    + `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+}
+
+function bodyOf(markdown, zh, drawn) {
   const lines = String(markdown ?? "").split(/\r?\n/u);
   const out = [];
   let fenced = false;
@@ -193,13 +297,31 @@ function bodyOf(markdown, zh) {
     if (/^```/u.test(line.trim())) { fenced = !fenced; continue; }
     if (fenced) { out.push(para(run(line, { code: true }), "SwarmCode")); continue; }
 
-    // A FIGURE, NAMED RATHER THAN DROPPED. `:::figure N` is an index into the
-    // artefact's own manifest; the picture cannot travel into this file, so
-    // the paragraph says a picture was here and which one.
+    // A FIGURE, AND THE PICTURE COMES WITH IT.
+    //
+    // This printed ［图 3：图片见网页版报告］ and nothing else, on the
+    // reasoning the .md export still runs on: a downloaded file cannot reach
+    // our byte route, and an `<img src>` pointing at the publisher would
+    // make every viewer of every copy fetch them directly. Both are true of
+    // Markdown and NEITHER is true here — a .docx is a zip, the bytes ride
+    // inside it, and opening one touches no network at all.
+    //
+    // THE SENTENCE SURVIVES AS THE CAPTION. It is not replaced by the
+    // picture, it is put under it: where the chart came off, when it was
+    // fetched and which citation carries it is the half a reader needs in
+    // order to use the picture as evidence rather than as decoration.
     const opens = /^:::figure[ \t]+(\d{1,3})[ \t]*$/u.exec(line.trim());
     if (opens !== null) { figure = opens[1]; continue; }
     if (figure !== null && line.trim() === ":::") {
-      out.push(para(run(zh ? `［图 ${figure}：图片见网页版报告］` : `[Figure ${figure} — see the report on screen]`, { italic: true })));
+      const held = drawn.get(Number(figure));
+      if (held === undefined) {
+        // NO BYTES, OR A FORMAT WORD WILL NOT DRAW. The line the Markdown
+        // export prints, which says what was there and where it came from.
+        out.push(para(run(zh ? `［图 ${figure}：图片见网页版报告］` : `[Figure ${figure} — see the report on screen]`, { italic: true })));
+      } else {
+        out.push(picture(held.rel, held.at, held.size, held.alt));
+        if (held.caption !== "") out.push(para(run(held.caption, { italic: true }), "SwarmQuote"));
+      }
       figure = null;
       continue;
     }
@@ -268,19 +390,65 @@ const DOC_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 /**
  * A report as a `.docx`.
  * @param markdown - the report body, figure tokens already rendered or left in.
- * @param options - `{title, language}`.
+ * @param options - `{title, language, figures}`. `figures` is
+ *   `[{ index, bytes, mime, width, height, alt, caption }]` — the picture
+ *   travels inside the zip, so a reader opening the file touches no network.
  * @returns the file, as a Buffer.
  */
-export function reportToDocx(markdown, { title = "", language = "zh" } = {}) {
+export function reportToDocx(markdown, { title = "", language = "zh", figures = [] } = {}) {
   const zh = language !== "en";
   const heading = String(title ?? "").trim() === "" ? "" : para(runsOf(title), "Heading1");
+
+  // WHICH FIGURES CAN ACTUALLY BE DRAWN, decided before a line of the body
+  // is written. A figure with no bytes, an unmeasurable header or a format
+  // Word draws as a red X is not in this map, and `bodyOf` prints the
+  // Markdown export's sentence for it instead — so the two exports differ
+  // only where one of them genuinely can carry more.
+  const drawn = new Map();
+  const parts = [];
+  const rels = [];
+  const kinds = new Set();
+  for (const figure of Array.isArray(figures) ? figures : []) {
+    const extension = DOCX_IMAGE_TYPES[figure?.mime];
+    if (extension === undefined || !Buffer.isBuffer(figure?.bytes) || figure.bytes.length === 0) continue;
+    const measured = imageSize(figure.bytes, figure.mime)
+      ?? (Number(figure.width) > 0 && Number(figure.height) > 0
+        ? { width: Number(figure.width), height: Number(figure.height) }
+        : null);
+    // A PICTURE WITH NO SIZE IS A ZERO-AREA RECTANGLE, which Word draws as
+    // nothing while still counting the paragraph — a blank gap where the
+    // sentence would have been. The sentence is better.
+    if (measured === null) continue;
+    // rId1 IS styles.xml. Numbered from two so the two relationship kinds
+    // share one namespace without a collision, which is what `Id` means.
+    const at = parts.length + 2;
+    const name = `media/image${at}.${extension}`;
+    parts.push({ name: `word/${name}`, data: figure.bytes });
+    rels.push(`<Relationship Id="rId${at}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${name}"/>`);
+    kinds.add(extension);
+    drawn.set(Number(figure.index), {
+      rel: `rId${at}`, at, size: measured,
+      alt: typeof figure.alt === "string" ? figure.alt : "",
+      caption: typeof figure.caption === "string" ? figure.caption : "",
+    });
+  }
+
   const document = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${heading}${bodyOf(markdown, zh)}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr></w:body></w:document>`;
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${heading}${bodyOf(markdown, zh, drawn)}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr></w:body></w:document>`;
+  // A DEFAULT PER EXTENSION, AND ONLY FOR THE ONES PRESENT. A package that
+  // declares a part type it does not contain still opens; one that contains
+  // a part whose extension is undeclared does not, and Word's message for it
+  // is "the file is corrupt" rather than anything about images.
+  const types = CONTENT_TYPES.replace(
+    "</Types>",
+    [...kinds].map((kind) => `<Default Extension="${kind}" ContentType="image/${kind === "jpeg" ? "jpeg" : kind}"/>`).join("") + "</Types>",
+  );
   return zip([
-    { name: "[Content_Types].xml", data: Buffer.from(CONTENT_TYPES, "utf8") },
+    { name: "[Content_Types].xml", data: Buffer.from(types, "utf8") },
     { name: "_rels/.rels", data: Buffer.from(ROOT_RELS, "utf8") },
-    { name: "word/_rels/document.xml.rels", data: Buffer.from(DOC_RELS, "utf8") },
+    { name: "word/_rels/document.xml.rels", data: Buffer.from(DOC_RELS.replace("</Relationships>", rels.join("") + "</Relationships>"), "utf8") },
     { name: "word/styles.xml", data: Buffer.from(STYLES, "utf8") },
     { name: "word/document.xml", data: Buffer.from(document, "utf8") },
+    ...parts,
   ]);
 }

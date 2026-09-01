@@ -79,7 +79,7 @@ import {
   TRACE_RESULT_CHARS,
   TRACE_ROLES,
   buildBibliography,
-  renderFigureTokens,
+  renderFigureTokens, figuresOfReport,
   buildMissionTrace,
   parseTraceRef,
   projectDegradeReason,
@@ -1503,15 +1503,39 @@ if (req.method === "GET" && (action === "facts.csv" || action === "citations.csv
       // Order matters. The bibliography is appended after the last chapter, so
       // rewriting the tokens first keeps the rewrite confined to the report's
       // own body and cannot reach into a reference list that never had one.
-      const markdown = renderFigureTokens(body, artifact, { language: mission.language })
+      // THE TWO EXPORTS PART WAYS AT THE FIGURE BLOCKS, and only there.
+      //
+      // `renderFigureTokens` replaces each block with a line of attribution
+      // because a .md cannot carry a picture: our byte route is unreachable
+      // from a downloaded copy, and a publisher URL in an `<img src>` would
+      // make every viewer of every copy fetch the publisher directly, which
+      // is the fan-out rule 4 exists to prevent.
+      //
+      // Neither is true of a .docx. It is a zip; the bytes ride inside it and
+      // opening one touches no network — so the Word file keeps its `:::figure`
+      // tokens through to `reportToDocx`, which turns each into the picture
+      // with that same line of attribution underneath it as the caption.
+      const wants = action === "report.docx";
+      const markdown = (wants ? body : renderFigureTokens(body, artifact, { language: mission.language }))
         + buildBibliography(artifact, { language: mission.language });
-      const extension = action === "report.docx" ? "docx" : "md";
+      // THE BYTES, READ FROM THE TABLE THE IMAGE ROUTE SERVES. Held figures
+      // only — `figureBytes` returns nothing for a row whose state is not
+      // `held` — so a figure the publisher declined is absent here for exactly
+      // the reason it is absent on screen, and the Word file falls back to the
+      // sentence rather than to a broken frame.
+      const figures = !wants ? [] : figuresOfReport(artifact, { language: mission.language })
+        .map((figure) => {
+          const stored = figure.figureId === null ? undefined : missionStore.figureBytes(figure.figureId);
+          return stored === undefined ? null : { ...figure, bytes: stored.bytes, mime: stored.mime };
+        })
+        .filter((figure) => figure !== null);
+      const extension = wants ? "docx" : "md";
       const filename = `${id}${artifact.version ? `-v${artifact.version}` : ""}.${extension}`;
       // A REAL `.docx`, not HTML under a Word content type. See
       // mission-docx.js for why that shortcut is refused: Word opens it, and
       // every converter downstream gets a file whose extension lies.
       const payload = action === "report.docx"
-        ? reportToDocx(markdown, { title: artifact.title ?? "", language: mission.language })
+        ? reportToDocx(markdown, { title: artifact.title ?? "", language: mission.language, figures })
         : Buffer.from(markdown, "utf8");
       res.writeHead(200, {
         "content-type": action === "report.docx"

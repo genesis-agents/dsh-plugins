@@ -3110,6 +3110,105 @@ export const FIGURE_BLOCK_RE = /^:::figure[ \t]+(\d{1,3})[ \t]*\r?\n:::[ \t]*\r?
  * @param options - `{language}` — "zh" picks the Chinese wording.
  * @returns the markdown with every figure block replaced by a line or removed.
  */
+/**
+ * What a figure is credited to, as the pieces of one line.
+ *
+ * SPLIT OUT SO THERE IS ONE COMPOSER. The .md export prints this joined into
+ * a blockquote and the .docx prints it as the caption UNDER the picture it
+ * embeds, and those two sentences must be the same sentence: a report and
+ * its Word copy disagreeing about which page a chart came off is worse than
+ * either of them being wrong, because only one of the two is ever checked.
+ *
+ * NULL, NOT AN EMPTY LIST, when the figure does not resolve. An index with no
+ * row behind it, or a row whose citation is not in this report, has no
+ * honest thing to print — see the caller's note — and null is the one answer
+ * a caller cannot mistake for "it resolved and said nothing".
+ * @param index - the `:::figure N` number.
+ * @param lookups - `{ byIndex, cited, evidence, zh }`, all built by the caller.
+ * @returns the pieces, in order, or null.
+ */
+function figureAttribution(index, { byIndex, cited, evidence, zh }) {
+  const figure = byIndex.get(index);
+  if (figure === undefined) return null;
+  const citation = cited.get(Number(figure?.citationIndex));
+  if (citation === undefined) return null;
+  const found = typeof citation?.findingId === "string" ? evidence.get(citation.findingId) ?? null : null;
+  const label = textOrNull(found?.sourceTitle) ?? textOrNull(found?.sourceHost)
+    ?? (zh ? "（来源不详）" : "(source unknown)");
+  const url = textOrNull(citation?.url) ?? textOrNull(found?.sourceUrl);
+  const caption = oneLineQuote(figure?.alt ?? "");
+  return [
+    zh ? `**图 ${index}**` : `**Figure ${index}**`,
+    caption === "" ? null : `“${caption}”`,
+    `— ${label}`,
+    url ?? (zh ? "（无链接）" : "(no url)"),
+    found?.fetchedAt == null ? null : `(${zh ? "抓取于" : "fetched"} ${found.fetchedAt})`,
+    `[${Number(figure.citationIndex)}]`,
+  ].filter((part) => part !== null);
+}
+
+/**
+ * Every figure this artefact names, with the words that go under it.
+ *
+ * THE .docx CARRIES THE BYTES AND THE .md CANNOT. `renderFigureTokens`
+ * replaces each block with a line of attribution because a Markdown file has
+ * nowhere to put a picture — our byte route is not reachable from a
+ * downloaded copy, and a publisher URL in an `<img src>` would make every
+ * viewer of every copy fetch the publisher directly, which is the fan-out
+ * rule 4 exists to prevent.
+ *
+ * A .docx is a zip. The picture travels INSIDE it, reaches no network when
+ * opened, and needs no route — so the same figure that becomes a sentence in
+ * one export becomes an image with that sentence under it in the other.
+ *
+ * THE BYTES ARE NOT READ HERE. This resolves indexes to rows and words; the
+ * caller pairs each row with `figureBytes`, because this module holds no
+ * store handle and a function that took one would be reaching past its own
+ * argument list for data the route already has.
+ * @param artifact - the stored artefact row.
+ * @param options - `{language}`.
+ * @returns `[{ index, figureId, alt, width, height, caption }]`, in report order.
+ */
+export function figuresOfReport(artifact, { language = "zh" } = {}) {
+  const rows = asArray(artifact?.figures);
+  if (rows.length === 0) return [];
+  const zh = String(language ?? "zh").toLowerCase().startsWith("zh");
+  const evidence = new Map();
+  for (const row of asArray(artifact?.evidence)) {
+    if (row && typeof row.findingId === "string") evidence.set(row.findingId, row);
+  }
+  const cited = new Map();
+  for (const row of asArray(artifact?.citations)) {
+    const index = Number(row?.index);
+    if (Number.isInteger(index) && !cited.has(index)) cited.set(index, row);
+  }
+  const byIndex = new Map();
+  for (const row of rows) {
+    const index = Number(row?.index);
+    if (Number.isInteger(index) && !byIndex.has(index)) byIndex.set(index, row);
+  }
+  const out = [];
+  for (const [index, row] of byIndex) {
+    const parts = figureAttribution(index, { byIndex, cited, evidence, zh });
+    // THE SAME REFUSAL AS THE .md PATH. A figure we cannot attribute to a
+    // page this run cited is decoration, and decoration presented as evidence
+    // is the one failure the figure block exists to prevent — so it is left
+    // out of the Word file exactly as it is left out of the Markdown one.
+    if (parts === null) continue;
+    out.push({
+      index,
+      figureId: typeof row?.figureId === "string" ? row.figureId : (typeof row?.id === "string" ? row.id : null),
+      alt: typeof row?.alt === "string" ? row.alt : "",
+      width: Number(row?.width) > 0 ? Number(row.width) : 0,
+      height: Number(row?.height) > 0 ? Number(row.height) : 0,
+      // JOINED HERE AND NOT AT THE FAR END, so the two exports cannot come to
+      // disagree about the separator, the order or the wording.
+      caption: parts.join(" ").replace(/\*\*/gu, ""),
+    });
+  }
+  return out;
+}
+
 export function renderFigureTokens(markdown, artifact, { language = "zh" } = {}) {
   const source = typeof markdown === "string" ? markdown : "";
   const rows = asArray(artifact?.figures);
@@ -3136,23 +3235,8 @@ export function renderFigureTokens(markdown, artifact, { language = "zh" } = {})
   }
 
   return source.replace(FIGURE_BLOCK_RE, (whole, digits) => {
-    const figure = byIndex.get(Number(digits));
-    if (figure === undefined) return "";
-    const citation = cited.get(Number(figure?.citationIndex));
-    if (citation === undefined) return "";
-    const found = typeof citation?.findingId === "string" ? evidence.get(citation.findingId) ?? null : null;
-    const label = textOrNull(found?.sourceTitle) ?? textOrNull(found?.sourceHost)
-      ?? (zh ? "（来源不详）" : "(source unknown)");
-    const url = textOrNull(citation?.url) ?? textOrNull(found?.sourceUrl);
-    const caption = oneLineQuote(figure?.alt ?? "");
-    const parts = [
-      zh ? `**图 ${Number(digits)}**` : `**Figure ${Number(digits)}**`,
-      caption === "" ? null : `“${caption}”`,
-      `— ${label}`,
-      url ?? (zh ? "（无链接）" : "(no url)"),
-      found?.fetchedAt == null ? null : `(${zh ? "抓取于" : "fetched"} ${found.fetchedAt})`,
-      `[${Number(figure.citationIndex)}]`,
-    ].filter((part) => part !== null);
+    const parts = figureAttribution(Number(digits), { byIndex, cited, evidence, zh });
+    if (parts === null) return "";
     // A blockquote, so the figure's own attribution separates from the sentence
     // above it the way the card separates them with a hairline. Never an image:
     // this file carries no bytes and names no route a downloaded copy could reach.
