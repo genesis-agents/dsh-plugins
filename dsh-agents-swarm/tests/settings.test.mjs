@@ -230,6 +230,11 @@ async function render(Component, props = {}) {
   // is the bug rather than the feature.
   return {
     get tree() { return tree; },
+    // The bundle's own test exports, and the sheet it put on the document —
+    // both from THIS factory, so they are the ones this tree is rendering
+    // against rather than a second instance with its own empty store.
+    exports: exported.__test__,
+    styleOf: load.styleOf,
     act: async (fn) => { fn(); return settle(); },
     tick: async (ms) => {
       await new Promise((wake) => { setTimeout(wake, ms); });
@@ -261,21 +266,54 @@ function captureFactory() {
     removeEventListener(name, fn) {
       this.listeners.set(name, (this.listeners.get(name) ?? []).filter((one) => one !== fn));
     },
+    dispatchEvent(event) {
+      for (const fn of this.listeners.get(event?.type) ?? []) fn(event);
+      return true;
+    },
+    // A READER'S OWN SETTINGS LIVE HERE, so a harness without it tests only
+    // the branch where the browser refused to answer — which is the branch
+    // every one of these choices falls back to. Without a store, "the size
+    // control works" and "the size control does nothing at all" look the
+    // same from outside.
+    localStorage: (() => {
+      const held = new Map();
+      return {
+        getItem: (key) => (held.has(key) ? held.get(key) : null),
+        setItem: (key, value) => { held.set(key, String(value)); },
+        removeItem: (key) => { held.delete(key); },
+        clear: () => { held.clear(); },
+      };
+    })(),
   };
+  // AND A DOCUMENT THAT WILL TAKE A STYLESHEET. Every injection in the
+  // bundle is wrapped in a try that swallows a host which will not, so a
+  // `document` with no `createElement` meant no test had ever seen the CSS
+  // this file actually puts on the page — only that putting it there did
+  // not throw. `styleOf(id)` below reads it back.
+  const styles = new Map();
   const document = {
     documentElement: { lang: "zh-CN" },
     addEventListener() {},
     removeEventListener() {},
+    getElementById: (id) => styles.get(id) ?? null,
+    createElement: () => ({ id: "", textContent: "" }),
+    head: { appendChild: (node) => { styles.set(node.id, node); return node; } },
   };
+  window.__styles__ = styles;
   // Indirect eval keeps the bundle out of this module's scope, so it can only
   // reach the globals handed to it here — the same ones a browser would.
   const run = new Function("window", "document", "globalThis", source);
   run(window, document, { ...globalThis, window, document });
   assert.ok(factory, "the bundle did not register through __ModuleLoader__.load");
-  return (require) => {
+  const load = (require) => {
     const module = { exports: {} };
     return factory(require, module, module.exports) ?? module.exports;
   };
+  // The globals the bundle was handed, so a test can ask what it did to them.
+  load.window = window;
+  load.document = document;
+  load.styleOf = (id) => styles.get(id)?.textContent ?? "";
+  return load;
 }
 
 /** The bundle's test exports, without rendering anything. */
@@ -4453,4 +4491,55 @@ test("clicking a dimension row opens its drawer rather than throwing", async () 
     await view.act(() => { one.props.onClick(); });
   }
   assert.ok(sawDimension, "no row on this board opened a DIMENSION drawer, so nothing here exercised the one that was rebuilt");
+});
+
+test("the reader picks the face and the size, and the whole scale follows", async () => {
+  // 字体的类型，大小等，应该在设置/通用下面可以允许用户配置.
+  //
+  // THE TEST IS THAT THE RULE REACHES THE DOCUMENT, not that a control
+  // renders. Every injection in the bundle is inside a try that swallows a
+  // host which will not take a stylesheet, so a preference that computes the
+  // right CSS and never lands is indistinguishable from one that works — and
+  // it is the failure this whole batch was about: `.swm-page` declares every
+  // token in the file, and things outside it silently render on nothing.
+  stubFetch();
+  const view = await render("SourcesSettings");
+  await view.act(() => { button(view.tree, "通用").props.onClick(); });
+
+  const { TYPE_STYLE_ID, TYPE_FACES, TYPE_SIZES } = view.exports;
+  const serif = TYPE_FACES.find((one) => one.id === "serif");
+  const large = TYPE_SIZES.find((one) => one.id === "large");
+
+  await view.act(() => { button(view.tree, "宋体").props.onClick(); });
+  await view.act(() => { button(view.tree, "大").props.onClick(); });
+
+  const css = view.styleOf(TYPE_STYLE_ID);
+  // ON `.swm-page` AND NOWHERE ELSE. This tab is a guest in DeepSeek's shell;
+  // a rule on `:root` or a moved root font-size would resize the sidebar, the
+  // composer and every other plugin along with it.
+  assert.ok(css.startsWith(".swm-page{"), `the type rule is not scoped to this plugin's pages: ${css}`);
+  assert.ok(css.includes(`--dsw-font-family:${serif.stack}`), `choosing 宋体 did not reach the document: ${css}`);
+  assert.ok(css.includes(`--dsw-font-scale:${large.scale}`), `choosing 大 did not reach the document: ${css}`);
+
+  // AND IT IS THE TWO NAMES THE SEVENTEEN STEPS ARE COMPOSED FROM, not a
+  // seventeen-line override. If a step ever stops reading them it stops
+  // following the setting, and nothing on the page would say so.
+  const scale = [...readFileSync(CLIENT, "utf8").matchAll(/"--dsw-font-(?!family|scale)[a-z0-9-]+:([^"]+)"/g)].map(([, value]) => value);
+  assert.ok(scale.length >= 17, `the type scale is down to ${scale.length} steps`);
+  for (const step of scale) {
+    assert.ok(
+      step.includes("var(--dsw-font-scale)") && step.includes("var(--dsw-font-family)"),
+      `a step of the scale is fixed and no longer follows 设置 → 通用: ${step}`,
+    );
+  }
+
+  // THE CHOICE SURVIVES A SECOND CHOICE, which is the whole of what the
+  // store is for here: `choose` merges a patch onto what is READ BACK, so a
+  // store that quietly refuses would have reset the face to 系统默认 the
+  // moment the size was picked. Both are still on the document.
+  assert.ok(css.includes(serif.stack), "picking a size threw away the face — the choice is not being read back");
+  const chosen = find(view.tree, (node) => node.props?.role === "radio"
+    && node.props?.["aria-checked"] === true
+    && textOf(node).some((piece) => piece.includes("宋体")));
+  assert.ok(chosen, "the face on the document is not the one the control shows as chosen");
 });

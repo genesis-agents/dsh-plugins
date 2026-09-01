@@ -1441,23 +1441,37 @@ window.__ModuleLoader__.load({
 			// thirty-row board.
 			"--dsw-alias-state-business-primary:#6d28d9;",
 			"--dsw-radius-sm:6px;--dsw-radius-md:8px;--dsw-radius-lg:12px;",
-			"--dsw-font-xxxxs-10:10px/14px var(--dsw-font-family);",
-			"--dsw-font-xxxxs-strong-10:600 10px/14px var(--dsw-font-family);",
-			"--dsw-font-xxxs-11:11px/16px var(--dsw-font-family);",
-			"--dsw-font-xxxs-strong-11:600 11px/16px var(--dsw-font-family);",
-			"--dsw-font-xxs-12:12px/16px var(--dsw-font-family);",
-			"--dsw-font-xxs-medium-12:500 12px/16px var(--dsw-font-family);",
-			"--dsw-font-xxs-strong-12:600 12px/16px var(--dsw-font-family);",
-			"--dsw-font-xs-13:13px/18px var(--dsw-font-family);",
-			"--dsw-font-xs-medium-13:500 13px/18px var(--dsw-font-family);",
-			"--dsw-font-xs-strong-13:600 13px/18px var(--dsw-font-family);",
-			"--dsw-font-s-14:14px/20px var(--dsw-font-family);",
-			"--dsw-font-s-medium-14:500 14px/20px var(--dsw-font-family);",
-			"--dsw-font-s-strong-14:600 14px/20px var(--dsw-font-family);",
-			"--dsw-font-base-16:16px/24px var(--dsw-font-family);",
-			"--dsw-font-base-strong-16:600 16px/24px var(--dsw-font-family);",
-			"--dsw-font-l-20:600 20px/28px var(--dsw-font-family);",
-			"--dsw-font-xl-24:700 24px/32px var(--dsw-font-family);",
+			// THE SIZE OF EVERY STEP, THROUGH ONE MULTIPLIER.
+			//
+			// 字体的类型、大小应该允许用户配置 — and a scale is the only place a
+			// reader can be given that without the tab coming apart. Seventeen
+			// steps set relative to one number keep every ratio between them: the
+			// 20px title stays a title against the 13px body at every setting,
+			// and a control sized `CONTROL.md` still holds its own label.
+			//
+			// NOT A ROOT FONT-SIZE AND NOT `rem`. This tab is a guest inside
+			// DeepSeek's shell; moving the document's root size would resize the
+			// sidebar, the composer and every other plugin along with it. The
+			// multiplier lives on `.swm-page`, so it moves this tab and nothing
+			// else — which is what a per-plugin preference has to mean.
+			"--dsw-font-scale:1;",
+			"--dsw-font-xxxxs-10:calc(10px * var(--dsw-font-scale))/calc(14px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-xxxxs-strong-10:600 calc(10px * var(--dsw-font-scale))/calc(14px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-xxxs-11:calc(11px * var(--dsw-font-scale))/calc(16px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-xxxs-strong-11:600 calc(11px * var(--dsw-font-scale))/calc(16px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-xxs-12:calc(12px * var(--dsw-font-scale))/calc(16px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-xxs-medium-12:500 calc(12px * var(--dsw-font-scale))/calc(16px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-xxs-strong-12:600 calc(12px * var(--dsw-font-scale))/calc(16px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-xs-13:calc(13px * var(--dsw-font-scale))/calc(18px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-xs-medium-13:500 calc(13px * var(--dsw-font-scale))/calc(18px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-xs-strong-13:600 calc(13px * var(--dsw-font-scale))/calc(18px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-s-14:calc(14px * var(--dsw-font-scale))/calc(20px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-s-medium-14:500 calc(14px * var(--dsw-font-scale))/calc(20px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-s-strong-14:600 calc(14px * var(--dsw-font-scale))/calc(20px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-base-16:calc(16px * var(--dsw-font-scale))/calc(24px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-base-strong-16:600 calc(16px * var(--dsw-font-scale))/calc(24px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-l-20:600 calc(20px * var(--dsw-font-scale))/calc(28px * var(--dsw-font-scale)) var(--dsw-font-family);",
+			"--dsw-font-xl-24:700 calc(24px * var(--dsw-font-scale))/calc(32px * var(--dsw-font-scale)) var(--dsw-font-family);",
 			"--dsw-shadow-lv1:0 1px 2px 0 rgba(0,0,0,0.05);",
 			"--dsw-shadow-lv3:0 4px 6px -1px rgba(0,0,0,0.1),0 2px 4px -2px rgba(0,0,0,0.1);",
 			"}",
@@ -1494,6 +1508,142 @@ window.__ModuleLoader__.load({
 		].join("");
 
 		const SWM_SHEET = SWM_CSS + SWM_THEME + SWM_RULES;
+
+		/**
+		* THE READER'S OWN TYPE, and the two knobs the scale exposes.
+		*
+		* PER READER, NOT PER LIBRARY, so it is held in `localStorage` and never
+		* sent to the server. Which face is comfortable is a fact about a person
+		* and their screen, not about the library — two people reading the same
+		* Mac mini should not be arguing about a font — and `/config` is a round
+		* trip to another machine for something that has to be applied before the
+		* next paint.
+		*
+		* FOUR FACES AND FOUR SIZES, NOT A TEXT BOX. A free-form family field
+		* accepts a name the machine does not have and falls silently through to
+		* whatever is next in the stack, which is a setting that appears to do
+		* nothing; a free-form size lets a reader pick a number at which the
+		* controls stop holding their own labels. Every choice here is one this
+		* tab is known to render.
+		*/
+		const TYPE_KEY = "dsw-swarm-type";
+		const TYPE_STYLE_ID = "dsw-swarm-type-style";
+		/** Broadcast so the settings page and an open swarm page agree at once. */
+		const TYPE_EVENT = "dsw-swarm-type-change";
+
+		const TYPE_FACES = [
+			{
+				id: "system", zh: "系统默认", en: "System",
+				zhNote: "跟随本机界面字体", enNote: "whatever this machine draws its interface in",
+				stack: "ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei','Noto Sans',sans-serif"
+			},
+			{
+				id: "sans", zh: "黑体", en: "Sans",
+				zhNote: "思源黑体一系，中英同一族", enNote: "the Noto/Source grotesk, one family across both scripts",
+				stack: "'Source Han Sans SC','Noto Sans SC','PingFang SC','Microsoft YaHei','Segoe UI',ui-sans-serif,sans-serif"
+			},
+			{
+				id: "serif", zh: "宋体", en: "Serif",
+				zhNote: "读长文更省力，界面会明显偏文档", enNote: "easier over long reports; the tab reads as a document",
+				stack: "Spectral,Georgia,'Source Han Serif SC','Noto Serif SC','Songti SC','SimSun',serif"
+			},
+			{
+				id: "mono", zh: "等宽", en: "Monospace",
+				zhNote: "每个字符等宽，数字成列", enNote: "every character one width, so columns of figures line up",
+				stack: MONO
+			}
+		];
+
+		// FOUR STEPS, AND THE OUTER TWO ARE DELIBERATELY NARROW. 0.92 and 1.15
+		// are as far as the fixed boxes in this file go: CONTROL.dot is 20px and
+		// a 14px step at 1.3 does not sit inside one.
+		const TYPE_SIZES = [
+			{ id: "compact", zh: "紧凑", en: "Compact", scale: 0.92 },
+			{ id: "standard", zh: "标准", en: "Standard", scale: 1 },
+			{ id: "roomy", zh: "舒适", en: "Comfortable", scale: 1.08 },
+			{ id: "large", zh: "大", en: "Large", scale: 1.15 }
+		];
+
+		/**
+		* What the reader last chose.
+		* @returns `{ face, size }`, always two ids this file knows.
+		*/
+		function readTypePref() {
+			// A BROWSER MAY REFUSE TO ANSWER. A private window or blocked site
+			// data throws on the ACCESSOR, not on the read, so the whole thing is
+			// inside the try — and the fallback is a working page, not a blank one.
+			try {
+				const raw = JSON.parse(window.localStorage.getItem(TYPE_KEY) ?? "null");
+				return {
+					face: TYPE_FACES.some((one) => one.id === raw?.face) ? raw.face : "system",
+					size: TYPE_SIZES.some((one) => one.id === raw?.size) ? raw.size : "standard"
+				};
+			} catch {
+				return { face: "system", size: "standard" };
+			}
+		}
+
+		/**
+		* Put the choice on the document.
+		* @param pref - `{ face, size }`.
+		*/
+		function applyTypePref(pref) {
+			const face = TYPE_FACES.find((one) => one.id === pref?.face) ?? TYPE_FACES[0];
+			const size = TYPE_SIZES.find((one) => one.id === pref?.size) ?? TYPE_SIZES[1];
+			// AFTER SWM_THEME, AND THAT IS THE WHOLE MECHANISM: same selector, same
+			// specificity, later in the document, so it wins on order. Nothing here
+			// overrides a single one of the seventeen steps — it moves the two names
+			// they are all composed from, which is why one rule restyles the tab.
+			const css = `.swm-page{--dsw-font-family:${face.stack};--dsw-font-scale:${size.scale}}`;
+			try {
+				if (typeof document?.getElementById !== "function") return;
+				let node = document.getElementById(TYPE_STYLE_ID);
+				if (node === null) {
+					node = document.createElement("style");
+					node.id = TYPE_STYLE_ID;
+					(document.head ?? document.documentElement)?.appendChild?.(node);
+				}
+				// REPLACED, NOT ADDED. `ensureStyle` returns early when its id is
+				// already on the page, which is right for a sheet that never changes
+				// and useless for one that is the point of a control.
+				node.textContent = css;
+			} catch {
+				// A host that will not take a stylesheet keeps the built-in scale,
+				// which is a legible page — just not the one that was asked for.
+			}
+		}
+
+		/**
+		* Read it, apply it, and keep every mounted surface in step.
+		* @returns `[pref, choose]`.
+		*/
+		function useTypePref() {
+			const [pref, setPref] = useState(readTypePref);
+
+			// LAYOUT, NOT EFFECT: on the document before the browser paints, so a
+			// page does not open at the built-in size and jump to the chosen one.
+			useLayoutEffect(() => { applyTypePref(pref); }, [pref]);
+
+			// AND EVERY OTHER SURFACE FOLLOWS. The settings page and the swarm page
+			// are two React trees with no parent between them; without this, choosing
+			// a face in Settings restyles the tab behind it while the control in
+			// front of it still shows the answer before last.
+			useEffect(() => {
+				const onChange = () => { setPref(readTypePref()); };
+				window.addEventListener?.(TYPE_EVENT, onChange);
+				return () => { window.removeEventListener?.(TYPE_EVENT, onChange); };
+			}, []);
+
+			const choose = useCallback((patch) => {
+				const next = { ...readTypePref(), ...patch };
+				try { window.localStorage.setItem(TYPE_KEY, JSON.stringify(next)); } catch { /* see readTypePref */ }
+				applyTypePref(next);
+				setPref(next);
+				try { window.dispatchEvent?.(new CustomEvent(TYPE_EVENT)); } catch { /* a host without CustomEvent still restyled itself above */ }
+			}, []);
+
+			return [pref, choose];
+		}
 		//#endregion
 
 		//#region ui primitives
@@ -20998,6 +21148,10 @@ window.__ModuleLoader__.load({
 			// the fallbacks are the light values, and they are the ones the
 			// dark block exists to correct.
 			useLayoutEffect(() => { ensureStyle(SWM_STYLE_ID, SWM_SHEET); }, []);
+			// AND THE READER'S OWN TYPE OVER IT. Called for its layout effect as
+			// much as for its value: the rule has to be on the document before the
+			// first paint, or the page opens in the built-in face and jumps.
+			useTypePref();
 			useLayoutEffect(() => {
 				if (!open) return;
 				const measure = () => { setLeft(centreColumnLeft()); };
@@ -21463,6 +21617,9 @@ window.__ModuleLoader__.load({
 			// no `.swm-focus` ring, and none of the tokens above. It is idempotent
 			// by id — the overlay calling it too is not a second stylesheet.
 			useLayoutEffect(() => { ensureStyle(SWM_STYLE_ID, SWM_SHEET); }, []);
+			// AND THE READER'S OWN TYPE OVER IT, which this page both applies and
+			// owns the controls for.
+			const [type, chooseType] = useTypePref();
 			useEffect(() => { void reload(); void loadStatus(); }, [reload, loadStatus]);
 
 			const save = useCallback(async (patch, message) => {
@@ -21531,11 +21688,68 @@ window.__ModuleLoader__.load({
 			// everything the word "sources" can mean, in the order the features
 			// happened to be written. Nothing here changed except which third of
 			// it you are looking at.
+			// FOUR, AND 通用 IS FIRST BECAUSE IT IS ABOUT THE READER. The other
+			// three are about the library — what it pulls from, what happened on the
+			// last run, what it authenticates with — and are the same for everybody
+			// pointed at this machine. This one is the only thing on the page that
+			// belongs to the person looking at it.
 			const PANES = [
+				{ id: "general", zh: "通用", en: "General" },
 				{ id: "feeds", zh: "订阅源", en: "Feeds", count: config.feeds.length },
 				{ id: "collect", zh: "采集", en: "Collection" },
 				{ id: "keys", zh: "密钥", en: "Keys" }
 			];
+
+			/**
+			* One row of mutually exclusive choices.
+			*
+			* A SEGMENT, NOT A `<select>`, and the reason is what is being chosen:
+			* four faces, laid out beside each other, EACH DRAWN IN ITSELF — the
+			* control shows the answer instead of naming it. A dropdown would list
+			* four words in the current face and make a reader commit before seeing
+			* anything.
+			* @param options - `[{ id, zh, en, zhNote, enNote }]`.
+			* @param chosen - the selected id.
+			* @param onChoose - called with an id.
+			* @param faceOf - optional: the family to draw an option's own label in.
+			* @returns the row.
+			*/
+			const choices = (options, chosen, onChoose, faceOf) => jsx("div", {
+				role: "radiogroup",
+				style: { display: "flex", flexWrap: "wrap", gap: SPACE.sm, marginBottom: SPACE.md },
+				children: options.map((option) => {
+					const on = option.id === chosen;
+					return jsxs("button", {
+						type: "button",
+						role: "radio",
+						"aria-checked": on,
+						className: "swm-ctl swm-focus",
+						onClick: () => { onChoose(option.id); },
+						style: {
+							display: "flex", flexDirection: "column", alignItems: "flex-start",
+							gap: SPACE.xs, cursor: "pointer", textAlign: "left",
+							flex: "1 1 150px", minWidth: 0,
+							padding: `${SPACE.sm} ${SPACE.md}`, borderRadius: RADIUS.md,
+							border: `1px solid ${on ? tint(TONE.accent, TINT.ring) : LINE.hair}`,
+							background: on ? tint(TONE.accent, TINT.soft) : SURFACE.card,
+							color: on ? `rgb(${TONE.accent})` : INK.primary
+						},
+						children: [
+							jsx("span", {
+								// DRAWN IN ITSELF. The whole question is what the text will
+								// look like, and a preview that is not in the face being
+								// offered answers a different one.
+								style: { font: FONT.bodyStrong, fontFamily: faceOf?.(option) },
+								children: zh ? option.zh : option.en
+							}, "name"),
+							option.zhNote === undefined ? null : jsx("span", {
+								style: { font: FONT.micro, color: INK.secondary },
+								children: zh ? option.zhNote : option.enNote
+							}, "note")
+						]
+					}, option.id);
+				})
+			});
 
 			return jsxs("div", {
 				// THE SCOPE THAT RESOLVES EVERY TOKEN ON THIS PAGE.
@@ -21589,7 +21803,63 @@ window.__ModuleLoader__.load({
 					jsx("div", {
 						role: "tabpanel",
 						"aria-label": zh ? PANES.find((p) => p.id === pane).zh : PANES.find((p) => p.id === pane).en,
-						children: pane === "feeds"
+						children: pane === "general"
+							? jsxs("div", { children: [
+							// ── type ──────────────────────────────────────────────────
+							jsx("p", {
+								style: heading,
+								children: zh ? "字体" : "Typeface"
+							}),
+							jsx("p", {
+								style: hint,
+								children: zh
+									? "只影响这个插件的页面，不会动 DeepSeek 其他部分。选择保存在本机浏览器里，不上传服务器，所以每台机器可以不一样。"
+									: "This plugin's pages only — nothing else in DeepSeek moves. The choice is kept in this browser and never sent to the server, so each machine can differ."
+							}),
+							choices(TYPE_FACES, type.face, (id) => { chooseType({ face: id }); }, (option) => option.stack),
+							jsx("p", {
+								style: heading,
+								children: zh ? "字号" : "Size"
+							}),
+							jsx("p", {
+								style: hint,
+								children: zh
+									? "整套字号一起缩放，标题和正文之间的比例不变。"
+									: "The whole scale moves together, so the ratio between a heading and its body text does not change."
+							}),
+							choices(TYPE_SIZES, type.size, (id) => { chooseType({ size: id }); }),
+							// AND A LINE OF THE REAL THING. Two words in a segment do not
+							// show whether a face is readable at the size chosen; a
+							// paragraph in both scripts, at the body step, does.
+							jsxs("div", {
+								style: {
+									display: "flex", flexDirection: "column", gap: SPACE.xs,
+									padding: `${SPACE.md} ${SPACE.lg}`, borderRadius: RADIUS.lg,
+									border: `1px solid ${LINE.hair}`, background: SURFACE.card
+								},
+								children: [
+									jsx("div", {
+										style: { font: FONT.largeStrong, lineHeight: LEAD.tight, color: INK.primary },
+										children: zh ? "算力底座" : "The compute layer"
+									}, "h"),
+									jsx("div", {
+										style: { font: FONT.body, lineHeight: LEAD.read, color: INK.secondary },
+										children: zh
+											? "一支智能体蜂群把一个课题查完：分维度、找证据、逐条核验，最后写成一份带出处的报告。"
+											: "A swarm of agents works a topic through: split into dimensions, gather evidence, verify it line by line, and sign a report that cites its sources."
+									}, "p"),
+									jsx("div", {
+										style: { font: FONT.micro, fontFamily: MONO, fontVariantNumeric: "tabular-nums", color: INK.quiet },
+										// MONO IS NOT CONFIGURABLE AND THIS SAYS SO. A timestamp,
+										// a host and a tool argument are compared character by
+										// character; a proportional face makes two near-identical
+										// queries look identical, whoever prefers what.
+										children: zh ? "0:05 · youtube.com · 1 条证据（等宽不随设置改变）" : "0:05 · youtube.com · 1 piece of evidence (mono does not follow this setting)"
+									}, "m")
+								]
+							}, "sample")
+							] })
+							: pane === "feeds"
 							? jsxs("div", { children: [
 							// ── feeds ─────────────────────────────────────────────────
 							jsx("p", {
@@ -21924,6 +22194,9 @@ window.__ModuleLoader__.load({
 			missionFace, missionHue, missionIcon, missionPillFace, missionDuration, missionMeterLine,
 			missionVerifyRows, missionEventDetail, missionNoEvidence, missionActionNote,
 			missionTierLine, MISSION_STAGE_FACES, MISSION_VERIFY_FACES,
+			// The reader's own type: the two lists a control offers, and the pair
+			// of functions that put a choice on the document and read it back.
+			TYPE_FACES, TYPE_SIZES, TYPE_KEY, TYPE_STYLE_ID, readTypePref, applyTypePref,
 			missionClock, missionSince, missionLatency, missionOkFace, missionRowTitle, missionRowState,
 			missionTraceSignature, missionFindingsSignature,
 			MISSION_ROLE_FACES, MISSION_TRACE_KINDS, MISSION_TRACE_TABS,
