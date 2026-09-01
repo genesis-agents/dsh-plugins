@@ -297,9 +297,23 @@ export function collectCandidates(store, config) {
   // Draining from the bottom walks forward instead. The backlog empties `cap`
   // rows per pass and the steady state is identical, because a day's hundred
   // rows are the same hundred rows either way.
-  const fresh = [];
+  // GATHERED PER TYPE, AND KEPT PER TYPE.
+  //
+  // This gathered by type and then sorted the lot by `createdAt` and sliced
+  // to `cap` — which threw the per-type work away entirely, because after
+  // that sort the oldest rows win outright whatever type they are.
+  //
+  // MEASURED, and it is not a rounding error. A transcript is fetched when
+  // somebody opens a video, so a transcribed video is recent by
+  // construction; this library's 23 of them are from the last fortnight and
+  // the watermark is still in December. Sorted globally they land at the end
+  // of a 27,839-row queue and are sliced off every single pass — 139 passes
+  // before the first one is read. The type list said videos were first and
+  // the slice said they were last.
+  const byType = new Map();
   let truncated = false;
   for (const type of types) {
+    const held = [];
     let taken = 0;
     let skip = 0;
     for (;;) {
@@ -317,7 +331,7 @@ export function collectCandidates(store, config) {
         // otherwise a library of untranscribed videos fills 200 slots with
         // rows the extractor cannot use and the pass reads nothing else.
         if (!quotable(row)) continue;
-        fresh.push(row);
+        held.push(row);
         taken += 1;
         if (taken >= cap) break;
       }
@@ -331,10 +345,33 @@ export function collectCandidates(store, config) {
       if (!page.hasMore) break;
       skip += page.rows.length;
     }
+    if (held.length > 0) byType.set(type, held);
   }
 
-  fresh.sort((left, right) => String(left.createdAt ?? "").localeCompare(String(right.createdAt ?? "")));
-  const rows = fresh.slice(0, cap);
+  // AN EVEN SHARE FIRST, THEN THE LEFTOVERS BY AGE.
+  //
+  // Oldest-first WITHIN a type is what stops a row being stranded for ever,
+  // and that is kept — each type hands over its own oldest. Across types the
+  // share is equal, so a type with 23 candidates contributes all 23 rather
+  // than losing every one of them to a type with twenty thousand.
+  //
+  // The remainder is filled by age, so a quiet type does not hold slots it
+  // has nothing to put in them.
+  const byAge = (left, right) => String(left.createdAt ?? "").localeCompare(String(right.createdAt ?? ""));
+  for (const held of byType.values()) held.sort(byAge);
+  const share = Math.max(1, Math.ceil(cap / Math.max(1, byType.size)));
+  const rows = [];
+  const rest = [];
+  for (const held of byType.values()) {
+    rows.push(...held.slice(0, share));
+    rest.push(...held.slice(share));
+  }
+  rows.sort(byAge);
+  rest.sort(byAge);
+  while (rows.length < cap && rest.length > 0) rows.push(rest.shift());
+  rows.length = Math.min(rows.length, cap);
+  rows.sort(byAge);
+  const fresh = [...rows, ...rest];
 
   // The true backlog, not the part this scan saw.
   let backlog = Math.max(0, fresh.length - rows.length);

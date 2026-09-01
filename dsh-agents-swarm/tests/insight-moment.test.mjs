@@ -170,3 +170,43 @@ test("a video with no transcript is not a candidate, and does not spend the ceil
     "a video the library holds no transcript for was handed to the extractor",
   );
 });
+
+test("a type with few candidates keeps them, instead of losing every one to a big type", async () => {
+  // THE PER-TYPE GATHER USED TO BE THROWN AWAY. Rows were collected by type
+  // and then sorted by `createdAt` and sliced to the ceiling — after which the
+  // oldest win outright whatever type they are.
+  //
+  // MEASURED, and not a rounding error. A transcript is fetched when somebody
+  // opens a video, so a transcribed video is recent by construction; this
+  // library's 23 are from the last fortnight and the watermark is still in
+  // December. Sorted globally they land at the end of a 27,839-row queue and
+  // are sliced off every pass — 139 of them before the first is read. The type
+  // list said videos were first and the slice said they were last.
+  const { pickCandidates } = await import("../lib/insight-extract.js");
+  const old = Array.from({ length: 300 }, (unused, at) => ({
+    id: `p${at}`, type: "PAPER", createdAt: `2025-01-${String((at % 28) + 1).padStart(2, "0")}T00:00:00.000Z`,
+  }));
+  // Two videos, both newer than every paper — which is the real shape.
+  const videos = [
+    { id: "v0", type: "YOUTUBE_VIDEO", createdAt: "2026-08-30T00:00:00.000Z" },
+    { id: "v1", type: "YOUTUBE_VIDEO", createdAt: "2026-08-31T00:00:00.000Z" },
+  ];
+  const store = {
+    query: ({ type, skip = 0 }) => {
+      if (skip > 0) return { rows: [], hasMore: false };
+      return type === "YOUTUBE_VIDEO" ? { rows: videos, hasMore: false } : { rows: old, hasMore: false };
+    },
+    getTranscript: () => ({ text: "spoken words", cues: [] }),
+  };
+  const picked = pickCandidates(store, {
+    insightResourceTypes: ["YOUTUBE_VIDEO", "PAPER"],
+    insightMaxRows: 20,
+  });
+  const ids = picked.map((row) => row.id);
+  assert.ok(ids.includes("v0") && ids.includes("v1"), `both videos were sliced off: ${ids.join(",")}`);
+  assert.equal(picked.length, 20, "the ceiling stopped being the ceiling");
+  // AND OLDEST-FIRST WITHIN A TYPE IS KEPT, which is what stops a row being
+  // stranded for ever — the papers taken are the oldest papers.
+  const papers = picked.filter((row) => row.type === "PAPER").map((row) => row.createdAt);
+  assert.deepEqual([...papers].sort(), papers, "the papers were not taken oldest first");
+});
