@@ -1582,6 +1582,8 @@ function stubFetch(overrides = {}) {
   };
 }
 
+
+
 test("the settings page renders rather than throwing", async () => {
   stubFetch();
   const { tree } = await render("SourcesSettings");

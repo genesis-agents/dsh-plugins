@@ -15878,9 +15878,11 @@ window.__ModuleLoader__.load({
 										jsx(MissionPanel, {
 											bare: true,
 											note: "",
-											// The same reader every other pane opens a page in. A
-											// finding in the dimension drawer reaches the page it
-											// was verified against without leaving the mission.
+											// NOT WIRED YET, AND SAYING SO. MissionReferenceTab is written and reads
+											// the same artefact the report does; what is not finished is the six tests
+											// that exercise this tab through MissionSources, whose subject the swap
+											// removes. Shipping the swap with those red would be shipping a tab whose
+											// behaviour nothing checks.
 											children: jsx(MissionSources, {
 												missionId, zh, mission,
 												onOpenTrace: (id) => { setFocusDimension(id); setPane("trace"); },
@@ -16522,6 +16524,305 @@ window.__ModuleLoader__.load({
 					}, "unnamed")
 				]
 			});
+		}
+
+		function MissionReferenceTab({ missionId, zh, mission, onOpenSource, onOpenTrace }) {
+			// EVERY HOOK BEFORE EVERY RETURN. These two were below the loading
+			// branches, so the component rendered three hooks while the artefact was
+			// in flight and five once it landed — React's #310, and the same defect
+			// that took the dimension drawer down an hour ago, in a component I wrote
+			// after fixing it.
+			const [group, setGroup] = useState("kind");
+			const [search, setSearch] = useState("");
+			// THE ARTEFACT, FETCHED HERE. The citations live on the report and this
+			// pane is not inside it; passing them down would mean the mission view
+			// carrying a copy of the artefact for one tab. One GET, and the pane is
+			// self-contained — the same route the report reads, so the two can never
+			// disagree about which version they are showing.
+			const [artifact, setArtifact] = useState(null);
+			const [error, setError] = useState("");
+			useEffect(() => {
+				if ((missionId ?? "") === "") return undefined;
+				let alive = true;
+				fetch(`${apiBase()}/missions/${encodeURIComponent(missionId)}/artifact`)
+					.then(missionData)
+					.then((data) => { if (alive) { setArtifact(data.artifact ?? null); setError(""); } })
+					.catch((cause) => { if (alive) setError(String(cause?.message ?? cause)); });
+				return () => { alive = false; };
+			}, [missionId]);
+		
+			if (error !== "") return jsx(ErrorBox, { message: error, zh }, "err");
+			if (artifact === null) return jsx(Skeleton, { rows: 4 }, "load");
+			const references = missionReferences(artifact);
+			const list = Array.isArray(references) ? references : [];
+
+			// ONLY WHAT THE HOST ITSELF DECLARES. A registrar enforces `.gov` and
+			// `.edu`; arXiv is a preprint server by definition. Everything else is
+			// unlabelled, which is true, where 其他 on nine rows in ten would read as
+			// a judgement nobody made.
+			const KIND = [
+				[/(^|\.)gov(\.[a-z]{2})?$/u, { id: "gov", zh: "政府", en: "Gov", hue: PALETTE.blue }],
+				[/(^|\.)mil$/u, { id: "gov", zh: "政府", en: "Gov", hue: PALETTE.blue }],
+				[/(^|\.)edu(\.[a-z]{2})?$/u, { id: "academic", zh: "学术", en: "Academic", hue: PALETTE.violet }],
+				[/(^|\.)ac\.[a-z]{2}$/u, { id: "academic", zh: "学术", en: "Academic", hue: PALETTE.violet }],
+				[/^arxiv\.org$/u, { id: "academic", zh: "学术", en: "Academic", hue: PALETTE.violet }]
+			];
+			const kindOf = (host) => {
+				const name = String(host ?? "").toLowerCase();
+				if (name === "") return null;
+				for (const [pattern, face] of KIND) if (pattern.test(name)) return face;
+				return null;
+			};
+
+			const hosts = new Set(list.map((entry) => entry.host).filter((host) => host !== ""));
+			const verified = list.filter((entry) => String(entry.verifyState ?? "").startsWith("verified")).length;
+			const official = list.filter((entry) => kindOf(entry.host) !== null).length;
+			const dated = list.filter((entry) => formatDate(entry.publishedAt) !== "").length;
+			const share = (n) => (list.length === 0 ? "" : `${Math.round((n / list.length) * 100)}%`);
+
+			// FOUR WAYS TO CUT ONE LIST, which is the reference's own set with its
+			// 按权威度 replaced by the grade we can actually compute.
+			const GROUPS = [
+				{ id: "kind", zh: "按类型", en: "By type" },
+				{ id: "verify", zh: "按核验", en: "By verification" },
+				{ id: "year", zh: "按年份", en: "By year" },
+				{ id: "host", zh: "按域名", en: "By domain" }
+			];
+
+			const needle = search.trim().toLowerCase();
+			const shown = needle === ""
+				? list
+				: list.filter((entry) => `${entry.title ?? ""} ${entry.host ?? ""} ${entry.quote ?? ""}`.toLowerCase().includes(needle));
+
+			const bucketOf = (entry) => {
+				if (group === "host") return entry.host === "" ? (zh ? "未记录域名" : "no domain recorded") : entry.host;
+				if (group === "verify") return missionFace(MISSION_VERIFY_FACES, entry.verifyState, zh);
+				if (group === "year") {
+					const date = formatDate(entry.publishedAt);
+					return date === "" ? (zh ? "没有发表日期" : "no publication date") : date.slice(0, 4);
+				}
+				const kind = kindOf(entry.host);
+				return kind === null ? (zh ? "未标注类型" : "unlabelled") : (zh ? kind.zh : kind.en);
+			};
+			const buckets = new Map();
+			for (const entry of shown) {
+				const key = bucketOf(entry);
+				const had = buckets.get(key);
+				if (had === undefined) buckets.set(key, [entry]);
+				else had.push(entry);
+			}
+			// BIGGEST FIRST, and the unlabelled bucket last however big it is: it is
+			// the one group that says nothing about its members.
+			const vague = new Set([zh ? "未标注类型" : "unlabelled", zh ? "没有发表日期" : "no publication date", zh ? "未记录域名" : "no domain recorded"]);
+			const ordered = [...buckets.entries()].sort((a, b) => {
+				const dull = (vague.has(a[0]) ? 1 : 0) - (vague.has(b[0]) ? 1 : 0);
+				return dull !== 0 ? dull : b[1].length - a[1].length;
+			});
+
+			if (list.length === 0) return jsx("div", {
+				style: { font: FONT.small, color: INK.secondary },
+				children: zh ? "这一版报告没有引用任何来源。" : "This version of the report cites nothing."
+			}, "empty");
+
+			return jsxs("div", {
+				style: { display: "flex", flexDirection: "column", gap: SPACE.lg },
+				children: [
+					// THE FOUR FIGURES THE REFERENCE OPENS WITH, in its own order.
+					MissionStatTiles({ tiles: [
+						{ label: zh ? "总引用" : "Citations", value: String(list.length), hint: zh ? `${hosts.size} 个域名` : `${hosts.size} domain(s)` },
+						{
+							label: zh ? "已核验" : "Verified",
+							value: String(verified),
+							hint: share(verified),
+							tone: missionRateHue(verified, list.length),
+							meter: missionRate(verified, list.length)
+						},
+						{ label: zh ? "官方 / 学术" : "Gov / academic", value: String(official), hint: share(official) },
+						{ label: zh ? "有日期" : "Dated", value: String(dated), hint: share(dated) }
+					] }, "figures"),
+
+					// The heading, the count, and the four cuts — one row, as the
+					// reference has it.
+					jsxs("div", {
+						style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" },
+						children: [
+							jsx("span", {
+								style: { flex: "none", display: "inline-flex", color: `rgb(${TONE.accent})` },
+								children: jsx(Icon, { name: "layers", size: ICON.md })
+							}, "mark"),
+							jsx("h3", {
+								style: { font: FONT.baseStrong, margin: 0, color: INK.primary },
+								children: zh ? `参考文献 · 共 ${list.length} 条` : `References · ${list.length}`
+							}, "title"),
+							jsx("input", {
+								type: "search",
+								value: search,
+								placeholder: zh ? "搜索标题 / 域名 / 引语…" : "Search title, domain or quote…",
+								"aria-label": zh ? "搜索参考文献" : "Search the references",
+								className: "swm-focus",
+								style: {
+									...SELECT_STYLE, cursor: "text", flex: 1,
+									minWidth: "180px", marginLeft: "auto"
+								},
+								onChange: (event) => { setSearch(event.target.value); }
+							}, "search"),
+							jsx("select", {
+								value: group,
+								"aria-label": zh ? "分组方式" : "Group by",
+								style: SELECT_STYLE,
+								onChange: (event) => { setGroup(event.target.value); },
+								children: GROUPS.map((one) => jsx("option", { value: one.id, children: zh ? one.zh : one.en }, one.id))
+							}, "group")
+						]
+					}, "head"),
+
+					// NOTHING MATCHED IS A SENTENCE, not an empty column.
+					shown.length !== 0 ? null : jsx("div", {
+						style: { font: FONT.small, color: INK.secondary },
+						children: zh ? `没有引用匹配“${search.trim()}”。` : `No citation matches “${search.trim()}”.`
+					}, "none"),
+
+					...ordered.map(([name, entries]) => jsxs("section", {
+						style: { display: "flex", flexDirection: "column", gap: SPACE.sm },
+						children: [
+							jsxs("div", {
+								style: { display: "flex", alignItems: "baseline", gap: SPACE.sm },
+								children: [
+									jsx("span", {
+										style: {
+											font: FONT.smallStrong, letterSpacing: TRACK_WIDE,
+											textTransform: "uppercase", color: INK.secondary
+										},
+										children: name
+									}, "name"),
+									jsx("span", { style: { ...COUNT_CHIP, flex: "none" }, children: String(entries.length) }, "n")
+								]
+							}, "head"),
+							...entries.map((entry) => MissionCitationCard({ entry, zh, kind: kindOf(entry.host), onOpenSource }, `c${entry.index}`))
+						]
+					}, `g-${name}`))
+				]
+			});
+		}
+
+		/**
+		 * One citation, in the tab's fuller treatment.
+		 *
+		 * Richer than the list at the foot of the report on purpose: that one is
+		 * artifact/ReferencePanel.tsx's two lines, and this is the pane a reader
+		 * opens to interrogate the bibliography rather than to glance at it. The
+		 * quote is here, and the verification, and the way into the copy we kept.
+		 * @param entry - one row from {@link missionReferences}.
+		 * @param zh - whether to write Chinese.
+		 * @param kind - the declared source kind, or null.
+		 * @param onOpenSource - open the page in the reader.
+		 * @param key - React key.
+		 * @returns the card.
+		 */
+		function MissionCitationCard({ entry, zh, kind, onOpenSource }, key) {
+			const vhue = missionHue(MISSION_VERIFY_FACES, entry.verifyState);
+			const vface = missionFace(MISSION_VERIFY_FACES, entry.verifyState, zh);
+			const titled = entry.url === ""
+				? (zh ? "这条引用没有留下地址。" : "No address was stored for this citation.")
+				: sourceTitleOf(entry.title, "", entry.url);
+			const date = formatDate(entry.publishedAt);
+			return jsx("div", {
+				id: `cite-${entry.index}`,
+				className: "swm-ref",
+				children: jsxs("div", {
+					style: { display: "flex", alignItems: "flex-start", gap: SPACE.sm },
+					children: [
+						jsx("span", {
+							title: vface,
+							style: {
+								flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
+								width: CONTROL.dot, height: CONTROL.dot, borderRadius: RADIUS.circle,
+								color: `rgb(${vhue})`, background: tint(vhue, TINT.soft),
+								boxShadow: `inset 0 0 0 1px ${tint(vhue, TINT.ring)}`
+							},
+							children: jsx(Icon, { name: missionIcon(MISSION_VERIFY_FACES, entry.verifyState), size: ICON.xs })
+						}, "state"),
+						jsxs("div", {
+							style: { flex: 1, minWidth: 0 },
+							children: [
+								jsxs("div", {
+									style: { display: "flex", alignItems: "baseline", gap: SPACE.xs, minWidth: 0 },
+									children: [
+										jsx("span", {
+											style: {
+												flex: "none", whiteSpace: "nowrap",
+												font: FONT.microStrong, fontFamily: MONO,
+												borderRadius: RADIUS.sm, padding: `0 ${SPACE.xs}`,
+												color: `rgb(${PALETTE.violet})`,
+												background: tint(PALETTE.violet, TINT.soft)
+											},
+											children: `[${entry.index}]`
+										}, "n"),
+										kind === null ? null : jsx("span", {
+											style: {
+												flex: "none", whiteSpace: "nowrap",
+												font: FONT.nano, borderRadius: RADIUS.sm,
+												padding: `0 ${SPACE.xs}`,
+												color: `rgb(${kind.hue})`,
+												background: tint(kind.hue, TINT.soft)
+											},
+											children: zh ? kind.zh : kind.en
+										}, "kind"),
+										entry.url === "" ? jsx("span", {
+											style: { ...clampBox(2), font: FONT.bodyMedium, color: INK.secondary, minWidth: 0, flex: 1 },
+											children: titled
+										}, "title") : jsx("a", {
+											href: entry.url, target: "_blank", rel: "noreferrer noopener",
+											className: "swm-prose-a",
+											style: {
+												...clampBox(2), minWidth: 0, flex: 1,
+												font: FONT.bodyMedium, color: `rgb(${PALETTE.violet})`,
+												textDecoration: "none"
+											},
+											children: `${titled} ↗`
+										}, "title")
+									]
+								}, "line"),
+								entry.quote === "" ? null : jsx("p", {
+									style: { ...clampBox(2), margin: `${SPACE.xs} 0 0`, font: FONT.micro, color: INK.secondary },
+									children: `“${entry.quote}”`
+								}, "quote"),
+								jsxs("div", {
+									style: {
+										display: "flex", flexWrap: "wrap", alignItems: "center",
+										rowGap: SPACE.xs, columnGap: SPACE.sm,
+										marginTop: SPACE.xs, font: FONT.nano, color: INK.quiet
+									},
+									children: [
+										jsx("span", { style: { flex: "none", color: `rgb(${vhue})` }, children: vface }, "verify"),
+										entry.host === "" ? null : jsx("span", { style: { flex: "none", fontFamily: MONO }, children: entry.host }, "host"),
+										date === "" ? null : jsx("span", { style: { flex: "none", fontFamily: MONO }, children: `· ${date}` }, "date"),
+										jsx("span", {
+											style: { flex: "none" },
+											children: zh ? `文中 ${entry.inText} 处` : `cited ${entry.inText}× in the text`
+										}, "inText"),
+										// THE COPY WE KEPT, not the live page. A citation is checked
+										// against what was read; the link above goes to what is there
+										// now, and the two are the same question only by luck.
+										typeof onOpenSource !== "function" || entry.url === "" ? null : jsx("button", {
+											type: "button",
+											className: "swm-focus",
+											style: {
+												marginLeft: "auto", flex: "none",
+												appearance: "none", border: "none", background: "transparent",
+												padding: 0, cursor: "pointer", font: FONT.nano,
+												color: "var(--dsw-alias-label-link)"
+											},
+											onClick: () => { onOpenSource({ sourceUrl: entry.url, sourceTitle: entry.title, quote: entry.quote, documentId: null }); },
+											children: zh ? "在阅读器里打开" : "Open in the reader"
+										}, "read")
+									]
+								}, "meta")
+							]
+						}, "body")
+					]
+				}, "row")
+			}, key);
 		}
 
 		/**
