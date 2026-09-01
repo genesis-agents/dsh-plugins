@@ -61,36 +61,35 @@ function ramp() {
   return found;
 }
 
-test("in the 信源 feed the colour is on the labels and the words are ink", () => {
-  // A COLUMN OF TWENTY SOURCES WAS TWENTY DIFFERENTLY-COLOURED SENTENCES.
-  // Every card drew its headline in `hue(kind)` — YouTube red, arXiv
-  // orange, a blue for the web — so the eye re-tuned on every row for a
-  // fact the tile beside it and the pill above it were both already
-  // stating, in that same hue.
+test("one card, one hue, and the kind is still said in words", () => {
+  // A COLUMN OF TWENTY SOURCES WAS TWENTY DIFFERENTLY-COLOURED OBJECTS.
+  // The card took `hue(kind)` in three places — the thumbnail tile, the
+  // source pill and the headline — so no two adjacent rows agreed about
+  // what a title looks like, and the hue had to be learnt before it read
+  // as anything at all.
   //
-  // THE TAGS KEEP THEIRS. This guard is not "no colour in the feed"; it is
-  // that running prose is ink. Counted rather than matched, because the
-  // card has exactly two coloured marks and a third would be the headline
-  // coming back under another name.
+  // ONE HUE, AND IT IS THE RED. Not because red means YouTube here but
+  // because it is the one the feed was already mostly drawn in; the kind
+  // is carried by the pill's WORDS, which need no key.
   const card = code(body("function ResourceCard("));
-  const tinted = [...card.matchAll(/color: hue\(kind\)/gu)].length;
+  const perKind = [...card.matchAll(/hue\(kind/gu)].length;
   assert.equal(
-    tinted, 2,
-    `${tinted} places in the card colour their text by source kind; the tile and the source pill are the two that may`,
+    perKind, 0,
+    `${perKind} place(s) in the card still colour themselves by source kind`,
   );
-  // AND EACH OF THE TWO IS A MARK, not a run of words: both sit on a
-  // ground of the same hue. A coloured foreground with no background is a
-  // sentence wearing a label's clothes.
-  for (const hit of card.matchAll(/color: hue\(kind\)/gu)) {
-    const around = card.slice(Math.max(0, hit.index - 160), hit.index);
-    assert.match(
-      around, /background: hue\(kind, TINT\.soft\)/u,
-      "text is coloured by source kind without a ground under it, which is a headline rather than a label",
-    );
-  }
+  assert.match(card, /const mark = PALETTE\.red;/u, "the card's one hue is not declared once");
+  // AND ALL THREE MARKS TAKE IT. Asserting the constant exists is not
+  // enough: two of three using it and the third left on something else is
+  // exactly the state this replaces.
+  const wearing = [...card.matchAll(/rgb\(\$\{mark\}\)|tint\(mark, TINT\.soft\)/gu)].length;
+  assert.equal(wearing, 5, `${wearing} uses of the card's hue; the tile takes two, the pill two, the headline one`);
+
+  // THE NAV KEEPS THE SIX. That is the one place the mapping is worth
+  // teaching — the six filters sit together there and can be compared,
+  // which is the only context in which a colour key is learnable.
   assert.match(
-    card, /padding: 0, textAlign: "left", cursor: "pointer",\s*\n\s*color: INK\.primary,/u,
-    "the card's headline is not drawn in ink",
+    SOURCE, /hue\(entry, TINT\.soft\)|hue\(kind, TINT\.soft\)/u,
+    "the per-kind hues went out of the file entirely, so the feed's nav lost its colours too",
   );
 });
 

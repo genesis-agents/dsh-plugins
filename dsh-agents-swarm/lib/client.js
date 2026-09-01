@@ -3699,6 +3699,23 @@ window.__ModuleLoader__.load({
 			const description = descriptionOf(row, zh);
 			const sourceName = sourceNameOf(row);
 			const categories = Array.isArray(row.categories) ? row.categories.slice(0, 2) : [];
+			// ONE HUE FOR THE WHOLE CARD, AND IT IS THE RED. Every card drew
+			// itself in the colour of where it came from — `hue(kind)`, so a
+			// YouTube row was red, a paper blue, a blog violet — and a column of
+			// twenty sources was twenty differently-coloured objects with no two
+			// adjacent rows agreeing about what a title looks like.
+			//
+			// The kind is not lost with the colour: the pill under the date says
+			// it in words, which is the reading that does not require having
+			// learnt six hues first, and the nav above the feed still colours its
+			// six filters — that is the one place the mapping is worth teaching,
+			// because there the six sit together and can be compared.
+			//
+			// PALETTE.red IS rgb(185,28,28), the -700 ink step. Not the -500 fill
+			// and not YouTube's own #FF0000: this is text on white and it has to
+			// clear 4.5:1, which the brand red does not.
+			const mark = PALETTE.red;
+
 			// The reference narrows a PAPER thumbnail and widens the rest.
 			const thumbWidth = row.type === "PAPER" ? "104px" : "168px";
 			return jsxs("article", {
@@ -3714,7 +3731,7 @@ window.__ModuleLoader__.load({
 						style: { font: FONT.largeStrong,
 							flex: "none", width: thumbWidth, height: "104px", borderRadius: RADIUS.md,
 							overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center",
-							background: hue(kind, TINT.soft), color: hue(kind), border: "none", padding: 0, cursor: "pointer"
+							background: tint(mark, TINT.soft), color: `rgb(${mark})`, border: "none", padding: 0, cursor: "pointer"
 						},
 						children: thumbnail === undefined || broken
 							? sourceName.slice(0, 2)
@@ -3741,7 +3758,7 @@ window.__ModuleLoader__.load({
 									sourceName === "" ? null : jsx("span", {
 										style: { font: FONT.microStrong,
 											padding: "1px 8px", borderRadius: RADIUS.pill,
-											background: hue(kind, TINT.soft), color: hue(kind),
+											background: tint(mark, TINT.soft), color: `rgb(${mark})`,
 											maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
 										},
 										children: sourceName
@@ -3753,21 +3770,16 @@ window.__ModuleLoader__.load({
 							jsx("button", {
 								type: "button",
 								onClick: () => { onOpen(row); },
-								// THE TITLE IS INK, NOT THE SOURCE'S COLOUR. Every card in the
-								// feed drew its headline in the hue of where it came from —
-								// YouTube red, arXiv orange, a blue for the web — so a column
-								// of twenty sources was twenty differently-coloured sentences
-								// and the eye had to re-tune on every row. The colour is doing
-								// no work there either: the tile beside it and the pill above
-								// it already carry the kind, in the same hue, and a reader who
-								// needs it has two places to find it.
-								//
-								// THE TAGS KEEP THEIR COLOURS, which is the whole point of the
-								// arrangement: colour marks the label, ink carries the words.
+								// AND THE HEADLINE WEARS IT TOO. This was ink for one round —
+								// on the reading that colour marks a label and ink carries the
+								// words — and that is not what was asked for. The feed is a
+								// wall of cards whose titles are the only thing anybody reads;
+								// drawn in the same red as the tile and the pill they read as
+								// links, which is what they are.
 								style: { font: FONT.baseStrong,
 									appearance: "none", border: "none", background: "transparent",
 									padding: 0, textAlign: "left", cursor: "pointer",
-									color: INK.primary,
+									color: `rgb(${mark})`,
 									overflow: "hidden", display: "-webkit-box",
 									WebkitLineClamp: 2, WebkitBoxOrient: "vertical"
 								},
