@@ -61,6 +61,7 @@ import {
   finalize,
 } from "./mission-runtime.js";
 import { concurrencyCap } from "./mission-handlers.js";
+import { reportToDocx } from "./mission-docx.js";
 import {
   COUNTING_VERIFY_STATE,
   FETCH_BACKED_VERIFY_STATES,
@@ -1451,7 +1452,12 @@ if (req.method === "GET" && (action === "facts.csv" || action === "citations.csv
     "text/csv; charset=utf-8", "facts.csv");
 }
 
-    if (req.method === "GET" && action === "report.md") {
+    // ONE ROUTE, TWO FORMATS. `.md` and `.docx` differ in exactly two lines
+    // — the bytes and the headers — and every step before that is the same
+    // version resolution, the same 404s, the same figure rendering and the
+    // same bibliography. Split into two handlers they would drift, and the
+    // one that drifts is the one nobody is looking at.
+    if (req.method === "GET" && (action === "report.md" || action === "report.docx")) {
       const mission = missionOr404(id);
       if (mission === null) return true;
       const params = paramsOf(req);
@@ -1499,14 +1505,23 @@ if (req.method === "GET" && (action === "facts.csv" || action === "citations.csv
       // own body and cannot reach into a reference list that never had one.
       const markdown = renderFigureTokens(body, artifact, { language: mission.language })
         + buildBibliography(artifact, { language: mission.language });
-      const filename = `${id}${artifact.version ? `-v${artifact.version}` : ""}.md`;
+      const extension = action === "report.docx" ? "docx" : "md";
+      const filename = `${id}${artifact.version ? `-v${artifact.version}` : ""}.${extension}`;
+      // A REAL `.docx`, not HTML under a Word content type. See
+      // mission-docx.js for why that shortcut is refused: Word opens it, and
+      // every converter downstream gets a file whose extension lies.
+      const payload = action === "report.docx"
+        ? reportToDocx(markdown, { title: artifact.title ?? "", language: mission.language })
+        : Buffer.from(markdown, "utf8");
       res.writeHead(200, {
-        "content-type": "text/markdown; charset=utf-8",
-        "content-length": Buffer.byteLength(markdown),
+        "content-type": action === "report.docx"
+          ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          : "text/markdown; charset=utf-8",
+        "content-length": payload.length,
         "content-disposition": `attachment; filename="${filename}"`,
         "cache-control": "no-store",
       });
-      res.end(markdown);
+      res.end(payload);
       return true;
     }
 

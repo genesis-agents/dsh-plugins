@@ -3909,3 +3909,37 @@ test("every spend row records the model that produced it", () => {
     );
   }
 });
+
+test("a report exports as a real .docx, not HTML wearing a Word content type", async () => {
+  // THE USUAL SHORTCUT IS HTML SERVED AS `application/msword`. Word opens it,
+  // so it looks like it worked, and Pages, Google Docs and every converter
+  // downstream get a file whose extension lies about its bytes.
+  //
+  // This asserts the bytes: a ZIP local-file header, the five parts an OOXML
+  // word document must carry, and the styles the body names. There is no
+  // build step here and so no library — see mission-docx.js.
+  const { reportToDocx } = await import("../lib/mission-docx.js");
+  const source = [
+    "# 章节一",
+    "",
+    "这是**加粗**、`代码` 与 *强调*，还有一处引用 [12]。",
+    "",
+    "- 第一项",
+    "- 第二项",
+    "",
+    "> 引用一句",
+  ].join(String.fromCharCode(10));
+  const file = reportToDocx(source, { title: "测试报告", language: "zh" });
+
+  assert.equal(file.slice(0, 2).toString("latin1"), "PK", "the export is not a ZIP, so it is not a .docx whatever it is called");
+  const whole = file.toString("latin1");
+  for (const part of [
+    "[Content_Types].xml",
+    "_rels/.rels",
+    "word/_rels/document.xml.rels",
+    "word/styles.xml",
+    "word/document.xml",
+  ]) {
+    assert.ok(whole.includes(part), `the archive has no ${part}, and Word refuses a package missing one`);
+  }
+});

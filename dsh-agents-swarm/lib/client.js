@@ -1037,6 +1037,18 @@ window.__ModuleLoader__.load({
 			`.swm-ref:hover{border-color:${tint(PALETTE.violet, TINT.ring)};background:${tint(PALETTE.violet, TINT.wash)}}`,
 			`.swm-ref:hover .swm-ref-title{text-decoration:underline}`,
 			`.swm-prose-a:hover{text-decoration:underline}`,
+			// PRINTING IS HOW THIS TAB MAKES A PDF, and it is the same route the
+			// reference takes — artifact/ReferencePanel.tsx is full of `print:`
+			// classes and its server hands the page to a headless browser. A PDF
+			// writer of our own would have to embed a CJK font to render one
+			// sentence of this report, and would still be worse at it than the
+			// engine already on screen.
+			//
+			// `visibility`, NOT `display`. Hiding with `display:none` collapses every
+			// ancestor the report is nested inside and the page prints empty; making
+			// everything invisible and the report visible again keeps the boxes and
+			// paints only what is wanted.
+			"@media print{body *{visibility:hidden}.swm-print-root,.swm-print-root *{visibility:visible}.swm-print-root{position:absolute;left:0;top:0;width:100%;padding:0;margin:0}.swm-noprint{display:none !important}.swm-print-root *{overflow:visible !important;max-height:none !important}a{text-decoration:none}}",
 
 			// A LIST IS ROWS SEPARATED BY A LINE. LINE's own docblock states the
 			// rule and the trajectory proved it: deleting a 2px gap between 120
@@ -15456,6 +15468,9 @@ window.__ModuleLoader__.load({
 					label: zh ? "导出" : "Export",
 					items: [
 						{ id: "report.md", zh: "报告 .md", en: "Report .md", zhNote: "写好的那一版报告，原文", enNote: "the report as it was written" },
+						// A REAL .docx, generated in mission-docx.js — headings, bold, lists and
+						// blockquotes as Word's own styles, not HTML wearing a Word content type.
+						{ id: "report.docx", zh: "报告 .docx", en: "Report .docx", zhNote: "Word 能直接编辑的那一份，保留标题、加粗与列表", enNote: "editable in Word, with headings, emphasis and lists kept" },
 						{ id: "facts.csv", zh: "证据 .csv", en: "Evidence .csv", zhNote: "每条通过核验的发现一行，带原句、来源与时间", enNote: "one row per verified finding, with its quote, host and stamp" },
 						{ id: "citations.csv", zh: "引用 .csv", en: "Citations .csv", zhNote: "报告里引到的每一处出处", enNote: "every source the report cites" },
 						{ id: "report.json", zh: "全量 .json", en: "Everything .json", zhNote: "这次运行的完整投影，机器读的那一份", enNote: "the whole projection of this run, for a machine to read" }
@@ -15470,7 +15485,23 @@ window.__ModuleLoader__.load({
 						href: `${apiBase()}/missions/${encodeURIComponent(missionId)}/${format.id}`
 							+ (reportVersion > 0 ? `?version=${reportVersion}` : ""),
 						download: `${missionId}${shownVersion > 0 ? `-v${shownVersion}` : ""}.${format.id.split(".").pop()}`
-					}))
+					})).concat([
+					// PDF IS THE PAGE, PRINTED. Not a fifth server route: a PDF writer of our
+					// own would have to embed a CJK font to render one sentence of this
+					// report and would still be worse at it than the engine already holding
+					// it on screen. The reference takes the same route — its own reference
+					// panel is full of `print:` rules and its server hands the page to a
+					// headless browser.
+					//
+					// AN ACTION, NOT A LINK, so it sits outside the map above: the other four
+					// are a GET a browser can save, and this one is `window.print()` with the
+					// harness made invisible around the report.
+					{
+						id: "report.pdf",
+						label: zh ? "报告 .pdf" : "Report .pdf",
+						note: zh ? "走浏览器打印，版式与屏幕上的一致" : "through the browser's own print, laid out as it is on screen",
+						onSelect: () => { if (typeof window?.print === "function") window.print(); }
+					}])
 				}, "export")
 			].filter((entry) => entry !== null);
 
@@ -16997,6 +17028,10 @@ window.__ModuleLoader__.load({
 			return jsx("div", {
 				style: { minHeight: 0 },
 				children: jsxs("div", {
+					// THE PRINTABLE ROOT. Everything outside it is made invisible when the
+					// page prints — see the `@media print` rule — so a PDF is the report and
+					// not the harness around it.
+					className: "swm-print-root",
 					style: { ...CONTENT_STYLE, padding: onBack === null || onBack === undefined ? 0 : "0 24px 24px" },
 					children: [
 						// The version row only exists when it has something to offer. With
@@ -17014,6 +17049,7 @@ window.__ModuleLoader__.load({
 						// two pills parked at the far right, three blocks away from the prose
 						// they change.
 						back === null ? null : jsx("div", {
+							className: "swm-noprint",
 							style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", margin: "0 0 12px" },
 							children: [back]
 						}, "back"),
@@ -17185,6 +17221,9 @@ window.__ModuleLoader__.load({
 							]
 						}, "summary"),
 						readSections.length < 2 && versions.length <= 1 ? null : jsxs("div", {
+							// NOT ON PAPER. The reading modes and the version picker are how a reader
+							// got to this document, not part of it.
+							className: "swm-noprint",
 							style: { display: "flex", alignItems: "center", gap: SPACE.md, flexWrap: "wrap", margin: `0 0 ${SPACE.md}` },
 							children: [
 								// A ONE-CHAPTER REPORT HAS NO READINGS. The strip used to be the
