@@ -6739,3 +6739,29 @@ test("the only control on a row is not gated on the Host having a field", () => 
     "the source select is still gated out of existence by a Host field",
   );
 });
+
+test("a skip is not counted or coloured as a failure", () => {
+  // MEASURED ON THE FIRST REAL RUN, and it read as a total breakdown to the
+  // person looking at it: 206 sources, 0 failures, 196 skipped for want of a
+  // transcript — reported as one amber number saying "196 个没能抽出主张".
+  //
+  // Skipping a video the library holds no transcript for is the DESIGNED
+  // behaviour: a title and a blurb cannot produce a checkable quote, so the
+  // scan declines before spending a model call. It did not try and fail; it
+  // chose not to try. Summing it with real failures turns the normal outcome
+  // on a video-heavy library into an alarm, and "没能抽出主张" is the wrong
+  // verb for it besides — it says the pass attempted.
+  const ledger = body("function PassLedger(");
+  assert.equal(
+    /const\s+lost\s*=/.test(ledger),
+    false,
+    "the ledger is back to one lumped 'lost' number over failures and skips",
+  );
+  assert.match(ledger, /const\s+broken\s*=/, "failures are not counted on their own");
+  assert.match(ledger, /const\s+skipped\s*=/, "skips are not counted on their own");
+  // And they are drawn in different colours, because they call for different
+  // actions: a failure means something is broken, a skip means the library is
+  // missing transcripts.
+  assert.match(ledger, /broken === 0 \? null[\s\S]{0,220}TONE\.danger/, "a failure is not drawn as a failure");
+  assert.match(ledger, /skipped === 0 \? null[\s\S]{0,320}TONE\.warn/, "a skip is not drawn as the milder thing it is");
+});

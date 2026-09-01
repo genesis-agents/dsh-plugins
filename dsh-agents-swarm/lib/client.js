@@ -9591,12 +9591,28 @@ window.__ModuleLoader__.load({
 			const counts = data.counts ?? {};
 			const states = Array.isArray(data.states) ? data.states : Object.keys(counts);
 			const looked = states.reduce((total, one) => total + Number(counts[one] ?? 0), 0);
-			// The ones that cost the library something. Counted separately because
-			// the summary line has to say whether there is anything to open this
-			// for, and "17 produced nothing" is that sentence.
-			const lost = Number(counts.failed ?? 0)
-				+ Number(counts["no-transcript"] ?? 0)
-				+ Number(counts.unusable ?? 0);
+			// A SKIP IS NOT A FAILURE, AND LUMPING THEM WAS ALARMING AND WRONG.
+			//
+			// This counted failed + no-transcript + unusable as one number and
+			// wrote it in amber as "其中 196 个没能抽出主张". On a library that is
+			// mostly untranscribed video that is the NORMAL, DESIGNED outcome —
+			// the scan skips a video it holds no transcript for because a title
+			// and a blurb cannot produce a checkable quote — and the sentence
+			// reported a healthy pass as a broken one. Measured on the first real
+			// run: 206 sources, 0 failures, 196 skipped for want of a transcript,
+			// and a reader who reasonably read that as "全部失败".
+			//
+			// "没能抽出主张" is also the wrong verb for a skip: it says the pass
+			// TRIED. It did not try; it declined, on purpose, before spending a
+			// model call.
+			//
+			// TWO NUMBERS NOW, because they need two different colours and two
+			// different actions. A failure is red and means something is broken.
+			// A skip is amber and means the library is missing transcripts —
+			// worth fixing, since the pass is only reading what is left, but
+			// nothing is wrong with the run.
+			const broken = Number(counts.failed ?? 0);
+			const skipped = Number(counts["no-transcript"] ?? 0) + Number(counts.unusable ?? 0);
 
 			return jsxs("section", {
 				style: {
@@ -9629,13 +9645,23 @@ window.__ModuleLoader__.load({
 								style: { font: FONT.micro, color: INK.quiet, fontFamily: MONO },
 								children: zh ? `看了 ${looked} 个信源` : `${looked} sources`
 							}, "n"),
-							// THE ONE SENTENCE THAT MUST BE TRUE WHILE SHUT. A reader who
-							// never opens this still learns whether the last pass lost
-							// anything, which is the whole reason the ledger exists.
-							lost === 0 ? null : jsx("span", {
+							// THE SENTENCES THAT MUST BE TRUE WHILE SHUT. A reader who never
+							// opens this still learns whether anything BROKE and whether the
+							// pass is reading most of the library or a corner of it — two
+							// facts, in that order of urgency.
+							broken === 0 ? null : jsx("span", {
+								style: { font: FONT.microStrong, color: `rgb(${TONE.danger})` },
+								children: zh ? `${broken} 个抽取失败` : `${broken} failed`
+							}, "broken"),
+							skipped === 0 ? null : jsx("span", {
+								title: zh
+									? "只有已经取到转录的视频才能抽出可核验的引语；没有转录的会在送给模型之前跳过，不花模型调用。"
+									: "Only a video with a stored transcript can yield a checkable quote; the rest are skipped before the model is called, at no cost.",
 								style: { font: FONT.micro, color: `rgb(${TONE.warn})` },
-								children: zh ? `其中 ${lost} 个没能抽出主张` : `${lost} produced nothing`
-							}, "lost"),
+								children: zh
+									? `跳过 ${skipped} 个（没有转录）`
+									: `${skipped} skipped for want of a transcript`
+							}, "skipped"),
 							jsx("span", { style: { flex: 1 } }, "spacer"),
 							jsx("span", {
 								title: formatStamp(data.batch),
