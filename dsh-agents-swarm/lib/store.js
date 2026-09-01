@@ -491,6 +491,31 @@ export class SourceStore {
   }
 
   /**
+   * Videos held that no transcript has ever been stored for.
+   *
+   * THE NUMBER THAT EXPLAINS A PASS READING TEN SOURCES OUT OF TWO HUNDRED.
+   * It has been computable since videos were first collected and appeared
+   * nowhere: not on the 信源 tab, not in the pass's summary, not in a log. The
+   * insight scan skips these correctly and for a stated reason, so the whole
+   * system behaved as designed while reading 5% of the library.
+   *
+   * A LEFT JOIN RATHER THAN `NOT IN (SELECT ...)`. The subquery form makes the
+   * count silently zero the moment a NULL reaches it, which on this schema it
+   * cannot today and could the first time `transcripts` gains a nullable key —
+   * a check that passes while the thing it checks is broken.
+   * @returns the count.
+   */
+  countVideosWithoutTranscript() {
+    return this.db.prepare(`
+      SELECT COUNT(*) AS n
+        FROM resources r
+        LEFT JOIN transcripts t ON t.resource_id = r.id
+       WHERE r.type IN ('YOUTUBE_VIDEO','YOUTUBE','VIDEO','PODCAST')
+         AND (t.resource_id IS NULL OR t.text = '')
+    `).get().n;
+  }
+
+  /**
    * Read a cached transcript.
    * @param resourceId - the video's resource id.
    * @returns `{ language, text, fetchedAt }`, or undefined.

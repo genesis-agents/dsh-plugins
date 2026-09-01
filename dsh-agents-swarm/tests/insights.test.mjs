@@ -62,7 +62,7 @@ import {
 // The candidate scan lives with the pass, not with the pure helpers: it needs
 // the store. Imported here because the drain order is a correctness property,
 // not an implementation detail.
-import { collectCandidates, insightPassOnce, readInsightConfig, runInsightPass } from "../lib/insight-extract.js";
+import { collectCandidates, insightPassOnce, readInsightConfig, runInsightPass, transcriptFailureKind } from "../lib/insight-extract.js";
 import { buildQueries, createPacer, isIndependent, searchArxiv, searchWeb } from "../lib/insight-corroborate.js";
 
 /** Floating point comparison, for scores that are exact only in decimal. */
@@ -1587,4 +1587,123 @@ test("a claim's reading survives the round trip to the list", (t) => {
   assert.equal(insights.get(id).gloss, "这条主张说明云上推理的单位成本已经越过临界点。", "the single-card read lost it");
   const listed = insights.list({ take: 10 }).insights.find((row) => row.id === id);
   assert.equal(listed.gloss, "这条主张说明云上推理的单位成本已经越过临界点。", "the list route serves no reading");
+});
+
+/* ── the stage that was missing ────────────────────────────────────────── */
+//
+// NOTHING IN THIS PROGRAM EVER FETCHED A TRANSCRIPT EXCEPT A PERSON OPENING A
+// VIDEO. `POST /transcript` was the only caller of `resolveTranscript`, and it
+// fires from the reader. So coverage was "the videos somebody clicked" — 23 of
+// 523 — and the insight scan correctly skipped the rest, read 5% of the
+// library, and reported a healthy run. Two halves that had never been joined.
+
+test("the pass fetches transcripts for the videos it is about to skip", async (t) => {
+  const { store, insights } = library(t);
+  store.put(resource("v1", { type: "YOUTUBE_VIDEO", title: "An hour on inference cost", sourceUrl: "https://youtu.be/aaaaaaaaaaa" }));
+  store.put(resource("v2", { type: "YOUTUBE_VIDEO", title: "An hour on capacity", sourceUrl: "https://youtu.be/bbbbbbbbbbb" }));
+  const asked = [];
+  const chat = async function* () { yield { error: "no model here" }; };
+  const result = await insightPassOnce(store, insights, chat, undefined, {
+    transcribe: async (row) => {
+      asked.push(row.id);
+      return { language: "en", text: "a long spoken sentence that a claim could quote from " + row.id, cues: [{ start: 0, text: "hello" }], via: "timedtext" };
+    },
+  });
+  assert.deepEqual(asked.sort(), ["v1", "v2"], "the pass never went and got the transcripts");
+  assert.equal(result.transcribeGained, 2, "the fetched transcripts were not stored");
+  assert.notEqual(store.getTranscript("v1"), undefined, "nothing reached the library");
+  // AND THEY GO BACK THROUGH THE SCAN. A freshly-transcribed video has to be
+  // selected on the same terms as everything else — the per-type share, the
+  // ceiling, the watermark — rather than promoted into a place no other row
+  // can earn.
+  assert.ok(result.rows >= 2, "the newly readable videos were not re-scanned: rows=" + result.rows);
+});
+
+test("a quota answer ends the top-up instead of spending the rest of the budget on it", async (t) => {
+  // Every remaining video gets the same answer from the same exhausted key, so
+  // carrying on spends the budget re-learning one fact — and against a rate
+  // limiter, spends it making the limit worse.
+  const { store, insights } = library(t);
+  for (let at = 0; at < 5; at += 1) {
+    store.put(resource("v" + at, { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/" + "abcde"[at] + "aaaaaaaaaa" }));
+  }
+  let tried = 0;
+  const chat = async function* () { yield { error: "no model here" }; };
+  const result = await insightPassOnce(store, insights, chat, undefined, {
+    transcribe: async () => { tried += 1; throw new Error("supadata key 1/1: HTTP 429 rate limit exceeded"); },
+  });
+  assert.equal(tried, 1, "kept going after a quota answer: " + tried + " requests");
+  assert.match(result.transcribeStopped, /429|rate limit/i, "the reason the stage stopped was not recorded");
+});
+
+test("a video with no captions is told apart from one nobody asked about", async (t) => {
+  // Three different things to do about it: buy quota, never try again, or try
+  // the next one. "no transcript stored" describes the library and says none
+  // of them.
+  assert.equal(transcriptFailureKind(new Error("supadata: HTTP 429 too many requests")), "quota");
+  assert.equal(transcriptFailureKind(new Error("timedtext: HTTP 404 no caption track")), "absent");
+  assert.equal(transcriptFailureKind(new Error("relay: socket hang up")), "other");
+  // And the ledger says which, rather than repeating the library's own words.
+  const { store, insights } = library(t);
+  store.put(resource("v", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/aaaaaaaaaaa" }));
+  store.put(resource("n", { type: "NEWS", title: "Something readable to make the pass run" }));
+  store.put(resource("n2", { type: "NEWS", title: "A second readable row for the pass" }));
+  const chat = async function* () { yield { error: "no model here" }; };
+  const result = await insightPassOnce(store, insights, chat, undefined, {
+    transcribe: async () => { throw new Error("timedtext: HTTP 404 no caption track"); },
+  });
+  const row = insights.passLedger(result.batch).rows.find((one) => one.resourceId === "v");
+  assert.match(row.reason, /没有字幕/, "the ledger still repeats the library's description: " + row.reason);
+});
+
+test("a top-up that cannot fetch leaves the pass unharmed", async (t) => {
+  // Preparation for the pass, not the pass. A stage that cannot reach the
+  // network must not take the extraction it was preparing for with it.
+  const { store, insights } = library(t);
+  store.put(resource("v", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/aaaaaaaaaaa" }));
+  store.put(resource("n", { type: "NEWS", title: "Anthropic confirmed a figure in a filing" }));
+  store.put(resource("n2", { type: "NEWS", title: "A second article stating the same figure" }));
+  const chat = async function* () { yield { error: "no model here" }; };
+  const result = await insightPassOnce(store, insights, chat, undefined, {
+    transcribe: async () => { throw new Error("the whole network is gone"); },
+  });
+  assert.equal(result.ran, true, "a failing top-up stopped the pass");
+});
+
+test("the budget is a budget, and zero turns the stage off", async (t) => {
+  const { store, insights } = library(t);
+  for (let at = 0; at < 6; at += 1) {
+    store.put(resource("v" + at, { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/" + "abcdef"[at] + "aaaaaaaaaa" }));
+  }
+  let tried = 0;
+  const transcribe = async () => { tried += 1; return { text: "" }; };
+  const chat = async function* () { yield { error: "no model here" }; };
+  await insightPassOnce(store, insights, chat, undefined, { transcribe, scope: { transcribe: 2 } });
+  assert.equal(tried, 2, "the budget was not honoured: " + tried + " requests");
+  tried = 0;
+  await insightPassOnce(store, insights, chat, undefined, { transcribe, scope: { transcribe: 0 } });
+  assert.equal(tried, 0, "zero did not turn the stage off");
+});
+
+test("an empty answer is not stored as a transcript", async (t) => {
+  // Storing one would make the next scan treat the video as readable and hand
+  // the model a blank block — a source that costs a slot in the ceiling and
+  // can produce nothing, for ever.
+  const { store, insights } = library(t);
+  store.put(resource("v", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/aaaaaaaaaaa" }));
+  const chat = async function* () { yield { error: "no model here" }; };
+  await insightPassOnce(store, insights, chat, undefined, {
+    transcribe: async () => ({ language: "en", text: "", cues: [] }),
+  });
+  assert.equal(store.getTranscript("v"), undefined, "an empty transcript was written to the library");
+});
+
+test("the library can say how many videos are waiting on a transcript", (t) => {
+  const { store } = library(t);
+  store.put(resource("v1", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/aaaaaaaaaaa" }));
+  store.put(resource("v2", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/bbbbbbbbbbb" }));
+  store.put(resource("n", { type: "NEWS" }));
+  assert.equal(store.countVideosWithoutTranscript(), 2, "articles are being counted as videos without transcripts");
+  store.putTranscript("v1", "en", "some spoken words", [{ start: 0, text: "some spoken words" }]);
+  assert.equal(store.countVideosWithoutTranscript(), 1, "a stored transcript did not come off the count");
 });

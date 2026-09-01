@@ -120,6 +120,38 @@ export function thumbnailDir(env = process.env) {
 }
 
 /** Upstream origin for the seed action, without a trailing slash. */
+/**
+ * The transcript fetcher the insight pass uses to top up what it is missing.
+ *
+ * INJECTED RATHER THAN IMPORTED BY THE PASS. insight-extract.js is a pure
+ * pipeline over a store and a chat entry point; giving it a network client of
+ * its own would make every test of the extraction stage reach for one. It is
+ * built here because this is where the config and the seed base already live.
+ *
+ * `resolveTranscript` tries timedtext, then a relay, then gens, and only then
+ * Supadata's paid quota — so the common case costs nothing, and the budget in
+ * `insightTranscribePerPass` exists to be polite to the free routes rather
+ * than to ration money.
+ * @param store - the source library, for the configured key and languages.
+ * @returns `async (row) => { language, text, cues, via }`, or undefined when
+ *   the row is not a video this can fetch for.
+ */
+function insightTranscriber(store) {
+  return async (row) => {
+    const videoId = videoIdOf(row?.sourceUrl ?? "");
+    // Not a throw: a non-video in the skip list is not a failure to report,
+    // it is a row this stage has nothing to offer. The caller records the
+    // empty answer and moves on.
+    if (videoId === undefined) return { text: "" };
+    const config = readConfig(store);
+    return resolveTranscript(videoId, {
+      apiKey: config.supadataKey,
+      gensBase: seedBase(),
+      languages: config.transcriptLanguages,
+    });
+  };
+}
+
 function seedBase(env = process.env) {
   const raw = env.DSH_SWARM_SEED_BASE;
   const value = typeof raw === "string" && raw.trim() !== "" ? raw.trim() : DEFAULT_SEED_BASE;
@@ -387,6 +419,10 @@ export function startCollectionTimer(store, logger, insightStore, chat, ctx) {
       // library is worth having on its own. Absent, the pass corroborates from
       // arXiv alone and says so.
       await runInsightPass(store, insightStore, chat, logger, {
+        // The scheduled pass tops up transcripts too, and this is where the
+        // backlog actually drains: twelve videos an hour, unattended, is what
+        // turns "23 of 523" into a library the pass can read.
+        transcribe: insightTranscriber(store),
         markSkips: true,
         // `ctx` is a PARAMETER. It was read here as a free variable, which is a
         // ReferenceError on every tick the pass was due — swallowed by the outer
@@ -580,6 +616,11 @@ export function writeConfig(store, patch) {
     // 洞察. `insightIntervalMinutes` is deliberately absent: 0-or-at-least-30
     // is not a range, and putting it here would accept 5.
     ["insightMaxRows", 20, 600], ["insightMaxClusters", 1, 60], ["insightMaxReconcileCalls", 0, 40],
+    // 0 turns the top-up off and is a legitimate choice — on a library with no
+    // videos it is the only sensible one. A plain range rather than the
+    // zero-or-a-minimum shape the two intervals use: a budget of 1 is not a
+    // race with itself, it is just a slow drain.
+    ["insightTranscribePerPass", 0, 60],
     ["insightMinIndependent", 2, 5], ["insightWindowDays", 1, 30], ["insightDormantDays", 3, 120],
     ["insightDuplicateBits", 0, 12],
   ]) {
@@ -674,7 +715,7 @@ export function writeConfig(store, patch) {
     // already read rows it never saw. Those rows are never offered again.
     "insightIntervalMinutes", "insightResourceTypes", "insightMaxRows", "insightMaxClusters",
     "insightMaxReconcileCalls", "insightMinIndependent", "insightWindowDays", "insightDormantDays",
-    "insightDuplicateBits", "insightChinese", "insightCorroborateClaims",
+    "insightDuplicateBits", "insightChinese", "insightCorroborateClaims", "insightTranscribePerPass",
     // 任务. The whitelist comes from the defaults object, so adding a setting is
     // one edit in one file rather than two that can disagree — the way the three
     // lists above can, and have.
@@ -957,7 +998,13 @@ export function createHandler(store, logger, chat, web, ctx, missions) {
   // where a Cordis context exists. Resolving it here reached for a `ctx` this
   // function has never had — the plugin then failed to load entirely, with 122
   // green tests, which is the shape of failure this repository specialises in.
-  const insight = createInsightRoutes({ store, chat, logger, sendJson, readJson, web });
+  // `transcribe` for the same reason `web` is here: the routes file is a pure
+  // HTTP face over the store and the pass, and a network client of its own
+  // would be a second place this plugin reaches the internet from.
+  const insight = createInsightRoutes({
+    store, chat, logger, sendJson, readJson, web,
+    transcribe: insightTranscriber(store),
+  });
 
   return async function handle(req, res) {
     const url = new URL(req.url ?? "/", "http://localhost");

@@ -9121,6 +9121,7 @@ window.__ModuleLoader__.load({
 		*/
 		const INSIGHT_PHASE_FACES = {
 			reading: { zh: "正在读信源", en: "Reading the library" },
+			transcribing: { zh: "正在取转录", en: "Fetching transcripts" },
 			clustering: { zh: "正在归并同题", en: "Grouping by story" },
 			extracting: { zh: "正在抽主张", en: "Extracting claims" },
 			reconciling: { zh: "正在合并去重", en: "Reconciling claims" },
@@ -9272,6 +9273,7 @@ window.__ModuleLoader__.load({
 			const [search, setSearch] = useState("");
 			const [types, setTypes] = useState([]);
 			const [maxRows, setMaxRows] = useState(0);
+			const [transcribe, setTranscribe] = useState(0);
 
 			// THE FORM RESETS TO THE SETTINGS EVERY TIME IT OPENS, not once at
 			// mount. A dialog carrying last time's answer is a dialog that runs a
@@ -9282,12 +9284,15 @@ window.__ModuleLoader__.load({
 				setSearch("");
 				setTypes(Array.isArray(status?.insightResourceTypes) ? [...status.insightResourceTypes] : []);
 				setMaxRows(Number(status?.insightMaxRows ?? 200));
+				setTranscribe(Number(status?.insightTranscribePerPass ?? 12));
 			}, [open, status]);
 
 			const vocabulary = Array.isArray(status?.resourceTypes) && status.resourceTypes.length > 0
 				? status.resourceTypes
 				: (Array.isArray(status?.insightResourceTypes) ? status.insightResourceTypes : []);
 			const configuredRows = Number(status?.insightMaxRows ?? 200);
+			const configuredTranscribe = Number(status?.insightTranscribePerPass ?? 12);
+			const awaiting = Number.isFinite(Number(status?.awaitingTranscript)) ? Number(status.awaitingTranscript) : null;
 
 			const field = (title, hint, body, key) => jsxs("div", {
 				style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
@@ -9312,7 +9317,8 @@ window.__ModuleLoader__.load({
 							days: days > 0 ? days : undefined,
 							search: search.trim() === "" ? undefined : search.trim(),
 							types: types.length === vocabulary.length ? undefined : types,
-							maxRows: maxRows === configuredRows ? undefined : maxRows
+							maxRows: maxRows === configuredRows ? undefined : maxRows,
+							transcribe: transcribe === configuredTranscribe ? undefined : transcribe
 						});
 					},
 					children: [
@@ -9417,6 +9423,23 @@ window.__ModuleLoader__.load({
 								})
 							}),
 							"types"
+						),
+						field(
+							zh ? "顺便取多少份转录" : "Transcripts to fetch",
+							zh
+								? `没有转录的视频抽不出可核验的引语，会被跳过。这一次先去取这么多份，取到的当场就能读。${awaiting === null ? "" : `现在有 ${awaiting} 个视频还没有转录。`}免费通道优先，取不到才动用配额。`
+								: `A video with no transcript cannot yield a checkable quote and is skipped. This run fetches up to this many first, and reads whatever it gets. ${awaiting === null ? "" : `${awaiting} videos are currently without one. `}The free routes are tried before any paid quota.`,
+							jsx("input", {
+								type: "number",
+								min: 0,
+								max: 60,
+								step: 1,
+								value: String(transcribe),
+								className: "swm-focus",
+								style: { ...FORM_CONTROL, fontVariantNumeric: "tabular-nums" },
+								onChange: (event) => { setTranscribe(Number(event.target.value)); }
+							}),
+							"transcribe"
 						),
 						field(
 							zh ? "读取上限" : "Rows to read",
@@ -9530,7 +9553,7 @@ window.__ModuleLoader__.load({
 		* @param onOpenMoment - opens a source in the library's own reader.
 		* @param tick - bumped by the pane when a pass ends, to re-read.
 		*/
-		function PassLedger({ zh, onOpenMoment, tick }) {
+		function PassLedger({ zh, onOpenMoment, tick, awaiting }) {
 			const [open, setOpen] = useState(false);
 			const [data, setData] = useState(null);
 			const [error, setError] = useState("");
@@ -9653,6 +9676,21 @@ window.__ModuleLoader__.load({
 								style: { font: FONT.microStrong, color: `rgb(${TONE.danger})` },
 								children: zh ? `${broken} 个抽取失败` : `${broken} failed`
 							}, "broken"),
+							// AND HOW BIG THE HOLE IS. A skip count is this pass's share of
+							// a backlog, and without the backlog beside it a reader cannot
+							// tell a library that is nearly caught up from one the pass has
+							// only ever seen a corner of. The pass now fetches transcripts
+							// itself, so this number is one that goes DOWN — which is the
+							// difference between a fault and a queue.
+							!Number.isFinite(Number(awaiting)) || Number(awaiting) === 0 ? null : jsx("span", {
+								title: zh
+									? "每次分析会顺便去取一批转录，所以这个数字会自己减少。想快一点就在「运行分析」里把「顺便取多少份转录」调高。"
+									: "Every analysis fetches a batch of transcripts, so this number comes down on its own. Raise it in the Run analysis dialog to drain it faster.",
+								style: { font: FONT.micro, color: INK.quiet },
+								children: zh
+									? `全库还有 ${awaiting} 个视频没有转录`
+									: `${awaiting} videos in the library still have none`
+							}, "awaiting"),
 							skipped === 0 ? null : jsx("span", {
 								title: zh
 									? "只有已经取到转录的视频才能抽出可核验的引语；没有转录的会在送给模型之前跳过，不花模型调用。"
@@ -10115,13 +10153,31 @@ window.__ModuleLoader__.load({
 			// reason is already recorded, already on the wire, and was rendered
 			// nowhere — which is how "I pressed the button and nothing happened"
 			// stays unanswerable while the answer sits in the response.
-			const outcome = newest === null || newest.ran === true || newest.running === true
+			// THE PROVIDER'S ANSWER OUTRANKS THE SKIP REASON, when there is one.
+			//
+			// A library of untranscribed videos whose transcript provider is out
+			// of quota fetches nothing, therefore has too little to read,
+			// therefore skips — and reports "only 0 new sources", which is true,
+			// unactionable, and points at the wrong thing entirely. The cause is
+			// one layer up and the pass now records it.
+			const stalled = typeof newest?.transcribeStopped === "string" && newest.transcribeStopped !== ""
+				? newest.transcribeStopped
+				: "";
+			const outcome = newest === null || newest.running === true
 				? null
-				: (typeof newest.error === "string" && newest.error !== ""
-					? { tone: TONE.danger, zh: `上一次没有跑成：${newest.error}`, en: `The last run failed: ${newest.error}` }
-					: (typeof newest.skipped === "string" && newest.skipped !== ""
-						? { tone: TONE.warn, zh: `上一次跳过了：${newest.skipped}`, en: `The last run was skipped: ${newest.skipped}` }
-						: null));
+				: (stalled !== ""
+					? {
+						tone: TONE.danger,
+						zh: `取不到转录了：${stalled} —— 没有转录的视频抽不出可核验的引语，所以这一轮几乎没有可读的材料。`,
+						en: `Transcripts could not be fetched: ${stalled}. A video without one cannot yield a checkable quote, so this pass had almost nothing to read.`
+					}
+					: (newest.ran === true
+						? null
+						: (typeof newest.error === "string" && newest.error !== ""
+							? { tone: TONE.danger, zh: `上一次没有跑成：${newest.error}`, en: `The last run failed: ${newest.error}` }
+							: (typeof newest.skipped === "string" && newest.skipped !== ""
+								? { tone: TONE.warn, zh: `上一次跳过了：${newest.skipped}`, en: `The last run was skipped: ${newest.skipped}` }
+								: null))));
 			const every = Number(status?.insightIntervalMinutes ?? 0);
 			// The pass rides the collection tick, so collection being off turns it
 			// off too — a schedule that is set, reported, and never honoured.
@@ -10670,7 +10726,7 @@ window.__ModuleLoader__.load({
 					// `tick` rather than its own timer: the pane already re-reads when
 					// a pass ends, and a second poller against the same lifecycle is a
 					// second thing to keep in step.
-					jsx(PassLedger, { zh, onOpenMoment, tick }, "ledger"),
+					jsx(PassLedger, { zh, onOpenMoment, tick, awaiting: status?.awaitingTranscript }, "ledger"),
 
 					// A SECTION LABEL, NOT A THIRD 16px HEADING.
 					//

@@ -150,7 +150,7 @@ function quoteDrop(record) {
  * @param deps - `{ store, chat, logger, sendJson, readJson }` from the Host half.
  * @returns `async (req, res, path) => boolean` — true when it answered.
  */
-export function createInsightRoutes({ store, chat, logger, sendJson, readJson, web }) {
+export function createInsightRoutes({ store, chat, logger, sendJson, readJson, web, transcribe }) {
   // Once, at creation. Construction runs the DDL, and a second instance would
   // be a second place to look when a statement is wrong. It throws when handed
   // anything but a SourceStore, which fails at plugin start-up rather than on
@@ -549,6 +549,18 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
           // the form plainly says.
           problems.push("types must name at least one source type");
         }
+        // HOW MANY TRANSCRIPTS TO GO AND GET, for this run only. The schedule
+        // takes a modest twelve an hour because it runs unattended; somebody
+        // sitting in front of a mostly-untranscribed library wants to spend a
+        // few minutes draining it, and has no way to say so otherwise.
+        if (asked.transcribe !== undefined && asked.transcribe !== null && asked.transcribe !== "") {
+          const many = Number(asked.transcribe);
+          if (!Number.isInteger(many) || many < 0 || many > 60) {
+            problems.push("transcribe must be a whole number from 0 (skip the top-up) to 60");
+          } else {
+            scope.transcribe = many;
+          }
+        }
         if (asked.maxRows !== undefined && asked.maxRows !== null && asked.maxRows !== "") {
           const rows = Number(asked.maxRows);
           if (!Number.isInteger(rows) || rows < 20 || rows > 600) {
@@ -579,7 +591,7 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
       // moves — a translated claim and a freshly-extracted one are the same
       // fact with two hashes. Two claims resting on an identical set of quotes
       // are one claim whatever they say, and that test needs no threshold.
-      void runInsightPass(store, insights, chat, logger, { markSkips: false, web, scope })
+      void runInsightPass(store, insights, chat, logger, { markSkips: false, web, scope, transcribe })
         .then(() => mergeIdenticalEvidence(insights, logger))
         .catch((cause) => { logger?.warn?.(`swarm: manual insight pass failed: ${String(cause?.message ?? cause)}`); })
         .finally(() => { manualRunInFlight = false; });
@@ -648,6 +660,14 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
           // whether it is working or whether it found nothing to do.
           insightRefiling: refileInFlight,
           insightLastRefile: lastRefile,
+          // HOW MANY VIDEOS ARE HELD WITH NO TRANSCRIPT, which is the number
+          // that explains a pass reading 10 sources out of 206. It was
+          // computable from the day videos were collected and reported nowhere.
+          //
+          // Counted over the whole library rather than over the next slice: a
+          // reader asking "why is the pass only reading a corner of this" wants
+          // the size of the corner, not this tick's share of it.
+          awaitingTranscript: store.countVideosWithoutTranscript?.() ?? null,
           // What the NEXT pass would read, so the schedule can be judged
           // before it runs rather than by reading tomorrow's tab.
           waiting,

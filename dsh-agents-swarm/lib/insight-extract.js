@@ -197,6 +197,28 @@ export const MIN_INSIGHT_INTERVAL_MINUTES = 30;
  */
 export const INSIGHT_DEFAULTS = {
   insightIntervalMinutes: 0,
+  // VIDEOS TO FETCH A TRANSCRIPT FOR, PER PASS.
+  //
+  // WHY THIS EXISTS. Until it did, the only thing in this program that ever
+  // fetched a transcript was `POST /transcript`, and the only thing that
+  // called it was a person opening a video in the reader. So the library's
+  // transcript coverage was exactly "the videos somebody happened to click":
+  // measured, 523 videos and 23 transcripts. The insight pass then correctly
+  // skipped the other five hundred — a title and a blurb cannot produce a
+  // checkable quote — and read 5% of the library while reporting a healthy run.
+  //
+  // Nothing was broken. The two halves had simply never been connected: one
+  // fetches on demand, the other needs them in bulk, and no code bridged them.
+  //
+  // ON BY DEFAULT, UNLIKE THE SCHEDULE. `insightIntervalMinutes: 0` is off
+  // because a pass costs model calls nobody agreed to. This costs none:
+  // `resolveTranscript` tries timedtext, then the relay, then gens — all free
+  // — and reaches Supadata's paid quota only when those refuse. A budget
+  // rather than a sweep because the free routes are somebody else's servers.
+  //
+  // TWELVE, which drains a five-hundred-video backlog in under two days of
+  // hourly passes and never makes a pass noticeably longer.
+  insightTranscribePerPass: 12,
   insightResourceTypes: ["YOUTUBE_VIDEO", "NEWS", "BLOG", "PAPER", "REPORT", "POLICY"],
   insightMaxRows: 200,
   insightMaxClusters: 20,
@@ -221,6 +243,7 @@ export const INSIGHT_DEFAULTS = {
 export function readInsightConfig(store) {
   return {
     insightIntervalMinutes: store.getSetting("insightIntervalMinutes", INSIGHT_DEFAULTS.insightIntervalMinutes),
+    insightTranscribePerPass: store.getSetting("insightTranscribePerPass", INSIGHT_DEFAULTS.insightTranscribePerPass),
     insightResourceTypes: store.getSetting("insightResourceTypes", INSIGHT_DEFAULTS.insightResourceTypes),
     insightMaxRows: store.getSetting("insightMaxRows", INSIGHT_DEFAULTS.insightMaxRows),
     insightMaxClusters: store.getSetting("insightMaxClusters", INSIGHT_DEFAULTS.insightMaxClusters),
@@ -1311,6 +1334,107 @@ function rescoreOne(insightStore, id, config, now, recount) {
 }
 
 /**
+ * Reasons a transcript fetch can fail, and what each one means for the pass.
+ *
+ * CLASSIFIED, NOT JUST RECORDED. A quota that is exhausted, a video that has
+ * no captions at all, and a network blip call for three different responses:
+ * stop the stage, never try this video again this pass, and try the next one.
+ * Left as one opaque string the stage would spend its whole budget re-learning
+ * that the quota is gone — twelve requests per pass, every pass, for ever.
+ * @param error - what `resolveTranscript` threw.
+ * @returns "quota" | "absent" | "other".
+ */
+export function transcriptFailureKind(error) {
+  const text = String(error?.message ?? error ?? "").toLowerCase();
+  // 429 and the provider's own wording. Checked before "absent" because a
+  // rate-limited request can also mention a missing track in the same string:
+  // the free routes are tried first and each appends its own failure, so one
+  // message routinely carries four.
+  if (/429|rate.?limit|quota|too many requests|limit exceeded/.test(text)) return "quota";
+  // 400/404 from every route: the video genuinely has no caption track. Worth
+  // separating because it is PERMANENT — no budget and no key will ever change
+  // it, and a reader looking at the ledger should not be told to buy quota.
+  if (/400|404|no caption|not available|no transcript|no subtitles/.test(text)) return "absent";
+  return "other";
+}
+
+/**
+ * Fetch transcripts for videos the scan is about to skip.
+ *
+ * THE STAGE THAT WAS MISSING. `collectCandidates` skips a video the library
+ * holds no transcript for, correctly and for a stated reason, and nothing
+ * anywhere ever went and got one. Transcripts arrived only through
+ * `POST /transcript`, which fires when a person opens a video in the reader —
+ * so coverage was "the videos somebody clicked", and the pass read whatever
+ * fraction of the library that came to. Measured: 23 of 523.
+ *
+ * SEQUENTIAL, NOT PARALLEL, and that is not caution about our own load. The
+ * first three routes are other people's servers — YouTube's timedtext, a
+ * relay, gens — and a burst of twelve concurrent requests to a free endpoint
+ * is how a client gets blocked outright. One at a time, bounded by the budget.
+ *
+ * A QUOTA ANSWER ENDS THE STAGE. Every remaining video would get the same
+ * answer from the same exhausted key, so carrying on spends the rest of the
+ * budget re-learning one fact — and against a rate limiter, spends it making
+ * the limit worse.
+ *
+ * NEVER THROWS. A transcript top-up is preparation for the pass, not the pass:
+ * a stage that cannot fetch must leave the extraction it was preparing for
+ * completely unharmed.
+ * @param store - the source library, for `putTranscript`.
+ * @param skipped - `[{ row, reason }]` from {@link collectCandidates}.
+ * @param options - `{ transcribe, limit, logger, onStep }`.
+ * @returns `{ tried, gained, stopped, outcomes }`; outcomes keyed by resource id.
+ */
+export async function topUpTranscripts(store, skipped, { transcribe, limit = 0, logger, onStep } = {}) {
+  const outcomes = new Map();
+  const budget = Math.max(0, Math.floor(Number(limit) || 0));
+  if (typeof transcribe !== "function" || budget === 0 || !Array.isArray(skipped)) {
+    return { tried: 0, gained: 0, stopped: "", outcomes };
+  }
+  // Only the ones a fetch could actually help. A row skipped because its
+  // stored transcript could not be READ is a different fault and re-fetching
+  // it would paper over a broken row rather than fix it.
+  const wanted = skipped
+    .filter((entry) => entry?.row !== undefined && /no transcript stored/i.test(String(entry.reason ?? "")))
+    .slice(0, budget);
+
+  let tried = 0;
+  let gained = 0;
+  let stopped = "";
+  for (const entry of wanted) {
+    const id = String(entry.row.id);
+    onStep?.(tried, wanted.length);
+    tried += 1;
+    try {
+      const got = await transcribe(entry.row);
+      const text = String(got?.text ?? "");
+      if (text === "") {
+        // A route that answered with nothing is not a success. Storing an
+        // empty transcript would make the next scan treat this video as
+        // readable and hand the model a blank block.
+        outcomes.set(id, { ok: false, kind: "absent", reason: "the transcript came back empty" });
+        continue;
+      }
+      store.putTranscript(id, got.language ?? "", text, Array.isArray(got.cues) ? got.cues : []);
+      gained += 1;
+      outcomes.set(id, { ok: true, via: got.via ?? "" });
+    } catch (cause) {
+      const reason = String(cause?.message ?? cause);
+      const kind = transcriptFailureKind(cause);
+      outcomes.set(id, { ok: false, kind, reason });
+      if (kind === "quota") {
+        stopped = reason;
+        logger?.warn?.(`swarm: transcript top-up stopped — the provider is out of quota or rate limiting`);
+        break;
+      }
+    }
+  }
+  if (gained > 0) logger?.info?.(`swarm: fetched ${gained} transcript(s) of ${tried} tried`);
+  return { tried, gained, stopped, outcomes };
+}
+
+/**
  * Run the whole pipeline once.
  *
  * Writes insights and evidence; writes NO settings. The watermark is returned,
@@ -1335,6 +1459,14 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     : new Date().toISOString();
   const config = readInsightConfig(store);
   if (chat === undefined) return { ran: false, reason: "no model routed" };
+
+  // Bounded here rather than inside the stage so a scoped manual run can ask
+  // for a bigger top-up than the schedule takes, which is the one thing
+  // somebody staring at a mostly-untranscribed library actually wants to do.
+  const transcribeBudget = bounded(
+    options.scope?.transcribe ?? config.insightTranscribePerPass,
+    0, 60, INSIGHT_DEFAULTS.insightTranscribePerPass,
+  );
 
   /**
    * Say where the pass has got to.
@@ -1362,7 +1494,33 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
 
   say("reading", 0, 0);
   // The scope, when the reader asked for one. Absent on every scheduled pass.
-  const { rows, backlog, truncated, skipped } = collectCandidates(store, config, options.scope ?? {});
+  let { rows, backlog, truncated, skipped } = collectCandidates(store, config, options.scope ?? {});
+
+  // ── GO AND GET THE TRANSCRIPTS THE SCAN JUST SKIPPED ──────────────────
+  //
+  // The scan is right to skip them and was the end of the story: nothing in
+  // this program ever fetched a transcript except a person opening a video.
+  // So the pass read whatever fraction of the library somebody had clicked —
+  // 23 of 523 — and reported it as a healthy run over 200 rows.
+  //
+  // BEFORE THE SECOND SCAN, not instead of it. A video that gains a transcript
+  // here has to go back through `collectCandidates` to be selected on the same
+  // terms as everything else: the per-type share, the ceiling, the watermark.
+  // Promoting it directly would give a freshly-transcribed video a place no
+  // other row can earn.
+  let transcribed = { tried: 0, gained: 0, stopped: "", outcomes: new Map() };
+  if (transcribeBudget > 0 && (skipped ?? []).length > 0) {
+    say("transcribing", 0, Math.min(transcribeBudget, skipped.length));
+    transcribed = await topUpTranscripts(store, skipped, {
+      transcribe: options.transcribe,
+      limit: transcribeBudget,
+      logger,
+      onStep: (done, total) => { say("transcribing", done, total); },
+    });
+    if (transcribed.gained > 0) {
+      ({ rows, backlog, truncated, skipped } = collectCandidates(store, config, options.scope ?? {}));
+    }
+  }
 
   // THE LEDGER, BUILT AS THE PASS GOES AND WRITTEN ONCE AT THE END.
   //
@@ -1382,12 +1540,37 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
       claims: claims ?? 0,
     });
   };
-  for (const entry of skipped ?? []) note(entry.row, "no-transcript", entry.reason);
+  for (const entry of skipped ?? []) {
+    // THE REAL ANSWER, WHERE THERE IS ONE. "no transcript stored" describes
+    // the library; it does not say whether anybody ever asked for one, whether
+    // the video HAS captions, or whether the quota ran out — which are three
+    // different things to do about it. The top-up's outcome replaces the
+    // library's description with the provider's answer.
+    const said = transcribed.outcomes.get(String(entry.row?.id));
+    note(
+      entry.row,
+      "no-transcript",
+      said === undefined || said.ok === true
+        ? `${entry.reason}（未尝试）`
+        : (said.kind === "quota"
+          ? "取转录失败：配额用尽或被限流"
+          : (said.kind === "absent" ? "这个视频没有字幕可取" : `取转录失败：${said.reason}`)),
+    );
+  }
   if (rows.length < MIN_PASS_ROWS) {
     return {
       ran: false,
       reason: `only ${rows.length} new source(s) since the last pass; ${MIN_PASS_ROWS} needed`,
       backlog,
+      // THE TOP-UP'S REPORT SURVIVES A SKIP, and this is the case it matters
+      // most in. A library of untranscribed videos whose provider is out of
+      // quota fetches nothing, therefore has too little to read, therefore
+      // skips — and the skip reason says "only 0 new sources", which is true
+      // and useless. The one fact that explains it, and the only one anybody
+      // can act on, was being discarded on the way out of this branch.
+      transcribeTried: transcribed.tried,
+      transcribeGained: transcribed.gained,
+      transcribeStopped: transcribed.stopped,
     };
   }
 
@@ -1656,6 +1839,12 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     // beside `rows` because on a video-heavy library it is the larger number,
     // and it was previously invisible at every layer.
     skipped: (skipped ?? []).length,
+    // What the top-up did. `transcribeStopped` carries the provider's own
+    // words when the quota ended the stage, because "0 gained" and "the key is
+    // exhausted" look identical from every number beside them.
+    transcribeTried: transcribed.tried,
+    transcribeGained: transcribed.gained,
+    transcribeStopped: transcribed.stopped,
     rows: rows.length,
     // Rows the clusterer could not use at all — no title, no usable text. A
     // pass reading two hundred rows and clustering nine is not a pass that
