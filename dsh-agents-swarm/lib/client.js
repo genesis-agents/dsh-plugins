@@ -1189,10 +1189,26 @@ window.__ModuleLoader__.load({
 		 */
 		const CHAPTER_CARD_HEIGHT = "128px";
 
+
 		// `dot` is the reference's round state badge — `h-5 w-5` holding a 12px
 		// glyph — and it is smaller than anything you can click, which is why it
 		// sits below `xs` rather than replacing it.
 		const CONTROL = { dot: "20px", xs: "24px", sm: "28px", md: "34px" };
+
+		/**
+		 * A dropdown, and the file's only one.
+		 *
+		 * It was declared INSIDE MissionTrace, so the two filters there were the
+		 * only selects that could look like this — and the report's version picker,
+		 * which wanted to be one, drew a row of chips instead: one per version,
+		 * wrapping, growing with every rerun. That is the same defect the run picker
+		 * had and was fixed for, one control over.
+		 */
+		const SELECT_STYLE = {
+			appearance: "none", height: CONTROL.sm, padding: `0 ${SPACE.sm}`, borderRadius: RADIUS.md,
+			border: `1px solid ${LINE.rule}`, background: "transparent",
+			color: INK.secondary, font: FONT.small, cursor: "pointer"
+		};
 
 		/** Variables and rules, in the order the cascade needs them. */
 		/**
@@ -11199,11 +11215,6 @@ window.__ModuleLoader__.load({
 			const saturated = ["events", "toolCalls", "findings"].filter((stream) => bounds[stream]?.saturated === true);
 			const gained = Math.max(0, Number(fresh?.data?.page?.total ?? 0) - Number(paging.total ?? 0));
 
-			const selectStyle = {
-				appearance: "none", height: CONTROL.sm, padding: "0 8px", borderRadius: RADIUS.md,
-				border: `1px solid ${LINE.rule}`, background: "transparent",
-				color: INK.secondary, font: FONT.small, cursor: "pointer"
-			};
 
 			const filters = jsxs("div", {
 				style: { display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", marginBottom: "8px" },
@@ -11219,7 +11230,7 @@ window.__ModuleLoader__.load({
 					jsx("select", {
 						value: stepId,
 						"aria-label": zh ? "按阶段筛选" : "Filter by stage",
-						style: selectStyle,
+						style: SELECT_STYLE,
 						onChange: (event) => { setStepId(event.target.value); },
 						children: [
 							jsx("option", { value: "", children: zh ? "所有阶段" : "Every stage" }, "any"),
@@ -11232,7 +11243,7 @@ window.__ModuleLoader__.load({
 					jsx("select", {
 						value: dimensionId,
 						"aria-label": zh ? "按维度筛选" : "Filter by dimension",
-						style: selectStyle,
+						style: SELECT_STYLE,
 						onChange: (event) => { setDimensionId(event.target.value); },
 						children: [
 							jsx("option", { value: "", children: zh ? "所有维度" : "Every dimension" }, "any"),
@@ -11246,7 +11257,7 @@ window.__ModuleLoader__.load({
 					agentOptions.length === 0 ? null : jsx("select", {
 						value: agentId,
 						"aria-label": zh ? "按执行者筛选" : "Filter by agent",
-						style: selectStyle,
+						style: SELECT_STYLE,
 						onChange: (event) => { setAgentId(event.target.value); },
 						children: [
 							jsx("option", { value: "", children: zh ? "所有执行者" : "Every agent" }, "any"),
@@ -17196,28 +17207,35 @@ window.__ModuleLoader__.load({
 									}, mode.id))
 								}, "modes"),
 								jsx("span", { style: { flex: 1 } }, "spacer"),
-								versions.length <= 1 ? null : jsxs("div", {
-									style: { display: "flex", alignItems: "center", gap: SPACE.xs, flexWrap: "wrap" },
-									role: "tablist",
-									"aria-label": zh ? "版本" : "Versions",
+								// A DROPDOWN, NOT A CHIP PER VERSION.
+								//
+								// This drew one button per version in a wrapping row. A report that has
+								// been rerun eleven times put eleven chips across the toolbar and then
+								// onto a second line, pushing the reading modes up — and the control is
+								// used to look BACK, rarely, which is exactly what a dropdown is for.
+								// The run picker two panes over was fixed for this same reason.
+								//
+								// The degraded marker survives INTO the option text. A version that was
+								// archived degraded is the one a reader most needs to spot before they
+								// quote from it, and a chip's tint cannot travel into a select.
+								versions.length <= 1 ? null : jsxs("label", {
+									style: { display: "flex", alignItems: "center", gap: SPACE.xs, flex: "none" },
 									children: [
-										// THE CHIPS ARE NOT SELF-EXPLANATORY WITHOUT THE BAND THEY LOST.
-										// Alone at the top of a page a right-aligned pill reading 第 2 版
-										// was the only thing it could be; in a row beside a segmented
-										// control it needs the word, which is the reference's own 版本历史.
 										jsx("span", {
 											style: { font: FONT.micro, color: INK.secondary, flex: "none" },
 											children: zh ? "版本" : "Versions"
 										}, "label"),
-										...versions.map((entry) => jsx("button", {
-											type: "button",
-											role: "tab",
-											"aria-selected": entry.version === artifact.version,
-											className: "swm-chip swm-focus", style: chipStyle({ hue: entry.degraded ? TONE.warn : TONE.neutral }, entry.version === artifact.version),
-											onClick: () => { setVersion(entry.version); },
-											children: (zh ? `第 ${entry.version} 版` : `v${entry.version}`)
-												+ (entry.degraded ? (zh ? " · 降级" : " · degraded") : "")
-										}, String(entry.version)))
+										jsx("select", {
+											value: String(artifact.version),
+											"aria-label": zh ? "版本" : "Versions",
+											style: SELECT_STYLE,
+											onChange: (event) => { setVersion(Number(event.target.value)); },
+											children: versions.map((entry) => jsx("option", {
+												value: String(entry.version),
+												children: (zh ? `第 ${entry.version} 版` : `v${entry.version}`)
+													+ (entry.degraded ? (zh ? " · 降级" : " · degraded") : "")
+											}, String(entry.version)))
+										}, "pick")
 									]
 								}, "versions")
 							]

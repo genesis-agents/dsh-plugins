@@ -2960,7 +2960,14 @@ test("the download follows the version on screen", async () => {
   assert.ok(newest.download.endsWith("-v2.md"), "the filename does not say which version it is");
 
   await pane(view, "报告");
-  await view.act(() => { chip(view.tree, "第 1 版").props.onClick(); });
+  // THE PICKER IS A SELECT NOW, not a chip per version. It drew one button
+  // per version in a wrapping row, and a report rerun eleven times put
+  // eleven of them across the toolbar and onto a second line — for a
+  // control used to look BACK, rarely.
+  const picker = find(view.tree, (node) => node.type === "select"
+    && node.props?.["aria-label"] === "版本");
+  assert.ok(picker, "the version picker is gone, so a reader cannot reach an older version at all");
+  await view.act(() => { picker.props.onChange({ target: { value: "1" } }); });
   assert.ok(
     textOf(view.tree).join(" ").includes("第一版只写了三百字"),
     "the version picker did not change the document on screen",
