@@ -8700,8 +8700,12 @@ window.__ModuleLoader__.load({
 							jsxs("div", {
 								style: { flex: 1, minWidth: "220px" },
 								children: [
+									// THE PANE'S NAME AT 20px, not at the 14px of a field label. The
+									// reference opens its page with a title you can read across the room;
+									// this said 信源洞察 in the same weight as the sentence under it, so the
+									// pane began with no beginning.
 									jsx("div", {
-										style: { font: FONT.baseStrong, color: INK.primary },
+										style: { font: FONT.title, color: INK.primary },
 										children: zh ? "信源洞察" : "Library insight"
 									}, "name"),
 									jsx("p", {
@@ -8796,7 +8800,11 @@ window.__ModuleLoader__.load({
 							// of the band empty — a slab of air for four small numbers, on
 							// a pane whose whole job is the list under it.
 							display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))",
-							gap: SPACE.sm, padding: `${SPACE.md} ${SPACE.lg}`,
+							// NO GAP, AND A RULE BETWEEN THE CELLS. Spread out with air
+							// between them the four numbers read as four things scattered on
+							// a band; the reference draws ONE object divided into cells, and
+							// that is what makes a strip of figures look like a strip.
+							gap: 0,
 							border: `1px solid ${LINE.hair}`,
 							borderRadius: RADIUS.lg, background: SURFACE.card
 						},
@@ -8805,14 +8813,17 @@ window.__ModuleLoader__.load({
 							{ zh: "抽出主张", en: "claims", value: last.claims ?? 0 },
 							{ zh: "通过核验", en: "verified", value: last.verified ?? 0 },
 							{ zh: "还没读到", en: "not yet read", value: last.backlog ?? 0, tone: TONE.warn }
-						].map((cell) => jsxs("div", {
+						].map((cell, at) => jsxs("div", {
 							style: {
-								display: "flex", flexDirection: "column", minWidth: 0
+								display: "flex", flexDirection: "column", minWidth: 0,
+								padding: `${SPACE.md} ${SPACE.lg}`,
+								// The first cell already has the box's own border to its left.
+								borderLeft: at === 0 ? undefined : `1px solid ${LINE.hair}`
 							},
 							children: [
 								jsx("div", {
 									style: {
-										font: FONT.baseStrong,
+										font: FONT.title,
 										// TABULAR, because these four are read down a row and a 1 that
 										// is narrower than a 7 makes them look ragged rather than aligned.
 										fontVariantNumeric: "tabular-nums",

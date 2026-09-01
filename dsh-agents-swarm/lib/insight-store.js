@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS insights (
   id                  TEXT PRIMARY KEY,
   statement           TEXT NOT NULL,     -- one sentence, the claim itself
   kind                TEXT NOT NULL,     -- launch | funding | policy | finding | shift
+  -- energy | compute | model | application | cross, or NULL for a row written
+  -- before the extractor was asked for one. See INSIGHT_LAYERS.
+  layer               TEXT,
   entities            TEXT,              -- JSON array, who/what it is about
   status              TEXT NOT NULL,     -- candidate | standing | contested | dormant
   -- A person's own verdict on this card, and it OUTRANKS the pass. Without it
@@ -166,6 +169,30 @@ export const INSIGHT_KINDS = Object.freeze(["launch", "funding", "policy", "find
 
 /** The only values `insights.status` and `insights.pinned_status` may hold. */
 export const INSIGHT_STATUSES = Object.freeze(["candidate", "standing", "contested", "dormant"]);
+
+/**
+ * Where in the stack a claim sits — the layer, not the kind and not the status.
+ *
+ * THREE VOCABULARIES, THREE QUESTIONS, and they were being read as one.
+ * `kind` is what a claim is ABOUT (something shipped, money moved, a result
+ * measured). `status` is how far it has GOT (nobody has corroborated it yet,
+ * two independent sources have, something contradicts it). Neither answers
+ * the question a reader of this library actually opens it with, which is
+ * WHAT PART OF THE STACK — and grouping by `kind` put a claim about a data
+ * centre's capex next to one about a model's licence because both happened
+ * to be measurements.
+ *
+ * THE STACK, NOT A TOPIC TREE. Five layers, and the fifth is the honest
+ * escape: a claim about open weights changing compute demand is not in the
+ * model layer or the compute layer, it is the relationship between them, and
+ * filing it under either loses exactly what makes it worth reading.
+ *
+ * NULL IS A VALUE. Every row written before this column existed has no layer
+ * and cannot be given one without a model call; the pane groups those under
+ * their own heading rather than guessing, which is also what tells a reader
+ * how much of the table predates the classification.
+ */
+export const INSIGHT_LAYERS = Object.freeze(["energy", "compute", "model", "application", "cross"]);
 
 /** The only values `insight_evidence.stance` may hold. */
 export const EVIDENCE_STANCES = Object.freeze(["supports", "contradicts", "context"]);
@@ -313,7 +340,7 @@ function shapeInsight(row) {
 
 /** Every column shapeInsight reads, so no reader is served a half row. */
 const INSIGHT_COLUMNS = `
-  id, statement, kind, entities, status, pinned_status, simhash,
+  id, statement, kind, layer, entities, status, pinned_status, simhash,
   first_seen_at, last_seen_at, source_count, independent_count, contradiction_count,
   novelty, relevance, credibility, momentum, rank_score, scored_at, supersedes, updated_at
 `;
@@ -375,6 +402,15 @@ export class InsightStore {
     this.store = store;
     this.db = store.db;
     this.db.exec(INSIGHT_DDL);
+    // ONE COLUMN, ADDED IN PLACE. `CREATE TABLE IF NOT EXISTS` is this
+    // module's whole migration story — see the file's own note — and it does
+    // nothing for a table that already exists. Every library in the world
+    // already has `insights`, so a new column has to be added rather than
+    // declared, exactly as store.js does for `transcripts.cues`.
+    const claimColumns = this.db.prepare("PRAGMA table_info(insights)").all();
+    if (claimColumns.length > 0 && !claimColumns.some((column) => column.name === "layer")) {
+      this.db.exec("ALTER TABLE insights ADD COLUMN layer TEXT");
+    }
     // `resource_type` was added after the column list above was first settled.
     // Adding it in place rather than bumping any version keeps an existing
     // library readable, exactly as store.js does for `cues`. NOT NULL needs a
