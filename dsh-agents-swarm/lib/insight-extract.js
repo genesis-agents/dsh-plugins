@@ -1621,7 +1621,18 @@ export function transcriptFailureKind(error) {
  * @param options - `{ transcribe, limit, logger, onStep }`.
  * @returns `{ tried, gained, stopped, outcomes }`; outcomes keyed by resource id.
  */
-export async function topUpTranscripts(store, skipped, { transcribe, limit = 0, logger, onStep } = {}) {
+/**
+ * How long to wait between videos in a drain, when nothing is being paid for.
+ *
+ * The paid provider paces itself inside the transcript client. This is for the
+ * three FREE routes in front of it — other people's servers, none of them paid,
+ * one of them already blocking us — and it is the difference between a drain and
+ * a burst. Two seconds is thirty videos a minute, which no endpoint notices.
+ */
+const DRAIN_GAP_MS = 2_000;
+
+export async function topUpTranscripts(store, skipped, { transcribe, limit = 0, logger, onStep, gapMs } = {}) {
+  const gap = Number.isFinite(Number(gapMs)) ? Math.max(0, Number(gapMs)) : DRAIN_GAP_MS;
   const outcomes = new Map();
   const budget = Math.max(0, Math.floor(Number(limit) || 0));
   if (typeof transcribe !== "function" || budget === 0 || !Array.isArray(skipped)) {
@@ -1640,6 +1651,11 @@ export async function topUpTranscripts(store, skipped, { transcribe, limit = 0, 
   for (const entry of wanted) {
     const id = String(entry.row.id);
     onStep?.(tried, wanted.length);
+    // A GAP BETWEEN VIDEOS, because the first three routes are other people's
+    // servers and nobody is paying them. The paid provider has its own pacing
+    // inside the client; this is for the free ones, and it is the difference
+    // between a drain and a burst — one of those relays already blocks us.
+    if (tried > 0 && gap > 0) await new Promise((wake) => setTimeout(wake, gap));
     tried += 1;
     try {
       const got = await transcribe(entry.row);
@@ -1671,9 +1687,30 @@ export async function topUpTranscripts(store, skipped, { transcribe, limit = 0, 
         }
       }
       if (kind === "quota") {
-        stopped = reason;
-        logger?.warn?.(`swarm: transcript top-up stopped — the provider is out of quota or rate limiting`);
-        break;
+        // RECORDED, AND THE DRAIN CARRIES ON — which reverses this stage's
+        // original rule, because the circumstance the rule was written for no
+        // longer holds.
+        //
+        // It used to break, reasoning that every remaining video would get the
+        // same answer from the same spent key, so carrying on would spend the
+        // rest of the budget re-learning one fact and, against a rate limiter,
+        // make the limit worse. Both halves were true THEN. The client now
+        // parks a rate-limited provider for twenty minutes and a credit-spent
+        // key for its cooldown, and refuses both WITHOUT SENDING ANYTHING — so
+        // carrying on makes no paid request, spends nothing, and cannot worsen
+        // a limit it never touches.
+        //
+        // What it does instead is try the FREE routes on every remaining video,
+        // and that is the whole reason to change it. MEASURED: one 429, on the
+        // second key of the first video, ended a drain of forty — so a backlog
+        // of ninety-six was being classified at one video per twenty-minute
+        // backoff. The free routes cost nothing and answer the question that
+        // actually matters here, which is whether the video publishes captions
+        // at all, and a video proven to have none is one nobody pays for again.
+        if (stopped === "") {
+          stopped = reason;
+          logger?.warn?.("swarm: the transcript provider is rate limiting or out of quota; carrying on with the free routes only");
+        }
       }
     }
   }
@@ -1762,6 +1799,11 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
       transcribe: options.transcribe,
       limit: transcribeBudget,
       logger,
+      // PASSED THROUGH, so the suite can run the stage without sleeping the
+      // real gap between every video. Three values in this batch were accepted
+      // by an outer function and never handed to the inner one, and every one
+      // of them looked right at both ends.
+      gapMs: options.transcribeGapMs,
       onStep: (done, total) => { say("transcribing", done, total); },
     });
     if (transcribed.gained > 0) {
@@ -2309,7 +2351,7 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
  * @param options - `{ markSkips }`.
  * @returns the outcome, as `insightPassOnce` reports it.
  */
-export async function runInsightPass(store, insightStore, chat, logger, { markSkips = false, web, scope, transcribe } = {}) {
+export async function runInsightPass(store, insightStore, chat, logger, { markSkips = false, web, scope, transcribe, transcribeGapMs } = {}) {
   const key = markSkips ? "insightLastRun" : "insightLastManualRun";
   const carried = readInsightConfig(store).insightLastRun?.watermark;
   const stamp = () => ({ date: localDate(), at: new Date().toISOString() });
@@ -2379,7 +2421,14 @@ export async function runInsightPass(store, insightStore, chat, logger, { markSk
     // which is the function that USES the fetcher rather than the one that
     // passes it on. A seam is exactly where a value gets dropped, and testing
     // only the inner side of one tests the half that cannot fail this way.
-    const result = await insightPassOnce(store, insightStore, chat, logger, { web, onProgress, scope, transcribe });
+    // EVERY OPTION THIS FUNCTION TAKES MUST APPEAR IN THIS OBJECT, and the
+    // note is here because this exact line has now dropped two of them. It
+    // accepted `transcribe` and never passed it on, so every scheduled run
+    // reported `transcribeTried: 0` while all four files involved were
+    // individually correct; the tests missed it because they called
+    // `insightPassOnce` directly, which is the function that USES the option
+    // rather than the one that forwards it.
+    const result = await insightPassOnce(store, insightStore, chat, logger, { web, onProgress, scope, transcribe, transcribeGapMs });
     if (result.ran) {
       const settled = { ...stamp(), ...result, scope: scopeNote };
       note(settled);

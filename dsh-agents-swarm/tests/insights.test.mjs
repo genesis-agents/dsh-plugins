@@ -1617,6 +1617,7 @@ test("the pass fetches transcripts for the videos it is about to skip", async (t
   const asked = [];
   const chat = async function* () { yield { error: "no model here" }; };
   const result = await insightPassOnce(store, insights, chat, undefined, {
+    transcribeGapMs: 0,
     transcribe: async (row) => {
       asked.push(row.id);
       return { language: "en", text: "a long spoken sentence that a claim could quote from " + row.id, cues: [{ start: 0, text: "hello" }], via: "timedtext" };
@@ -1632,10 +1633,21 @@ test("the pass fetches transcripts for the videos it is about to skip", async (t
   assert.ok(result.rows >= 2, "the newly readable videos were not re-scanned: rows=" + result.rows);
 });
 
-test("a quota answer ends the top-up instead of spending the rest of the budget on it", async (t) => {
-  // Every remaining video gets the same answer from the same exhausted key, so
-  // carrying on spends the budget re-learning one fact — and against a rate
-  // limiter, spends it making the limit worse.
+test("a quota answer is recorded, and the free routes carry on without it", async (t) => {
+  // THIS TEST HAS BEEN TURNED AROUND, and the rule it used to hold was right
+  // when it was written: every remaining video would get the same answer from
+  // the same exhausted key, so carrying on spent the budget re-learning one
+  // fact and, against a rate limiter, made the limit worse.
+  //
+  // Neither half holds now. The client parks a rate-limited provider for twenty
+  // minutes and a credit-spent key for its cooldown, and refuses both WITHOUT
+  // SENDING ANYTHING, so carrying on makes no paid request at all. Meanwhile
+  // the three free routes in front of it cost nothing and answer the question
+  // that decides whether a video is ever worth paying for.
+  //
+  // MEASURED, which is why it changed: one 429 on the second key of the first
+  // video ended a drain of forty, so a ninety-six video backlog was being
+  // classified at one video per twenty-minute backoff.
   const { store, insights } = library(t);
   for (let at = 0; at < 5; at += 1) {
     store.put(resource("v" + at, { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/" + "abcde"[at] + "aaaaaaaaaa" }));
@@ -1643,10 +1655,11 @@ test("a quota answer ends the top-up instead of spending the rest of the budget 
   let tried = 0;
   const chat = async function* () { yield { error: "no model here" }; };
   const result = await insightPassOnce(store, insights, chat, undefined, {
+    transcribeGapMs: 0,
     transcribe: async () => { tried += 1; throw new Error("supadata key 1/1: HTTP 429 rate limit exceeded"); },
   });
-  assert.equal(tried, 1, "kept going after a quota answer: " + tried + " requests");
-  assert.match(result.transcribeStopped, /429|rate limit/i, "the reason the stage stopped was not recorded");
+  assert.ok(tried > 1, "the drain still stopped at the first quota answer, after " + tried + " request(s)");
+  assert.match(result.transcribeStopped, /429|rate limit/i, "the reason was not recorded, so nobody can see why nothing was bought");
 });
 
 test("a video with no captions is told apart from one nobody asked about", async (t) => {
@@ -1663,6 +1676,7 @@ test("a video with no captions is told apart from one nobody asked about", async
   store.put(resource("n2", { type: "NEWS", title: "A second readable row for the pass" }));
   const chat = async function* () { yield { error: "no model here" }; };
   const result = await insightPassOnce(store, insights, chat, undefined, {
+    transcribeGapMs: 0,
     transcribe: async () => { throw new Error("timedtext: HTTP 404 no caption track"); },
   });
   const row = insights.passLedger(result.batch).rows.find((one) => one.resourceId === "v");
@@ -1684,6 +1698,7 @@ test("a top-up that cannot fetch leaves the pass unharmed", async (t) => {
   store.put(resource("n2", { type: "NEWS", title: "A second article stating the same figure" }));
   const chat = async function* () { yield { error: "no model here" }; };
   const result = await insightPassOnce(store, insights, chat, undefined, {
+    transcribeGapMs: 0,
     transcribe: async () => { throw new Error("the whole network is gone"); },
   });
   assert.equal(result.ran, true, "a failing top-up stopped the pass");
@@ -1697,7 +1712,7 @@ test("the budget is a budget, and zero turns the stage off", async (t) => {
   let tried = 0;
   const transcribe = async () => { tried += 1; return { text: "" }; };
   const chat = async function* () { yield { error: "no model here" }; };
-  await insightPassOnce(store, insights, chat, undefined, { transcribe, scope: { transcribe: 2 } });
+  await insightPassOnce(store, insights, chat, undefined, { transcribe, transcribeGapMs: 0, scope: { transcribe: 2 } });
   assert.equal(tried, 2, "the budget was not honoured: " + tried + " requests");
   tried = 0;
   await insightPassOnce(store, insights, chat, undefined, { transcribe, scope: { transcribe: 0 } });
@@ -1712,6 +1727,7 @@ test("an empty answer is not stored as a transcript", async (t) => {
   store.put(resource("v", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/aaaaaaaaaaa" }));
   const chat = async function* () { yield { error: "no model here" }; };
   await insightPassOnce(store, insights, chat, undefined, {
+    transcribeGapMs: 0,
     transcribe: async () => ({ language: "en", text: "", cues: [] }),
   });
   assert.equal(store.getTranscript("v"), undefined, "an empty transcript was written to the library");
@@ -1746,6 +1762,7 @@ test("runInsightPass forwards the transcript fetcher it was handed", async (t) =
   const chat = async function* () { yield { error: "no model here" }; };
   await runInsightPass(store, insights, chat, undefined, {
     markSkips: false,
+    transcribeGapMs: 0,
     transcribe: async (row) => {
       asked += 1;
       return { language: "en", text: "a long spoken sentence a claim could quote from " + row.id, cues: [], via: "timedtext" };
@@ -1770,6 +1787,7 @@ test("the scheduled pass gets a fetcher through the same seam", async (t) => {
   const chat = async function* () { yield { error: "no model here" }; };
   await runInsightPass(store, insights, chat, undefined, {
     markSkips: true,
+    transcribeGapMs: 0,
     transcribe: async () => { asked += 1; return { language: "en", text: "spoken words long enough to matter here", cues: [] }; },
   });
   assert.ok(asked > 0, "the scheduled pass never reached the fetcher");
@@ -1792,6 +1810,7 @@ test("a scoped run tops up only what its own scan skipped", async (t) => {
   let asked = 0;
   const chat = async function* () { yield { error: "no model here" }; };
   await insightPassOnce(store, insights, chat, undefined, {
+    transcribeGapMs: 0,
     transcribe: async () => { asked += 1; return { language: "en", text: "words", cues: [] }; },
     scope: { search: "zzqqxx-no-such-topic", transcribe: 60 },
   });
@@ -1850,6 +1869,7 @@ test("a busy route still reads the body before it refuses", async (t) => {
     sendJson: (res, code, body) => answers.push({ code, body }),
     readJson: async (req) => JSON.parse(req.__body ?? "{}"),
     // Held open so a drain is genuinely in flight for the second request.
+    transcribeGapMs: 0,
     transcribe: async () => { await held; return { language: "en", text: "words", cues: [] }; },
   });
   const post = async (body) => {
