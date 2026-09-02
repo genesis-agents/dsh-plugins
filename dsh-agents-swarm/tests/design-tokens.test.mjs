@@ -6883,8 +6883,31 @@ test("a skip is not counted or coloured as a failure", () => {
   // And they are drawn in different colours, because they call for different
   // actions: a failure means something is broken, a skip means the library is
   // missing transcripts.
-  assert.match(ledger, /broken === 0 \? null[\s\S]{0,220}TONE\.danger/, "a failure is not drawn as a failure");
-  assert.match(ledger, /skipped === 0 \? null[\s\S]{0,320}TONE\.warn/, "a skip is not drawn as the milder thing it is");
+  // ASSERTED AS A PROPERTY, NOT AS MARKUP. These used to match the exact shape
+  // of two chips — "broken === 0 ? null : …" — and when the six flat figures
+  // became a funnel the chips went away while the rule they enforced did not.
+  // A guard that fails because the JSX moved has to be rewritten every time the
+  // screen improves, and gets deleted the third time.
+  //
+  // What must hold is that the two outcomes are told apart by colour: a failure
+  // means something is broken, a skip means the library is missing transcripts,
+  // and they call for different actions.
+  // BOUNDED BY THE NEXT ENTRY, NOT BY A CHARACTER COUNT. A fixed window of 400
+  // reached into the step AFTER the one being checked and found ITS colour, so
+  // recolouring 没有转录 as a failure passed — the guard read the neighbour and
+  // reported the rule as held. Verified by making exactly that change and
+  // watching it go green.
+  const near = (needle, tone) => {
+    const at = ledger.indexOf(needle);
+    if (at < 0) return "the ledger no longer mentions " + needle;
+    const next = ledger.indexOf("key: ", at + needle.length);
+    const entry = ledger.slice(at, next < 0 ? at + 400 : next);
+    return entry.includes(tone) ? "" : needle + " is not drawn with " + tone;
+  };
+  const K = (name) => "key: " + String.fromCharCode(34) + name + String.fromCharCode(34);
+  assert.equal(near(K("failed"), "TONE.danger"), "", "a failure is not drawn as a failure");
+  assert.equal(near(K("no-transcript"), "TONE.warn"), "", "a skip is not drawn as the milder thing it is");
+  assert.equal(near(K("unusable"), "TONE.warn"), "", "a skip is not drawn as the milder thing it is");
 });
 
 test("a running marker is not read as a running process", () => {

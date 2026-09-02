@@ -9848,14 +9848,14 @@ window.__ModuleLoader__.load({
 							}, "title"),
 							jsx("span", {
 								style: { font: FONT.micro, color: INK.quiet, fontFamily: MONO },
-								// THE SUM IS SHOWN, BECAUSE IT DOES NOT MATCH THE BAND ABOVE.
-								// This total includes the rows skipped before the scan counted
-								// them, so it is legitimately larger than 本轮扫过 — and read
-								// side by side without the arithmetic, "600 扫过" against
+									// THE SUM IS NOT SHOWN HERE ANY MORE. It used to read
+									// "经手 3008 = 扫过 3000 + 跳过 8", which was one clause of five in a
+									// run-on line — and the funnel below now draws that subtraction as its
+									// first two steps, where it does not have to be read as a sentence.
 								// "看了 628" is simply two numbers disagreeing.
 								children: zh
-									? (skipped > 0 ? `经手 ${looked} 个信源 = 扫过 ${looked - skipped} + 跳过 ${skipped}` : `经手 ${looked} 个信源`)
-									: (skipped > 0 ? `${looked} sources = ${looked - skipped} scanned + ${skipped} skipped` : `${looked} sources`)
+									? `经手 ${looked} 个信源`
+									: `${looked} sources`
 							}, "n"),
 							// THE SENTENCES THAT MUST BE TRUE WHILE SHUT. A reader who never
 							// opens this still learns whether anything BROKE and whether the
@@ -9913,18 +9913,11 @@ window.__ModuleLoader__.load({
 									? `全库还有 ${awaiting} 个视频等转录${Number(absent) > 0 ? `（另有 ${absent} 个确认没有字幕）` : ""}`
 									: `${awaiting} videos still waiting${Number(absent) > 0 ? ` (${absent} more publish no captions at all)` : ""}`
 							}, "awaiting"),
-							skipped === 0 ? null : jsx("span", {
-								title: zh
-									? "只有已经取到转录的视频才能抽出可核验的引语；没有转录的会在送给模型之前跳过，不花模型调用。"
-									: "Only a video with a stored transcript can yield a checkable quote; the rest are skipped before the model is called, at no cost.",
-								style: { font: FONT.micro, color: `rgb(${TONE.warn})` },
-								// THE COUNT IS ALREADY IN THE HEADLINE'S ARITHMETIC, so this
-								// says WHY rather than repeating how many — the same number
-								// twice in one line reads as two findings.
-								children: zh
-									? "跳过的都是没有转录的视频"
-									: "all skipped for want of a transcript"
-							}, "skipped"),
+							// THE SKIP REASON MOVED INTO THE FUNNEL. This said "跳过的都是没有
+							// 转录的视频" beside four other clauses; the funnel's own steps are
+							// now labelled 没有转录，跳过 and 没有正文，跳过, so the reason sits on
+							// the number it explains instead of in a sentence about it.
+
 							jsx("span", { style: { flex: 1 } }, "spacer"),
 							jsx("span", {
 								title: formatStamp(data.batch),
@@ -9934,77 +9927,71 @@ window.__ModuleLoader__.load({
 						]
 					}, "head"),
 
-					// THE COUNTS, ALWAYS. Six cells rather than the four the run's own
-					// figures carry, and they answer a different question: those are
-					// about the CLAIMS, these are about the SOURCES.
+					// THE PASS IS A FUNNEL, AND IT WAS DRAWN AS A ROW OF UNRELATED BOXES.
 					//
-					// AND THEY DO NOT ALL ADD UP TO THE SAME TOTAL, which is the last
-					// thing on this band a reader could not work out. Four of the six —
-					// 抽取失败, 超出上限, 读了没抽到, 进了主张 — sum to 扫过; the other two,
-					// 没有转录 and 没有正文, sum to 跳过, because a skip happens BEFORE the
-					// scan counts the row. Measured on a real pass: 2961 + 12 + 15 + 12
-					// = 3000 扫过, and 30 + 0 = 30 跳过, together the 3030 经手 in the line
-					// above. In one flat row of six they read as one list against one
-					// total, and the two that belong to the other total look like
-					// arithmetic that does not close. I checked this myself and got it
-					// wrong on the first attempt, off by exactly the 抽取失败 column.
+					// Six figures sat here in one flat grid with a caption underneath saying
+					// which four of them added up to which total. That caption was the tell: a
+					// layout that needs a sentence explaining which of its numbers can be added
+					// is a layout that has thrown away the thing the reader needed. I wrote it,
+					// and I had already failed to add them up correctly myself once.
 					//
-					// SORTED, NOT SEPARATED BY A RULE. The scan's four come first in the
-					// order the pass reaches them, then the skips; the boundary is drawn
-					// by a caption under each group rather than a divider, because a
-					// divider inside a six-cell grid reads as two panels rather than two
-					// halves of one.
+					// Every one of those numbers is a STAGE, and each is subtracted from the one
+					// before it. Measured on a real pass: 3008 handled, 8 skipped for want of a
+					// transcript, 3000 scanned, 2963 declined by the model-call ceiling, leaving
+					// 37 that reached the model — of which 13 yielded nothing, 0 failed, and 24
+					// ended up inside a claim. 24 + 13 + 0 = 37, and 3000 - 2963 = 37.
+					//
+					// Drawn as steps, each number appears exactly once, at the point where it
+					// leaves — so the arithmetic is the shape rather than a note about it, and
+					// the caption is gone rather than reworded.
+					//
+					// NOT A PROPORTIONAL BAR, which was the first idea. The ceiling declines
+					// ~99% of a scan by design, so a stacked bar is one segment and a sliver:
+					// truthful, unreadable, and it would make a normal pass look like a fault.
 					jsx("div", {
-						style: {
-							display: "grid",
-							gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))",
-							gap: SPACE.xs
-						},
-						children: ["failed", "binned", "read", "extracted", "no-transcript", "unusable"]
-							.filter((one) => states.includes(one))
-							.map((one) => {
-							const face = PASS_STATE_FACES[one] ?? null;
-							const value = Number(counts[one] ?? 0);
-							return jsxs("div", {
-								style: {
-									// NO GAP, matching the run's four figures directly above: a
-									// number and its own caption are one object, and the leading
-									// each step already carries is the space between them. A raw
-									// pixel here would also be the sixth raw `gap` in the file,
-									// which the token ratchet correctly refuses.
-									display: "flex", flexDirection: "column", minWidth: 0,
-									// A ZERO IS DRAWN, NOT OMITTED. A missing 抽取失败 column and
-									// a 抽取失败 0 column say different things, and the first says
-									// it by accident.
-									opacity: value === 0 ? OPACITY.quiet : 1
-								},
-								children: [
-									jsx("div", {
-										style: {
-											font: FONT.baseStrong, fontVariantNumeric: "tabular-nums",
-											color: value === 0 || face === null ? INK.secondary : `rgb(${face.hue})`
-										},
-										children: String(value)
-									}, "n"),
-									jsx("div", {
-										style: { font: FONT.micro, color: INK.quiet },
-										children: face === null ? one : (zh ? face.zh : face.en)
-									}, "l")
-								]
-							}, one);
-						})
-					}, "counts"),
-
-					// WHICH FOUR MAKE WHICH TOTAL, said once in words. Without it the
-					// grouping above is a hint and the reader still has to guess where
-					// the boundary falls.
-					jsx("div", {
-						style: { font: FONT.micro, color: INK.quiet },
-						children: zh
-							? `前四项合计 ${scanned} = 扫过；后两项合计 ${skipped} = 跳过（在扫描计数之前就跳过了）`
-							: `the first four sum to ${scanned} scanned; the last two sum to ${skipped} skipped, before the scan counted them`
-					}, "sums"),
-
+						style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
+						children: [
+							{ key: "handled", zh: "经手", en: "handled", value: looked, tone: null, lead: false },
+							{ key: "no-transcript", zh: "没有转录，跳过", en: "skipped, no transcript", value: Number(counts["no-transcript"] ?? 0), tone: TONE.warn, lead: true },
+							{ key: "unusable", zh: "没有正文，跳过", en: "skipped, no usable text", value: Number(counts.unusable ?? 0), tone: TONE.warn, lead: true },
+							{ key: "scanned", zh: "扫过", en: "scanned", value: scanned, tone: null, lead: false },
+							{ key: "binned", zh: "超出本轮模型调用上限", en: "over this pass's model-call ceiling", value: Number(counts.binned ?? 0), tone: TONE.muted, lead: true },
+							{ key: "reached", zh: "送进模型", en: "reached the model", value: scanned - Number(counts.binned ?? 0), tone: null, lead: false },
+							{ key: "read", zh: "读了没抽到", en: "read, nothing kept", value: Number(counts.read ?? 0), tone: TONE.neutral, lead: true },
+							{ key: "failed", zh: "抽取失败", en: "extraction failed", value: Number(counts.failed ?? 0), tone: TONE.danger, lead: true },
+							{ key: "extracted", zh: "进了主张", en: "used in a claim", value: Number(counts.extracted ?? 0), tone: TONE.success, lead: false }
+						].map((step) => jsxs("div", {
+							style: {
+								display: "flex", alignItems: "baseline", gap: SPACE.sm,
+								// A SUBTRACTION IS INDENTED UNDER WHAT IT LEAVES. The three
+								// totals sit at the margin and everything that comes off them
+								// hangs beneath, so the shape says which is which without a
+								// second colour or a rule doing it.
+								paddingLeft: step.lead ? SPACE.lg : 0,
+								opacity: step.value === 0 ? OPACITY.quiet : 1
+							},
+							children: [
+								jsx("span", {
+									style: { font: FONT.micro, color: INK.quiet, width: "14px", flex: "none" },
+									"aria-hidden": "true",
+									children: step.lead ? "−" : ""
+								}, "sign"),
+								jsx("span", {
+									style: {
+										font: step.lead ? FONT.body : FONT.baseStrong,
+										fontVariantNumeric: "tabular-nums",
+										color: step.tone === null ? INK.primary : `rgb(${step.tone})`,
+										minWidth: "64px", textAlign: "right", flex: "none"
+									},
+									children: String(step.value)
+								}, "n"),
+								jsx("span", {
+									style: { font: FONT.micro, color: step.lead ? INK.quiet : INK.secondary, minWidth: 0 },
+									children: zh ? step.zh : step.en
+								}, "l")
+							]
+						}, step.key))
+					}, "funnel"),
 					// THE ROWS, ONLY WHEN ASKED FOR. Sorted by the Host into order of
 					// concern, so the failures are at the top rather than alphabetically
 					// among two hundred successes.
