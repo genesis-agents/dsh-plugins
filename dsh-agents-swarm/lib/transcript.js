@@ -853,6 +853,22 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
         settleMinutes(minutes, got);
         return got;
       } catch (cause) {
+        // THE RESERVATION GOES BACK, because a refused request delivers no
+        // transcript and bills for none. Minutes are charged for CONTENT, and a
+        // 429, a spent-credit 402, a 404 and an empty answer all hand back
+        // nothing at all.
+        //
+        // MEASURED: five requests, every one of them refused with 429, consumed
+        // THREE HUNDRED of the six-hundred-minute ceiling — half the budget
+        // spent on requests that bought nothing. Left alone this ends as the
+        // per-video cap did, with the budget blocking the work it exists to
+        // permit, and it would have looked like real spending in the tab.
+        //
+        // THE CALL COUNT STAYS. That request did reach the provider and does
+        // count against a per-request allowance; it is the MINUTES that were
+        // never sold. The two ceilings measure different things, which is why
+        // there are two of them.
+        paidMinutes = Math.max(0, paidMinutes - minutes);
         // Recorded before the message is folded into `failures`, so the tally
         // sees the individual answer rather than the joined string every route
         // above it also contributed to.

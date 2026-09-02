@@ -57,6 +57,29 @@ test("pacing can be turned off, and then it really is off", () => {
   assert.equal(supadataPacingWait(), 0, "a gap survived being set to zero");
 });
 
+test("a refused request gives its reservation back, and still counts as a call", async () => {
+  // MEASURED: five requests, every one refused with 429, consumed THREE HUNDRED
+  // of the six-hundred-minute ceiling. Half the budget spent on requests that
+  // bought nothing, and it would have read as real spending in the tab.
+  //
+  // Minutes are charged for CONTENT. A 429, a spent-credit 402, a 404 and an
+  // empty answer all hand back nothing, so the reservation taken before the
+  // request has to be released when the request fails — otherwise this ends the
+  // way the per-video cap did, with the budget blocking the work it exists to
+  // permit.
+  resetSupadataSpend();
+  resetSupadataHealth();
+  setSupadataPacing(0);
+  const refused = await chain("k1", () => 429, 30 * 60);
+  assert.match(String(refused.error?.message), /429/, "the fixture did not produce a refusal");
+  const spend = supadataSpend();
+  assert.equal(spend.minutes, 0, "a refused request was billed " + spend.minutes + " minute(s) of a budget it never spent");
+  // THE CALL COUNT STAYS. The request did reach the provider and does count
+  // against a per-request allowance; it is the MINUTES that were never sold.
+  // The two ceilings measure different things, which is why there are two.
+  assert.equal(spend.calls, 1, "a request that reached the provider was not counted as one");
+});
+
 test("one rate limit does not blind the whole drain", async () => {
   // MEASURED: a classification run over ninety-six videos made THREE paid
   // requests. The second took a 429, the flat twenty-minute stand-down parked
