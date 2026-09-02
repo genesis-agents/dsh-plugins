@@ -15,12 +15,47 @@
 import { strict as assert } from "node:assert";
 import { beforeEach, test } from "node:test";
 
-import { maskSupadataKey, resetSupadataHealth, resetSupadataSpend, supadataKeyHealth, supadataKeys, supadataSpend, resolveTranscript } from "../lib/transcript.js";
+import { maskSupadataKey, resetSupadataHealth, resetSupadataSpend, setSupadataPacing, supadataKeyHealth, supadataKeys, supadataPacingWait, supadataSpend, resolveTranscript } from "../lib/transcript.js";
 
 // A HOOK, NOT A CALL IN EVERY TEST. The key-health cache is module-level and
 // two tests here failed on state a third had left behind — a suite reporting
 // the order it ran in rather than the behaviour it checks.
-beforeEach(() => { resetSupadataHealth(); resetSupadataSpend(); });
+// AND THE PACING GOES TO ZERO. Paid requests are spaced six seconds apart in
+// production; a suite that makes twenty of them would sleep for two minutes and
+// be killed by its own timeout, which is exactly what happened on the first run
+// after the gap was added. The gap has a test of its own that asserts the wait
+// WITHOUT waiting it.
+beforeEach(() => { resetSupadataHealth(); resetSupadataSpend(); setSupadataPacing(0); });
+
+test("paid requests are spaced, not merely sequential", async () => {
+  // "难道不应该一个一个来吗" — and it already was, one `await` after another in
+  // a single loop. Sequential is not paced: with no gap a backlog leaves as fast
+  // as the socket allows, and this provider's limit is per MINUTE. Measured on a
+  // brand-new key: 429 on the second request, seconds after the first.
+  //
+  // ASSERTED WITHOUT SLEEPING. The wait is computed by a function of its own so
+  // the rule can be checked in microseconds rather than by a test that sits
+  // through six real seconds to prove it sat through six real seconds.
+  resetSupadataSpend();
+  setSupadataPacing(6000);
+  try {
+    assert.equal(supadataPacingWait(), 0, "the first request after a reset was made to wait");
+    await chain("k1", () => ({ content: "fine", lang: "en" }), 10 * 60);
+    const wait = supadataPacingWait();
+    assert.ok(wait > 0, "a second request would have gone out immediately after the first");
+    assert.ok(wait <= 6000, `the gap was ${wait}ms, longer than the one that was set`);
+  } finally {
+    setSupadataPacing(0);
+  }
+});
+
+test("pacing can be turned off, and then it really is off", () => {
+  // The knob exists so somebody who knows their plan's limit can drain faster
+  // than a number chosen for safety. A knob that quietly keeps a floor is worse
+  // than none, because the drain then takes a time nobody asked for.
+  setSupadataPacing(0);
+  assert.equal(supadataPacingWait(), 0, "a gap survived being set to zero");
+});
 
 test("the setting is split into keys however it was pasted", () => {
   // A person pasting four keys uses whichever separator their clipboard

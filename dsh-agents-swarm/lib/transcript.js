@@ -418,6 +418,58 @@ const UNKNOWN_MINUTES = 60;
 let paidMinutes = 0;
 
 /**
+ * The least time between two paid requests from this host.
+ *
+ * "难道不应该一个一个来吗" — and it already was, one `await` after another in a
+ * single loop. Sequential is not the same as paced: with no gap, a backlog of
+ * ninety-eight videos leaves as fast as the socket allows, and the provider's
+ * limit is per MINUTE. Measured: a brand-new key answered 429 on the second
+ * request, seconds after the first.
+ *
+ * SIX SECONDS IS TEN A MINUTE, comfortably under any published limit, and it
+ * puts a hundred-video drain at ten minutes — which is the right trade when the
+ * alternative has been, four separate times, an emptied quota.
+ *
+ * IT BELONGS HERE, NOT IN THE DRAIN LOOP. Three callers reach the provider —
+ * the scheduled top-up, the manual drain, and a reader opening a video — and a
+ * gap enforced in one of them is a gap the other two walk straight past.
+ */
+const PAID_CALL_GAP_MS = 6_000;
+let paidCallGapMs = PAID_CALL_GAP_MS;
+let lastPaidCallAt = 0;
+
+/**
+ * Change the gap between paid requests.
+ *
+ * A KNOB RATHER THAN A CONSTANT, for two reasons and only one of them is
+ * testing. A drain of a hundred videos at six seconds each takes ten minutes,
+ * and somebody sitting in front of it who knows their plan's limit should be
+ * able to say so instead of waiting out a number chosen for safety. The suite
+ * sets it to 0, because a test that sleeps through the real gap is a test that
+ * times out — which this one did, at two minutes, on its first run.
+ * @param ms - the gap in milliseconds; negative values are treated as 0.
+ * @returns the gap now in force.
+ */
+export function setSupadataPacing(ms) {
+  const asked = Number(ms);
+  paidCallGapMs = Number.isFinite(asked) && asked > 0 ? Math.floor(asked) : 0;
+  return paidCallGapMs;
+}
+
+/**
+ * How long to wait before the next paid request may go out.
+ *
+ * Separated from the waiting so it can be asserted without a test sleeping
+ * through it.
+ * @param now - the current epoch milliseconds.
+ * @returns milliseconds to wait; 0 when the gap has already passed.
+ */
+export function supadataPacingWait(now = Date.now()) {
+  if (lastPaidCallAt === 0 || paidCallGapMs === 0) return 0;
+  return Math.max(0, paidCallGapMs - (now - lastPaidCallAt));
+}
+
+/**
  * Replace a reservation with what the fetch actually cost.
  *
  * The provider bills the length of the recording, and the transcript says what
@@ -460,6 +512,7 @@ export function supadataSpend() {
 
 /** Forget the spend, for a host that has been given fresh quota. */
 export function resetSupadataSpend() {
+  lastPaidCallAt = 0;
   const spent = { calls: paidCalls, minutes: paidMinutes };
   paidCalls = 0;
   paidMinutes = 0;
@@ -754,6 +807,12 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
     for (let step = 0; step < usable.length; step += 1) {
       const at = (start + step) % usable.length;
       try {
+        // PACED BEFORE THE REQUEST, NOT AFTER THE REFUSAL. Backing off once a
+        // 429 has arrived is repair; spacing the requests is prevention, and
+        // this provider's limit is per minute.
+        const wait = supadataPacingWait();
+        if (wait > 0) await new Promise((wake) => setTimeout(wake, wait));
+        lastPaidCallAt = Date.now();
         // COUNTED BEFORE THE AWAIT, not after. A request that throws still
         // reached the provider and still counted against a quota; counting on
         // success would meter only the calls that were worth making.
