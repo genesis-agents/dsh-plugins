@@ -1014,6 +1014,54 @@ function extractClaimsObject(text) {
   return best;
 }
 
+/**
+ * Recover the claims from an answer that stops in the middle of one.
+ *
+ * {@link extractClaimsObject} needs a COMPLETE, balanced object, so an answer
+ * cut off part-way through the array — the shape a model produces when it runs
+ * out of output room — matches nothing and the whole call is lost. MEASURED on
+ * one pass: twelve sources reported as 抽取失败 with "no JSON object in it
+ * carries a claims array", which is what a truncated answer looks like from the
+ * outside and reads as a refusal.
+ *
+ * The claims BEFORE the cut are whole and were paid for. This walks the array
+ * taking every element that closes and stops at the one that does not, so a
+ * long answer loses its tail rather than all of itself.
+ *
+ * NOT A FALLBACK FOR A REFUSAL. It looks for the `"claims"` key and an array
+ * after it; prose, an apology, or an object of some other shape still yields
+ * nothing and still throws, because inventing a partial success out of those
+ * would hide exactly the failure the caller needs to see.
+ * @param text - the model answer.
+ * @returns the whole claims found before the cut, or [].
+ */
+function salvageClaims(text) {
+  const source = String(text ?? "");
+  const key = source.lastIndexOf("\"claims\"");
+  if (key === -1) return [];
+  const open = source.indexOf("[", key);
+  if (open === -1) return [];
+  const found = [];
+  let from = open + 1;
+  for (let attempt = 0; attempt < MAX_OBJECT_SCANS; attempt += 1) {
+    const start = source.indexOf("{", from);
+    if (start === -1) break;
+    const end = matchingBrace(source, start);
+    // The first element that does not close IS the cut. Everything after it is
+    // part of the same unfinished object, so scanning on would find braces
+    // nested inside it rather than the next claim.
+    if (end === -1) break;
+    try {
+      const parsed = JSON.parse(source.slice(start, end + 1));
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) found.push(parsed);
+    } catch {
+      break;
+    }
+    from = end + 1;
+  }
+  return found;
+}
+
 /** The proper names a claim is about, cleaned, at most six. */
 function readEntities(value) {
   if (!Array.isArray(value)) return [];
@@ -1050,7 +1098,19 @@ export function parseClaims(answer, labels, options = {}) {
   if (source === "") throw new Error("the model returned an empty answer");
   const reject = typeof options.onReject === "function" ? options.onReject : () => {};
 
-  const object = extractClaimsObject(source);
+  let object = extractClaimsObject(source);
+  if (object === undefined) {
+    // BEFORE GIVING UP, TAKE WHAT COMPLETED. An answer that stops part-way
+    // through the array is indistinguishable from a refusal at this point —
+    // both are "no complete object carrying claims" — and the two deserve
+    // opposite treatment: a refusal is a total loss, a truncation is a tail
+    // loss. Twelve sources went down as 抽取失败 on one pass for want of this.
+    const salvaged = salvageClaims(source);
+    if (salvaged.length > 0) {
+      reject(`the answer stopped part-way through; kept the ${salvaged.length} claim(s) that completed`);
+      object = { claims: salvaged };
+    }
+  }
   if (object === undefined) {
     const hint = source.includes("{")
       ? "no JSON object in it carries a \"claims\" array, which is what prose wrapped around a refusal looks like"

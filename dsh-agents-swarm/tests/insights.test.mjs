@@ -64,7 +64,7 @@ import {
 // The candidate scan lives with the pass, not with the pure helpers: it needs
 // the store. Imported here because the drain order is a correctness property,
 // not an implementation detail.
-import { EXTRACTION_PROMPT, collectCandidates, verifyClaims, insightPassOnce, readInsightConfig, rescoreOne, runInsightPass, transcriptFailureKind } from "../lib/insight-extract.js";
+import { EXTRACTION_PROMPT, collectCandidates, parseClaims, verifyClaims, insightPassOnce, readInsightConfig, rescoreOne, runInsightPass, transcriptFailureKind } from "../lib/insight-extract.js";
 import { buildQueries, createPacer, isIndependent, searchArxiv, searchWeb } from "../lib/insight-corroborate.js";
 
 /** Floating point comparison, for scores that are exact only in decimal. */
@@ -2793,6 +2793,48 @@ test("the schedule reports what will happen, not what was chosen", (t) => {
   // And the value the route reads comes from the store, so a library with no
   // collection setting still answers rather than reporting NaN.
   assert.equal(Number(store.getSetting("collectIntervalMinutes", 60)), 60);
+});
+
+test("an answer that stops mid-claim keeps the claims that finished", () => {
+  // MEASURED on one pass: twelve sources reported as 抽取失败 with "no JSON
+  // object in it carries a claims array" — which is the message for a refusal,
+  // and is also exactly what a truncated answer looks like from outside. The
+  // parser needs a COMPLETE balanced object, so an answer that runs out of room
+  // part-way through the array matched nothing and the whole call was lost,
+  // including the claims that had already been written in full.
+  const labels = new Map([["A", "r1"], ["B", "r2"]]);
+  // One line, because the truncation is about a missing closing brace and not
+  // about whitespace, and a multi-line fixture here was written with an escape
+  // that did not survive the patch that wrote it.
+  const cut = '{"claims": ['
+    + '{"statement": "The first claim, whole and paid for", "kind": "funding", "entities": ["Acme"], '
+    + '"evidence": [{"source": "A", "stance": "supports", "quote": "a quote long enough to be checked against its source"}]}, '
+    + '{"statement": "The second one was cut off here", "kind": "fun';
+  const rejected = [];
+  const claims = parseClaims(cut, labels, { onReject: (why) => rejected.push(String(why)) });
+  assert.equal(claims.length, 1, "the completed claim was thrown away with the truncated one");
+  assert.match(claims[0].statement, /whole and paid for/);
+  assert.ok(
+    rejected.some((why) => /stopped part-way/.test(why)),
+    "the truncation was not reported, so a silent partial reads as an honest empty answer",
+  );
+});
+
+test("prose with a brace in it is still a failure, not a partial success", () => {
+  // The salvage must not turn a refusal into a quiet nothing. A model that
+  // declines, or answers in an object of some other shape, is a real failure the
+  // caller has to see — inventing a partial success out of it would hide the one
+  // thing worth knowing.
+  assert.throws(
+    () => parseClaims('I cannot help with that. {"note": "refused"}', new Map([["A", "r1"]]), {}),
+    /did not return claims/,
+    "a refusal was salvaged into a success",
+  );
+  assert.throws(
+    () => parseClaims('{"claims": [', new Map([["A", "r1"]]), {}),
+    /did not return claims/,
+    "an answer cut off before any claim completed was reported as a success",
+  );
 });
 
 /* ── the block is a conversation, not a skeleton ───────────────────────── */
