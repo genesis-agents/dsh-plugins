@@ -906,6 +906,24 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
           // number lied in the direction that costs money — "97 still have no
           // transcript" reads as 97 fetches to be paid for.
           captionsUnavailable: store.countVideosWithoutCaptions?.() ?? null,
+          // HOW OFTEN THE PASS CAN ACTUALLY RUN, which is not what it is set to.
+          //
+          // The pass is chained after collection and only asks whether it is
+          // due; it cannot tick more often than the thing that calls it. The
+          // code has said so in a comment since it was written — "30 under an
+          // hourly collection is an hourly pass" — and the tab went on
+          // reporting 每 30 分钟 regardless, which is a schedule the reader was
+          // told they had set and never got. Setting it to 30 today changed
+          // nothing at all and nothing said why.
+          insightEffectiveIntervalMinutes: (() => {
+            const asked = Number(config.insightIntervalMinutes);
+            if (!Number.isFinite(asked) || asked <= 0) return 0;
+            const driver = Number(store.getSetting("collectIntervalMinutes", DEFAULT_COLLECT_INTERVAL_MINUTES));
+            if (!Number.isFinite(driver) || driver <= 0) return asked;
+            // The pass runs on a collection tick at which it is also due, so
+            // the true cadence is the driver rounded up to cover the ask.
+            return Math.max(driver, Math.ceil(asked / driver) * driver);
+          })(),
           // Whether a drain is running here, and what the last one did. A
           // number that is not moving and a fetcher that is not running look
           // identical from the count alone.

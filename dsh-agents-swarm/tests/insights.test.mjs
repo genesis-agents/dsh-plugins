@@ -2773,6 +2773,28 @@ test("a transcript arriving later clears the absence", (t) => {
   assert.equal(store.countVideosWithoutTranscript(), 0, "a transcribed video is being counted as waiting");
 });
 
+test("the schedule reports what will happen, not what was chosen", (t) => {
+  // The pass is chained after collection and only asks whether it is due, so
+  // it cannot tick more often than the thing that calls it. The Host has said
+  // so in a comment since the pass was written — "30 under an hourly collection
+  // is an hourly pass, not a half-hourly one" — and the tab reported 每 30 分钟
+  // anyway. Setting it to 30 changed nothing and nothing said why.
+  const { store } = library(t);
+  const effective = (asked, driver) => {
+    if (!Number.isFinite(asked) || asked <= 0) return 0;
+    if (!Number.isFinite(driver) || driver <= 0) return asked;
+    return Math.max(driver, Math.ceil(asked / driver) * driver);
+  };
+  assert.equal(effective(30, 60), 60, "a half-hourly ask under hourly collection is not reported as hourly");
+  assert.equal(effective(720, 60), 720, "a twelve-hourly ask was dragged down to the collection tick");
+  assert.equal(effective(90, 60), 120, "an ask between two ticks must round UP to the tick that covers it");
+  assert.equal(effective(0, 60), 0, "off must stay off");
+  assert.equal(effective(30, 0), 30, "with collection off there is nothing to round to");
+  // And the value the route reads comes from the store, so a library with no
+  // collection setting still answers rather than reporting NaN.
+  assert.equal(Number(store.getSetting("collectIntervalMinutes", 60)), 60);
+});
+
 /* ── the block is a conversation, not a skeleton ───────────────────────── */
 
 test("an excerpt is a continuous run, not every Nth line", () => {

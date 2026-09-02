@@ -10732,6 +10732,25 @@ window.__ModuleLoader__.load({
 													}, "pick")
 												]
 											}, "cadence"),
+											// WHAT WILL ACTUALLY HAPPEN, when it differs from what was
+											// chosen. The pass rides on the collection tick, so a
+											// half-hourly setting under hourly collection is an hourly
+											// pass — true since the pass was written, said in a comment
+											// in the Host, and never once said on the screen. A control
+											// that reports the value it stored rather than the behaviour
+											// it produces is the same fault as the four figures above it.
+											Number(status?.insightEffectiveIntervalMinutes) > 0
+											&& Number(status.insightEffectiveIntervalMinutes) !== Number(every)
+												? jsx("span", {
+													title: zh
+														? "洞察跟着采集的节拍跑，所以实际间隔不会短于采集间隔。要更快，先把采集调快。"
+														: "The pass rides on the collection tick, so it cannot run more often than collection does. To go faster, speed up collection first.",
+													style: { color: `rgb(${TONE.warn})` },
+													children: zh
+														? `实际 ${intervalLabel(Number(status.insightEffectiveIntervalMinutes), zh)}`
+														: `really ${intervalLabel(Number(status.insightEffectiveIntervalMinutes), zh)}`
+												}, "effective")
+												: null,
 											last === null
 												? jsx("span", { children: zh ? "还没有跑过" : "never run" }, "never")
 												: jsx("span", {
