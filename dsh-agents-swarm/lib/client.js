@@ -9725,7 +9725,7 @@ window.__ModuleLoader__.load({
 		* @param onOpenMoment - opens a source in the library's own reader.
 		* @param tick - bumped by the pane when a pass ends, to re-read.
 		*/
-		function PassLedger({ zh, onOpenMoment, tick, awaiting, perPass }) {
+		function PassLedger({ zh, onOpenMoment, tick, awaiting, absent, perPass }) {
 			const [open, setOpen] = useState(false);
 			const [data, setData] = useState(null);
 			const [error, setError] = useState("");
@@ -9905,8 +9905,8 @@ window.__ModuleLoader__.load({
 										: "Per-pass transcript fetching is set to 0, so this number will not come down on its own. Raise it in the Run analysis dialog, or run a transcript fetch on its own."),
 								style: { font: FONT.micro, color: INK.quiet },
 								children: zh
-									? `全库还有 ${awaiting} 个视频没有转录`
-									: `${awaiting} videos in the library still have none`
+									? `全库还有 ${awaiting} 个视频等转录${Number(absent) > 0 ? `（另有 ${absent} 个确认没有字幕）` : ""}`
+									: `${awaiting} videos still waiting${Number(absent) > 0 ? ` (${absent} more publish no captions at all)` : ""}`
 							}, "awaiting"),
 							skipped === 0 ? null : jsx("span", {
 								title: zh
@@ -11058,7 +11058,7 @@ window.__ModuleLoader__.load({
 					// `tick` rather than its own timer: the pane already re-reads when
 					// a pass ends, and a second poller against the same lifecycle is a
 					// second thing to keep in step.
-					jsx(PassLedger, { zh, onOpenMoment, tick, awaiting: status?.awaitingTranscript, perPass: status?.insightTranscribePerPass }, "ledger"),
+					jsx(PassLedger, { zh, onOpenMoment, tick, awaiting: status?.awaitingTranscript, absent: status?.captionsUnavailable, perPass: status?.insightTranscribePerPass }, "ledger"),
 
 					// A SECTION LABEL, NOT A THIRD 16px HEADING.
 					//

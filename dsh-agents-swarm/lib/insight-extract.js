@@ -1658,6 +1658,18 @@ export async function topUpTranscripts(store, skipped, { transcribe, limit = 0, 
       const reason = String(cause?.message ?? cause);
       const kind = transcriptFailureKind(cause);
       outcomes.set(id, { ok: false, kind, reason });
+      // WRITTEN DOWN, so it is asked once rather than on every drain for ever.
+      // "absent" means every route agreed the video publishes no caption track,
+      // which the classifier has called permanent since it was written and
+      // which nothing has ever recorded — so these videos were bought again and
+      // again, and counted as a queue that would never empty.
+      if (kind === "absent" && typeof store.markTranscriptAbsent === "function") {
+        try {
+          store.markTranscriptAbsent(id, reason);
+        } catch {
+          // A library too old for the column loses only the memory, not the run.
+        }
+      }
       if (kind === "quota") {
         stopped = reason;
         logger?.warn?.(`swarm: transcript top-up stopped — the provider is out of quota or rate limiting`);

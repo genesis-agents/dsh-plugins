@@ -900,6 +900,12 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
           // reader asking "why is the pass only reading a corner of this" wants
           // the size of the corner, not this tick's share of it.
           awaitingTranscript: store.countVideosWithoutTranscript?.() ?? null,
+          // REPORTED BESIDE THE QUEUE, NOT INSIDE IT. These are videos every
+          // route has agreed publish no captions at all; they are not waiting
+          // for quota, a key, or a faster schedule. Summed into one figure the
+          // number lied in the direction that costs money — "97 still have no
+          // transcript" reads as 97 fetches to be paid for.
+          captionsUnavailable: store.countVideosWithoutCaptions?.() ?? null,
           // Whether a drain is running here, and what the last one did. A
           // number that is not moving and a fetcher that is not running look
           // identical from the count alone.

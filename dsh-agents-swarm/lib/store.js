@@ -249,6 +249,17 @@ export class SourceStore {
     // image is re-fetched on every pass, forever — which is what the reference
     // does: it never persists a negative, so its only memory of a failure is a
     // Map in one browser tab.
+    // A VIDEO THAT PUBLISHES NO CAPTIONS IS A FACT, AND IT WAS NEVER WRITTEN
+    // DOWN. Every route says the same thing about such a video — YouTube
+    // publishes no track, the relay is blocked, the paid provider has nothing —
+    // and the classifier has called that answer PERMANENT since it was written.
+    // Nothing recorded it, so the same videos were bought again on every drain,
+    // and `awaitingTranscript` counted them as work that would never finish.
+    // This is `thumbnail_checked_at`'s lesson, on a queue that costs money.
+    if (!columns.some((column) => column.name === "absent_at")) {
+      this.db.exec("ALTER TABLE transcripts ADD COLUMN absent_at TEXT");
+      this.db.exec("ALTER TABLE transcripts ADD COLUMN absent_reason TEXT");
+    }
     const resourceColumns = this.db.prepare("PRAGMA table_info(resources)").all();
     if (!resourceColumns.some((column) => column.name === "thumbnail_checked_at")) {
       this.db.exec("ALTER TABLE resources ADD COLUMN thumbnail_checked_at TEXT");
@@ -527,7 +538,47 @@ export class SourceStore {
         LEFT JOIN transcripts t ON t.resource_id = r.id
        WHERE r.type IN ('YOUTUBE_VIDEO','YOUTUBE','VIDEO','PODCAST')
          AND (t.resource_id IS NULL OR t.text = '')
+         AND t.absent_at IS NULL
     `).get().n;
+  }
+
+  /**
+   * Videos that have been proven to publish no captions at all.
+   *
+   * REPORTED SEPARATELY FROM THE QUEUE, because they are not the same fact and
+   * adding them together produced a number that lied in the direction that
+   * costs money: "97 videos still have no transcript" reads as 97 fetches
+   * waiting to be paid for, when most of them cannot be fetched by anyone at
+   * any price.
+   * @returns the count.
+   */
+  countVideosWithoutCaptions() {
+    return this.db.prepare(
+      "SELECT COUNT(*) AS n FROM transcripts WHERE absent_at IS NOT NULL",
+    ).get().n;
+  }
+
+  /**
+   * Record that a video publishes no captions anywhere.
+   *
+   * ONLY FOR A DEFINITIVE ANSWER. A quota refusal, a rate limit or a network
+   * fault says nothing about the video, and writing this on one of those would
+   * retire a fetchable video for ever on the strength of a bad afternoon.
+   * The caller classifies; this only stores.
+   *
+   * RECOVERABLE ON PURPOSE. Auto-captions can appear months later, so this is
+   * "stop asking on the drain's own account", not "never again": `putTranscript`
+   * clears the mark, so a deliberate refresh that succeeds puts the video back
+   * exactly as if it had never been marked.
+   * @param resourceId - the video.
+   * @param reason - what every route answered, for the ledger.
+   */
+  markTranscriptAbsent(resourceId, reason = "") {
+    this.db.prepare(`
+      INSERT INTO transcripts (resource_id, language, text, cues, fetched_at, absent_at, absent_reason)
+      VALUES (?, '', '', NULL, ?, ?, ?)
+      ON CONFLICT(resource_id) DO UPDATE SET absent_at = excluded.absent_at, absent_reason = excluded.absent_reason
+    `).run(String(resourceId), new Date().toISOString(), new Date().toISOString(), String(reason).slice(0, 500));
   }
 
   /**
@@ -548,6 +599,7 @@ export class SourceStore {
         LEFT JOIN transcripts t ON t.resource_id = r.id
        WHERE r.type IN ('YOUTUBE_VIDEO','YOUTUBE','VIDEO','PODCAST')
          AND (t.resource_id IS NULL OR t.text = '')
+         AND t.absent_at IS NULL
        ORDER BY r.created_at ASC
        LIMIT ?
     `).all(take);
@@ -583,7 +635,12 @@ export class SourceStore {
       INSERT INTO transcripts (resource_id, language, text, cues, fetched_at) VALUES (?,?,?,?,?)
       ON CONFLICT(resource_id) DO UPDATE SET
         language = excluded.language, text = excluded.text,
-        cues = excluded.cues, fetched_at = excluded.fetched_at
+        cues = excluded.cues, fetched_at = excluded.fetched_at,
+        -- A TRANSCRIPT ARRIVING UNDOES THE ABSENCE, and leaving the mark set
+        -- would keep a now-transcribed video out of the queue's count for ever
+        -- while the pass happily reads it — two readers of the same table
+        -- disagreeing about whether the video has words.
+        absent_at = NULL, absent_reason = NULL
     `).run(resourceId, language, text, JSON.stringify(cues), new Date().toISOString());
   }
 

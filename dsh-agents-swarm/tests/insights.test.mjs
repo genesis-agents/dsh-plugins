@@ -2712,6 +2712,47 @@ test("the backlog is what the next pass would be offered, not what this one page
   );
 });
 
+test("a video that publishes no captions is asked for once, not on every drain", (t) => {
+  // MEASURED: a drain of twelve tried two videos and bought nothing. The first
+  // answered "timedtext: this video publishes no caption track; relay is
+  // blocked; gens: HTTP 404; supadata returned no transcript" — every route
+  // agreeing, which the classifier has called PERMANENT since it was written.
+  // Nothing recorded it. So the same videos were paid for again on the next
+  // drain, and the next, and `awaitingTranscript` counted them as work that
+  // would never finish.
+  //
+  // This is `thumbnail_checked_at`'s lesson applied to a queue that costs money.
+  const { store } = library(t);
+  store.put(resource("v1", { type: "YOUTUBE_VIDEO", createdAt: "2026-08-01T00:00:00.000Z" }));
+  store.put(resource("v2", { type: "YOUTUBE_VIDEO", createdAt: "2026-08-02T00:00:00.000Z" }));
+  assert.equal(store.countVideosWithoutTranscript(), 2, "the fixture did not start with two waiting");
+
+  store.markTranscriptAbsent("v1", "timedtext: this video publishes no caption track");
+  assert.equal(store.countVideosWithoutTranscript(), 1, "a video proven to have no captions is still in the fetch queue");
+  assert.equal(store.countVideosWithoutCaptions(), 1, "the absence was not counted anywhere");
+  assert.deepEqual(
+    store.videosWithoutTranscript(20).map((row) => row.id),
+    ["v2"],
+    "the drain would buy the caption-less video again",
+  );
+});
+
+test("a transcript arriving later clears the absence", (t) => {
+  // Auto-captions can appear months after publication, so the mark is "stop
+  // asking on the drain's own account", not "never again". Leaving it set would
+  // keep a now-transcribed video out of the count for ever while the pass reads
+  // it happily — two readers of one table disagreeing about whether the video
+  // has words.
+  const { store } = library(t);
+  store.put(resource("v1", { type: "YOUTUBE_VIDEO", createdAt: "2026-08-01T00:00:00.000Z" }));
+  store.markTranscriptAbsent("v1", "no caption track");
+  assert.equal(store.countVideosWithoutCaptions(), 1);
+
+  store.putTranscript("v1", "en", "the words, at last", []);
+  assert.equal(store.countVideosWithoutCaptions(), 0, "the video has a transcript and is still marked as having none");
+  assert.equal(store.countVideosWithoutTranscript(), 0, "a transcribed video is being counted as waiting");
+});
+
 /* ── the block is a conversation, not a skeleton ───────────────────────── */
 
 test("an excerpt is a continuous run, not every Nth line", () => {
