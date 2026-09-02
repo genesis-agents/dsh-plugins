@@ -9322,7 +9322,9 @@ window.__ModuleLoader__.load({
 			const [days, setDays] = useState(0);
 			const [search, setSearch] = useState("");
 			const [types, setTypes] = useState([]);
-			const [maxRows, setMaxRows] = useState(0);
+			// THE COST, not the scan's working set. See the dialog's own note: rows
+			// were the visible number and clusters were the one that bills.
+			const [maxClusters, setMaxClusters] = useState(0);
 			const [transcribe, setTranscribe] = useState(0);
 			const [maxAgeDays, setMaxAgeDays] = useState(30);
 
@@ -9334,7 +9336,7 @@ window.__ModuleLoader__.load({
 				setDays(0);
 				setSearch("");
 				setTypes(Array.isArray(status?.insightResourceTypes) ? [...status.insightResourceTypes] : []);
-				setMaxRows(Number(status?.insightMaxRows ?? 200));
+				setMaxClusters(Number(status?.insightMaxClusters ?? 20));
 				setTranscribe(Number(status?.insightTranscribePerPass ?? 12));
 				setMaxAgeDays(Number(status?.insightMaxAgeDays ?? 30));
 			}, [open, status]);
@@ -9342,7 +9344,7 @@ window.__ModuleLoader__.load({
 			const vocabulary = Array.isArray(status?.resourceTypes) && status.resourceTypes.length > 0
 				? status.resourceTypes
 				: (Array.isArray(status?.insightResourceTypes) ? status.insightResourceTypes : []);
-			const configuredRows = Number(status?.insightMaxRows ?? 200);
+			const configuredClusters = Number(status?.insightMaxClusters ?? 20);
 			const configuredTranscribe = Number(status?.insightTranscribePerPass ?? 12);
 			const configuredAge = Number(status?.insightMaxAgeDays ?? 30);
 			const awaiting = Number.isFinite(Number(status?.awaitingTranscript)) ? Number(status.awaitingTranscript) : null;
@@ -9370,7 +9372,13 @@ window.__ModuleLoader__.load({
 							days: days > 0 ? days : undefined,
 							search: search.trim() === "" ? undefined : search.trim(),
 							types: types.length === vocabulary.length ? undefined : types,
-							maxRows: maxRows === configuredRows ? undefined : maxRows,
+							// ROWS FOLLOW THE CLUSTERS, at twice as many. The scan needs
+							// more candidates than it can use or two reports of one story
+							// would cost the batch a slot; twice is enough headroom for
+							// that and small enough that nothing is read to be thrown away
+							// in bulk, which 200-against-20 was doing.
+							maxClusters: maxClusters === configuredClusters ? undefined : maxClusters,
+							maxRows: maxClusters === configuredClusters ? undefined : Math.min(600, Math.max(20, maxClusters * 2)),
 							transcribe: transcribe === configuredTranscribe ? undefined : transcribe,
 							maxAgeDays: maxAgeDays === configuredAge ? undefined : maxAgeDays
 						});
@@ -9495,7 +9503,52 @@ window.__ModuleLoader__.load({
 							}),
 							"types"
 						),
+						// ── THE ONE NUMBER THAT IS ABOUT COST ───────────────────────
+						//
+						// TWO FIELDS WERE SPENDING THE SAME BUDGET AND NEITHER NAMED IT.
+						// "读取上限" was rows the scan pulls, defaulted to 200; "归并上限"
+						// — the number of clusters, and therefore of MODEL CALLS — was not
+						// in the dialog at all, at 20. So a reader adjusting the visible
+						// number moved something that mostly does not matter, while the
+						// one that decides the bill was invisible.
+						//
+						// And the two disagreed: 200 rows against a 20-cluster ceiling
+						// means a slice of unrelated sources forms roughly 200 clusters,
+						// 20 survive, and 180 rows were read to be discarded.
+						//
+						// ROWS IS AN IMPLEMENTATION DETAIL. How many candidates the scan
+						// pulls in order to find N stories is the scan's business; how many
+						// stories get a model call is the reader's. So the dialog asks for
+						// the second, and the pass takes twice as many rows as it can use
+						// — enough headroom that two articles about one story fold into one
+						// cluster for free, rather than the batch shrinking every time the
+						// news repeats itself.
 						field(
+							zh ? "最多抽几条" : "Claims to extract",
+							zh
+								? `这一次最多做几次模型调用 —— 一个话题一次。定时用的是 ${configuredClusters} 次。同一件事的多篇报道会合成一次，不额外花钱。`
+								: `How many model calls this run may make — one per story. The schedule uses ${configuredClusters}. Several reports of one story fold into a single call at no extra cost.`,
+							jsx("input", {
+								type: "number",
+								min: 1,
+								max: 60,
+								step: 1,
+								value: String(maxClusters),
+								className: "swm-focus",
+								style: { ...FORM_CONTROL, fontVariantNumeric: "tabular-nums" },
+								onChange: (event) => { setMaxClusters(Number(event.target.value)); }
+							}),
+							"clusters"
+						),
+						// TRANSCRIPT FETCHING IS HIDDEN WHILE IT IS OFF, and it is off.
+						//
+						// The paid route emptied six keys and has never once succeeded, so
+						// the schedule's budget is 0 — and a field offering to spend a
+						// quota that is exhausted, through a provider that has returned
+						// nothing, is an invitation to repeat the thing that went wrong. It
+						// reappears the moment somebody sets a budget in the settings,
+						// which is the deliberate act that should precede spending.
+						configuredTranscribe <= 0 ? null : field(
 							zh ? "顺便取多少份转录" : "Transcripts to fetch",
 							zh
 								? `没有转录的视频抽不出可核验的引语，会被跳过。这一次先去取这么多份，取到的当场就能读。${awaiting === null ? "" : `现在有 ${awaiting} 个视频还没有转录。`}免费通道优先，取不到才动用配额。`
@@ -9511,23 +9564,6 @@ window.__ModuleLoader__.load({
 								onChange: (event) => { setTranscribe(Number(event.target.value)); }
 							}),
 							"transcribe"
-						),
-						field(
-							zh ? "读取上限" : "Rows to read",
-							zh
-								? `这一次最多读多少行。定时用的是 ${configuredRows} 行。读得越多，这一次花的模型调用越多。`
-								: `How many rows this run may read. The schedule uses ${configuredRows}. More rows is more model calls.`,
-							jsx("input", {
-								type: "number",
-								min: 20,
-								max: 600,
-								step: 10,
-								value: String(maxRows),
-								className: "swm-focus",
-								style: { ...FORM_CONTROL, fontVariantNumeric: "tabular-nums" },
-								onChange: (event) => { setMaxRows(Number(event.target.value)); }
-							}),
-							"rows"
 						),
 						jsxs("div", {
 							style: { display: "flex", alignItems: "center", gap: SPACE.sm, justifyContent: "flex-end" },

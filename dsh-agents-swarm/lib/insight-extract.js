@@ -1697,7 +1697,11 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
   const clusters = clusterItems(items, {
     windowDays: bounded(config.insightWindowDays, 1, 30, INSIGHT_DEFAULTS.insightWindowDays),
     maxBits: bounded(config.insightDuplicateBits, 0, 12, INSIGHT_DEFAULTS.insightDuplicateBits),
-    maxClusters: bounded(config.insightMaxClusters, 1, 60, INSIGHT_DEFAULTS.insightMaxClusters),
+    // A SCOPE MAY NARROW THE SPEND FOR ONE RUN, exactly as it may narrow the
+    // window or the row count. This is the ceiling that decides how many model
+    // calls a pass makes, so a reader asking for a small cheap run is asking
+    // for this one.
+    maxClusters: bounded(options.scope?.maxClusters ?? config.insightMaxClusters, 1, 60, INSIGHT_DEFAULTS.insightMaxClusters),
     // THE FRONT OF THE QUEUE, IN THIS FUNCTION'S ORDER. `rows` is sorted by
     // `createdAt` ascending and the watermark advances on the same field, so
     // this is the one row that must be read for the drain to move at all.

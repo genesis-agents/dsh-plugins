@@ -582,6 +582,17 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
             scope.maxAgeDays = age;
           }
         }
+        // HOW MANY MODEL CALLS THIS RUN MAY MAKE — one per story. The
+        // dialog asks for this rather than for rows, because it is the number
+        // that bills and rows are the scan working set behind it.
+        if (asked.maxClusters !== undefined && asked.maxClusters !== null && asked.maxClusters !== "") {
+          const many = Number(asked.maxClusters);
+          if (!Number.isInteger(many) || many < 1 || many > 60) {
+            problems.push("maxClusters must be a whole number between 1 and 60");
+          } else {
+            scope.maxClusters = many;
+          }
+        }
         if (asked.maxRows !== undefined && asked.maxRows !== null && asked.maxRows !== "") {
           const rows = Number(asked.maxRows);
           if (!Number.isInteger(rows) || rows < 20 || rows > 600) {

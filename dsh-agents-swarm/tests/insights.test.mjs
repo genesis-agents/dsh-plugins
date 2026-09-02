@@ -2501,3 +2501,46 @@ test("every spoken quote that survives verification can be placed", async (t) =>
   const result = await insightPassOnce(store, insights, chat, undefined, {});
   assert.equal(result.locatedQuotes, result.spokenQuotes, "a spoken quote survived that cannot be placed");
 });
+
+test("a scoped run can lower the model-call ceiling for one pass", async (t) => {
+  // THE NUMBER THE DIALOG NOW ASKS FOR. It used to ask for ROWS — the scan's
+  // working set, defaulted to 200 — while the ceiling that decides how many
+  // model calls a pass makes was not in the dialog at all, at 20. So a reader
+  // adjusting the visible number moved something that mostly does not matter
+  // and could not touch the one that bills. The two also disagreed: 200 rows
+  // against a 20-cluster ceiling means a slice of unrelated sources forms
+  // roughly 200 clusters, 20 survive, and 180 rows were read to be discarded.
+  //
+  // ASSERTED THROUGH THE PASS, NOT THROUGH THE HELPER. Three values in this
+  // batch were accepted by an outer function and never handed to the inner one
+  // — a fetcher, a report, a default — and every one of them looked correct at
+  // both ends. The only test that catches that enters where production enters.
+  const { store, insights } = library(t);
+  const word = (n) => "w" + n.toString(36) + "x" + ((n * 7919) % 99991).toString(36);
+  for (let at = 0; at < 30; at += 1) {
+    store.put(resource("r" + String(at).padStart(3, "0"), {
+      title: `${word(at * 3)} ${word(at * 3 + 1)} ${word(at * 3 + 2)}`,
+      abstract: Array.from({ length: 12 }, (_, k) => word(at * 100 + k)).join(" "),
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, at)).toISOString(),
+      publishedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+    }));
+  }
+  store.setSetting("insightMaxRows", 100);
+  store.setSetting("insightMaxClusters", 20);
+  store.setSetting("insightMaxAgeDays", 0);
+
+  let calls = 0;
+  const chat = async function* () { calls += 1; yield { error: "no model here" }; };
+
+  // Unscoped: the stored ceiling of 20 applies.
+  calls = 0;
+  const wide = await insightPassOnce(store, insights, chat, undefined, {});
+  assert.ok(wide.clusters > 3, `only ${wide.clusters} clusters formed; the fixture cannot show a ceiling`);
+
+  // Scoped to three: three clusters, three model calls, whatever the setting
+  // says. A value accepted and dropped would leave this at the stored 20.
+  calls = 0;
+  const narrow = await insightPassOnce(store, insights, chat, undefined, { scope: { maxClusters: 3 } });
+  assert.equal(narrow.clusters, 3, `the scope asked for 3 clusters and the pass made ${narrow.clusters}`);
+  assert.equal(calls, 3, `the scope asked for 3 model calls and the pass made ${calls}`);
+});
