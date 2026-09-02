@@ -1910,27 +1910,79 @@ function unrelatedSlice(count) {
   return rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-/** The watermark exactly as insightPassOnce computes it. */
-function watermarkOf(rows, reached) {
-  const firstUnread = rows.find((row) => !reached.has(String(row.id)));
-  const ceiling = firstUnread === undefined ? null : String(firstUnread.createdAt ?? "");
+/**
+ * The watermark exactly as insightPassOnce computes it.
+ * @param rows - what the scan handed to clustering, oldest first.
+ * @param unconsidered - the oldest row the scan saw and did NOT hand over, or "".
+ */
+function watermarkOf(rows, unconsidered = "") {
+  const considered = new Set(rows.map((row) => String(row.id)));
+  const first = rows.find((row) => !considered.has(String(row.id)));
+  const edges = [
+    first === undefined ? "" : String(first.createdAt ?? ""),
+    unconsidered,
+  ].filter((at) => at !== "");
+  const ceiling = edges.length === 0 ? null : edges.reduce((low, at) => (at < low ? at : low));
   return rows
-    .filter((row) => reached.has(String(row.id)))
+    .filter((row) => considered.has(String(row.id)))
     .map((row) => String(row.createdAt ?? ""))
     .filter((at) => ceiling === null || at < ceiling)
     .reduce((latest, value) => (value > latest ? value : latest), "");
 }
 
-test("no row is watermarked past without having been read", () => {
+test("no row is watermarked past without the scan having looked at it", () => {
+  // THE GUARANTEE, RESTATED. It used to be "never past a row the model did not
+  // answer for", which sounds stronger and was in practice unmeetable: the
+  // model answers for `maxClusters` stories while the scan looks at `maxRows`,
+  // and when those differ by two orders of magnitude the watermark stops within
+  // a few rows of where it started, for ever. The test below measures that.
+  //
+  // What must hold instead is that no row NOTHING looked at is skipped. Rows
+  // clustering ranked and the ceiling declined were looked at, and the ledger
+  // names each one with reason `over-ceiling`; the per-type share's leftovers
+  // were not, and they arrive as `unconsidered` so the watermark stops there.
   const rows = unrelatedSlice(200);
-  const items = rows.map(itemForRow).filter((one) => one !== undefined);
-  const clusters = clusterItems(items, { windowDays: 7, maxBits: 3, maxClusters: 20, ensureItemId: String(rows[0].id) });
-  const reached = new Set(clusters.flatMap((c) => c.members.map((m) => String(m.id))));
-  assert.ok(reached.size < rows.length, "the fixture clustered everything; the ceiling never bit");
+  const leftovers = unrelatedSlice(20).map((row, at) => ({
+    ...row,
+    id: "rest" + String(at),
+    // OLDER THAN SOME OF `rows`, which is the case that bites: the per-type
+    // share means a busy type's remainder can predate a quiet type's newest.
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 30) + at * 1000).toISOString(),
+  }));
+  const unconsidered = leftovers
+    .map((row) => String(row.createdAt))
+    .reduce((oldest, at) => (oldest === "" || at < oldest ? at : oldest), "");
 
-  const watermark = watermarkOf(rows, reached);
-  const stranded = rows.filter((row) => !reached.has(String(row.id)) && String(row.createdAt) <= watermark);
-  assert.equal(stranded.length, 0, `${stranded.length} unread rows are below the watermark and will never be offered again`);
+  const watermark = watermarkOf(rows, unconsidered);
+  const stranded = leftovers.filter((row) => String(row.createdAt) <= watermark);
+  assert.equal(stranded.length, 0, `${stranded.length} rows nothing looked at are below the watermark and will never be offered again`);
+});
+
+test("a scan far wider than the model-call budget still advances the watermark", () => {
+  // THE BUG THIS FILE EXISTS FOR, in its second form. The first was a scan that
+  // took the NEWEST rows and watermarked past the rest; the fix made the
+  // watermark cover only rows that reached a surviving cluster, which is
+  // correct and, at a realistic ratio of rows to calls, immobile.
+  //
+  // MEASURED ON THE REAL LIBRARY before this changed: 12,807 rows waiting, a
+  // pass reading 200 of them moved the watermark 1.3 seconds, and a pass
+  // reading 20 moved it about as far. The four biggest stories were re-read
+  // every pass and re-derived claims that merged into themselves, so the board
+  // stopped growing while the queue did not.
+  const rows = unrelatedSlice(600);
+  const items = rows.map(itemForRow).filter((one) => one !== undefined);
+  const clusters = clusterItems(items, { windowDays: 7, maxBits: 3, maxClusters: 4, ensureItemId: String(rows[0].id) });
+  const reached = new Set(clusters.flatMap((c) => c.members.map((m) => String(m.id))));
+  assert.ok(reached.size < 100, `the model got ${reached.size} of 600 rows; the ceiling never bit and the fixture proves nothing`);
+
+  // Nothing was left unconsidered here — the scan handed over all 600 — so the
+  // watermark reaches the newest of them and the next pass starts after it.
+  const watermark = watermarkOf(rows, "");
+  assert.equal(
+    watermark,
+    String(rows[rows.length - 1].createdAt),
+    "the watermark did not clear the slice, so these 600 rows come back next pass and the queue never drains",
+  );
 });
 
 test("the oldest row is always read, so the queue cannot starve", () => {
@@ -1943,8 +1995,8 @@ test("the oldest row is always read, so the queue cannot starve", () => {
   const items = rows.map(itemForRow).filter((one) => one !== undefined);
   const clusters = clusterItems(items, { windowDays: 7, maxBits: 3, maxClusters: 20, ensureItemId: String(rows[0].id) });
   const reached = new Set(clusters.flatMap((c) => c.members.map((m) => String(m.id))));
-  assert.ok(reached.has(String(rows[0].id)), "the oldest row was not read; the watermark cannot advance at all");
-  assert.ok(watermarkOf(rows, reached) !== "", "the watermark did not move, so the next pass re-reads this slice");
+  assert.ok(reached.has(String(rows[0].id)), "the oldest row was not read; the front of the queue is being passed over");
+  assert.ok(watermarkOf(rows, "") !== "", "the watermark did not move, so the next pass re-reads this slice");
 });
 
 test("the ceiling is still honoured, and still prefers the big stories", () => {
@@ -2543,6 +2595,42 @@ test("a scoped run can lower the model-call ceiling for one pass", async (t) => 
   const narrow = await insightPassOnce(store, insights, chat, undefined, { scope: { maxClusters: 3 } });
   assert.equal(narrow.clusters, 3, `the scope asked for 3 clusters and the pass made ${narrow.clusters}`);
   assert.equal(calls, 3, `the scope asked for 3 model calls and the pass made ${calls}`);
+});
+
+test("the pass itself clears the slice it read, so the queue drains", async (t) => {
+  // ASSERTED THROUGH THE PASS, for the reason the test above gives: the
+  // watermark's formula is mirrored by a helper in this file, and a mirror
+  // cannot catch the source drifting away from it. This one enters where
+  // production enters and reads the watermark the pass actually returns.
+  //
+  // The shape is the real one — a scan window far wider than the model-call
+  // budget, which is what `insightMaxRows: 600` against `insightMaxClusters: 4`
+  // means. Before this, the returned watermark sat within a couple of rows of
+  // the start whatever the window held, so every pass re-read the same slice.
+  const { store, insights } = library(t);
+  const word = (n) => "w" + n.toString(36) + "x" + ((n * 7919) % 99991).toString(36);
+  const last = 120;
+  for (let at = 0; at < last; at += 1) {
+    store.put(resource("q" + String(at).padStart(3, "0"), {
+      title: `${word(at * 3)} ${word(at * 3 + 1)} ${word(at * 3 + 2)}`,
+      abstract: Array.from({ length: 12 }, (_, k) => word(at * 100 + k)).join(" "),
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, at)).toISOString(),
+      publishedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+    }));
+  }
+  store.setSetting("insightMaxRows", 600);
+  store.setSetting("insightMaxClusters", 4);
+  store.setSetting("insightMaxAgeDays", 0);
+
+  const chat = async function* () { yield { error: "no model here" }; };
+  const pass = await insightPassOnce(store, insights, chat, undefined, {});
+
+  assert.ok(pass.binned > 50, `only ${pass.binned} rows were binned; the ceiling never bit and this proves nothing`);
+  assert.equal(
+    pass.watermark,
+    new Date(Date.UTC(2026, 0, 1, 0, 0, last - 1)).toISOString(),
+    `the pass read ${pass.rows} rows and left the watermark at ${pass.watermark}; the slice it just read comes back next pass`,
+  );
 });
 
 /* ── the block is a conversation, not a skeleton ───────────────────────── */

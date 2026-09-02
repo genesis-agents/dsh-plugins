@@ -607,7 +607,26 @@ export function collectCandidates(store, config, scope = {}) {
       // lower bound — `truncated` already says the slice was capped.
     }
   }
-  return { rows, backlog, truncated, skipped };
+  // THE OLDEST ROW THIS SCAN SAW AND DID NOT HAND TO CLUSTERING.
+  //
+  // `rest` is what the per-type share and the row ceiling left over. Those rows
+  // were never considered, so a watermark may not pass them — and it cannot be
+  // derived downstream, because `rest` is dropped here and `rows` alone cannot
+  // say whether the gap after its newest entry is "nothing more" or "six
+  // thousand more". Without this the pass either strands them or, computing the
+  // boundary from `rows` only, silently reads past them.
+  //
+  // NOT `truncated`. That flag says the SQL had more to offer; this says which
+  // instant the reader actually got to, which is the only thing a `created_at >`
+  // filter can be told.
+  const unconsidered = rest.reduce(
+    (oldest, row) => {
+      const at = String(row.createdAt ?? "");
+      return at !== "" && (oldest === "" || at < oldest) ? at : oldest;
+    },
+    "",
+  );
+  return { rows, backlog, truncated, skipped, unconsidered };
 }
 
 /**
@@ -1685,7 +1704,7 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
 
   say("reading", 0, 0);
   // The scope, when the reader asked for one. Absent on every scheduled pass.
-  let { rows, backlog, truncated, skipped } = collectCandidates(store, config, options.scope ?? {});
+  let { rows, backlog, truncated, skipped, unconsidered } = collectCandidates(store, config, options.scope ?? {});
 
   // ── GO AND GET THE TRANSCRIPTS THE SCAN JUST SKIPPED ──────────────────
   //
@@ -1709,7 +1728,7 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
       onStep: (done, total) => { say("transcribing", done, total); },
     });
     if (transcribed.gained > 0) {
-      ({ rows, backlog, truncated, skipped } = collectCandidates(store, config, options.scope ?? {}));
+      ({ rows, backlog, truncated, skipped, unconsidered } = collectCandidates(store, config, options.scope ?? {}));
     }
   }
 
@@ -1816,13 +1835,22 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
   // loss is this repository's signature failure, and it was inside the feature
   // built to avoid it.
   //
-  // Rows that were binned simply come back next pass. `binned` below reports
-  // how many, so the ceiling is a number somebody can watch rather than a
-  // silent trade.
+  // `binned` below reports how many rows the ceiling declined, so it is a
+  // number somebody can watch rather than a silent trade — and the ledger names
+  // each one, because a count cannot tell a ceiling doing its job from one set
+  // far too low.
   const reached = new Set();
   for (const cluster of clusters) {
     for (const member of cluster.members) reached.add(String(member?.id));
   }
+  // EVERY ROW THE SCAN HANDED TO CLUSTERING, which is every row in `rows`.
+  //
+  // Held as a set of its own rather than written as "all of them" so the two
+  // ideas stay separable at the point they are used: `reached` is what the
+  // model was shown and is what `binned` counts, `considered` is what the pass
+  // looked at and is what the watermark may cover. Collapsing them is the bug
+  // the watermark note below describes.
+  const considered = new Set(rows.map((row) => String(row.id)));
   // THE WATERMARK MAY ONLY COVER ROWS THAT WERE ACTUALLY READ, AND ONLY
   // CONTIGUOUSLY FROM THE OLDEST.
   //
@@ -1844,10 +1872,32 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
   // filters with `created_at > ?`, so two rows sharing an instant where one was
   // binned would see the binned one skipped by a watermark equal to that
   // instant. Rows are already oldest-first here.
-  const firstUnread = rows.find((row) => !reached.has(String(row.id)));
-  const ceiling = firstUnread === undefined ? null : String(firstUnread.createdAt ?? "");
+  // CONSIDERED, NOT ANSWERED BY THE MODEL — and the difference is the whole
+  // reason the backlog was immortal.
+  //
+  // This advanced only across rows that reached a surviving cluster. With a
+  // scan window far wider than the model-call budget — 600 rows, 4 calls —
+  // almost every row is binned over the ceiling, the first of them stops the
+  // watermark within a few rows of where it started, and every one of the 600
+  // comes back next pass. MEASURED on this library: a pass reading 200 rows
+  // moved the watermark 1.3 seconds; a pass reading 20 moved it about as far.
+  // Twelve thousand rows waiting, and the same four biggest stories re-read
+  // every pass for ever, re-deriving claims that then merge into themselves.
+  //
+  // Clustering saw every row in `rows` and ranked it against the others. Being
+  // ranked below the ceiling is a decision about that row, not an absence of
+  // one, and the ledger records each with reason `over-ceiling` — so the reader
+  // can see what was declined and, if four calls a pass is too few, say so.
+  // What the watermark may NOT pass is a row nothing looked at: the leftovers
+  // of the per-type share, which arrive as `unconsidered`.
+  const first = rows.find((row) => !considered.has(String(row.id)));
+  const edges = [
+    first === undefined ? "" : String(first.createdAt ?? ""),
+    typeof unconsidered === "string" ? unconsidered : "",
+  ].filter((at) => at !== "");
+  const ceiling = edges.length === 0 ? null : edges.reduce((low, at) => (at < low ? at : low));
   const watermark = rows
-    .filter((row) => reached.has(String(row.id)))
+    .filter((row) => considered.has(String(row.id)))
     .map((row) => String(row.createdAt ?? ""))
     .filter((at) => ceiling === null || at < ceiling)
     .reduce((latest, value) => (value > latest ? value : latest), "");
