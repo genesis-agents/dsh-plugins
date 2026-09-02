@@ -408,6 +408,31 @@ function shiftIso(iso, minutes) {
  * @param config - the insight settings.
  * @returns `{ rows, backlog, truncated }`.
  */
+/**
+ * The widest scan a pass may make, whatever the setting asks for.
+ *
+ * SCANNING IS NOT WHAT BILLS. `maxClusters` is — one model call per story —
+ * and `maxRows` is only the working set clustering ranks to find those
+ * stories. The two were bounded as though they cost the same: rows were capped
+ * at 600, which is roughly a day of this library's intake, so a pass could
+ * never clear more than a day and a backlog measured in weeks could not be
+ * caught up at any schedule.
+ *
+ * MEASURED, on the real shape of the data: clustering 600 rows takes 8ms, 3,000
+ * takes 36ms, 6,000 takes 86ms — linear, and next to nothing beside a single
+ * model call. The SQL behind it pages 100 at a time out of SQLite. There was
+ * never a reason for the low ceiling and it cost the pass its ability to catch
+ * up.
+ *
+ * READING WIDE IS ALSO WHAT MAKES THE CHOICE GOOD. Clusters are ranked by how
+ * many sources carry the story, so four calls spent out of six thousand
+ * candidates buy the four biggest stories of the week; four spent out of twenty
+ * buy whatever happened to be next in the queue, which on the first pass after
+ * a rebuild was two newsletters, a podcast about finding your purpose, and a
+ * guide to checking disk health.
+ */
+const MAX_SCAN_ROWS = 6000;
+
 export function collectCandidates(store, config, scope = {}) {
   // A SCOPE NARROWS THE SCAN AND NOTHING ELSE.
   //
@@ -486,8 +511,8 @@ export function collectCandidates(store, config, scope = {}) {
     return false;
   };
   const cap = Number.isFinite(Number(scope.maxRows)) && Number(scope.maxRows) > 0
-    ? bounded(scope.maxRows, 20, 600, INSIGHT_DEFAULTS.insightMaxRows)
-    : bounded(config.insightMaxRows, 20, 600, INSIGHT_DEFAULTS.insightMaxRows);
+    ? bounded(scope.maxRows, 20, MAX_SCAN_ROWS, INSIGHT_DEFAULTS.insightMaxRows)
+    : bounded(config.insightMaxRows, 20, MAX_SCAN_ROWS, INSIGHT_DEFAULTS.insightMaxRows);
   // A WINDOW REPLACES THE WATERMARK, it does not narrow it further.
   //
   // "Read the last week" from somebody looking at a table that has not moved

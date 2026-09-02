@@ -595,8 +595,8 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
         }
         if (asked.maxRows !== undefined && asked.maxRows !== null && asked.maxRows !== "") {
           const rows = Number(asked.maxRows);
-          if (!Number.isInteger(rows) || rows < 20 || rows > 600) {
-            problems.push("maxRows must be a whole number between 20 and 600");
+          if (!Number.isInteger(rows) || rows < 20 || rows > 6000) {
+            problems.push("maxRows must be a whole number between 20 and 6000");
           } else {
             scope.maxRows = rows;
           }

@@ -9378,7 +9378,7 @@ window.__ModuleLoader__.load({
 							// that and small enough that nothing is read to be thrown away
 							// in bulk, which 200-against-20 was doing.
 							maxClusters: maxClusters === configuredClusters ? undefined : maxClusters,
-							maxRows: maxClusters === configuredClusters ? undefined : Math.min(600, Math.max(20, maxClusters * 2)),
+							maxRows: maxClusters === configuredClusters ? undefined : Math.min(6000, Math.max(20, maxClusters * 2)),
 							transcribe: transcribe === configuredTranscribe ? undefined : transcribe,
 							maxAgeDays: maxAgeDays === configuredAge ? undefined : maxAgeDays
 						});

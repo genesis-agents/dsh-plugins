@@ -640,7 +640,7 @@ export function writeConfig(store, patch) {
     ["publishSources", 1, 20], ["publishMinutes", 2, 20], ["publishMinSources", 1, 20],
     // 洞察. `insightIntervalMinutes` is deliberately absent: 0-or-at-least-30
     // is not a range, and putting it here would accept 5.
-    ["insightMaxRows", 20, 600], ["insightMaxClusters", 1, 60], ["insightMaxReconcileCalls", 0, 40],
+    ["insightMaxRows", 20, 6000], ["insightMaxClusters", 1, 60], ["insightMaxReconcileCalls", 0, 40],
     // 0 turns the top-up off and is a legitimate choice — on a library with no
     // videos it is the only sensible one. A plain range rather than the
     // zero-or-a-minimum shape the two intervals use: a budget of 1 is not a

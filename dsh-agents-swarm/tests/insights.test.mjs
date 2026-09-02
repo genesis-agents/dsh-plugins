@@ -2633,6 +2633,32 @@ test("the pass itself clears the slice it read, so the queue drains", async (t) 
   );
 });
 
+test("the scan window is bounded by what clustering costs, not by the model bill", (t) => {
+  // The row ceiling was 600, which is about a day of this library's intake — so
+  // a pass could never clear more than a day and a backlog measured in weeks
+  // could not be caught up at any schedule. Rows are the working set clustering
+  // ranks; `maxClusters` is what bills. The two were bounded as though they
+  // cost the same.
+  const { store, insights } = library(t);
+  const word = (n) => "w" + n.toString(36) + "x" + ((n * 7919) % 99991).toString(36);
+  const many = 1500;
+  for (let at = 0; at < many; at += 1) {
+    store.put(resource("s" + String(at).padStart(4, "0"), {
+      title: `${word(at * 3)} ${word(at * 3 + 1)} ${word(at * 3 + 2)}`,
+      abstract: Array.from({ length: 12 }, (_, k) => word(at * 100 + k)).join(" "),
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 0) + at * 1000).toISOString(),
+      publishedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+    }));
+  }
+  store.setSetting("insightMaxRows", 1500);
+  store.setSetting("insightMaxAgeDays", 0);
+  assert.equal(
+    collectCandidates(store, readInsightConfig(store)).rows.length,
+    many,
+    "the scan was clamped below what was asked for; a backlog cannot be caught up",
+  );
+});
+
 /* ── the block is a conversation, not a skeleton ───────────────────────── */
 
 test("an excerpt is a continuous run, not every Nth line", () => {
