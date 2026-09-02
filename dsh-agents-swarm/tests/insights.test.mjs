@@ -19,6 +19,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
 import { SourceStore } from "../lib/store.js";
+import { sourceMaterial } from "../lib/podcast.js";
 import { createInsightRoutes } from "../lib/insight-routes.js";
 import {
   CREDIBILITY_WEIGHTS,
@@ -2306,4 +2307,58 @@ test("the extractor is told to quote what was said, not what the blurb claims", 
   // And the escape hatch stays: a figure stated only in the show notes is still
   // a fact the source published, and is worth keeping as the weaker of the two.
   assert.match(EXTRACTION_PROMPT, /Quote the description only when/, "the prompt forbids description quotes outright");
+});
+
+/* ── a transcribed video's blurb is not evidence ───────────────────────── */
+
+test("spokenOnly removes the description from a transcribed video", () => {
+  // MEASURED TWICE. Told in the prompt to prefer the transcript, the model
+  // quoted the description anyway on 28 of 28 timestamp-less video quotes —
+  // verified by searching each quote in its own transcript: none were there,
+  // none of those videos lacked a transcript, and the locator was not at fault.
+  //
+  // A blurb is polished, on-topic and 386 characters; a transcript is 7,610
+  // characters of conversational speech with the claim buried in it. An
+  // instruction does not beat that, so the material does.
+  const cues = Array.from({ length: 200 }, (_, at) => ({
+    start: at * 36, duration: 36, text: `spoken sentence number ${at} with real conversational content here`,
+  }));
+  const row = {
+    id: "v", type: "YOUTUBE_VIDEO", title: "A talk",
+    abstract: "PUBLISHER BLURB about the video, written to sell it.",
+    sourceUrl: "https://youtu.be/aaaaaaaaaaa",
+  };
+  const transcript = { language: "en", text: cues.map((c) => c.text).join(" "), cues };
+  const spoken = sourceMaterial(row, transcript, 8000, { spokenOnly: true });
+  assert.equal(spoken.includes("PUBLISHER BLURB"), false, "the blurb is still quotable");
+  assert.ok(spoken.includes("Transcript"), "the transcript went missing with it");
+});
+
+test("the podcast path still gets the description", () => {
+  // Same function, two callers, two jobs: the generator is writing ABOUT the
+  // video and the blurb is legitimate context there. An option rather than a
+  // rule for exactly that reason.
+  const cues = [{ start: 0, duration: 36, text: "some spoken words that go on for a while here" }];
+  const row = { id: "v", type: "YOUTUBE_VIDEO", title: "A talk", abstract: "PUBLISHER BLURB", sourceUrl: "https://youtu.be/aaaaaaaaaaa" };
+  const both = sourceMaterial(row, { language: "en", text: cues[0].text, cues }, 8000);
+  assert.ok(both.includes("PUBLISHER BLURB"), "the podcast generator lost its context");
+});
+
+test("a source with no transcript keeps its body whatever the caller asks", () => {
+  // `spokenOnly` means "prefer what was said where anything was said". An
+  // article has no spoken words and dropping its body would leave a header and
+  // nothing to quote — the whole corpus of written sources, silenced by an
+  // option meant for videos.
+  const row = { id: "a", type: "NEWS", title: "An article", abstract: "THE BODY of the article.", sourceUrl: "https://news.test/1" };
+  const block = sourceMaterial(row, undefined, 8000, { spokenOnly: true });
+  assert.ok(block.includes("THE BODY"), "an article lost its body text");
+});
+
+test("a transcript that did not fit says so, rather than claiming no body exists", () => {
+  // "No body text is stored for this source" would send whoever reads it to fix
+  // the wrong thing: the transcript is there and the budget was too small.
+  const cues = Array.from({ length: 400 }, (_, at) => ({ start: at, duration: 1, text: `line ${at} of many` }));
+  const row = { id: "v", type: "YOUTUBE_VIDEO", title: "A talk", abstract: "blurb", sourceUrl: "https://youtu.be/aaaaaaaaaaa" };
+  const block = sourceMaterial(row, { language: "en", text: "x", cues }, 260, { spokenOnly: true });
+  assert.equal(block.includes("No body text is stored"), false, "a budget problem was reported as a missing transcript");
 });

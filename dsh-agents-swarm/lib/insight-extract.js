@@ -749,7 +749,12 @@ export function buildExtractionPrompt(cluster, options = {}) {
 
   let assembled;
   try {
-    assembled = assembleMaterial(usable);
+    // SPOKEN WORDS ONLY, where a source has them. This block exists to be
+    // QUOTED FROM, and a video's description is the publisher's copy about the
+    // video rather than anything said in it — unquotable at a moment, and weak
+    // evidence dressed as strong. The podcast generator passes no such option:
+    // it is writing about the video and the blurb is real context there.
+    assembled = assembleMaterial(usable, { spokenOnly: true });
   } catch (cause) {
     // `assembleMaterial` throws in an episode's vocabulary ("an episode needs
     // at least one source"). Letting that surface from the insight pass sends

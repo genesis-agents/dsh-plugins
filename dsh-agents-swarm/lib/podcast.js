@@ -258,7 +258,7 @@ function hasBodyText(transcript) {
  * @param budget - characters this source may spend; defaults to {@link MAX_SOURCE_CHARS}.
  * @returns the material block, or an empty string when the row is unusable.
  */
-export function sourceMaterial(row, transcript, budget = MAX_SOURCE_CHARS) {
+export function sourceMaterial(row, transcript, budget = MAX_SOURCE_CHARS, options = {}) {
   if (row == null) return "";
   const title = firstText(row.title);
   if (title === "") return "";
@@ -281,8 +281,30 @@ export function sourceMaterial(row, transcript, budget = MAX_SOURCE_CHARS) {
   let remaining = budget - headerChars;
 
   const summary = firstText(row.aiSummary, row.abstract, row.content);
+  // A TRANSCRIBED VIDEO'S DESCRIPTION IS NOT EVIDENCE, and `spokenOnly` is how
+  // a caller says so.
+  //
+  // MEASURED, TWICE. Told to prefer the transcript, the model quoted the
+  // description anyway on 28 of 28 timestamp-less video quotes — verified by
+  // searching each quote in its own transcript: none were there, none of those
+  // videos lacked a transcript, and the locator was not at fault. A blurb is
+  // polished, on-topic and 386 characters; a transcript is 7,610 characters of
+  // conversational speech with the claim buried in it. An instruction does not
+  // beat that, so the material does.
+  //
+  // WHAT IS LOST IS REAL AND IS THE POINT. A figure stated only in the show
+  // notes becomes unquotable for this caller. That trade is right HERE and only
+  // here: a claim quoted from a publisher's own marketing copy, shown under the
+  // publisher's name with a link to the video, is weak provenance wearing
+  // strong provenance's clothes — and it can never carry the moment that makes
+  // a talk citable at all.
+  //
+  // AN OPTION RATHER THAN THE RULE, because the podcast generator needs the
+  // description: it is writing ABOUT the video and the blurb is legitimate
+  // context there. Same function, two callers, two jobs.
+  const spokenOnly = options.spokenOnly === true && hasBodyText(transcript);
   let hasSummary = false;
-  if (summary !== "" && remaining > 0) {
+  if (summary !== "" && remaining > 0 && !spokenOnly) {
     const fitted = summary.slice(0, remaining);
     lines.push("", fitted);
     remaining -= fitted.length + 2;
@@ -314,6 +336,13 @@ export function sourceMaterial(row, transcript, budget = MAX_SOURCE_CHARS) {
     }
   }
 
+  // A `spokenOnly` block whose transcript did not fit is not a block with no
+  // body: the transcript is there and the budget was too small. Saying "no body
+  // text is stored" would send whoever reads it to fix the wrong thing.
+  if (spokenOnly && !hasTranscript) {
+    lines.push("", "This source has a transcript but it did not fit the space allowed, so only the details above are given.");
+    return lines.join("\n");
+  }
   if (!hasSummary && !hasTranscript) {
     lines.push("", summary !== "" || hasBodyText(transcript)
       ? "Body text is stored for this source but did not fit the space this episode allows, so only the details above are given. Nothing beyond them is known here."
@@ -344,7 +373,7 @@ function asEntries(sources) {
  * @param sources - `[{ row, transcript }]`, or bare rows.
  * @returns `{ blocks, material }`.
  */
-export function assembleMaterial(sources) {
+export function assembleMaterial(sources, options = {}) {
   const entries = asEntries(sources);
   if (entries.length === 0) throw new Error("an episode needs at least one source");
 
@@ -357,7 +386,7 @@ export function assembleMaterial(sources) {
     Math.min(MAX_SOURCE_CHARS, Math.floor(MAX_TOTAL_SOURCE_CHARS / entries.length)),
   );
   const blocks = entries
-    .map((entry) => sourceMaterial(entry.row, entry.transcript, perSource))
+    .map((entry) => sourceMaterial(entry.row, entry.transcript, perSource, options))
     .filter((block) => block !== "");
   if (blocks.length === 0) throw new Error("none of the selected sources carry a usable title");
   return { blocks, material: blocks.join("\n\n") };
