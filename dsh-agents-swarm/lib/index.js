@@ -1561,6 +1561,52 @@ export function createHandler(store, logger, chat, web, ctx, missions) {
       return;
     }
 
+    // ── record that a video publishes no captions, on outside evidence ──
+    //
+    // THE OTHER HALF OF `/transcript/ingest`. That route exists because this
+    // Host cannot always reach captions YouTube will serve to somebody else;
+    // this one exists because it cannot tell "there are none" from "we were not
+    // shown any" either, and a caller that CAN see the full track list holds the
+    // only sound evidence for the absence.
+    //
+    // Without it a video with genuinely no captions stays on the fetch queue for
+    // ever and is paid for on every drain — and the Host can never take it off,
+    // because its own verdict on that question is exactly the one that was
+    // measured wrong.
+    //
+    // THE REASON IS REQUIRED AND IS STORED. An absence with no account of who
+    // established it, and how, is a permanent verdict nobody can audit — which
+    // is the state the first batch of these was in.
+    if (req.method === "POST" && path === "/transcript/absent") {
+      let body;
+      try {
+        body = await readJson(req);
+      } catch (cause) {
+        sendJson(res, 400, { success: false, error: String(cause?.message ?? cause) });
+        return;
+      }
+      const row = typeof body.resourceId === "string" ? store.get(body.resourceId) : undefined;
+      if (row === undefined) {
+        sendJson(res, 404, { success: false, error: "no such resource" });
+        return;
+      }
+      const reason = String(body.reason ?? "").trim();
+      if (reason === "") {
+        sendJson(res, 400, { success: false, error: "a reason is required: say what was checked and what it showed" });
+        return;
+      }
+      const held = store.getTranscript(row.id);
+      if (held !== undefined && String(held.text ?? "") !== "") {
+        // A stored transcript outranks an outside opinion that there is none.
+        sendJson(res, 409, { success: false, error: "this video already has a transcript; not marking it absent" });
+        return;
+      }
+      store.markTranscriptAbsent(row.id, reason);
+      logger?.info?.(`swarm: ${row.id} recorded as publishing no captions — ${reason}`);
+      sendJson(res, 200, { success: true, data: { id: row.id, reason } });
+      return;
+    }
+
     if (req.method === "POST" && path === "/transcript/ingest") {
       let body;
       try {

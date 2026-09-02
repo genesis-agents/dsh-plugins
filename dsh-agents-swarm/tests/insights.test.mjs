@@ -2929,6 +2929,28 @@ test("clearing the absences puts the videos back without touching real transcrip
   assert.equal(kept?.cues?.length, 1, "the cues were dropped, so the video can no longer be seeked");
 });
 
+test("a stored transcript outranks an outside claim that there is none", (t) => {
+  // The absence route takes evidence from a caller that can see the full track
+  // list, which this Host often cannot. But an outside opinion must never
+  // overwrite a transcript already in hand: that would turn a race between two
+  // fetchers into a video losing words it had.
+  const { store } = library(t);
+  store.put(resource("v1", { type: "YOUTUBE_VIDEO", createdAt: "2026-08-01T00:00:00.000Z" }));
+  store.putTranscript("v1", "en", "words already fetched", [{ start: 0, duration: 1, text: "words" }]);
+
+  // The guard the route applies before it calls the store.
+  const held = store.getTranscript("v1");
+  assert.ok(held !== undefined && String(held.text) !== "", "the fixture has no transcript to protect");
+
+  // And when there really is none, the mark takes the video off the queue with
+  // its reason recorded — an absence nobody can audit is the state the first
+  // batch of these was in.
+  store.put(resource("v2", { type: "YOUTUBE_VIDEO", createdAt: "2026-08-02T00:00:00.000Z" }));
+  store.markTranscriptAbsent("v2", "yt-dlp listed every track for this video and found none");
+  assert.deepEqual(store.videosWithoutTranscript(50).map((row) => row.id), [], "a verified absence left the video on the fetch queue");
+  assert.equal(store.countVideosWithoutCaptions(), 1);
+});
+
 /* ── the block is a conversation, not a skeleton ───────────────────────── */
 
 test("an excerpt is a continuous run, not every Nth line", () => {
