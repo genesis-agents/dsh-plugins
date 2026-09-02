@@ -143,6 +143,28 @@ export const DEFAULT_COLLECT_INTERVAL_MINUTES = 60;
 export const MIN_VIDEO_SECONDS = 20 * 60;
 
 /**
+ * Above this a video is not read automatically.
+ *
+ * A CEILING AS WELL AS A FLOOR, and only the floor existed. The reference
+ * implementation this was compared against carries both, and its note for the
+ * upper one is the argument: a four-hour company history is business history
+ * rather than a technical judgement, and reading it costs a day's transcript
+ * budget for material the tab is not about.
+ *
+ * FIVE HOURS RATHER THAN THEIR TWO, chosen deliberately: two would exclude an
+ * ordinary long-form interview, which is exactly the format this library exists
+ * to read. Five excludes only the genuine outliers — a conference recording, a
+ * live stream, an archive dump — where the length itself says the video is not
+ * one conversation.
+ *
+ * NOT DISCARDED, DEFERRED. Such a video stays in the library and stays
+ * readable; what it does not get is an automatic fetch. Deciding to spend on
+ * one is a person's call, which is what the reference means by an oversized
+ * queue.
+ */
+export const MAX_AUTO_VIDEO_SECONDS = 5 * 60 * 60;
+
+/**
  * The video id in a YouTube watch URL, or an empty string.
  * @param url - the item's link.
  * @returns the eleven-character id.

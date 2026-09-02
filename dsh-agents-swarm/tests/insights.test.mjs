@@ -2544,3 +2544,85 @@ test("a scoped run can lower the model-call ceiling for one pass", async (t) => 
   assert.equal(narrow.clusters, 3, `the scope asked for 3 clusters and the pass made ${narrow.clusters}`);
   assert.equal(calls, 3, `the scope asked for 3 model calls and the pass made ${calls}`);
 });
+
+/* ── the block is a conversation, not a skeleton ───────────────────────── */
+
+test("an excerpt is a continuous run, not every Nth line", () => {
+  // THIS IS WHY THE EXTRACTION READ AS A LIST OF FACTS. The excerpt kept every
+  // Nth cue and dropped the rest — measured on a real recording, 1,942 cues
+  // into 7,610 characters is every nineteenth — so the model received the first
+  // sentence of one thought, the fourth sentence of the next, and nothing that
+  // joined them. Measured: 101 lines with 100 breaks in them, covering 5.2% of
+  // the conversation.
+  //
+  // An argument worth extracting is made over consecutive minutes: a speaker
+  // states a counterintuitive position, gives the number behind it, then says
+  // what it implies. Sampled to one line in nineteen, all that survives is what
+  // stands alone in a single cue — a funding figure, a job title, a product
+  // name. The reasoning was not passed over by the model; it was never in the
+  // block.
+  const cues = Array.from({ length: 400 }, (_, at) => ({
+    start: at * 2, duration: 2, text: `line ${at} of an argument that continues into the next line`,
+  }));
+  const row = { id: "v", type: "YOUTUBE_VIDEO", title: "A talk", sourceUrl: "https://youtu.be/aaaaaaaaaaa" };
+  const block = sourceMaterial(row, { language: "en", text: "x", cues }, 4000, { spokenOnly: true });
+
+  const numbers = [...block.matchAll(/line (\d+) of an argument/g)].map((m) => Number(m[1]));
+  assert.ok(numbers.length > 5, `only ${numbers.length} lines survived; the fixture proves nothing`);
+  for (let at = 1; at < numbers.length; at += 1) {
+    assert.equal(
+      numbers[at],
+      numbers[at - 1] + 1,
+      `line ${numbers[at - 1]} is followed by ${numbers[at]}; the excerpt is a skeleton, and a quote copied across that seam exists nowhere in the recording`,
+    );
+  }
+});
+
+test("the insight pass asks for the whole recording, not an episode's share", () => {
+  // 8,000 characters is 11% of a 70,000-character conversation, and no prompt
+  // recovers the other 89%. Two callers want opposite things from one function:
+  // a script is about many sources and needs a little of each; an extraction is
+  // an argument out of one recording and needs all of it.
+  const cues = Array.from({ length: 2000 }, (_, at) => ({
+    start: at * 2, duration: 2, text: `line ${at} carrying part of a long conversation here`,
+  }));
+  const row = { id: "v", type: "YOUTUBE_VIDEO", title: "A talk", sourceUrl: "https://youtu.be/aaaaaaaaaaa" };
+  const transcript = { language: "en", text: "x", cues };
+  const episode = sourceMaterial(row, transcript, 8000, { spokenOnly: true });
+  const extraction = sourceMaterial(row, transcript, 120_000, { spokenOnly: true });
+  assert.ok(
+    extraction.length > episode.length * 8,
+    `the extraction block is only ${Math.round(extraction.length / episode.length)}x the episode's`,
+  );
+});
+
+test("a label never claims more of the recording than the block holds", () => {
+  // A model told it holds the whole recording speaks for the parts it was never
+  // given — which is the reason this label exists, and it said "sampled across
+  // the whole recording" while holding a continuous opening.
+  const cues = Array.from({ length: 400 }, (_, at) => ({ start: at, duration: 1, text: `line ${at} of many words here` }));
+  const row = { id: "v", type: "YOUTUBE_VIDEO", title: "A talk", sourceUrl: "https://youtu.be/aaaaaaaaaaa" };
+  const trimmed = sourceMaterial(row, { language: "en", text: "x", cues }, 2000, { spokenOnly: true });
+  assert.equal(trimmed.includes("sampled across"), false, "the label still describes a sampler that no longer exists");
+  assert.match(trimmed, /continues beyond this/, "a trimmed block does not say it is trimmed");
+
+  const whole = sourceMaterial(row, { language: "en", text: "x", cues }, 120_000, { spokenOnly: true });
+  assert.match(whole, /Transcript \(complete\)/, "a complete transcript is not reported as complete");
+});
+
+test("a video longer than the auto-read ceiling is deferred, not read", (t) => {
+  // A ceiling as well as a floor, and only the floor existed. Five hours
+  // excludes a conference recording or an archive dump — where the length
+  // itself says it is not one conversation — while keeping the long-form
+  // interview this library is for. Deferred rather than discarded: it stays in
+  // the library and a person can decide.
+  const { store } = library(t);
+  store.put(resource("normal", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/aaaaaaaaaaa", durationSeconds: 2 * 3600 }));
+  store.put(resource("huge", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/bbbbbbbbbbb", durationSeconds: 6 * 3600 }));
+  store.putTranscript("normal", "en", "spoken words that go on for a while", [{ start: 0, text: "spoken words that go on for a while" }]);
+  store.putTranscript("huge", "en", "spoken words that go on for a while", [{ start: 0, text: "spoken words that go on for a while" }]);
+
+  const scan = collectCandidates(store, { insightMaxRows: 20, insightResourceTypes: ["YOUTUBE_VIDEO"], insightMaxAgeDays: 0 });
+  assert.deepEqual(scan.rows.map((row) => row.id), ["normal"], "a six-hour recording was read automatically");
+  assert.match(String(scan.skipped[0]?.reason ?? ""), /ceiling/, "it was skipped without saying why");
+});

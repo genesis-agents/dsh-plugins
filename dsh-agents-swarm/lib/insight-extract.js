@@ -35,7 +35,7 @@
 
 import { assembleMaterial, detectLanguage } from "./podcast.js";
 import { localDate } from "./publish-schedule.js";
-import { EVIDENCE_STANCES, INSIGHT_KINDS, INSIGHT_LAYERS } from "./insight-store.js";
+import { EVIDENCE_STANCES, INSIGHT_KINDS, INSIGHT_LAYERS, INSIGHT_SIGNALS } from "./insight-store.js";
 import { corroborateOne } from "./insight-corroborate.js";
 // The card's own locator, reused as the verifier for anything quoted from a
 // transcript: one matcher, so a quote that survives extraction is a quote the
@@ -58,6 +58,9 @@ import {
 // a type this file accepted and store.js did not would filter every row out
 // of a scan that reports itself as having read nothing new.
 import { RESOURCE_TYPES } from "./store.js";
+// The collector owns both video-length rules; importing keeps one number in
+// one place, which a default written twice has already cost this batch once.
+import { MAX_AUTO_VIDEO_SECONDS } from "./collect.js";
 
 /** How often the clock is consulted for a due pass. */
 const TICK_MS = 60_000;
@@ -125,6 +128,23 @@ const MAX_OBJECT_SCANS = 8;
  * ever notice the card was an essay.
  */
 const MAX_STATEMENT_CHARS = 600;
+
+/**
+ * Characters of ONE source handed to the extractor, and of a whole cluster.
+ *
+ * AN ORDER OF MAGNITUDE ABOVE THE EPISODE BUDGET, because the two callers want
+ * opposite things. A script is about many sources and needs a little of each;
+ * an extraction is an argument out of one recording and needs all of it.
+ *
+ * 120,000 characters is a three-hour conversation in full. 240,000 across a
+ * cluster is two of them, which with the cluster ceiling lowered is the shape
+ * of a batch: a few sources, each read whole, rather than twenty read at a
+ * tenth. That is what the reference implementation does — one to four videos a
+ * batch, transcripts entire — and the difference in what comes out is the
+ * reason this number exists.
+ */
+const MAX_INSIGHT_SOURCE_CHARS = 120_000;
+const MAX_INSIGHT_TOTAL_CHARS = 240_000;
 
 /** Claims kept from one answer, matching the prompt's own cap. */
 const MAX_CLAIMS = 3;
@@ -444,6 +464,15 @@ export function collectCandidates(store, config, scope = {}) {
   const skipped = [];
   const quotable = (row) => {
     if (!TIMED.has(String(row?.type ?? "").toUpperCase())) return true;
+    // TOO LONG TO READ AUTOMATICALLY. A five-hour recording is a conference or
+    // an archive dump rather than one conversation, and reading it whole would
+    // spend the cluster's entire budget on a single source. Deferred rather
+    // than discarded: it stays in the library, and a person can decide.
+    const seconds = Number(row?.durationSeconds);
+    if (Number.isFinite(seconds) && seconds > MAX_AUTO_VIDEO_SECONDS) {
+      skipped.push({ row, reason: "longer than the auto-read ceiling" });
+      return false;
+    }
     if (typeof store.getTranscript !== "function") return true;
     let held = "";
     try {
@@ -626,7 +655,26 @@ const LANGUAGE_NAMES = {
 export const EXTRACTION_PROMPT = [
   "You are extracting standing CLAIMS from a group of sources that all cover the same story.",
   "",
-  "A claim is one sentence that somebody could look up and find to be WRONG. \"AI is advancing rapidly\" is not a claim — nobody can disagree with it, so it tells a reader nothing. \"Anthropic raised $3.5bn at a $61.5bn valuation in March 2025\" is a claim: it names who, what, how much and when, and a reader who knows better can say so. Specific enough to be wrong is the whole test. Apply it to every sentence you are about to write, and delete the ones that fail.",
+  "A claim is one sentence that somebody could look up and find to be WRONG. \"AI is advancing rapidly\" is not a claim — nobody can disagree with it, so it tells a reader nothing. \"Anthropic raised $3.5bn at a $61.5bn valuation in March 2025\" is a claim: it names who, what, how much and when, and a reader who knows better can say so. Specific enough to be wrong is the FIRST test. Apply it to every sentence you are about to write, and delete the ones that fail.",
+  "",
+  "THE SECOND TEST, AND MOST CANDIDATES DIE HERE: would somebody who follows this industry closely stop and read it?",
+  "",
+  "Being checkable is not the same as being worth telling. \"Nvidia expects revenue to grow about 70% in FY2028\" is perfectly checkable and is a headline that reader saw last week — it names a number without changing anything they think. Extract the sentence that CARRIES the insight, not the one that reports the announcement.",
+  "",
+  "What clears the second test, roughly in order of value:",
+  "- A claim that CONTRADICTS what the audience currently believes. \"The cheapest model is the most expensive one, because a weak model burns 50 million tokens getting to the same answer\" — a reader who prices by tokens per million has to change how they price.",
+  "- A NUMBER THAT REFRAMES something. Not the headline figure, the one buried in an answer that makes the headline mean something different.",
+  "- A first-hand OPERATIONAL detail somebody would only know by doing it: what broke, what it cost, how long it took, what they tried first and abandoned.",
+  "- A DISAGREEMENT between two people who both know. Two experts contradicting each other is worth more than either of them agreeing with the consensus.",
+  "- A LEADING INDICATOR: something small and concrete that implies something large and not yet visible.",
+  "",
+  "What fails it, however checkable:",
+  "- A funding round, a product launch or an earnings figure with nothing said about it beyond the fact. The wire services have it; a reader does not need this program for it.",
+  "- A restatement of the obvious in specific clothes. \"Company X says AI demand is strong\" is not saved by naming the company.",
+  "- A biography, a job title, a description of what an organisation does.",
+  "- Anything a reader would answer with \"yes, obviously\".",
+  "",
+  "RETURNING NOTHING IS THE RIGHT ANSWER FOR MOST GROUPS OF SOURCES. Three claims that pass both tests are a good day. One is normal. Zero is common and correct — an empty answer costs a reader nothing, and a page of checkable trivia costs them the habit of reading it.",
   "",
   "Rules for the statement:",
   "- One sentence. Name the actor, the thing, and the number or the date wherever the sources give them.",
@@ -668,15 +716,34 @@ export const EXTRACTION_PROMPT = [
   "Use \"cross\" sparingly and only when it is right: \"open weights do not reduce compute demand\" is about the link between the model layer and the compute layer, and filing it under either loses exactly what makes it worth reading. A claim that merely mentions two layers is not cross-layer; pick the one it is ABOUT.",
   "If none of the five fits — the claim is not about this stack at all — omit the field. An omitted layer is honest; a wrong one sends a reader to the wrong section for ever.",
   "",
+  "\"signal\" — WHY this one is worth reading, which is a different question from what it is about. Exactly one of:",
+  "  counter    — it contradicts what the audience currently believes",
+  "  reframe    — a number or definition that changes how something should be measured",
+  "  operational— a first-hand detail about doing the thing: cost, failure, duration, what was abandoned",
+  "  dispute    — two people who both know, disagreeing",
+  "  leading    — small and concrete now, implying something large and not yet visible",
+  "  record     — a fact worth having on file, with no angle beyond itself",
+  "Pick honestly. \"record\" is the honest answer for a funding round or an earnings figure, and a page of them is a page nobody reads — so if the only label that fits is \"record\", ask the second test again before keeping the claim at all.",
+  "",
   "\"entities\" — the two to five proper names the claim is about: companies, models, laboratories, agencies, people. Spelled as the sources spell them.",
   "",
   "\"speaker\" — WHO SAID THE QUOTE, on each piece of evidence, and only when the source block itself makes it plain: an interviewer naming their guest, a speaker introducing themselves, a transcript line attributing a sentence, an article quoting somebody by name. Give the name as the source gives it, and a role after it where the source states one — \"Jensen Huang, Nvidia\". OMIT THE FIELD when the source does not say. A written article speaking in its own voice has no speaker, and an hour of conversation between two people whose names appear nowhere in the block has no speaker either. Do not infer one from the channel, the title, or who you believe was probably talking: a name under a sentence is an attribution, and a wrong attribution is worse than none.",
   "",
-  "\"gloss\" — ONE SENTENCE saying what the claim MEANS for somebody following this industry: the consequence, the thing that changes, or what it is evidence of. Not a translation of the statement and not a restatement of it in other words — a reader who has just read the statement learns nothing from either. Write it in {LANGUAGE}. Where the claim's significance genuinely depends on something the sources do not establish, omit the field rather than speculating: an omitted gloss is honest, an invented one is this program asserting something no source says, under a provenance badge.",
+  "\"gloss\" — ONE OR TWO SENTENCES doing the reader's thinking forward from the claim. Write it in {LANGUAGE}.",
+  "",
+  "The test for a gloss: delete the statement above it and read the gloss alone. If it still says something, it is a gloss. If it now says nothing, it was a restatement and it is worthless. \"This expectation shows the company believes demand will continue\" fails — it is the statement with softer verbs.",
+  "",
+  "A gloss that works does one of these:",
+  "- Names what a reader should now MEASURE differently. \"Cost should be read as price per completed result rather than per million tokens\" changes an instrument.",
+  "- States the CONSEQUENCE if the claim holds, including for whom. \"If this holds, frontier pricing power is steadier than the published price gaps suggest.\"",
+  "- CONNECTS it to something otherwise unexplained. \"…which is also why agent workflows keep converging on the expensive model.\"",
+  "- Names the CONDITION under which it stops being true.",
+  "",
+  "Where the claim's significance genuinely depends on something the sources do not establish, omit the field rather than speculating: an omitted gloss is honest, an invented one is this program asserting something no source says, under a provenance badge.",
   "",
   "Return ONE JSON object and nothing else. No prose before it, no prose after it, no code fence:",
   "",
-  "{\"claims\":[{\"statement\":\"<one sentence, specific enough to be wrong>\",\"kind\":\"finding\",\"layer\":\"compute\",\"gloss\":\"<one sentence on what it means; omit if the sources do not support one>\",\"entities\":[\"…\",\"…\"],\"evidence\":[{\"source\":\"S1\",\"stance\":\"supports\",\"quote\":\"<copied character for character out of [S1]>\",\"speaker\":\"<who said it, omit if the block does not say>\"},{\"source\":\"S3\",\"stance\":\"contradicts\",\"quote\":\"<copied character for character out of [S3]>\"}]}]}",
+  "{\"claims\":[{\"statement\":\"<one sentence, specific enough to be wrong AND worth stopping for>\",\"kind\":\"finding\",\"layer\":\"compute\",\"signal\":\"counter\",\"gloss\":\"<what a reader should now think or measure differently; omit if the sources do not support one>\",\"entities\":[\"…\",\"…\"],\"evidence\":[{\"source\":\"S1\",\"stance\":\"supports\",\"quote\":\"<copied character for character out of [S1]>\",\"speaker\":\"<who said it, omit if the block does not say>\"},{\"source\":\"S3\",\"stance\":\"contradicts\",\"quote\":\"<copied character for character out of [S3]>\"}]}]}",
   "",
   "--- SOURCES ---",
   "{SOURCES}",
@@ -758,7 +825,23 @@ export function buildExtractionPrompt(cluster, options = {}) {
     // video rather than anything said in it — unquotable at a moment, and weak
     // evidence dressed as strong. The podcast generator passes no such option:
     // it is writing about the video and the blurb is real context there.
-    assembled = assembleMaterial(usable, { spokenOnly: true });
+    // ── THE WHOLE RECORDING, NOT A SLICE OF IT ────────────────────────
+    //
+    // 8,000 characters is 11% of a 70,000-character conversation, and the
+    // extraction read like it: a list of funding figures and job titles, with
+    // none of the reasoning that makes a claim worth reading. An argument is
+    // made over consecutive minutes — a speaker states a position, gives the
+    // number behind it, then says what it implies — and none of that survives
+    // being cut to a tenth.
+    //
+    // The reference implementation this was measured against hands its model
+    // the transcript entire and reads one to four videos a batch. This is that
+    // trade: fewer sources, all of each.
+    assembled = assembleMaterial(usable, {
+      spokenOnly: true,
+      maxSourceChars: MAX_INSIGHT_SOURCE_CHARS,
+      maxTotalChars: MAX_INSIGHT_TOTAL_CHARS,
+    });
   } catch (cause) {
     // `assembleMaterial` throws in an episode's vocabulary ("an episode needs
     // at least one source"). Letting that surface from the insight pass sends
@@ -995,11 +1078,17 @@ export function parseClaims(answer, labels, options = {}) {
     // is a reading, and the card has to present it as one. Rejecting a claim
     // for a missing gloss would throw away verified evidence over the one
     // field that carries no evidence.
+    // WHY IT IS WORTH READING, and never fatal for the same reason the layer
+    // and the gloss are not: a claim with real evidence must not be discarded
+    // over a label. An unrecognised value is dropped rather than stored — a
+    // vocabulary that accepts anything is not a vocabulary.
+    const flag = typeof raw?.signal === "string" ? raw.signal.trim().toLowerCase() : "";
     const said = typeof raw?.gloss === "string" ? raw.gloss.trim() : "";
     claims.push({
       statement, kind,
       layer: INSIGHT_LAYERS.includes(layer) ? layer : null,
       gloss: said !== "" && said.length <= MAX_GLOSS_CHARS ? said : "",
+      signal: INSIGHT_SIGNALS.includes(flag) ? flag : null,
       entities: readEntities(raw?.entities), evidence,
     });
     // The prompt asks for at most three. A prompt limit is a request, not a
@@ -1325,6 +1414,7 @@ export async function reconcileClaim(insightStore, chat, claim, options) {
       // it. Under 未归层 for ever, with nothing reporting anything.
       layer: claim.layer ?? undefined,
       gloss: claim.gloss,
+      signal: claim.signal ?? undefined,
       entities: Array.isArray(target.entities) ? target.entities : [],
       status: target.status,
       simhash: target.simhash,
@@ -1354,6 +1444,7 @@ export async function reconcileClaim(insightStore, chat, claim, options) {
     kind: claim.kind,
     layer: claim.layer,
     gloss: claim.gloss,
+    signal: claim.signal,
     entities: claim.entities,
     status: "candidate",
     simhash: hash,

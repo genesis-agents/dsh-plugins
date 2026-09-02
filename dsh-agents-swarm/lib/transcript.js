@@ -394,7 +394,11 @@ let paidCalls = 0;
  * budget.
  */
 const PAID_MINUTE_CEILING = 600;
-const PAID_MINUTES_PER_VIDEO = 180;
+// FIVE HOURS, matching the collector's own ceiling rather than a second number
+// invented here. Two limits on the same quantity are two limits that disagree
+// the first time either moves — which this batch has already paid for once,
+// with a default written down twice.
+const PAID_MINUTES_PER_VIDEO = 5 * 60;
 let paidMinutes = 0;
 
 /** How many paid requests have been made, and what is left. */

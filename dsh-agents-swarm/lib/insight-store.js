@@ -126,6 +126,12 @@ CREATE TABLE IF NOT EXISTS insights (
   -- than speculate, and a claim must not be discarded for taking that
   -- instruction.
   gloss               TEXT,
+  -- WHY this one is worth reading, which is a different question from what it
+  -- is about. The kind column says a launch or a funding round; this one says
+  -- whether a
+  -- reader should stop. NULL for every row written before the extractor was
+  -- asked, and for one where nothing fits.
+  signal              TEXT,
   supersedes          TEXT,              -- id of the claim this replaced
   updated_at          TEXT NOT NULL
 ) STRICT;
@@ -305,6 +311,8 @@ export const INSIGHT_STATUSES = Object.freeze(["candidate", "standing", "contest
  * their own heading rather than guessing, which is also what tells a reader
  * how much of the table predates the classification.
  */
+export const INSIGHT_SIGNALS = Object.freeze(["counter", "reframe", "operational", "dispute", "leading", "record"]);
+
 export const INSIGHT_LAYERS = Object.freeze(["energy", "compute", "model", "application", "cross"]);
 
 /** The only values `insight_evidence.stance` may hold. */
@@ -443,6 +451,7 @@ function shapeInsight(row) {
     // null again whenever the model declined — which the prompt asks it to do
     // rather than speculate.
     gloss: row.gloss ?? null,
+    signal: row.signal ?? null,
     entities: entitiesOf(row.entities),
     status: row.status,
     pinnedStatus: pinned,
@@ -466,7 +475,7 @@ function shapeInsight(row) {
 
 /** Every column shapeInsight reads, so no reader is served a half row. */
 const INSIGHT_COLUMNS = `
-  id, statement, kind, layer, gloss, entities, status, pinned_status, simhash,
+  id, statement, kind, layer, gloss, signal, entities, status, pinned_status, simhash,
   first_seen_at, last_seen_at, source_count, independent_count, contradiction_count,
   novelty, relevance, credibility, momentum, rank_score, scored_at, supersedes, updated_at
 `;
@@ -561,6 +570,9 @@ export class InsightStore {
     // came back empty.
     if (!own.some((column) => column.name === "gloss")) {
       this.db.exec("ALTER TABLE insights ADD COLUMN gloss TEXT");
+    }
+    if (!own.some((column) => column.name === "signal")) {
+      this.db.exec("ALTER TABLE insights ADD COLUMN signal TEXT");
     }
     if (!columns.some((column) => column.name === "speaker")) {
       this.db.exec("ALTER TABLE insight_evidence ADD COLUMN speaker TEXT");
@@ -1103,9 +1115,9 @@ export class InsightStore {
     const id = typeof record?.id === "string" && record.id !== "" ? record.id : newInsightId();
     this.db.prepare(`
       INSERT INTO insights (
-        id, statement, kind, layer, gloss, entities, status, simhash,
+        id, statement, kind, layer, gloss, signal, entities, status, simhash,
         first_seen_at, last_seen_at, supersedes, updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         statement = excluded.statement,
         kind = excluded.kind,
@@ -1118,6 +1130,7 @@ export class InsightStore {
         -- optional by design, so "absent" is the common case and overwriting
         -- with it would make the reading flicker away on the next merge.
         gloss = COALESCE(excluded.gloss, insights.gloss),
+        signal = COALESCE(excluded.signal, insights.signal),
         entities = excluded.entities,
         simhash = excluded.simhash,
         supersedes = excluded.supersedes,
@@ -1136,6 +1149,7 @@ export class InsightStore {
       // is also how a reader sees how much of the table predates the field.
       INSIGHT_LAYERS.includes(record?.layer) ? record.layer : null,
       typeof record?.gloss === "string" && record.gloss.trim() !== "" ? record.gloss.trim() : null,
+      INSIGHT_SIGNALS.includes(record?.signal) ? record.signal : null,
       entitiesJson(record?.entities), status, simhash,
       firstSeenAt, lastSeenAt,
       typeof record?.supersedes === "string" && record.supersedes !== "" ? record.supersedes : null,

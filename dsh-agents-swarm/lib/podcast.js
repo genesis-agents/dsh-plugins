@@ -185,8 +185,43 @@ function firstText(...values) {
 function sampleLines(lines, budget) {
   const whole = lines.join("\n");
   if (whole.length <= budget) return { text: whole, complete: true };
-  const step = Math.max(2, Math.round(whole.length / Math.max(1, budget)));
-  const kept = lines.filter((_, index) => index % step === 0).join("\n").slice(0, budget);
+
+  // ── A CONTINUOUS RUN, NOT EVERY NTH LINE ────────────────────────────────
+  //
+  // THIS WAS TAKING A SKELETON AND CALLING IT AN EXCERPT. Every Nth cue kept
+  // and the rest dropped — measured on a real recording, 1,942 cues into 7,610
+  // characters is every seventh — so the model received the first sentence of
+  // one thought, the fourth sentence of the next, and nothing that joined them.
+  //
+  // IT IS WHY THE EXTRACTION READ AS A LIST OF FACTS. An argument worth
+  // extracting is made over consecutive minutes: a speaker states a
+  // counterintuitive position, gives the number behind it, then says what it
+  // implies. Sampled to one line in seven, all that survives is whatever stands
+  // alone in a single cue — a funding figure, a job title, a product name. The
+  // reasoning was not passed over by the model; it was never in the block.
+  //
+  // AND IT MANUFACTURED SPLICES. Two kept lines sit adjacent in the block and
+  // six cues apart in the recording, so a quote copied across that seam is
+  // verbatim in what the model was shown and exists nowhere in the source. That
+  // hole is now closed downstream by verifying against the transcript, but the
+  // cause was here.
+  //
+  // FROM THE BEGINNING, deliberately. A talk states its thesis early and spends
+  // the rest supporting it, so the opening is where the argument is densest —
+  // and unlike a midpoint it needs no judgement about which part matters, which
+  // is a judgement this function has no basis for making.
+  //
+  // The cut lands on a line boundary rather than mid-sentence: a half sentence
+  // at the end of a block is a half sentence a model may quote.
+  let kept = "";
+  for (const line of lines) {
+    if (kept.length + line.length + 1 > budget) break;
+    kept = kept === "" ? line : `${kept}\n${line}`;
+  }
+  // A single line longer than the whole budget: take what fits rather than
+  // returning nothing, since one long line is the shape a cue-less legacy
+  // transcript arrives in.
+  if (kept === "") kept = whole.slice(0, budget);
   return { text: kept, complete: false };
 }
 
@@ -329,9 +364,14 @@ export function sourceMaterial(row, transcript, budget = MAX_SOURCE_CHARS, optio
       // Say which it is, for the reason `buildResourceContext` gives: a model
       // told it holds the whole recording will speak for the parts it was
       // never given.
+      // THE LABEL HAS TO MATCH WHAT THE BLOCK IS. It said "sampled across the
+      // whole recording", which was true of the old skeleton and is a lie about
+      // a continuous opening — and a model told it holds the whole recording
+      // speaks for the parts it was never given, which is the reason this label
+      // exists at all.
       lines.push("", excerpt.complete
         ? "Transcript (complete):"
-        : "Transcript (excerpt, sampled across the whole recording):", excerpt.text);
+        : "Transcript (the opening of the recording; it continues beyond this):", excerpt.text);
       hasTranscript = true;
     }
   }
@@ -381,9 +421,20 @@ export function assembleMaterial(sources, options = {}) {
   // spend it: an episode whose last five sources arrived empty would still
   // look complete in the prompt, and only the finished script would show that
   // half the selection was never discussed.
+  // THE BUDGET IS THE CALLER'S, because two callers want opposite things from
+  // the same function. An episode is a script about many sources and wants a
+  // little of each; an extraction is an argument out of one recording and wants
+  // all of it. 8,000 characters of a 70,000-character transcript is 11% of a
+  // conversation, and no prompt recovers the other 89%.
+  const sourceCap = Number.isFinite(Number(options.maxSourceChars)) && Number(options.maxSourceChars) > 0
+    ? Number(options.maxSourceChars)
+    : MAX_SOURCE_CHARS;
+  const totalCap = Number.isFinite(Number(options.maxTotalChars)) && Number(options.maxTotalChars) > 0
+    ? Number(options.maxTotalChars)
+    : MAX_TOTAL_SOURCE_CHARS;
   const perSource = Math.max(
     500,
-    Math.min(MAX_SOURCE_CHARS, Math.floor(MAX_TOTAL_SOURCE_CHARS / entries.length)),
+    Math.min(sourceCap, Math.floor(totalCap / entries.length)),
   );
   const blocks = entries
     .map((entry) => sourceMaterial(entry.row, entry.transcript, perSource, options))
