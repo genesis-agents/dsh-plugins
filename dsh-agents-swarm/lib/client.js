@@ -9949,7 +9949,14 @@ window.__ModuleLoader__.load({
 					// ~99% of a scan by design, so a stacked bar is one segment and a sliver:
 					// truthful, unreadable, and it would make a normal pass look like a fault.
 					jsx("div", {
-						style: { display: "flex", flexDirection: "column", gap: SPACE.xs },
+						// LAID OUT ACROSS, NOT DOWN. As a column of nine rows this used the full
+						// width of the pane for about two hundred pixels of it and stood eight rows
+						// tall — the flat grid's opposite failure, and reported as such.
+						//
+						// The milestones are the spine and run left to right; every deduction hangs
+						// between the two it separates, which is where it actually happens. Same
+						// funnel, same arithmetic, two lines instead of eight.
+						style: { display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: SPACE.sm, rowGap: SPACE.xs },
 						children: [
 							{ key: "handled", zh: "经手", en: "handled", value: looked, tone: null, lead: false },
 							{ key: "no-transcript", zh: "没有转录，跳过", en: "skipped, no transcript", value: Number(counts["no-transcript"] ?? 0), tone: TONE.warn, lead: true },
@@ -9960,33 +9967,28 @@ window.__ModuleLoader__.load({
 							{ key: "read", zh: "读了没抽到", en: "read, nothing kept", value: Number(counts.read ?? 0), tone: TONE.neutral, lead: true },
 							{ key: "failed", zh: "抽取失败", en: "extraction failed", value: Number(counts.failed ?? 0), tone: TONE.danger, lead: true },
 							{ key: "extracted", zh: "进了主张", en: "used in a claim", value: Number(counts.extracted ?? 0), tone: TONE.success, lead: false }
-						].map((step) => jsxs("div", {
+						].map((step, at) => jsxs("span", {
 							style: {
-								display: "flex", alignItems: "baseline", gap: SPACE.sm,
-								// A SUBTRACTION IS INDENTED UNDER WHAT IT LEAVES. The three
-								// totals sit at the margin and everything that comes off them
-								// hangs beneath, so the shape says which is which without a
-								// second colour or a rule doing it.
-								paddingLeft: step.lead ? SPACE.lg : 0,
+								display: "inline-flex", alignItems: "baseline", gap: SPACE.xs,
 								opacity: step.value === 0 ? OPACITY.quiet : 1
 							},
 							children: [
-								jsx("span", {
-									style: { font: FONT.micro, color: INK.quiet, width: "14px", flex: "none" },
-									"aria-hidden": "true",
-									children: step.lead ? "−" : ""
-								}, "sign"),
+								// A CHEVRON BEFORE EACH MILESTONE AFTER THE FIRST, so the spine
+								// reads as a sequence rather than as four numbers that happen to
+								// be adjacent. Deductions get the minus they already had.
+								step.lead
+									? jsx("span", { style: { font: FONT.micro, color: INK.quiet }, "aria-hidden": "true", children: "−" }, "sign")
+									: (at === 0 ? null : jsx("span", { style: { font: FONT.micro, color: INK.quiet }, "aria-hidden": "true", children: "→" }, "arrow")),
 								jsx("span", {
 									style: {
-										font: step.lead ? FONT.body : FONT.baseStrong,
+										font: step.lead ? FONT.micro : FONT.baseStrong,
 										fontVariantNumeric: "tabular-nums",
-										color: step.tone === null ? INK.primary : `rgb(${step.tone})`,
-										minWidth: "64px", textAlign: "right", flex: "none"
+										color: step.tone === null ? INK.primary : `rgb(${step.tone})`
 									},
 									children: String(step.value)
 								}, "n"),
 								jsx("span", {
-									style: { font: FONT.micro, color: step.lead ? INK.quiet : INK.secondary, minWidth: 0 },
+									style: { font: FONT.micro, color: step.lead ? INK.quiet : INK.secondary },
 									children: zh ? step.zh : step.en
 								}, "l")
 							]
