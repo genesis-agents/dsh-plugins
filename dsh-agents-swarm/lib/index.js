@@ -19,7 +19,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { SourceStore, RESOURCE_TYPES } from "./store.js";
 import { COLLECTORS, DEFAULT_COLLECT_INTERVAL_MINUTES, runCollector } from "./collect.js";
 import { registerLibraryTool } from "./tool.js";
-import { resolveTranscript, listCaptionTracks, transcriptFromXml, fetchVideoDetails, supadataKeyHealth, supadataKeys } from "./transcript.js";
+import { resolveTranscript, listCaptionTracks, transcriptFromXml, fetchVideoDetails, resetSupadataHealth, supadataKeyHealth, supadataKeys } from "./transcript.js";
 import { translateBatch, isSupportedLanguage, BATCH_SIZE, TARGET_LANGUAGES } from "./translate.js";
 import { admissibleUrl, fetchDocument, readableText, readArticle, displayModeOf, documentUrlOf } from "./proxy.js";
 import { sourceFeeds } from "./sources.js";
@@ -1207,6 +1207,15 @@ export function createHandler(store, logger, chat, web, ctx, missions) {
     // So the mutation happens where the keys already live. The page sends a
     // position and, for a replace or an add, one new key; it never learns the
     // others and never sends them back.
+    // A KEY REFUSED FOR QUOTA IS LEFT ALONE FOR SIX HOURS, and this is how
+    // somebody who has just topped one up says so. Without it the cooldown —
+    // which exists to stop pointless retries — would punish the person who
+    // fixed the problem by making them wait out a fact about yesterday.
+    if (req.method === "POST" && path === "/config/supadata-reset") {
+      sendJson(res, 200, { success: true, data: { cleared: resetSupadataHealth(), keys: supadataKeyHealth(readConfig(store).supadataKey) } });
+      return;
+    }
+
     if (req.method === "POST" && path === "/config/supadata-key") {
       let body;
       try {

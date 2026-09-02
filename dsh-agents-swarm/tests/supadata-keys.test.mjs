@@ -13,9 +13,14 @@
 // three others sit idle. Round-robin is the point; that it still tries every
 // key before giving up is what makes the round-robin safe.
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 
-import { maskSupadataKey, supadataKeyHealth, supadataKeys, resolveTranscript } from "../lib/transcript.js";
+import { maskSupadataKey, resetSupadataHealth, supadataKeyHealth, supadataKeys, resolveTranscript } from "../lib/transcript.js";
+
+// A HOOK, NOT A CALL IN EVERY TEST. The key-health cache is module-level and
+// two tests here failed on state a third had left behind — a suite reporting
+// the order it ran in rather than the behaviour it checks.
+beforeEach(() => { resetSupadataHealth(); });
 
 test("the setting is split into keys however it was pasted", () => {
   // A person pasting four keys uses whichever separator their clipboard
@@ -201,4 +206,56 @@ test("nothing usable leaves in the health payload", () => {
   }
   // And the fingerprint that IS there is the one the row shows.
   assert.deepEqual(supadataKeyHealth(keys).map((one) => one.masked), ["sd_…1234", "sd_…5678"]);
+});
+
+test("an exhausted key is not asked again, so a batch cannot burn the list per video", async () => {
+  // THIS EMPTIED FIVE REAL KEYS. The rotation breaks on 400 and 404 — "a video
+  // Supadata will not serve is not a key problem" — and does NOT break on 429,
+  // so a video whose free routes failed walked the whole list and spent one
+  // request per key to be refused five times. Twelve videos a pass is sixty
+  // wasted calls an hour, for ever; a drain of sixty videos is three hundred in
+  // one round. Measured after the fact on the live host: 54 calls, 0 successes,
+  // 51 of them 429.
+  //
+  // Continuing past a 429 is RIGHT when one key is spent and the others are
+  // not — that is the entire reason for holding several, and the test above
+  // pins it. It is wrong when the key was already known to be spent, and
+  // nothing remembered.
+  const keys = "k1\nk2\nk3\nk4\nk5";
+  const first = await chain(keys, () => 429);
+  assert.ok(first.used.length > 1, `the first video probed only ${first.used.length} key(s); the list is not being tried`);
+
+  // Every video after it makes NO paid call at all — the whole burn, gone.
+  for (const _ of [1, 2, 3, 4]) {
+    const again = await chain(keys, () => 429);
+    assert.equal(again.used.length, 0, `${again.used.length} paid call(s) against keys already known to be out of quota`);
+  }
+});
+
+test("a key that starts working again comes back without a restart", async () => {
+  // The cooldown exists to stop pointless retries, not to bury a key somebody
+  // has just topped up. `resetSupadataHealth` is the door for the person who
+  // fixed the quota and should not wait six hours to find out — and it is the
+  // same door `POST /config/supadata-reset` opens.
+  const spent = await chain("k1", () => 429);
+  assert.equal(spent.used.length, 1);
+  assert.equal(supadataKeyHealth("k1")[0].state, "quota");
+
+  // Topped up on the provider's side. The cooldown correctly keeps it idle.
+  const stillCooling = await chain("k1", () => ({ content: "now it works", lang: "en" }));
+  assert.equal(stillCooling.used.length, 0, "the cooldown did not hold");
+
+  resetSupadataHealth();
+  const back = await chain("k1", () => ({ content: "now it works", lang: "en" }));
+  assert.equal(back.result?.text, "now it works", "the key did not come back after the reset");
+  assert.equal(supadataKeyHealth("k1")[0].state, "ok");
+});
+
+test("a success clears a key's cooldown by itself", async () => {
+  // The other direction, and it matters as much: a key restored on the
+  // provider's side must come back without anybody pressing anything, or the
+  // reset button becomes a step people have to know about.
+  await chain("k1\nk2", (key) => (key === "k1" ? 429 : { content: "k2 is fine", lang: "en" }));
+  assert.equal(supadataKeyHealth("k1\nk2")[0].state, "quota");
+  assert.equal(supadataKeyHealth("k1\nk2")[1].state, "ok", "the working key was marked spent");
 });

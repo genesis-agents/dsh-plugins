@@ -299,13 +299,55 @@ const supadataHealth = new Map();
  * @param outcome - "ok" | "quota" | "failed".
  * @param error - the scrubbed message, for the two that are not "ok".
  */
+/**
+ * How long a key that answered 429 is left alone.
+ *
+ * A QUOTA IS NOT A BLIP. Supadata's resets on its own schedule — daily or
+ * monthly, not in ninety seconds — so retrying a refused key on the next video
+ * spends a request to be told the same thing, and does it once per video for
+ * ever. Six hours is long enough that a day's quota is not re-probed dozens of
+ * times, and short enough that a key restored at noon is back in service the
+ * same afternoon.
+ */
+const QUOTA_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Forget every key's recorded state.
+ *
+ * TWO CALLERS AND BOTH ARE REAL. A person who has just topped up their quota
+ * should not wait out a six-hour cooldown that is now describing a fact about
+ * yesterday — the cooldown exists to stop pointless retries, not to punish
+ * somebody for fixing the problem. And a module-level cache with no reset is a
+ * cache that leaks between tests: two of them here failed on state left behind
+ * by a third, which is a suite that reports the order it ran in rather than the
+ * behaviour it checks.
+ * @returns the number of keys forgotten.
+ */
+export function resetSupadataHealth() {
+  const held = supadataHealth.size;
+  supadataHealth.clear();
+  return held;
+}
+
+/** Whether a key is inside its cooldown after a quota refusal. */
+function isExhausted(key, now = Date.now()) {
+  const held = supadataHealth.get(key);
+  if (held === undefined || held.exhaustedAt === 0) return false;
+  return now - held.exhaustedAt < QUOTA_COOLDOWN_MS;
+}
+
 function noteSupadataKey(key, outcome, error = "") {
-  const held = supadataHealth.get(key) ?? { calls: 0, ok: 0, quota: 0, failed: 0, lastError: "", lastAt: "" };
+  const held = supadataHealth.get(key) ?? { calls: 0, ok: 0, quota: 0, failed: 0, lastError: "", lastAt: "", exhaustedAt: 0 };
   held.calls += 1;
   held[outcome] += 1;
   held.lastAt = new Date().toISOString();
   if (outcome !== "ok") held.lastError = error;
   else held.lastError = "";
+  // A QUOTA REFUSAL STARTS A COOLDOWN; A SUCCESS ENDS ONE. The second half
+  // matters as much: a key restored on the provider's side must come back
+  // without anybody restarting anything.
+  if (outcome === "quota") held.exhaustedAt = Date.now();
+  if (outcome === "ok") held.exhaustedAt = 0;
   supadataHealth.set(key, held);
 }
 
@@ -335,7 +377,7 @@ export function maskSupadataKey(key) {
 
 export function supadataKeyHealth(raw) {
   return supadataKeys(raw).map((key, at) => {
-    const held = supadataHealth.get(key) ?? { calls: 0, ok: 0, quota: 0, failed: 0, lastError: "", lastAt: "" };
+    const held = supadataHealth.get(key) ?? { calls: 0, ok: 0, quota: 0, failed: 0, lastError: "", lastAt: "", exhaustedAt: 0 };
     // The state is the LAST thing that happened, not a ratio: a key that served
     // a thousand transcripts and is now out of quota is out of quota, and an
     // average would report it as healthy for a long time.
@@ -466,20 +508,41 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
   if (keys.length === 0) {
     failures.push("supadata: no API key configured (Settings → Sources)");
   } else {
-    const start = supadataCursor % keys.length;
-    supadataCursor = (start + 1) % keys.length;
-    for (let step = 0; step < keys.length; step += 1) {
-      const at = (start + step) % keys.length;
+    // ── EVERY KEY WAS BEING BURNED ON EVERY VIDEO ─────────────────────
+    //
+    // MEASURED, AFTER IT HAPPENED: five keys, 54 calls, 0 successes, 51 of them
+    // 429. The loop below breaks on 400 and 404 — "a video Supadata will not
+    // serve is not a key problem" — and does NOT break on 429, so a video whose
+    // free routes failed walked the whole list and spent one request per key to
+    // be refused five times. At twelve videos a pass that is sixty wasted calls
+    // an hour, for ever, and a drain of sixty videos is three hundred in one
+    // round. It emptied every key.
+    //
+    // Continuing past a 429 is right when ONE key is spent and the others are
+    // not — that is the entire reason for holding several. It is wrong when the
+    // key was already known to be spent, and nothing remembered.
+    //
+    // So a refused key is skipped for a cooldown, and when every key is inside
+    // one the request is not made at all: there is nothing left to ask.
+    const usable = keys.filter((key) => !isExhausted(key));
+    if (usable.length === 0) {
+      failures.push(`supadata: all ${keys.length} key(s) are out of quota; not asking again until the cooldown expires`);
+      throw new Error(failures.join("; "));
+    }
+    const start = supadataCursor % usable.length;
+    supadataCursor = (start + 1) % usable.length;
+    for (let step = 0; step < usable.length; step += 1) {
+      const at = (start + step) % usable.length;
       try {
-        const got = { ...await fetchViaSupadata(videoId, keys[at], languages[0] ?? "en"), via: "supadata" };
-        noteSupadataKey(keys[at], "ok");
+        const got = { ...await fetchViaSupadata(videoId, usable[at], languages[0] ?? "en"), via: "supadata" };
+        noteSupadataKey(usable[at], "ok");
         return got;
       } catch (cause) {
         // Recorded before the message is folded into `failures`, so the tally
         // sees the individual answer rather than the joined string every route
         // above it also contributed to.
         noteSupadataKey(
-          keys[at],
+          usable[at],
           /quota|429|rate.?limit|too many requests/i.test(String(cause?.message ?? cause)) ? "quota" : "failed",
           String(cause?.message ?? cause),
         );
@@ -487,11 +550,21 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
         // a log or an error body — this string is handed to the browser —
         // and "key 3 of 4" is what a person needs to know which one to
         // replace without it ever being printed.
-        failures.push(`supadata key ${at + 1}/${keys.length}: ${String(cause?.message ?? cause)}`);
+        failures.push(`supadata key ${keys.indexOf(usable[at]) + 1}/${keys.length}: ${String(cause?.message ?? cause)}`);
         // A VIDEO SUPADATA WILL NOT SERVE IS NOT A KEY PROBLEM. 400 and 404
         // are the same answer from every key in the list, so trying the
         // other three spends three requests to be told the same thing.
         if (cause?.status === 400 || cause?.status === 404) break;
+        // A 429 DOES NOT BREAK, and an existing test says why: holding several
+        // keys is pointless if one refusal ends the attempt — the next key may
+        // genuinely have quota, and finding that out is the whole reason the
+        // list exists.
+        //
+        // The multiplication is fixed one layer up instead. The refused key is
+        // now in a cooldown, so the FIRST video walks the list and learns which
+        // keys are spent, and every video after it skips them and makes no call
+        // at all. Five wasted requests once, rather than five per video for
+        // ever — which is what emptied the quota.
       }
     }
   }
