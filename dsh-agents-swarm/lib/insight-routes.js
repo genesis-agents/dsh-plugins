@@ -821,6 +821,33 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
     }
 
     // ── what one pass actually did, source by source ────────────────────
+    // ── which videos are still waiting on a transcript ──────────────────
+    //
+    // READ-ONLY, AND IT EXISTS BECAUSE THE QUEUE WAS ONLY EVER VISIBLE AS A
+    // COUNT. `/insights/transcribe` walks the same list but fetching is the
+    // only thing it will do with it, so anything that wanted to SEE the queue —
+    // a person deciding whether to buy quota, a tool fetching captions by some
+    // route this Host has no way to reach — had to start a paid drain to find
+    // out what was in it.
+    //
+    // The rows it names are exactly the ones a drain would try, in the order it
+    // would try them, so a caller that fills them in from elsewhere and posts
+    // them to `/transcript/ingest` is doing the drain's work rather than
+    // racing it. Videos proven to publish no captions are already excluded by
+    // the store, so nothing here is a video anyone should ask about again.
+    if (req.method === "GET" && path === "/insights/awaiting") {
+      const take = boundedInteger(params, "take", 1, 200, 50);
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          waiting: store.countVideosWithoutTranscript?.() ?? null,
+          captionsUnavailable: store.countVideosWithoutCaptions?.() ?? null,
+          videos: store.videosWithoutTranscript?.(take) ?? [],
+        },
+      });
+      return true;
+    }
+
     if (req.method === "GET" && path === "/insights/ledger") {
       const params = new URL(req.url, "http://local").searchParams;
       const batch = params.get("batch") ?? undefined;

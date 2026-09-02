@@ -2837,6 +2837,35 @@ test("prose with a brace in it is still a failure, not a partial success", () =>
   );
 });
 
+test("the transcript queue can be read without starting a paid drain", (t) => {
+  // It was only ever visible as a COUNT. `/insights/transcribe` walks the same
+  // list, but fetching is the only thing it will do with it — so anything that
+  // wanted to SEE the queue had to start a paid drain to find out what was in
+  // it, which is a strange price for a question.
+  //
+  // The rows must be the ones a drain would try, in the order it would try
+  // them, so a caller filling them in from somewhere this Host cannot reach is
+  // doing the drain's work rather than racing it.
+  const { store } = library(t);
+  store.put(resource("v1", { type: "YOUTUBE_VIDEO", createdAt: "2026-08-01T00:00:00.000Z" }));
+  store.put(resource("v2", { type: "YOUTUBE_VIDEO", createdAt: "2026-08-02T00:00:00.000Z" }));
+  store.put(resource("v3", { type: "YOUTUBE_VIDEO", createdAt: "2026-08-03T00:00:00.000Z" }));
+  store.markTranscriptAbsent("v2", "no caption track");
+
+  const queue = store.videosWithoutTranscript(50).map((row) => row.id);
+  assert.deepEqual(queue, ["v1", "v3"], "the queue is not oldest-first, or is offering a video proven to have none");
+  assert.equal(store.countVideosWithoutTranscript(), 2);
+
+  // And a transcript posted in from outside takes the video off the queue, which
+  // is the whole point of being able to read it.
+  store.putTranscript("v1", "en", "words fetched by some other route entirely", []);
+  assert.deepEqual(
+    store.videosWithoutTranscript(50).map((row) => row.id),
+    ["v3"],
+    "a video whose transcript arrived from elsewhere is still being offered for fetching",
+  );
+});
+
 /* ── the block is a conversation, not a skeleton ───────────────────────── */
 
 test("an excerpt is a continuous run, not every Nth line", () => {
