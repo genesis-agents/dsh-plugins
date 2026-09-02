@@ -15,7 +15,7 @@
 import { strict as assert } from "node:assert";
 import { beforeEach, test } from "node:test";
 
-import { maskSupadataKey, resetSupadataHealth, resetSupadataSpend, setSupadataPacing, supadataKeyHealth, supadataKeys, supadataPacingWait, supadataSpend, resolveTranscript } from "../lib/transcript.js";
+import { fetchViaYtDlp, maskSupadataKey, resetSupadataHealth, resetSupadataSpend, setSupadataPacing, setYtDlp, supadataKeyHealth, supadataKeys, supadataPacingWait, supadataSpend, resolveTranscript } from "../lib/transcript.js";
 
 // A HOOK, NOT A CALL IN EVERY TEST. The key-health cache is module-level and
 // two tests here failed on state a third had left behind — a suite reporting
@@ -25,7 +25,12 @@ import { maskSupadataKey, resetSupadataHealth, resetSupadataSpend, setSupadataPa
 // be killed by its own timeout, which is exactly what happened on the first run
 // after the gap was added. The gap has a test of its own that asserts the wait
 // WITHOUT waiting it.
-beforeEach(() => { resetSupadataHealth(); resetSupadataSpend(); setSupadataPacing(0); });
+// AND yt-dlp IS FORCED OFF. It is installed on the machine this suite runs
+// on, so every test that resolves a transcript would spawn it and wait out a
+// real network fetch — the first run after that route was added was killed at
+// two minutes having finished nothing. The route has a test of its own that
+// turns it back on.
+beforeEach(() => { resetSupadataHealth(); resetSupadataSpend(); setSupadataPacing(0); setYtDlp(false); });
 
 test("paid requests are spaced, not merely sequential", async () => {
   // "难道不应该一个一个来吗" — and it already was, one `await` after another in
@@ -104,6 +109,50 @@ test("one rate limit does not blind the whole drain", async () => {
     /standing down for (60|[1-9]d?)s/,
     "the stand-down is still being reported in twenty-minute units: " + String(parked.error?.message),
   );
+});
+
+test("a video id is checked before it becomes a process argument", async () => {
+  // THE ONE THING THAT MUST NOT BE LOOSE. This route spawns a binary, and
+  // although it uses an argument array with no shell — which cannot be talked
+  // into running a second command — an id is not the place to find out whether
+  // that reasoning is airtight. Eleven characters of a known alphabet, or it
+  // never reaches spawn at all.
+  setYtDlp(true);
+  try {
+    for (const bad of ["", "short", "$(id)", "aaaaaaaaaaa; rm -rf /", "../../etc/passwd", "aaaaaaaaaaaa"]) {
+      await assert.rejects(
+        () => fetchViaYtDlp(bad),
+        /not a video id/,
+        JSON.stringify(bad) + " was accepted as a video id",
+      );
+    }
+  } finally {
+    setYtDlp(false);
+  }
+});
+
+test("the route stands aside when yt-dlp is not installed", async () => {
+  // A host without it must behave exactly as it did before this route existed:
+  // the attempt fails immediately, by name, and the chain carries on to the
+  // next route rather than waiting out a spawn that cannot work.
+  setYtDlp(false);
+  await assert.rejects(
+    () => fetchViaYtDlp("aaaaaaaaaaa"),
+    /not installed/,
+    "a host without yt-dlp did not say so",
+  );
+});
+
+test("a failed yt-dlp does not stop the chain reaching the paid route", async () => {
+  // The order is deliberate: free routes, then yt-dlp, then the paid provider.
+  // If a missing binary ended the chain, adding this route would have taken the
+  // paid fallback away from every host that does not have it.
+  resetSupadataSpend();
+  resetSupadataHealth();
+  setYtDlp(false);
+  const { used, result } = await chain("k1", () => ({ content: "fine", lang: "en" }), 10 * 60);
+  assert.equal(used.length, 1, "the paid route was never reached");
+  assert.equal(result?.via, "supadata");
 });
 
 test("the setting is split into keys however it was pasted", () => {

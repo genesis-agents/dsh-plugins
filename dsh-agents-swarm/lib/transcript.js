@@ -754,6 +754,116 @@ export async function fetchTranscript(videoId, languages = DEFAULT_LANGUAGES) {
  * @returns `{ language, text, cues, via }`.
  * @throws an error naming every route that was tried and why it failed.
  */
+/**
+ * Whether a local yt-dlp can be used, decided once.
+ *
+ * `undefined` until asked, then true or false for the life of the process. The
+ * answer cannot change without something being installed, and probing on every
+ * video would spawn a process per video to learn a fact that does not move.
+ */
+let ytDlpUsable;
+
+/**
+ * Set the probe's answer without probing.
+ *
+ * A TEST SEAM, and it earns its keep the same way `setSupadataPacing` does: the
+ * suite runs on a machine where yt-dlp IS installed, so without this every test
+ * that resolves a transcript spawns it and waits out a real network fetch. The
+ * first run after this route was added did exactly that and was killed at two
+ * minutes having finished nothing.
+ * @param usable - true to force the route on, false off, undefined to probe again.
+ */
+export function setYtDlp(usable) {
+  ytDlpUsable = usable === undefined ? undefined : usable === true;
+}
+
+/** Reset the cached probe. For tests, which install and uninstall it. */
+export function forgetYtDlp() {
+  ytDlpUsable = undefined;
+}
+
+/**
+ * Is yt-dlp on this host's PATH?
+ * @returns true when it answers `--version`.
+ */
+export async function hasYtDlp() {
+  if (ytDlpUsable !== undefined) return ytDlpUsable;
+  try {
+    const { spawn } = await import("node:child_process");
+    ytDlpUsable = await new Promise((settle) => {
+      // NO SHELL, EVER, on any path that touches a video id. `spawn` with an
+      // argument array cannot be talked into running a second command by a
+      // string that looks like one.
+      const probe = spawn("yt-dlp", ["--version"], { shell: false, stdio: "ignore" });
+      const giveUp = setTimeout(() => { probe.kill(); settle(false); }, 10_000);
+      probe.on("error", () => { clearTimeout(giveUp); settle(false); });
+      probe.on("close", (code) => { clearTimeout(giveUp); settle(code === 0); });
+    });
+  } catch {
+    ytDlpUsable = false;
+  }
+  return ytDlpUsable;
+}
+
+/**
+ * Fetch captions with a local yt-dlp.
+ *
+ * WHY THIS EXISTS. YouTube applies its block to the CALLER'S PATH, not to the
+ * method — the note on the gens route says so and this host proves it: from
+ * here the timedtext endpoint answers 200 with an empty body, while the same
+ * walk from a machine YouTube does not throttle returns the captions. Measured
+ * on this library: 542 of 574 videos were fetched that way, in one afternoon,
+ * for nothing, after every built-in route had reported them unavailable.
+ *
+ * yt-dlp carries the player negotiation this module cannot, so where it is
+ * installed the library can fill itself in rather than depending on somebody
+ * running a script by hand. Where it is not, nothing changes: the probe fails
+ * once and this route is skipped for the life of the process.
+ *
+ * THE VIDEO ID IS VALIDATED BEFORE IT BECOMES AN ARGUMENT. It is eleven
+ * characters of a known alphabet or this throws — an id is not a place to find
+ * out whether `spawn` without a shell is really safe.
+ * @param videoId - the eleven-character video id.
+ * @param languages - preference order.
+ * @returns `{ language, text, cues }`.
+ */
+export async function fetchViaYtDlp(videoId, languages = DEFAULT_LANGUAGES) {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(String(videoId))) throw new Error("not a video id");
+  if (!await hasYtDlp()) throw new Error("yt-dlp is not installed on this host");
+  const { spawn } = await import("node:child_process");
+  const { mkdtemp, readdir, readFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const work = await mkdtemp(join(tmpdir(), "swm-subs-"));
+  try {
+    // ONE LANGUAGE FAMILY PER RUN. Asking for three in a row took a 429 on the
+    // third within a single video: the limit counts requests, not languages.
+    for (const language of [...new Set(languages.map((one) => String(one).split("-")[0]))]) {
+      const ran = await new Promise((settle) => {
+        const child = spawn("yt-dlp", [
+          "--skip-download", "--write-auto-subs", "--write-subs",
+          "--sub-langs", `${language}.*,${language}`,
+          "--sub-format", "srv1", "--no-warnings", "--quiet",
+          "-o", join(work, "%(id)s.%(ext)s"),
+          `https://www.youtube.com/watch?v=${videoId}`,
+        ], { shell: false, stdio: "ignore" });
+        const giveUp = setTimeout(() => { child.kill(); settle(false); }, 120_000);
+        child.on("error", () => { clearTimeout(giveUp); settle(false); });
+        child.on("close", () => { clearTimeout(giveUp); settle(true); });
+      });
+      if (!ran) continue;
+      const written = (await readdir(work)).filter((name) => name.endsWith(".srv1"));
+      if (written.length === 0) continue;
+      const xml = await readFile(join(work, written[0]), "utf8");
+      const stamped = written[0].replace(`${videoId}.`, "").replace(".srv1", "");
+      return transcriptFromXml(xml, stamped === "" ? language : stamped);
+    }
+    throw new Error("yt-dlp found no caption track in any requested language");
+  } finally {
+    await rm(work, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export async function resolveTranscript(videoId, { apiKey, gensBase, languages = DEFAULT_LANGUAGES, durationSeconds } = {}) {
   const failures = [];
   try {
@@ -765,6 +875,15 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
     return { ...await fetchViaRelay(videoId, languages), via: "relay" };
   } catch (cause) {
     failures.push(`relay: ${String(cause?.message ?? cause)}`);
+  }
+  // AHEAD OF EVERYTHING PAID, because it costs nothing and is the only route
+  // that actually works from a host YouTube throttles. Behind the pure-HTTP
+  // ones because it spawns a process, which is a bigger thing to do than a
+  // fetch and should not be the first thing tried.
+  try {
+    return { ...await fetchViaYtDlp(videoId, languages), via: "yt-dlp" };
+  } catch (cause) {
+    failures.push(`yt-dlp: ${String(cause?.message ?? cause)}`);
   }
   // Ahead of the paid route because it works today and costs nothing; behind
   // the free ones because it is on its way out.

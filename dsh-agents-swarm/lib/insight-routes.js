@@ -30,6 +30,7 @@
 import { INSIGHT_KINDS, INSIGHT_STATUSES, PASS_STATES, openInsightStore } from "./insight-store.js";
 import { RESOURCE_TYPES } from "./store.js";
 import { DEFAULT_COLLECT_INTERVAL_MINUTES, MIN_VIDEO_SECONDS } from "./collect.js";
+import { hasYtDlp } from "./transcript.js";
 import { MIN_INSIGHT_INTERVAL_MINUTES, pickCandidates, readInsightConfig, rescoreOne, runInsightPass, topUpTranscripts } from "./insight-extract.js";
 import { withMoments } from "./insight-moment.js";
 import { STRENGTH_BANDS, strengthOf } from "./insights.js";
@@ -877,6 +878,19 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
         data: {
           waiting: store.countVideosWithoutTranscript?.() ?? null,
           captionsUnavailable: store.countVideosWithoutCaptions?.() ?? null,
+          // WHETHER THIS HOST CAN FILL THE QUEUE ITSELF.
+          //
+          // Every built-in route failed on this deployment — the free ones
+          // because YouTube blocks the path rather than the method, the paid one
+          // on 429 — and the backlog was cleared from a different machine with
+          // yt-dlp, 542 videos for nothing. Whether that can happen unattended
+          // comes down to one binary being present, and until now there was no
+          // way to ask short of logging in.
+          //
+          // Reported rather than assumed, because the answer decides whether new
+          // videos get transcripts on their own or wait for somebody to run a
+          // script.
+          ytDlp: await hasYtDlp().catch(() => false),
           videos: store.videosWithoutTranscript?.(take) ?? [],
         },
       });
@@ -968,6 +982,19 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
           // number lied in the direction that costs money — "97 still have no
           // transcript" reads as 97 fetches to be paid for.
           captionsUnavailable: store.countVideosWithoutCaptions?.() ?? null,
+          // WHETHER THIS HOST CAN FILL THE QUEUE ITSELF.
+          //
+          // Every built-in route failed on this deployment — the free ones
+          // because YouTube blocks the path rather than the method, the paid one
+          // on 429 — and the backlog was cleared from a different machine with
+          // yt-dlp, 542 videos for nothing. Whether that can happen unattended
+          // comes down to one binary being present, and until now there was no
+          // way to ask short of logging in.
+          //
+          // Reported rather than assumed, because the answer decides whether new
+          // videos get transcripts on their own or wait for somebody to run a
+          // script.
+          ytDlp: await hasYtDlp().catch(() => false),
           // HOW OFTEN THE PASS CAN ACTUALLY RUN, which is not what it is set to.
           //
           // The pass is chained after collection and only asks whether it is
