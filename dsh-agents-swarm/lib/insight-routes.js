@@ -864,7 +864,14 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
     }
 
     if (req.method === "GET" && path === "/insights/awaiting") {
-      const take = boundedInteger(params, "take", 1, 200, 50);
+      // `paramsOf(req)`, NOT a free `params`. That name is declared inside the
+      // /insights/list block a few hundred lines above, so reading it here is a
+      // ReferenceError — thrown before anything is sent, caught by the outer
+      // handler, and served as a 400 with an empty body, which reads as "your
+      // request was malformed" for a request that was fine. The same shape as the
+      // `ctx` bug this file already carries a note about: a free variable that
+      // resolves in one scope and not in the one it was copied into.
+      const take = boundedInteger(paramsOf(req), "take", 1, 200, 50);
       sendJson(res, 200, {
         success: true,
         data: {

@@ -2951,6 +2951,44 @@ test("a stored transcript outranks an outside claim that there is none", (t) => 
   assert.equal(store.countVideosWithoutCaptions(), 1);
 });
 
+test("the queue route answers a real request, not a 400 from its own scope", async (t) => {
+  // IT SHIPPED BROKEN AND THE SUITE WAS GREEN. The handler read a bare `params`,
+  // a name declared inside the /insights/list block a few hundred lines above —
+  // a ReferenceError, thrown before anything was sent, caught by the outer
+  // handler and served as a 400 with an EMPTY BODY. From outside that reads as
+  // "your request was malformed" for a request that was fine, and the backfill
+  // driving off it reported an empty queue and did nothing at all.
+  //
+  // The same shape as the `ctx` bug this repository already carries a note
+  // about, and the store-level tests could not see it because the fault was in
+  // the route, not the store. So this one enters where the browser enters.
+  const { store, insights } = library(t);
+  store.put(resource("v1", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/aaaaaaaaaaa", createdAt: "2026-08-01T00:00:00.000Z" }));
+  store.put(resource("v2", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/bbbbbbbbbbb", createdAt: "2026-08-02T00:00:00.000Z" }));
+  store.markTranscriptAbsent("v2", "checked from a machine that can see the track list");
+  void insights;
+
+  const answers = [];
+  const handle = createInsightRoutes({
+    store,
+    chat: undefined,
+    logger: undefined,
+    sendJson: (res, code, body) => answers.push({ code, body }),
+    readJson: async (req) => JSON.parse(req.__body ?? "{}"),
+  });
+
+  await handle({ method: "GET", url: "/insights/awaiting?take=5", headers: {} }, {}, "/insights/awaiting");
+  const answer = answers[answers.length - 1];
+  assert.equal(answer.code, 200, "the queue route answered " + answer.code + " to a well-formed request");
+  assert.equal(answer.body.data.waiting, 1);
+  assert.equal(answer.body.data.captionsUnavailable, 1);
+  assert.deepEqual(answer.body.data.videos.map((row) => row.id), ["v1"], "the route named the wrong videos");
+
+  // And with no query at all, since that is the other way a caller uses it.
+  await handle({ method: "GET", url: "/insights/awaiting", headers: {} }, {}, "/insights/awaiting");
+  assert.equal(answers[answers.length - 1].code, 200, "the route needs a query string to work");
+});
+
 /* ── the block is a conversation, not a skeleton ───────────────────────── */
 
 test("an excerpt is a continuous run, not every Nth line", () => {
