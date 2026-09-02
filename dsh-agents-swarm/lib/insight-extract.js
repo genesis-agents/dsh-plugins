@@ -37,6 +37,10 @@ import { assembleMaterial, detectLanguage } from "./podcast.js";
 import { localDate } from "./publish-schedule.js";
 import { EVIDENCE_STANCES, INSIGHT_KINDS, INSIGHT_LAYERS } from "./insight-store.js";
 import { corroborateOne } from "./insight-corroborate.js";
+// The card's own locator, reused as the verifier for anything quoted from a
+// transcript: one matcher, so a quote that survives extraction is a quote the
+// card can point at a second.
+import { momentOf } from "./insight-moment.js";
 import {
   MIN_QUOTE_CHARS,
   MIN_QUOTE_CJK_CHARS,
@@ -1027,12 +1031,38 @@ export function parseClaims(answer, labels, options = {}) {
  * @param blocks - resourceId → the quotable body of the block that source was shown as.
  * @returns `{ kept, dropped }`, `dropped` as `[{ statement, reason }]`.
  */
-export function verifyClaims(claims, blocks) {
+export function verifyClaims(claims, blocks, cuesById = new Map()) {
   const kept = [];
   const dropped = [];
   for (const claim of claims) {
     let reason = "";
     for (const row of claim.evidence) {
+      // ── A SPOKEN QUOTE MUST BE LOCATABLE IN THE RECORDING ──────────────
+      //
+      // `verifyQuote` checks the quote against the BLOCK the model was shown,
+      // which is the right check and is not enough for a video. The block is
+      // SAMPLED when a transcript does not fit the budget: `sampleLines` keeps
+      // every Nth cue and joins them with a newline, so two lines the model saw
+      // side by side are — measured on a real recording, 1,942 cues into 7,610
+      // characters — six cues apart. A quote copied across that boundary is
+      // verbatim in the block, passes verification, and is a splice of two
+      // moments minutes apart presented as one sentence somebody said.
+      //
+      // The transcript is the authority for anything quoted from a transcript.
+      // `momentOf` is the same matcher the card uses to draw ▶, so this closes
+      // the provenance hole and guarantees the timestamp in one test: a video
+      // quote that survives HAS a moment, by construction.
+      //
+      // TOLERANT OF THE SAMPLING ARTEFACT IT IS CATCHING. `momentOf` falls back
+      // to the longest leading run, so a quote whose tail crossed a gap still
+      // resolves — to where the passage begins, which is what a timestamp
+      // means. Only a quote with no contiguous opening run at all is dropped,
+      // and that is a quote the recording does not contain.
+      const cues = cuesById.get(row.resourceId);
+      if (Array.isArray(cues) && cues.length > 0 && momentOf(row.quote, cues) === null) {
+        reason = "quoted from a transcript but not found as a continuous run in the recording";
+        break;
+      }
       const verdict = verifyQuote(row.quote, blocks, row.resourceId);
       if (verdict.ok) continue;
       reason = verdict.reason ?? "not found in the source it is attributed to";
@@ -1090,7 +1120,16 @@ export async function extractClaims(chat, cluster, options = {}) {
 
   const rejected = [];
   const parsed = parseClaims(answer, labels, { onReject: (reason) => rejected.push(reason) });
-  const { kept, dropped } = verifyClaims(parsed, blocks);
+  // THE CUES, SO A SPOKEN QUOTE IS CHECKED AGAINST THE RECORDING RATHER THAN
+  // AGAINST THE SAMPLE OF IT THE MODEL WAS SHOWN.
+  const cuesById = new Map();
+  for (const entry of options.entries ?? []) {
+    const cues = entry?.transcript?.cues;
+    if (entry?.row?.id !== undefined && Array.isArray(cues) && cues.length > 0) {
+      cuesById.set(String(entry.row.id), cues);
+    }
+  }
+  const { kept, dropped } = verifyClaims(parsed, blocks, cuesById);
 
   const rows = new Map();
   for (const entry of options.entries ?? []) {

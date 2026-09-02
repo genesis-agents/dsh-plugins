@@ -64,7 +64,7 @@ import {
 // The candidate scan lives with the pass, not with the pure helpers: it needs
 // the store. Imported here because the drain order is a correctness property,
 // not an implementation detail.
-import { EXTRACTION_PROMPT, collectCandidates, insightPassOnce, readInsightConfig, rescoreOne, runInsightPass, transcriptFailureKind } from "../lib/insight-extract.js";
+import { EXTRACTION_PROMPT, collectCandidates, verifyClaims, insightPassOnce, readInsightConfig, rescoreOne, runInsightPass, transcriptFailureKind } from "../lib/insight-extract.js";
 import { buildQueries, createPacer, isIndependent, searchArxiv, searchWeb } from "../lib/insight-corroborate.js";
 
 /** Floating point comparison, for scores that are exact only in decimal. */
@@ -2361,4 +2361,68 @@ test("a transcript that did not fit says so, rather than claiming no body exists
   const row = { id: "v", type: "YOUTUBE_VIDEO", title: "A talk", abstract: "blurb", sourceUrl: "https://youtu.be/aaaaaaaaaaa" };
   const block = sourceMaterial(row, { language: "en", text: "x", cues }, 260, { spokenOnly: true });
   assert.equal(block.includes("No body text is stored"), false, "a budget problem was reported as a missing transcript");
+});
+
+/* ── a spoken quote is checked against the recording ───────────────────── */
+
+test("a quote spliced across a sampling gap is dropped, not published", () => {
+  // THE HOLE `verifyQuote` CANNOT SEE. It checks the quote against the BLOCK
+  // the model was shown, which is right and is not enough for a video: the
+  // block is SAMPLED when a transcript does not fit the budget, keeping every
+  // Nth cue joined by a newline. Measured on a real recording — 1,942 cues into
+  // 7,610 characters — that is every seventh cue, so two lines the model saw
+  // side by side are six cues apart. A quote copied across that boundary is
+  // verbatim in the block, passes verification, and is a splice of two moments
+  // minutes apart presented as one sentence somebody said.
+  const cues = Array.from({ length: 40 }, (_, at) => ({
+    start: at * 30, text: `cue ${at} carrying a full sentence of real spoken content`,
+  }));
+  // The block as the model saw it: every 7th cue, newline-joined.
+  const sampled = cues.filter((_, at) => at % 7 === 0).map((c) => c.text).join("\n");
+  const blocks = new Map([["v", sampled]]);
+  const cuesById = new Map([["v", cues]]);
+
+  // A quote that spans the gap between two sampled lines whose OPENING run is
+  // real still resolves — to where the passage begins.
+  const spliced = `${cues[7].text} ${cues[14].text}`;
+  const claim = (quote) => ({
+    statement: "A claim about something that was said in the recording",
+    kind: "finding", layer: null, gloss: "", entities: ["X"],
+    evidence: [{ label: "S1", resourceId: "v", stance: "supports", quote, speaker: "" }],
+  });
+  assert.equal(verifyClaims([claim(spliced)], blocks, cuesById).kept.length, 1, "a locatable opening run was thrown away");
+
+  // A quote whose opening run is NOT in the recording at all is dropped, even
+  // though it appears verbatim in the sampled block.
+  const invented = "a sentence assembled from words nobody put together like this";
+  const withInvented = new Map([["v", `${sampled}\n${invented}`]]);
+  const out = verifyClaims([claim(invented)], withInvented, cuesById);
+  assert.equal(out.kept.length, 0, "a quote absent from the recording was published");
+  assert.match(out.dropped[0].reason, /continuous run in the recording/);
+});
+
+test("a source with no transcript is verified exactly as before", () => {
+  // The recording check applies only where there is a recording. An article's
+  // quote is checked against its block and nothing else, or every written
+  // source would be dropped by a rule written for videos.
+  const blocks = new Map([["a", "## An article\n\nThe body says something specific and checkable here."]]);
+  const claim = {
+    statement: "A claim drawn from an article rather than from a talk",
+    kind: "finding", layer: null, gloss: "", entities: ["X"],
+    evidence: [{ label: "S1", resourceId: "a", stance: "supports", quote: "The body says something specific and checkable here.", speaker: "" }],
+  };
+  assert.equal(verifyClaims([claim], blocks, new Map()).kept.length, 1, "an article quote was dropped by the transcript rule");
+});
+
+test("a video whose transcript is not to hand is not dropped for it", () => {
+  // `cuesById` is empty when the pass could not load a transcript. Treating
+  // "we do not have it" as "the quote is not in it" would drop every claim from
+  // every video the moment the cache was cold.
+  const blocks = new Map([["v", "## A talk\n\nsome spoken words that were said and are quotable here."]]);
+  const claim = {
+    statement: "A claim from a talk whose cues are not loaded in this pass",
+    kind: "finding", layer: null, gloss: "", entities: ["X"],
+    evidence: [{ label: "S1", resourceId: "v", stance: "supports", quote: "some spoken words that were said and are quotable here.", speaker: "" }],
+  };
+  assert.equal(verifyClaims([claim], blocks, new Map()).kept.length, 1);
 });

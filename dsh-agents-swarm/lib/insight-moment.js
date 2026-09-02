@@ -98,8 +98,47 @@ export function momentOf(quote, cues) {
   }
   if (starts.length === 0) return null;
 
-  const found = haystack.indexOf(wanted);
-  if (found < 0) return null;
+  // THE WHOLE QUOTE FIRST, and that match needs no caveat.
+  let found = haystack.indexOf(wanted);
+
+  // FAILING THAT, THE LONGEST LEADING RUN THAT IS ACTUALLY CONTIGUOUS.
+  //
+  // THE MATERIAL THE MODEL WAS SHOWN IS SAMPLED when a transcript does not fit
+  // the budget: `sampleLines` keeps every Nth cue and joins them with a
+  // newline. Measured on a real recording — 1,942 cues into 7,610 characters —
+  // that is every seventh cue, so two lines the model saw side by side are six
+  // cues apart in the recording. A quote copied across that boundary is
+  // verbatim in the block it was checked against, passes verification, and
+  // exists as a continuous run nowhere in the transcript.
+  //
+  // Its OPENING run still does, and that is where the quoted passage begins —
+  // which is exactly what a timestamp is for. Bounded by the same floor the
+  // whole quote had to clear, so a prefix too short to be a locator is refused
+  // for the reason a short quote is: the first match of a handful of words is
+  // not the one the claim came from.
+  //
+  // BINARY SEARCH, because the prefixes present in the haystack are a
+  // prefix-closed set: if 200 characters are there, so are the first 100. Ten
+  // lookups rather than six hundred.
+  if (found < 0) {
+    let low = floor;
+    let high = wanted.length;
+    let best = -1;
+    let bestLen = 0;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const hit = haystack.indexOf(wanted.slice(0, mid));
+      if (hit < 0) {
+        high = mid - 1;
+      } else {
+        best = hit;
+        bestLen = mid;
+        low = mid + 1;
+      }
+    }
+    if (best < 0 || bestLen < floor) return null;
+    found = best;
+  }
 
   // THE LAST CUE THAT BEGINS AT OR BEFORE THE MATCH. A quote routinely spans
   // three cues; the one it STARTS in is the moment to link to, because that is
