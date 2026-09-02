@@ -63,7 +63,7 @@ import {
 // The candidate scan lives with the pass, not with the pure helpers: it needs
 // the store. Imported here because the drain order is a correctness property,
 // not an implementation detail.
-import { collectCandidates, insightPassOnce, readInsightConfig, rescoreOne, runInsightPass, transcriptFailureKind } from "../lib/insight-extract.js";
+import { EXTRACTION_PROMPT, collectCandidates, insightPassOnce, readInsightConfig, rescoreOne, runInsightPass, transcriptFailureKind } from "../lib/insight-extract.js";
 import { buildQueries, createPacer, isIndependent, searchArxiv, searchWeb } from "../lib/insight-corroborate.js";
 
 /** Floating point comparison, for scores that are exact only in decimal. */
@@ -2287,4 +2287,23 @@ test("each source keeps its own date rather than the claim taking one", (t) => {
   const card = insights.list({ take: 10 }).insights.find((row) => row.id === id);
   const dates = card.evidencePreview.map((one) => one.publishedAt).sort();
   assert.deepEqual(dates, ["2026-01-01T00:00:00.000Z", "2026-08-30T00:00:00.000Z"]);
+});
+
+test("the extractor is told to quote what was said, not what the blurb claims", () => {
+  // MEASURED ON THE LIVE TAB: 23 of 36 video quotes carried no timestamp, and
+  // the reason was not a missing transcript. The videos had them — 70,765
+  // characters and 1,942 cues on one — and 95% of the block handed to the model
+  // was transcript. It quoted the 386-character description anyway, because a
+  // publisher's blurb is polished, on-topic and short while a transcript is a
+  // wall of conversational speech.
+  //
+  // What it produced were sentences like "She is one of the three authors of
+  // the report" and "Tara Seshan leads product for ChatGPT Work at OpenAI" —
+  // third-person description, nobody's testimony, and unpointable at any moment
+  // in the recording. The card correctly said 来自简介 and correctly showed no
+  // timestamp; the quote was simply the wrong quote.
+  assert.match(EXTRACTION_PROMPT, /Transcript.*QUOTE FROM THE TRANSCRIPT/s, "the prompt does not prefer spoken words");
+  // And the escape hatch stays: a figure stated only in the show notes is still
+  // a fact the source published, and is worth keeping as the weaker of the two.
+  assert.match(EXTRACTION_PROMPT, /Quote the description only when/, "the prompt forbids description quotes outright");
 });
