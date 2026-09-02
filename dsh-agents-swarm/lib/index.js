@@ -143,6 +143,28 @@ function insightTranscriber(store) {
     // it is a row this stage has nothing to offer. The caller records the
     // empty answer and moves on.
     if (videoId === undefined) return { text: "" };
+
+    // ── THE LAST LINE, AT THE POINT WHERE THE MONEY IS SPENT ────────────
+    //
+    // A video that already has a transcript is never fetched again. Not
+    // "should not be" — is not, checked here, one indexed read before the
+    // request rather than three files away.
+    //
+    // Everything upstream already believes it is doing this: `collectCandidates`
+    // only reports a row as skipped when `getTranscript(row.id).text` is empty,
+    // `topUpTranscripts` only takes rows whose reason matches "no transcript
+    // stored", and `videosWithoutTranscript` filters on the same column. Three
+    // guards, in three files, all correct — and none of them at the point of
+    // spending, so a fourth caller written later inherits none of them.
+    //
+    // AND ONE OF THEM WAS ALREADY WRONG in a way none of the others could
+    // catch: the reader's route treated a transcript with text but no cues as
+    // a MISS and re-fetched it on every open, for ever, on videos that plainly
+    // had subtitles. A check here would have refused that request whatever the
+    // route believed.
+    const held = String(store.getTranscript(row?.id)?.text ?? "").trim();
+    if (held !== "") return { text: "" };
+
     const config = readConfig(store);
     return resolveTranscript(videoId, {
       apiKey: config.supadataKey,
@@ -1305,13 +1327,37 @@ export function createHandler(store, logger, chat, web, ctx, missions) {
         sendJson(res, 404, { success: false, error: "no such resource" });
         return;
       }
-      // A cache entry with no cues predates the timed-segment column, and the
-      // reader needs timestamps to seek. An incomplete entry is a miss, not a
-      // hit — serving it would show the panel an empty transcript.
+      // A STORED TRANSCRIPT IS A HIT. FULL STOP.
+      //
+      // THIS WAS SPENDING PAID QUOTA ON VIDEOS THAT ALREADY HAD SUBTITLES, on
+      // every single read, for ever. The rule was "an entry with no cues
+      // predates the timed-segment column, and the reader needs timestamps to
+      // seek, so it is a miss" — and its justification, "serving it would show
+      // the panel an empty transcript", is simply false: such an entry has its
+      // TEXT. What it lacks is the ability to seek.
+      //
+      // So a cue-less row was re-fetched on every open. `videosWithoutTranscript`
+      // correctly counts it as done, so no drain would touch it — and the read
+      // path went to the provider anyway, silently, once per view. Combined
+      // with the key rotation burning the whole list per attempt, that is how
+      // five keys emptied with zero successes.
+      //
+      // LOSING A SEEK IS NOT WORTH BUYING. A transcript without cues shows its
+      // words and cannot jump to a second; that is a smaller loss than a bill,
+      // and it is recoverable on demand — `refresh: true` still re-fetches, so
+      // a person who wants the timestamps can ask for them, once, deliberately.
+      //
+      // Answered with `via: "cache"` and `degraded: true` rather than pretending
+      // to be whole: a caller that needs cues can tell that it did not get them
+      // without inferring it from an empty array.
       const stored = body.refresh === true ? undefined : store.getTranscript(row.id);
-      const cached = stored !== undefined && Array.isArray(stored.cues) && stored.cues.length > 0 ? stored : undefined;
-      if (cached !== undefined) {
-        sendJson(res, 200, { success: true, data: { ...cached, via: "cache" } });
+      const hasText = stored !== undefined && String(stored.text ?? "").trim() !== "";
+      if (hasText) {
+        const seekable = Array.isArray(stored.cues) && stored.cues.length > 0;
+        sendJson(res, 200, {
+          success: true,
+          data: { ...stored, cues: seekable ? stored.cues : [], via: "cache", degraded: !seekable },
+        });
         return;
       }
       const videoId = videoIdOf(row.sourceUrl);

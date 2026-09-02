@@ -167,3 +167,30 @@ test("a setting's default is written down once", () => {
     "a reader of collectIntervalMinutes falls back to a typed-in number instead of the shared default",
   );
 });
+
+test("a video that already has a transcript is never fetched again", (t) => {
+  // THE COMPLAINT, AND IT WAS TRUE. The reader's route treated a transcript
+  // with text but no cues as a cache MISS and re-fetched it on every open, for
+  // ever, on videos that plainly had subtitles — paid quota, silently, once per
+  // view. `videosWithoutTranscript` correctly counted those videos as done, so
+  // no drain would touch them; the read path went to the provider anyway.
+  //
+  // Three guards existed in three files and all were correct. None of them was
+  // at the point of spending, which is why a fourth path could ignore all
+  // three. The store's own answer is what the guard has to be built on.
+  const store = new SourceStore(":memory:");
+  t.after(() => store.close());
+  store.put({ id: "v", type: "YOUTUBE_VIDEO", title: "A talk", sourceUrl: "https://youtu.be/aaaaaaaaaaa" });
+
+  // No transcript: this video is a candidate for fetching.
+  assert.equal(store.countVideosWithoutTranscript(), 1);
+  assert.deepEqual(store.videosWithoutTranscript(10).map((row) => row.id), ["v"]);
+
+  // TEXT BUT NO CUES — the exact shape that was being re-fetched. It counts as
+  // having one, because it does.
+  store.putTranscript("v", "en", "the words that were spoken in this recording", []);
+  assert.equal(store.countVideosWithoutTranscript(), 0, "a cue-less transcript is treated as absent");
+  assert.equal(store.videosWithoutTranscript(10).length, 0, "a cue-less transcript is queued for fetching");
+  assert.notEqual(store.getTranscript("v"), undefined, "the stored text is not readable");
+  assert.equal(store.getTranscript("v").text, "the words that were spoken in this recording");
+});
