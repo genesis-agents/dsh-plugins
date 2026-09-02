@@ -10205,10 +10205,51 @@ window.__ModuleLoader__.load({
 			// `insightLastRun` is in the list as well as the manual one: the timer's
 			// pass writes the rows this tab is looking at, and a reader watching an
 			// empty table has the same question about it.
-			const runningRecord = status?.insightLastManualRun?.running === true
+			const marked = status?.insightLastManualRun?.running === true
 				? status.insightLastManualRun
 				: (status?.insightLastRun?.running === true ? status.insightLastRun : null);
+
+			// A MARKER IS NOT A PROCESS, AND THE CLOCK IS THE ONLY WAY TO TELL.
+			//
+			// The `running` stamp survives a crash on purpose — a pass that died
+			// mid-way is better visible than silently absent — but the page was
+			// reading it as "this is happening now" and drawing a live progress
+			// row over it. Measured: a deploy restarted the host during the
+			// corroboration stage, and the tab showed 正在找第二来源 0/3 with a
+			// moving bar for thirteen minutes over a process that no longer
+			// existed.
+			//
+			// `manualRunInFlight` IS NOT THE ANSWER. It is true only for a manual
+			// pass started by THIS host process, so the scheduled pass — the one
+			// that runs unattended and is therefore the one most likely to be
+			// interrupted — has no liveness signal at all. It never had one.
+			//
+			// SO: A LIVE PASS KEEPS ITS STAMP FRESH. `note()` rewrites the record
+			// on every progress report, throttled to 750ms, and every stage
+			// reports at least once per unit of work. Four minutes without a
+			// stamp is longer than any single unit takes — the slowest is one
+			// model call or one page fetch — so a record older than that is a
+			// marker, not a run.
+			//
+			// GENEROUS RATHER THAN TIGHT, deliberately: calling a slow pass dead
+			// is worse than calling a dead pass slow for another minute, because
+			// the first one tells a reader to press the button again while the
+			// work is still going.
+			const STALE_AFTER_MS = 4 * 60 * 1000;
+			const stampedAt = marked === null ? 0 : Date.parse(marked.at ?? "");
+			const stale = marked !== null
+				&& status?.manualRunInFlight !== true
+				&& Number.isFinite(stampedAt)
+				&& Date.now() - stampedAt > STALE_AFTER_MS;
+
+			// The record to draw a LIVE progress row for. A stale one is reported
+			// as interrupted instead, which is a different sentence and a
+			// different colour.
+			const runningRecord = stale ? null : marked;
 			const passRunning = status?.manualRunInFlight === true || runningRecord !== null;
+			// What was interrupted, if anything, so the reader is told rather than
+			// left watching a bar that will never move again.
+			const interrupted = stale ? marked : null;
 
 			// WATCH IT WHILE IT RUNS. Every 2.5 seconds, and only while there is
 			// something to watch — an unconditional interval is a request every few
@@ -10617,6 +10658,52 @@ window.__ModuleLoader__.load({
 							void runNow(scope);
 						}
 					}, "ask"),
+
+					// A PASS THAT WAS INTERRUPTED SAYS SO, rather than spinning.
+					//
+					// It is drawn where the progress row would have been, in the same
+					// place and at the same weight, because it is the answer to the
+					// same question — "what is happening" — and the honest answer is
+					// "nothing, and here is how far it got".
+					interrupted === null ? null : jsxs("div", {
+						style: {
+							display: "flex", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap",
+							padding: `${SPACE.sm} ${SPACE.md}`,
+							border: `1px solid ${tint(TONE.warn, TINT.ring)}`,
+							background: tint(TONE.warn, TINT.soft),
+							borderRadius: RADIUS.lg,
+							font: FONT.micro, color: `rgb(${TONE.warn})`
+						},
+						children: [
+							jsx("span", {
+								style: { font: FONT.microStrong },
+								children: zh ? "上一次跑到一半被中断了" : "The last pass was interrupted"
+							}, "title"),
+							INSIGHT_PHASE_FACES[interrupted.phase] === undefined ? null : jsx("span", {
+								style: { color: INK.quiet },
+								children: zh
+									? `停在「${INSIGHT_PHASE_FACES[interrupted.phase].zh}」${interrupted.done ?? 0}/${interrupted.total ?? 0}`
+									: `stopped at ${INSIGHT_PHASE_FACES[interrupted.phase].en} ${interrupted.done ?? 0}/${interrupted.total ?? 0}`
+							}, "where"),
+							jsx("span", {
+								title: formatStamp(interrupted.at),
+								style: { color: INK.quiet },
+								children: formatAgo(interrupted.at, zh)
+							}, "when"),
+							jsx("span", { style: { flex: 1 } }, "gap"),
+							// A WAY OUT, not just a diagnosis. Nothing is lost — the pass
+							// commits its claims as it goes and never advanced a watermark
+							// past what it did not read — so starting again is the whole
+							// remedy, and it belongs beside the sentence that explains why.
+							jsx("button", {
+								type: "button",
+								disabled: busy !== "",
+								className: "swm-ctl swm-focus", style: controlStyle(busy !== ""),
+								onClick: () => { setAsking(true); },
+								children: zh ? "重新跑" : "Run again"
+							}, "retry")
+						]
+					}, "interrupted"),
 
 					// A PASS IS RUNNING AND HERE IS WHERE IT HAS GOT TO.
 					//

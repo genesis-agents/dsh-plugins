@@ -6765,3 +6765,30 @@ test("a skip is not counted or coloured as a failure", () => {
   assert.match(ledger, /broken === 0 \? null[\s\S]{0,220}TONE\.danger/, "a failure is not drawn as a failure");
   assert.match(ledger, /skipped === 0 \? null[\s\S]{0,320}TONE\.warn/, "a skip is not drawn as the milder thing it is");
 });
+
+test("a running marker is not read as a running process", () => {
+  // MEASURED THREE TIMES IN ONE AFTERNOON, each time by a deploy restarting the
+  // host mid-pass. The `running` stamp survives a crash on purpose — a pass
+  // that died is better visible than silently absent — but the page read it as
+  // "this is happening now" and drew a moving progress bar over a process that
+  // no longer existed, for thirteen minutes.
+  //
+  // `manualRunInFlight` cannot be the answer: it is true only for a pass this
+  // host process started, so the SCHEDULED pass — unattended, and therefore the
+  // one most likely to be interrupted — has no liveness signal at all.
+  //
+  // A live pass keeps its stamp fresh: `note()` rewrites the record on every
+  // progress report and every stage reports at least once per unit of work.
+  // The clock is the only signal that survives a restart, which is exactly the
+  // case being detected.
+  const pane = body("function LibraryInsightPane(");
+  assert.match(pane, /STALE_AFTER_MS/, "the pane trusts a running marker with no staleness check");
+  assert.match(
+    pane,
+    /const runningRecord = stale \? null : marked/,
+    "a stale marker still drives the live progress row",
+  );
+  // And the reader is told, rather than left watching a bar that will never
+  // move again.
+  assert.match(pane, /interrupted/, "an interrupted pass is not reported as interrupted");
+});

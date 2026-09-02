@@ -68,12 +68,50 @@ REMOTE="$(git rev-parse origin/main)"
 DEFER_MARK="${DEFER_MARK:-$HOME/.dsh-autoupdate-deferred-since}"
 DEFER_MAX="${DEFER_MAX:-7200}"
 
+# AN INSIGHT PASS IS IN-FLIGHT WORK TOO, and this script did not know it.
+#
+# The mission check below has existed since a push killed a mission mid-fetch.
+# The insight pass is the same shape and was not covered: it makes up to twenty
+# model calls over minutes, and a restart during one strands its `running`
+# marker, which the tab then draws as a progress bar over a process that no
+# longer exists. Measured three times in one afternoon, each time by a deploy I
+# made myself while a pass was mid-corroboration.
+#
+# STALENESS IS THE TEST, NOT THE FLAG. `manualRunInFlight` is true only for a
+# pass started by the running host process, so it is false for the scheduled
+# pass — the unattended one, and therefore the one most likely to be hit. A
+# record whose stamp moved in the last four minutes is a live pass whatever
+# started it; anything older is already stranded and deferring for it would
+# defer for ever.
+running_pass() {
+  curl -fsS -m 5 "http://127.0.0.1:${DSH_PORT:-3080}/swarm-api/insights/status" 2>/dev/null \
+    | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{
+        const j=JSON.parse(d).data||{};
+        const live=[j.insightLastManualRun,j.insightLastRun].filter(r=>r&&r.running===true)
+          .some(r=>Date.now()-Date.parse(r.at||"")<4*60*1000);
+        process.stdout.write(j.manualRunInFlight===true||live?"1":"0");
+      }catch(e){process.stdout.write("")}})' 2>/dev/null
+}
+
 running_missions() {
   curl -fsS -m 5 "http://127.0.0.1:${DSH_PORT:-3080}/swarm-api/missions/list?status=running" 2>/dev/null \
     | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);process.stdout.write(String((j.data&&j.data.missions||[]).length))}catch(e){process.stdout.write("")}})' 2>/dev/null
 }
 
+# Either kind of in-flight work defers the update. Summed rather than checked
+# separately so the deferral logic below stays one branch: what matters is
+# whether ANYTHING is mid-flight, not which of the two it is.
 LIVE="$(running_missions)"
+PASS="$(running_pass)"
+# STRING CONCATENATION WOULD HAVE WORKED AND IS NOT WHAT THIS SAYS. $LIVE is
+# compared with -gt 0 below, so appending a digit happens to test true — and
+# leaves a variable whose value is a lie about how many things are running.
+# An empty answer from either probe is "cannot ask", which the note below
+# already reads as "proceed": a box that is not answering has no work to
+# protect and probably needs the update.
+case "$LIVE" in ""|*[!0-9]*) LIVE=0 ;; esac
+case "$PASS" in ""|*[!0-9]*) PASS=0 ;; esac
+LIVE=$(( LIVE + PASS ))
 # An EMPTY answer is not zero. A box that is down, or a plugin that did not
 # mount, cannot be asked what it is running — and treating "cannot ask" as
 # "nothing is running" is how this check would pass at exactly the moment it
