@@ -597,6 +597,46 @@ test("no size is chosen outside the scale", () => {
   );
 });
 
+test("a control takes its height from the scale, like its type", () => {
+  // TYPE WAS GUARDED AND GEOMETRY WAS NOT, and that is why this exists.
+  // `fontSize` in raw pixels has been held at zero for a long time, so a control
+  // could not be a stray SIZE — but it could be a stray SHAPE, and one was
+  // reported as 字体偏大 when the type was correct and the box was six pixels
+  // taller than everything around it.
+  //
+  // Two others were off the scale entirely: 20px and 22px against a scale of
+  // 20 / 24 / 28 / 34. A height nobody can name is a height the next person
+  // matches by eye, and matching by eye is what produced the pair that
+  // disagreed.
+  //
+  // WRITTEN WITHOUT REGEX LITERALS, deliberately. The escapes in them did not
+  // survive the patch that wrote this test — twice — and a guard that fails to
+  // parse is a guard that protects nothing.
+  const NL = String.fromCharCode(10);
+  const CR = String.fromCharCode(13);
+  const MARK = "height: " + String.fromCharCode(34);
+  const lines = SOURCE.split(NL).map((line) => line.split(CR).join(""));
+  const strays = [];
+  lines.forEach((line, at) => {
+    if (!line.includes("swm-ctl") && !line.includes("controlStyle(")) return;
+    // The style object may run over the next few lines.
+    const window = lines.slice(at, at + 6).join(NL);
+    const found = window.indexOf(MARK);
+    if (found < 0) return;
+    const closes = window.indexOf(String.fromCharCode(34), found + MARK.length);
+    const value = closes < 0 ? "" : window.slice(found + MARK.length, closes);
+    // Only a raw pixel value is a stray; a CONTROL member is not quoted here.
+    if (value.endsWith("px") && value.slice(0, -2).split("").every((c) => c >= "0" && c <= "9")) {
+      strays.push("line " + (at + 1) + ": height " + value);
+    }
+  });
+  assert.deepEqual(
+    strays,
+    [],
+    "a control is sized in raw pixels; use a CONTROL member so it lands beside the others rather than near them",
+  );
+});
+
 test("emphasis is the shell's weight", () => {
   const heavy = [...SOURCE.matchAll(/fontWeight: (\d+)/g)].map((match) => Number(match[1])).filter((weight) => weight > 500);
   assert.deepEqual(

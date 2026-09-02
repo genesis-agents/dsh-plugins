@@ -5758,7 +5758,7 @@ window.__ModuleLoader__.load({
 									}),
 									running || untranslated === 0 ? null : jsx("button", {
 										type: "button",
-										className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: "20px", padding: "0 6px", color: hue(kind) },
+										className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: CONTROL.xs, padding: "0 6px", color: hue(kind) },
 										onClick: () => { setRetryTick((tick) => tick + 1); },
 										children: zh ? "重译" : "Retry"
 									})
@@ -6355,7 +6355,7 @@ window.__ModuleLoader__.load({
 											jsx("span", { style: { flex: 1 }, children: formatDate(note.createdAt) }),
 											jsx("button", {
 												type: "button",
-												className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: "22px", padding: "0 8px" },
+												className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: CONTROL.xs, padding: "0 8px" },
 												onClick: async () => {
 													await fetch(`${apiBase()}/notes?id=${encodeURIComponent(note.id)}`, { method: "DELETE" });
 													await reload();
@@ -10657,7 +10657,20 @@ window.__ModuleLoader__.load({
 										children: [
 											jsx("button", {
 												type: "button",
-												className: "swm-ctl swm-focus", style: controlStyle(busy !== ""),
+												className: "swm-ctl swm-focus",
+												// THE HEIGHT, NOT THE TYPE. Reported as 字体偏大, and the
+												// type was never wrong: the ladder this tab is measured
+												// against gives controls 13px, alongside sections and
+												// quotation, and dropping these to 12 introduced a fifth
+												// size and broke it. The rank guard caught that.
+												//
+												// What is out of step is the BOX. The default control is
+												// 34px tall; the schedule select in the same corner is 28,
+												// and the labels under it are 11px type. A 34px button
+												// beside a 28px select reads as a larger UI dropped into a
+												// dense band, and "the text looks big" is what that looks
+												// like from outside.
+												style: { ...controlStyle(busy !== ""), height: CONTROL.sm },
 												disabled: busy !== "",
 												onClick: () => { setTick((value) => value + 1); },
 												children: zh ? "刷新" : "Refresh"
@@ -10676,6 +10689,9 @@ window.__ModuleLoader__.load({
 												className: "swm-ctl swm-focus",
 												style: {
 													...controlStyle(busy !== "" || passRunning),
+													// Matched to 刷新 beside it and the select below it; see
+													// the note there for why the default BOX is wrong here.
+													height: CONTROL.sm,
 													border: `1px solid ${tint(TONE.accent, TINT.ring)}`,
 													background: tint(TONE.accent, TINT.soft),
 													color: `rgb(${TONE.accent})`
