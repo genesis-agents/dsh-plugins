@@ -336,7 +336,24 @@ const QUOTA_COOLDOWN_MS = 6 * 60 * 60 * 1000;
  * first like the second would idle a working account for a quarter of a day.
  */
 const RATE_LIMIT_BACKOFF_MS = 20 * 60 * 1000;
+/**
+ * How long to stand down after a rate limit, escalating.
+ *
+ * A FLAT TWENTY MINUTES TURNED ONE REFUSAL INTO A BLIND DRAIN. Measured: a
+ * classification run over ninety-six videos made THREE paid requests. The
+ * second took a 429, the provider was parked for twenty minutes, and the
+ * remaining ninety-three were attempted with the paid route standing down —
+ * so their answers were "we did not ask" rather than anything about the video,
+ * and the run learned three facts instead of ninety-six.
+ *
+ * The first refusal is usually a burst that a minute cures. Twenty minutes is
+ * the right answer to the FOURTH one, not the first. Escalating spends a
+ * minute finding out which kind this is, and a success puts it back to the
+ * start — so a provider that is merely busy is not treated as one that is out.
+ */
+const BACKOFF_LADDER_MS = [60 * 1000, 5 * 60 * 1000, RATE_LIMIT_BACKOFF_MS];
 let rateLimitedAt = 0;
+let backoffStep = 0;
 
 /** Whether a 402/403 means this key is out of credit, as opposed to too fast. */
 function isCreditExhausted(cause) {
@@ -513,6 +530,8 @@ export function supadataSpend() {
 /** Forget the spend, for a host that has been given fresh quota. */
 export function resetSupadataSpend() {
   lastPaidCallAt = 0;
+  rateLimitedAt = 0;
+  backoffStep = 0;
   const spent = { calls: paidCalls, minutes: paidMinutes };
   paidCalls = 0;
   paidMinutes = 0;
@@ -760,8 +779,13 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
     // machine rather than about an account. While it holds there is nothing to
     // try: every key would travel from the same address that was just refused.
     const cooling = Date.now() - rateLimitedAt;
-    if (rateLimitedAt !== 0 && cooling < RATE_LIMIT_BACKOFF_MS) {
-      failures.push(`supadata: rate limited ${Math.round(cooling / 60000)} minute(s) ago; standing down for ${Math.round(RATE_LIMIT_BACKOFF_MS / 60000)}`);
+    // ONE REFUSAL IS THE FIRST RUNG, NOT THE SECOND. `backoffStep` counts
+    // refusals, so the wait after the Nth is the Nth rung — index N-1. Reading
+    // it as index N skipped 60s entirely and made a single 429 cost five
+    // minutes, which is the flat twenty this ladder replaced, only smaller.
+    const backoff = BACKOFF_LADDER_MS[Math.min(Math.max(0, backoffStep - 1), BACKOFF_LADDER_MS.length - 1)];
+    if (rateLimitedAt !== 0 && cooling < backoff) {
+      failures.push(`supadata: rate limited ${Math.round(cooling / 1000)}s ago; standing down for ${Math.round(backoff / 1000)}s`);
       throw new Error(failures.join("; "));
     }
 
@@ -822,6 +846,9 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
         paidMinutes += minutes;
         const got = { ...await fetchViaSupadata(videoId, usable[at], languages[0] ?? "en"), via: "supadata" };
         noteSupadataKey(usable[at], "ok");
+        // A request that got through says the burst is over.
+        rateLimitedAt = 0;
+        backoffStep = 0;
         // The reservation was a guess; the transcript is the fact.
         settleMinutes(minutes, got);
         return got;
@@ -853,6 +880,11 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
         // slow down — which is how six keys turned a single refusal into six.
         if (limited) {
           rateLimitedAt = Date.now();
+          // Each refusal moves one rung up; a success below moves it back to
+          // the bottom. Without the reset the ladder only ever climbs, and a
+          // provider that was busy once at breakfast is treated as spent for
+          // the rest of the day.
+          backoffStep = Math.min(backoffStep + 1, BACKOFF_LADDER_MS.length - 1);
           break;
         }
         // A 429 DOES NOT BREAK, and an existing test says why: holding several

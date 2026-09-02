@@ -57,6 +57,32 @@ test("pacing can be turned off, and then it really is off", () => {
   assert.equal(supadataPacingWait(), 0, "a gap survived being set to zero");
 });
 
+test("one rate limit does not blind the whole drain", async () => {
+  // MEASURED: a classification run over ninety-six videos made THREE paid
+  // requests. The second took a 429, the flat twenty-minute stand-down parked
+  // the provider, and the remaining ninety-three were attempted with the paid
+  // route refusing before it sent anything — so their answers said "we did not
+  // ask" rather than anything about the video, and the run learned three facts
+  // instead of ninety-six.
+  //
+  // The first refusal is usually a burst that a minute cures; twenty minutes is
+  // the right answer to the fourth one. The ladder spends a minute finding out
+  // which kind it is.
+  resetSupadataSpend();
+  resetSupadataHealth();
+  const first = await chain("k1", () => 429, 10 * 60);
+  assert.match(String(first.error?.message), /429/, "the fixture did not produce a rate limit");
+
+  // Immediately after, the provider is parked — but for a minute, not twenty.
+  const parked = await chain("k1", () => ({ content: "fine", lang: "en" }), 10 * 60);
+  assert.equal(parked.used.length, 0, "a request was sent while the provider was standing down");
+  assert.match(
+    String(parked.error?.message),
+    /standing down for (60|[1-9]d?)s/,
+    "the stand-down is still being reported in twenty-minute units: " + String(parked.error?.message),
+  );
+});
+
 test("the setting is split into keys however it was pasted", () => {
   // A person pasting four keys uses whichever separator their clipboard
   // produced. All three are the same list.
