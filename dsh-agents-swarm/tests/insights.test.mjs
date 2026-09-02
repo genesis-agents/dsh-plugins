@@ -63,7 +63,7 @@ import {
 // The candidate scan lives with the pass, not with the pure helpers: it needs
 // the store. Imported here because the drain order is a correctness property,
 // not an implementation detail.
-import { collectCandidates, insightPassOnce, readInsightConfig, runInsightPass, transcriptFailureKind } from "../lib/insight-extract.js";
+import { collectCandidates, insightPassOnce, readInsightConfig, rescoreOne, runInsightPass, transcriptFailureKind } from "../lib/insight-extract.js";
 import { buildQueries, createPacer, isIndependent, searchArxiv, searchWeb } from "../lib/insight-corroborate.js";
 
 /** Floating point comparison, for scores that are exact only in decimal. */
@@ -832,7 +832,13 @@ test("an unknown filter value is refused rather than answered with an empty page
   assert.throws(() => insights.list({ filter: "recent" }), /filter must be one of/);
   assert.throws(() => insights.list({ status: "pending" }), /status must be one of/);
   assert.throws(() => insights.list({ kind: "NEWS" }), /kind must be one of/);
-  assert.deepEqual(INSIGHT_STATUSES, ["candidate", "standing", "contested", "dormant"]);
+  // FIVE, and `expired` is the newest. It is written by the pass into
+  // `status` when the EVENT a claim is about has aged out — a different fact
+  // from `dormant`, which means we have had no new evidence lately and is
+  // reversible the moment a source turns up. Pinned here because the list is a
+  // vocabulary three files validate against, and a member added without
+  // thought is a status nothing can filter to.
+  assert.deepEqual(INSIGHT_STATUSES, ["candidate", "standing", "contested", "dormant", "expired"]);
 });
 
 test("a person's pin survives the next pass", (t) => {
@@ -2137,4 +2143,108 @@ test("the three cards from the screenshot now sort below this week's material", 
   // And it is no longer strong: one source caps it at medium, and its rank has
   // fallen out of the high band anyway.
   assert.equal(strengthOf(archived.rank, { independentCount: 1, minIndependent: 2 }), "medium");
+});
+
+/* ── a claim retires when the EVENT ages out ───────────────────────────── */
+
+test("an old event expires; a stale-but-recent one only goes dormant", () => {
+  // TWO DIFFERENT FACTS. Dormant means "no new evidence in N days" — about our
+  // activity, and reversible the moment a source turns up. Expired means the
+  // event itself has aged out of the horizon this tab is for, which no amount
+  // of fresh evidence changes: an article published today about a 2009
+  // benchmark does not make the benchmark recent.
+  const now = "2026-09-01T00:00:00.000Z";
+  const old = nextStatus(
+    { independentCount: 3, lastSeenAt: now },
+    {},
+    { now, eventAt: "2009-06-01T00:00:00.000Z", expireAfterDays: 90, dormantDays: 21 },
+  );
+  assert.equal(old, "expired", "an old event stayed on the board");
+  // Recent event, no evidence for a month: dormant, not expired.
+  const stale = nextStatus(
+    { independentCount: 3, lastSeenAt: "2026-07-20T00:00:00.000Z" },
+    {},
+    { now, eventAt: "2026-07-20T00:00:00.000Z", expireAfterDays: 90, dormantDays: 21 },
+  );
+  assert.equal(stale, "dormant", "a merely quiet claim was retired as old");
+});
+
+test("a person's verdict outranks expiry, however old the event", () => {
+  // The pinned column is the reader's own and is the whole reason it outranks
+  // the pass. A pass that expired past it would be overruling a decision
+  // somebody made on purpose — and the 成立 seat would empty itself over time
+  // with nothing on screen to say why.
+  const now = "2026-09-01T00:00:00.000Z";
+  const held = nextStatus(
+    { pinnedStatus: "standing", independentCount: 1, lastSeenAt: "2009-06-01T00:00:00.000Z" },
+    {},
+    { now, eventAt: "2009-06-01T00:00:00.000Z", expireAfterDays: 90 },
+  );
+  assert.equal(held, "standing", "expiry overruled a verdict a person had made");
+});
+
+test("expiry never writes the reader's column", (t) => {
+  // Forging a signature. The 人工判定 chip would appear on cards nobody had
+  // judged, and the 搁置 seat would fill with things nobody shelved.
+  const { store, insights } = library(t);
+  store.put(resource("old", { publishedAt: "2009-06-01T00:00:00.000Z" }));
+  const id = claim(insights);
+  insights.addEvidence(id, [evidence("old", { resourceType: "NEWS" })]);
+  rescoreOne(insights, id, { insightExpireAfterDays: 90 }, "2026-09-01T00:00:00.000Z", false);
+  const row = insights.get(id);
+  assert.equal(row.status, "expired", "the old claim was not retired");
+  assert.equal(row.pinnedStatus, null, "the pass wrote the reader's own column");
+});
+
+test("an undated claim never expires", () => {
+  // "We do not know when this happened" is not evidence that it happened long
+  // ago. Expiring on a missing field would quietly retire every claim from
+  // every feed that omits a date.
+  const now = "2026-09-01T00:00:00.000Z";
+  const status = nextStatus(
+    { independentCount: 3, lastSeenAt: now },
+    {},
+    { now, eventAt: "", expireAfterDays: 90, dormantDays: 21 },
+  );
+  assert.notEqual(status, "expired");
+});
+
+test("zero turns expiry off", () => {
+  const now = "2026-09-01T00:00:00.000Z";
+  const status = nextStatus(
+    { independentCount: 3, lastSeenAt: now },
+    {},
+    { now, eventAt: "2009-06-01T00:00:00.000Z", expireAfterDays: 0, dormantDays: 21 },
+  );
+  assert.notEqual(status, "expired", "a library meant to accumulate lost its old claims");
+});
+
+test("an expired claim leaves the inbox and lands in its own seat", (t) => {
+  // The whole ask: what is left on screen should be what still needs a person.
+  const { store, insights } = library(t);
+  store.put(resource("old", { publishedAt: "2009-06-01T00:00:00.000Z" }));
+  store.put(resource("new", { publishedAt: new Date(Date.now() - 2 * 86_400_000).toISOString() }));
+  const stale = claim(insights, { statement: "An archived comparison from a paper published in 2009" });
+  const fresh = claim(insights, {
+    statement: "A finding published this week and stated just as plainly",
+    simhash: simhash("A finding published this week and stated just as plainly"),
+  });
+  insights.addEvidence(stale, [evidence("old", { resourceType: "NEWS" })]);
+  insights.addEvidence(fresh, [evidence("new", { resourceType: "NEWS", quote: "raised $3.5bn in a Series E round led by Lightspeed this week" })]);
+  const now = new Date().toISOString();
+  for (const id of [stale, fresh]) rescoreOne(insights, id, { insightExpireAfterDays: 90 }, now, false);
+
+  assert.deepEqual(
+    insights.list({ verdict: "pending", take: 50 }).insights.map((row) => row.id),
+    [fresh],
+    "the expired claim is still in the inbox",
+  );
+  assert.deepEqual(
+    insights.list({ verdict: "expired", take: 50 }).insights.map((row) => row.id),
+    [stale],
+    "the expired claim is not findable in its own seat",
+  );
+  const counts = insights.countsByVerdict();
+  assert.equal(counts.expired, 1);
+  assert.equal(counts.pending, 1, "the inbox count still includes the retired claim");
 });

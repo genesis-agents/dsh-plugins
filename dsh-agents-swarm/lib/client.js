@@ -9958,6 +9958,19 @@ window.__ModuleLoader__.load({
 				id: "dormant", zh: "搁置", en: "Shelved", hue: TONE.muted,
 				hintZh: "你搁置的主张。这里不会随着蜂群的判断改变而少掉东西。",
 				hintEn: "Claims you shelved. Nothing leaves this seat because the swarm changed its mind."
+			},
+			// NOT A VERDICT, AND IT SITS LAST BECAUSE OF THAT. Nobody decided it:
+			// the pass retires a claim whose underlying EVENT has aged out of the
+			// horizon this tab is for. It earns a seat anyway because it shares the
+			// strip's job — it is where a card goes when it leaves the inbox, and a
+			// reader who watched the count drop is owed somewhere to look.
+			//
+			// Only ever holds cards nobody judged. One you marked 成立 stays in
+			// 成立 however old it gets; that is what pinning it was for.
+			{
+				id: "expired", zh: "已过期", en: "Aged out", hue: TONE.muted,
+				hintZh: "事情本身已经太久远、蜂群自动退场的主张 —— 不是你判定的。你判定过的不会进这里。",
+				hintEn: "Claims the swarm retired because the event itself has aged out. Not your verdict, and nothing you have judged lands here."
 			}
 		];
 
@@ -11093,6 +11106,9 @@ window.__ModuleLoader__.load({
 							// reader would open. A rule the library applies and cannot
 							// name is indistinguishable from a feed that stopped
 							// publishing.
+							Number(status?.insightExpireAfterDays ?? 0) <= 0 ? null : (zh
+								? `过期 事情本身超过 ${status.insightExpireAfterDays} 天的主张会自动退场，移到「已过期」—— 你判定过的不受影响`
+								: `Expiry: a claim whose event is more than ${status.insightExpireAfterDays} days old is retired to Aged out; anything you have judged is untouched`),
 							Number(status?.insightMaxAgeDays ?? 0) <= 0 ? null : (zh
 								? `时效 只读发布时间在 ${status.insightMaxAgeDays} 天以内的信源；更早的留给主题洞察`
 								: `Recency: only sources published within ${status.insightMaxAgeDays} days are read; older material is what 主题洞察 is for`),

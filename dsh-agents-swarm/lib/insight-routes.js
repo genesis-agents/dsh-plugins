@@ -54,7 +54,7 @@ const FILTERS = ["new", "rising", "contested", "dormant"];
  * vocabulary and is emphatically not a verdict — a person never decides that a
  * claim is a candidate, the pass does.
  */
-const VERDICTS = ["pending", "standing", "contested", "dormant"];
+const VERDICTS = ["pending", "standing", "contested", "dormant", "expired"];
 
 /**
  * Sorts the list route accepts.
@@ -880,6 +880,7 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
           // reading under. It was reading everything above the watermark and
           // saying nothing about age at all.
           insightMaxAgeDays: Number(readInsightConfig(store).insightMaxAgeDays),
+          insightExpireAfterDays: Number(readInsightConfig(store).insightExpireAfterDays),
           // The cuts a strength band is read at, so the pane can STATE them
           // rather than print 高 over a number nobody was shown the scale for.
           // A judgement a reader cannot see is indistinguishable from one

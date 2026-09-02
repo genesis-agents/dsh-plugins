@@ -893,7 +893,7 @@ export const SCORE_WEIGHTS = Object.freeze({ momentum: 0.35, credibility: 0.30, 
  * @param rows - evidence rows.
  * @returns the earliest ISO stamp found, or "".
  */
-function earliestPublication(rows) {
+export function earliestPublication(rows) {
   let earliest = "";
   for (const row of Array.isArray(rows) ? rows : []) {
     const at = firstText(row?.resource?.publishedAt, row?.publishedAt);
@@ -1087,6 +1087,35 @@ export function nextStatus(insight, scores, options = {}) {
 
   const dormantDays = Number.isFinite(options.dormantDays) && options.dormantDays > 0 ? options.dormantDays : 21;
   const minIndependent = Number.isFinite(options.minIndependent) && options.minIndependent > 0 ? options.minIndependent : 2;
+
+  // ── EXPIRY, AND IT IS TESTED FIRST ──────────────────────────────────
+  //
+  // A DIFFERENT FACT FROM DORMANCY. Dormant means "no new evidence in N days" —
+  // a statement about our activity, and reversible the moment a source turns
+  // up. Expired means the EVENT the claim is about has aged out of the horizon
+  // this tab is for, which no amount of fresh evidence changes: an article
+  // published today about a 2009 benchmark does not make the benchmark recent.
+  //
+  // FIRST, because it is the more permanent of the two and the one a reader
+  // cannot resolve by waiting. A claim that is both stale and old should read
+  // as old.
+  //
+  // WRITTEN TO `status`, NEVER TO `pinned_status`. The pinned column is the
+  // reader's own verdict and is the whole reason it outranks the pass; a pass
+  // that wrote it would be forging a signature — the 人工判定 chip would appear
+  // on cards nobody had judged, and the 搁置 seat would fill with things nobody
+  // shelved. The pinned check above still runs first, so a card somebody marked
+  // 成立 stays 成立 however old it gets. That is what pinning it was for.
+  //
+  // AN UNDATED CLAIM NEVER EXPIRES. "We do not know when this happened" is not
+  // evidence that it happened long ago, and expiring on a missing field would
+  // quietly retire every claim from every feed that omits a date.
+  const expireDays = Number.isFinite(options.expireAfterDays) && options.expireAfterDays > 0
+    ? options.expireAfterDays
+    : 0;
+  if (expireDays > 0 && parsesAsDate(options.eventAt) && daysBetween(options.eventAt, options.now) >= expireDays) {
+    return "expired";
+  }
 
   // Dormancy is tested BEFORE contested, deliberately. Contested first would
   // mean a contested claim can never go dormant, and since the default list

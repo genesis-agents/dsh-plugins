@@ -41,6 +41,7 @@ import {
   MIN_QUOTE_CHARS,
   MIN_QUOTE_CJK_CHARS,
   clusterItems,
+  earliestPublication,
   itemForRow,
   nextStatus,
   scoreInsight,
@@ -239,6 +240,22 @@ export const INSIGHT_DEFAULTS = {
   // actually holds; anything older is research, and research is what 主题洞察
   // is for.
   insightMaxAgeDays: 30,
+  // HOW LONG A CLAIM STAYS ON THE BOARD AFTER THE EVENT IT IS ABOUT.
+  //
+  // `insightMaxAgeDays` stops old material being READ; this retires what has
+  // already been extracted. Without it the intake floor only holds the line
+  // going forward — everything the pass had already pulled in stays on the
+  // board for ever, so a tab cleaned up today fills again with last year's
+  // archive the moment anything touches those rows.
+  //
+  // THREE TIMES THE INTAKE FLOOR, not equal to it. A claim entering at 29 days
+  // old under a 30-day floor would expire on its second day on the board, which
+  // is a tab that discards what it just decided to read. Ninety days is long
+  // enough to watch a story develop and short enough that the board is about
+  // now.
+  //
+  // 0 turns it off, for a library meant to accumulate.
+  insightExpireAfterDays: 90,
   insightResourceTypes: ["YOUTUBE_VIDEO", "NEWS", "BLOG", "PAPER", "REPORT", "POLICY"],
   insightMaxRows: 200,
   insightMaxClusters: 20,
@@ -265,6 +282,7 @@ export function readInsightConfig(store) {
     insightIntervalMinutes: store.getSetting("insightIntervalMinutes", INSIGHT_DEFAULTS.insightIntervalMinutes),
     insightTranscribePerPass: store.getSetting("insightTranscribePerPass", INSIGHT_DEFAULTS.insightTranscribePerPass),
     insightMaxAgeDays: store.getSetting("insightMaxAgeDays", INSIGHT_DEFAULTS.insightMaxAgeDays),
+    insightExpireAfterDays: store.getSetting("insightExpireAfterDays", INSIGHT_DEFAULTS.insightExpireAfterDays),
     insightResourceTypes: store.getSetting("insightResourceTypes", INSIGHT_DEFAULTS.insightResourceTypes),
     insightMaxRows: store.getSetting("insightMaxRows", INSIGHT_DEFAULTS.insightMaxRows),
     insightMaxClusters: store.getSetting("insightMaxClusters", INSIGHT_DEFAULTS.insightMaxClusters),
@@ -1359,6 +1377,12 @@ export function rescoreOne(insightStore, id, config, now, recount) {
     now,
     minIndependent: bounded(config.insightMinIndependent, 2, 5, INSIGHT_DEFAULTS.insightMinIndependent),
     dormantDays,
+    // THE EVENT'S OWN DATE — the earliest publication among the rows backing
+    // the claim, the same instant `scoreNovelty` measures from and for the same
+    // reason: a claim's age is a fact about the world, not about when we
+    // noticed it.
+    eventAt: earliestPublication(evidence),
+    expireAfterDays: bounded(config.insightExpireAfterDays, 0, 3650, INSIGHT_DEFAULTS.insightExpireAfterDays),
   });
   return insightStore.applyScores(id, scores, { status, now });
 }

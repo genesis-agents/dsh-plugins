@@ -281,7 +281,7 @@ CREATE INDEX IF NOT EXISTS ix_insight_evidence_stance   ON insight_evidence(insi
 export const INSIGHT_KINDS = Object.freeze(["launch", "funding", "policy", "finding", "shift"]);
 
 /** The only values `insights.status` and `insights.pinned_status` may hold. */
-export const INSIGHT_STATUSES = Object.freeze(["candidate", "standing", "contested", "dormant"]);
+export const INSIGHT_STATUSES = Object.freeze(["candidate", "standing", "contested", "dormant", "expired"]);
 
 /**
  * Where in the stack a claim sits — the layer, not the kind and not the status.
@@ -311,6 +311,9 @@ export const INSIGHT_LAYERS = Object.freeze(["energy", "compute", "model", "appl
 export const EVIDENCE_STANCES = Object.freeze(["supports", "contradicts", "context"]);
 
 /** Statuses the default list page shows. Spelt as a set, not as `!= dormant`. */
+// `expired` IS NOT LIVE, which is what keeps it out of the inbox and off the
+// default page without a single call site asking about it. A claim whose
+// underlying event has aged out is not something a reader still has to judge.
 const LIVE_STATUSES = Object.freeze(["candidate", "standing", "contested"]);
 
 /** Columns a caller may sort by, mapped to their SQL expression. */
@@ -635,6 +638,14 @@ export class InsightStore {
     ).all()) {
       counts[row.v] = row.n;
     }
+    // AGED OUT AND NEVER JUDGED. Not a verdict — nobody decided it — but it
+    // shares the strip's job: it is where a card goes when it leaves the inbox,
+    // and a reader who watched the count drop is owed somewhere to look. Scoped
+    // to unpinned rows for the same reason the inbox is: a card somebody marked
+    // 成立 belongs in 成立 however old it gets.
+    counts.expired = this.db.prepare(
+      "SELECT COUNT(*) AS n FROM insights WHERE pinned_status IS NULL AND status = 'expired'",
+    ).get().n;
     return counts;
   }
 
@@ -705,6 +716,12 @@ export class InsightStore {
     // be asked for as a distinct value rather than as a member of the
     // vocabulary. Spelling it "" or leaving it out would make "show me what I
     // have not looked at" indistinguishable from "show me everything".
+    // `expired` IS A SEAT BUT NOT A VERDICT. It filters the pass's own column
+    // and, like the inbox, only rows nobody has judged: a card somebody marked
+    // 成立 stays in 成立 however old the event behind it gets.
+    if (verdict === "expired") {
+      where.push("pinned_status IS NULL AND status = 'expired'");
+    }
     const verdicting = typeof verdict === "string" && verdict !== "";
     // A DECIDED VERDICT SUPPRESSES THE DEFAULT LIVE-STATUS CLAUSE; "pending"
     // does not. "Show me what I shelved" means all of it, including the rows
@@ -713,10 +730,17 @@ export class InsightStore {
     // not judged" is the opposite: it is an INBOX, and an inbox that fills up
     // with everything the pass has already given up on is an inbox nobody
     // reaches the bottom of.
+    // `expired` SUPPRESSES THE LIVE-STATUS DEFAULT, exactly as a decided
+    // verdict does — and for a sharper reason: expired is BY DEFINITION not a
+    // live status, so leaving the default in place ANDs two mutually exclusive
+    // clauses and the seat is empty by construction. Caught by the test that
+    // asks the seat for the card it had just retired.
     const judged = verdicting && verdict !== "pending";
     if (verdicting) {
       if (verdict === "pending") {
         where.push("pinned_status IS NULL");
+      } else if (verdict === "expired") {
+        // already applied above
       } else {
         assertMember(verdict, INSIGHT_STATUSES, "verdict");
         where.push("pinned_status = ?");
