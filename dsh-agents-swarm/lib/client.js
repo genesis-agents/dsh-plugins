@@ -5758,7 +5758,7 @@ window.__ModuleLoader__.load({
 									}),
 									running || untranslated === 0 ? null : jsx("button", {
 										type: "button",
-										className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: CONTROL.xs, padding: "0 6px", color: hue(kind) },
+										className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: CONTROL.xs, padding: "0 8px", color: hue(kind) },
 										onClick: () => { setRetryTick((tick) => tick + 1); },
 										children: zh ? "重译" : "Retry"
 									})
@@ -17802,7 +17802,7 @@ window.__ModuleLoader__.load({
 						type: "button",
 						"aria-pressed": entry.runCount === current,
 						className: "swm-ctl swm-focus", style: {
-							...controlStyle(), height: CONTROL.xs, padding: "0 9px",
+							...controlStyle(), height: CONTROL.xs, padding: "0 10px",
 							font: entry.runCount === current ? FONT.microStrong : FONT.micro,
 							color: entry.total === 0 ? INK.quiet : undefined,
 							...pressedStyle(entry.runCount === current)
@@ -17816,7 +17816,7 @@ window.__ModuleLoader__.load({
 					!folded ? null : jsx("button", {
 						type: "button",
 						className: "swm-ctl swm-focus",
-						style: { ...controlStyle(), height: CONTROL.xs, padding: "0 9px", font: FONT.micro },
+						style: { ...controlStyle(), height: CONTROL.xs, padding: "0 10px", font: FONT.micro },
 						onClick: () => { setAllRuns(true); },
 						children: zh ? `+${runs.length - shownRuns.length} 次` : `+${runs.length - shownRuns.length}`
 					}, "more")
@@ -22988,14 +22988,14 @@ window.__ModuleLoader__.load({
 														value: hosts.a,
 														"aria-label": zh ? "主持人 A 的声音" : "Host A voice",
 														onChange: (event) => { setHosts((previous) => ({ ...previous, a: event.target.value })); },
-														className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: CONTROL.sm, padding: "0 6px" },
+														className: "swm-ctl swm-focus", style: { ...controlStyle(), font: FONT.micro, height: CONTROL.sm, padding: "0 8px" },
 														children: voices.map((voice) => jsx("option", { value: voice.id, children: `A · ${voice.label}` }, voice.id))
 													}),
 													jsx("select", {
 														value: hosts.b,
 														"aria-label": zh ? "主持人 B 的声音" : "Host B voice",
 														onChange: (event) => { setHosts((previous) => ({ ...previous, b: event.target.value })); },
-														className: "swm-ctl swm-focus", style: { ...controlStyle(busy || running), font: FONT.micro, height: CONTROL.sm, padding: "0 6px" },
+														className: "swm-ctl swm-focus", style: { ...controlStyle(busy || running), font: FONT.micro, height: CONTROL.sm, padding: "0 8px" },
 														children: voices.map((voice) => jsx("option", { value: voice.id, children: `B · ${voice.label}` }, voice.id))
 													})
 												]

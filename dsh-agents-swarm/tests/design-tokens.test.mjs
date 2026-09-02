@@ -637,6 +637,87 @@ test("a control takes its height from the scale, like its type", () => {
   );
 });
 
+test("a control is padded from one short ladder, not by eye", () => {
+  // THE HEIGHT GUARD ABOVE, ONE PROPERTY ALONG. Controls carried five distinct
+  // horizontal paddings — 10, 9, 8, 6 and 4 — and 9 and 6 are each a pixel or
+  // two from a neighbour they sit directly beside. That is the same defect as
+  // the 34px button next to the 28px select: not a value that is wrong on its
+  // own, but two values that cannot be told apart doing the job of one.
+  //
+  // THIS IS A RATCHET, NOT A CONVERSION. The app writes 110 paddings in raw
+  // pixels across 57 distinct values, and rounding all of them onto SPACE would
+  // change the density of every panel in the product on the strength of one
+  // report about two buttons. What must not happen is a SIXTH control padding
+  // appearing, so this holds the set that exists and lets it shrink.
+  const NL = String.fromCharCode(10);
+  const CR = String.fromCharCode(13);
+  const MARK = "padding: " + String.fromCharCode(34);
+  const lines = SOURCE.split(NL).map((line) => line.split(CR).join(""));
+  const found = new Set();
+  lines.forEach((line, at) => {
+    if (!line.includes("swm-ctl") && !line.includes("controlStyle(")) return;
+    const window = lines.slice(at, at + 6).join(NL);
+    const start = window.indexOf(MARK);
+    if (start < 0) return;
+    const closes = window.indexOf(String.fromCharCode(34), start + MARK.length);
+    if (closes > 0) found.add(window.slice(start + MARK.length, closes));
+  });
+  const allowed = new Set(["0 10px", "0 8px", "0 4px", "0 24px 16px", "0 8px 0 10px"]);
+  const strays = [...found].filter((value) => !allowed.has(value)).sort();
+  assert.deepEqual(
+    strays,
+    [],
+    "a control is padded with a value no other control uses; match one that is already there, or this becomes a sixth thing to tell apart by eye",
+  );
+});
+
+test("the raw pixel spacing that is left can only shrink", () => {
+  // 110 paddings in raw pixels across 57 distinct values, against a SPACE scale
+  // of 4 / 8 / 12 / 16 / 24. Most are one or two pixels off a scale step —
+  // 9, 10, 11, 13, 14 — which is the same "one pixel from a neighbour it will
+  // sit next to" the font-size guard names as its reason.
+  //
+  // NOT CONVERTED, AND THAT IS A DELIBERATE LIMIT. Rounding all of them would
+  // change the density of every panel in the product, in one commit, on the
+  // strength of a report about two buttons — a change nobody could review by
+  // looking. A ratchet stops it getting worse and makes each future one a
+  // decision rather than a default, which is what the suite floor does for
+  // tests and what this file does for font sizes.
+  //
+  // TWO CEILINGS, AND THE SECOND IS THE ONE THAT MATTERS. The count says how
+  // much raw spacing there is; the DISTINCT count says how many different
+  // answers the product gives to the same question, which is what a reader
+  // actually sees. Collapsing 0 9px onto 0 10px changed the second and not the
+  // first, and the second is the fix.
+  //
+  // LOWER THESE WHEN YOU CONVERT SOME. Never raise them.
+  const CEILING = 110;
+  const DISTINCT_CEILING = 55;
+  const MARK = "padding: " + String.fromCharCode(34);
+  let count = 0;
+  const distinct = new Set();
+  let from = 0;
+  for (;;) {
+    const start = SOURCE.indexOf(MARK, from);
+    if (start < 0) break;
+    const closes = SOURCE.indexOf(String.fromCharCode(34), start + MARK.length);
+    const value = closes < 0 ? "" : SOURCE.slice(start + MARK.length, closes);
+    if (value.includes("px")) {
+      count += 1;
+      distinct.add(value);
+    }
+    from = start + MARK.length;
+  }
+  assert.ok(
+    count <= CEILING,
+    count + " paddings are written in raw pixels, over the ceiling of " + CEILING + "; use a SPACE member, or lower the ceiling in the same commit that converts some",
+  );
+  assert.ok(
+    distinct.size <= DISTINCT_CEILING,
+    distinct.size + " distinct raw paddings, over the ceiling of " + DISTINCT_CEILING + "; a new value is a new thing to tell apart by eye — reuse one that is already there",
+  );
+});
+
 test("emphasis is the shell's weight", () => {
   const heavy = [...SOURCE.matchAll(/fontWeight: (\d+)/g)].map((match) => Number(match[1])).filter((weight) => weight > 500);
   assert.deepEqual(
