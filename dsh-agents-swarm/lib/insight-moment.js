@@ -23,6 +23,8 @@
  * 38:08, which is worse than no timestamp at all. No match, no link.
  */
 
+import { quoteFloor } from "./insights.js";
+
 /** Only these carry a timeline a second can point into. */
 const TIMED_TYPES = new Set(["YOUTUBE_VIDEO", "YOUTUBE", "VIDEO", "PODCAST"]);
 
@@ -62,7 +64,25 @@ export function momentOf(quote, cues) {
   const wanted = fold(quote).trim();
   // A HANDFUL OF WORDS IS NOT A LOCATOR. "and so" appears forty times in an
   // hour of speech, and the first match is not the one the claim came from.
-  if (wanted.length < 24 || !Array.isArray(cues) || cues.length === 0) return null;
+  //
+  // BUT 24 CHARACTERS IS A LATIN RULE, AND IT WAS BEING APPLIED TO CHINESE.
+  // Measured on a live card: 他曾经每天烧掉三四百美元，只用最前沿的模型。 is 22
+  // characters — a complete sentence naming a person, an amount and a habit,
+  // which no hour of speech repeats by accident. It was rejected as too short
+  // to locate, so the card fell back to 来自简介 and lost its timestamp. Every
+  // Chinese-language video on the tab was in that position.
+  //
+  // The rest of this codebase already knows the difference: `quoteFloor` picks
+  // 20 for Latin and 8 for majority-CJK, and `verifyQuote` has used it since
+  // the extractor was written. This file simply typed its own number.
+  //
+  // THREE TIMES THE EVIDENCE FLOOR, not equal to it. The two answer different
+  // questions: 8 CJK characters is enough to be worth QUOTING, and a locator
+  // has to be specific enough that its FIRST match in an hour of speech is the
+  // right one. Scaling the same ratio the Latin number already carries — 24
+  // against a floor of 20 — keeps one rule rather than two magic numbers.
+  const floor = Math.ceil(quoteFloor(wanted) * 1.2);
+  if (wanted.length < floor || !Array.isArray(cues) || cues.length === 0) return null;
 
   // THE JOIN HAS TO BE THE ONE THE OFFSETS ARE COMPUTED AGAINST. Building the
   // haystack and the offset table in the same pass is what guarantees that:

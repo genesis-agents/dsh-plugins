@@ -230,3 +230,39 @@ test("the list's flat evidence gets a moment, not only the item's nested one", a
   assert.equal(out[0].at, 757, "the list's own evidence shape resolves to no moment");
   assert.equal(out[0].atUrl, "https://www.youtube.com/watch?v=abc123&t=757s");
 });
+
+test("a Chinese quote is long enough to locate at Chinese lengths", () => {
+  // MEASURED ON A LIVE CARD. 他曾经每天烧掉三四百美元，只用最前沿的模型。 is 22
+  // characters — a complete sentence naming a person, an amount and a habit,
+  // which no hour of speech repeats by accident. The locator floor was a flat
+  // 24, which is a LATIN rule: "and so" appears forty times in an hour, and
+  // twenty-four Latin characters is the length at which that stops being true.
+  // Twenty-four CJK characters is a paragraph.
+  //
+  // So the quote was rejected as too short to locate, the card fell back to
+  // 来自简介, and every Chinese-language video on the tab lost its timestamp.
+  // The rest of this codebase already knows the difference — `quoteFloor` picks
+  // 20 for Latin and 8 for majority-CJK — and this file had typed its own
+  // number.
+  const cues = [
+    { start: 0, text: "开场白，随便说点什么" },
+    { start: 212, text: "他曾经每天烧掉三四百美元，只用最前沿的模型。" },
+  ];
+  assert.equal(momentOf("他曾经每天烧掉三四百美元，只用最前沿的模型。", cues), 212);
+});
+
+test("a handful of Latin words is still not a locator", () => {
+  // The rule the flat 24 existed for, and it has to survive the fix: the first
+  // match of a common phrase is not the one the claim came from.
+  assert.equal(momentOf("and so we did", [{ start: 5, text: "and so we did" }]), null);
+  assert.equal(momentOf("it is true", [{ start: 5, text: "it is true" }]), null);
+  // And a real Latin quote still resolves.
+  const cues = [{ start: 88, text: "the interconnection queue backlog for large data center projects has grown" }];
+  assert.equal(momentOf("the interconnection queue backlog for large data center projects has grown", cues), 88);
+});
+
+test("a very short Chinese fragment is still refused", () => {
+  // The floor moved, it did not disappear. 好的，对 is two words of assent and
+  // appears throughout any conversation.
+  assert.equal(momentOf("好的，对", [{ start: 3, text: "好的，对，我们继续" }]), null);
+});

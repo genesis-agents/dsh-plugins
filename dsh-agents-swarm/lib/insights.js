@@ -669,7 +669,7 @@ export const MIN_QUOTE_CJK_CHARS = 8;
  * quote, and the pass would report a drop rate that reads as a bad model when
  * it is a bad threshold.
  */
-function quoteFloor(normalized) {
+export function quoteFloor(normalized) {
   const letters = (normalized.match(/\p{L}/gu) ?? []).length;
   if (letters === 0) return MIN_QUOTE_CHARS;
   const cjk = (normalized.match(CJK_LETTER) ?? []).length;
