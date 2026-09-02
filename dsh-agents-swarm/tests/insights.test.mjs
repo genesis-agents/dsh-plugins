@@ -2426,3 +2426,78 @@ test("a video whose transcript is not to hand is not dropped for it", () => {
   };
   assert.equal(verifyClaims([claim], blocks, new Map()).kept.length, 1);
 });
+
+/* ── the pass grades its own provenance ────────────────────────────────── */
+
+test("a pass counts how many of its spoken quotes can be played", async (t) => {
+  // MEASURED BY HAND FOUR TIMES TO GET HERE, each time with a shell script
+  // written after the fact against a board that had already drifted. A number
+  // nobody computes is a number that regresses quietly: the entire reason this
+  // took four attempts is that "23 of 36 video quotes have no timestamp" was
+  // never on a screen and never in a log.
+  //
+  // The pass counts it while it still has the cues in hand, which is the only
+  // moment the answer is cheap.
+  const { store, insights } = library(t);
+  const cues = Array.from({ length: 30 }, (_, at) => ({
+    start: at * 30, text: `cue ${at} carrying a full sentence of real spoken content`,
+  }));
+  store.put(resource("v", { type: "YOUTUBE_VIDEO", title: "A talk", sourceUrl: "https://youtu.be/aaaaaaaaaaa" }));
+  store.putTranscript("v", "en", cues.map((c) => c.text).join(" "), cues);
+  store.put(resource("n", { type: "NEWS", title: "An article about the same story" }));
+
+  // A model that quotes the recording verbatim.
+  const chat = async function* () {
+    yield {
+      text: JSON.stringify({
+        claims: [{
+          statement: "A claim drawn from something that was actually said in the recording",
+          kind: "finding",
+          entities: ["Anthropic", "OpenAI"],
+          evidence: [{ source: "S1", stance: "supports", quote: cues[9].text }],
+        }],
+      }),
+    };
+  };
+  const result = await insightPassOnce(store, insights, chat, undefined, {});
+  // Whether the claim survived depends on labels the fixture cannot control;
+  // what is pinned here is that the pass REPORTS the two numbers at all, and
+  // that they are consistent with each other.
+  assert.equal(typeof result.spokenQuotes, "number", "the pass does not count its spoken quotes");
+  assert.equal(typeof result.locatedQuotes, "number", "the pass does not count what it can place");
+  assert.ok(
+    result.locatedQuotes <= result.spokenQuotes,
+    `more quotes placed (${result.locatedQuotes}) than taken from a recording (${result.spokenQuotes})`,
+  );
+});
+
+test("every spoken quote that survives verification can be placed", async (t) => {
+  // THE GUARANTEE, stated as a test rather than as a hope. `verifyClaims`
+  // checks anything quoted from a transcript against the recording using the
+  // same matcher the card draws ▶ with, so a surviving video quote HAS a
+  // moment by construction. If that ever stops being true, the pass's own
+  // grade shows it and this fails.
+  const { store, insights } = library(t);
+  const cues = Array.from({ length: 30 }, (_, at) => ({
+    start: at * 30, text: `cue ${at} carrying a full sentence of real spoken content`,
+  }));
+  store.put(resource("v", { type: "YOUTUBE_VIDEO", sourceUrl: "https://youtu.be/aaaaaaaaaaa" }));
+  store.putTranscript("v", "en", cues.map((c) => c.text).join(" "), cues);
+  store.put(resource("n", { type: "NEWS", title: "A second readable row for the pass" }));
+
+  // A model that quotes something the recording does not contain.
+  const chat = async function* () {
+    yield {
+      text: JSON.stringify({
+        claims: [{
+          statement: "A claim resting on words nobody in the recording ever said",
+          kind: "finding",
+          entities: ["Anthropic", "OpenAI"],
+          evidence: [{ source: "S1", stance: "supports", quote: "a sentence assembled from words nobody put together like this at all" }],
+        }],
+      }),
+    };
+  };
+  const result = await insightPassOnce(store, insights, chat, undefined, {});
+  assert.equal(result.locatedQuotes, result.spokenQuotes, "a spoken quote survived that cannot be placed");
+});

@@ -9764,6 +9764,11 @@ window.__ModuleLoader__.load({
 			// A skip is amber and means the library is missing transcripts —
 			// worth fixing, since the pass is only reading what is left, but
 			// nothing is wrong with the run.
+			// The provenance grade from the run this ledger belongs to. On the
+			// ledger rather than in the run's own figures because it is about the
+			// QUOTES rather than about the claims, which is what this panel is for.
+			const spokenQuotes = data.spokenQuotes;
+			const locatedQuotes = data.locatedQuotes;
 			const broken = Number(counts.failed ?? 0);
 			const skipped = Number(counts["no-transcript"] ?? 0) + Number(counts.unusable ?? 0);
 
@@ -9802,6 +9807,29 @@ window.__ModuleLoader__.load({
 							// opens this still learns whether anything BROKE and whether the
 							// pass is reading most of the library or a corner of it — two
 							// facts, in that order of urgency.
+							// HOW MANY SPOKEN QUOTES CAN BE PLAYED. The one number that says
+							// whether the whole provenance chain is working: a quote taken
+							// from a recording either points at a second in it or it does
+							// not, and this batch spent four measurements-by-hand learning
+							// that nobody was counting.
+							//
+							// Green at 100% rather than silent, because that is a fact worth
+							// seeing: it is the difference between "everything is fine" and
+							// "nothing has been checked".
+							!Number.isFinite(Number(spokenQuotes)) || Number(spokenQuotes) === 0 ? null : jsx("span", {
+								title: zh
+									? "从有录音的信源里引的话，有多少能定位到具体的秒。低于全部说明有引语通过了核验却指不到任何一刻。"
+									: "Quotes taken from a source with a recording, and how many can be pointed at a second in it. Below 100% means a quote passed verification that cannot be placed.",
+								style: {
+									font: FONT.micro,
+									color: Number(locatedQuotes) >= Number(spokenQuotes)
+										? `rgb(${TONE.success})`
+										: `rgb(${TONE.warn})`
+								},
+								children: zh
+									? `口语引语可定位 ${locatedQuotes}/${spokenQuotes}`
+									: `${locatedQuotes}/${spokenQuotes} spoken quotes locatable`
+							}, "grade"),
 							broken === 0 ? null : jsx("span", {
 								style: { font: FONT.microStrong, color: `rgb(${TONE.danger})` },
 								children: zh ? `${broken} 个抽取失败` : `${broken} failed`

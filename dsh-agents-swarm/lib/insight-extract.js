@@ -1768,6 +1768,12 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
   }
 
   const failures = [];
+  // Quotes taken from a source that HAS a recording, and how many of those can
+  // be pointed at a second in it. Anything below 100% after this batch means a
+  // quote survived verification that the locator cannot place — which is the
+  // exact hole `verifyClaims` was given the cues to close.
+  let spokenQuotes = 0;
+  let locatedQuotes = 0;
   const droppedReasons = {};
   const rejectedReasons = {};
   const kept = [];
@@ -1796,6 +1802,28 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     try {
       const result = await extractClaims(chat, cluster, { zh: config.insightChinese === true, entries });
       extracted += 1;
+      // ── THE PASS GRADES ITS OWN PROVENANCE ────────────────────────────
+      //
+      // MEASURED BY HAND FOUR TIMES TO GET HERE, and each measurement was a
+      // shell script written after the fact against a board that had already
+      // drifted. A number nobody computes is a number that regresses quietly:
+      // the whole reason this took four attempts is that "23 of 36 video
+      // quotes have no timestamp" was never on screen and never in a log.
+      //
+      // Two facts per pass, and they are the two that matter: how many quotes
+      // came from a source that CAN carry a moment, and how many of those
+      // actually do. Their ratio is the health of everything this batch
+      // changed — the spoken-only material, the transcript verification, the
+      // locator's script floor — in one number that moves when any of them
+      // breaks.
+      for (const claim of result.claims) {
+        for (const row of claim.evidence ?? []) {
+          const cues = entries.find((one) => String(one?.row?.id) === String(row.resourceId))?.transcript?.cues;
+          if (!Array.isArray(cues) || cues.length === 0) continue;
+          spokenQuotes += 1;
+          if (momentOf(row.quote, cues) !== null) locatedQuotes += 1;
+        }
+      }
       // EVERY MEMBER OF THE CLUSTER GETS THE CLUSTER'S VERDICT, and the count
       // is the cluster's, not each row's. A cluster is what the model is shown
       // — several articles about one story, in one call — so "which of these
@@ -1980,6 +2008,11 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     transcribeTried: transcribed.tried,
     transcribeGained: transcribed.gained,
     transcribeStopped: transcribed.stopped,
+    // The provenance grade. Equal numbers mean every quote from a recording can
+    // be played; a gap is a regression in something this batch fixed, and it is
+    // visible in the run record without anybody writing a script.
+    spokenQuotes,
+    locatedQuotes,
     rows: rows.length,
     // Rows the clusterer could not use at all — no title, no usable text. A
     // pass reading two hundred rows and clustering nine is not a pass that

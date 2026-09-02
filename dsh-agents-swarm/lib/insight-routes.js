@@ -797,6 +797,22 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
           // The passes still on record, so a reader can look at the one before
           // this one rather than only at the newest.
           batches: insights.passBatches(),
+          // THE PROVENANCE GRADE OF THE RUN THIS LEDGER BELONGS TO. Read off
+          // the run record rather than recomputed here: the pass counted it
+          // while it had the cues in hand, and a second implementation over a
+          // different set of rows would be a second answer to one question.
+          //
+          // Matched by batch, because the newest ledger and the newest run
+          // record are the same pass only until somebody starts another one.
+          ...(() => {
+            const config = readInsightConfig(store);
+            const run = [config.insightLastRun, config.insightLastManualRun]
+              .filter((one) => one !== null && one !== undefined)
+              .find((one) => one.batch === ledger.batch);
+            return run === undefined
+              ? {}
+              : { spokenQuotes: run.spokenQuotes, locatedQuotes: run.locatedQuotes };
+          })(),
         },
       });
       return true;
