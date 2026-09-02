@@ -373,15 +373,50 @@ function isRateLimited(cause) {
 const PAID_CALL_CEILING = 200;
 let paidCalls = 0;
 
+/**
+ * Minutes of video bought since this host started, and the ceiling on them.
+ *
+ * THE UNIT THAT ACTUALLY BILLS, and the third one I have had to correct. The
+ * budget counted VIDEOS, so sixty videos became three hundred requests. Then it
+ * counted REQUESTS, so ten requests became two hundred and fifty credits —
+ * measured by the person paying, watching the number drop by 250 inside a
+ * second while my meter read "10".
+ *
+ * Ten requests for 250 credits is 25 each, and 25 is the length of a podcast
+ * episode in minutes. A transcript is priced by how much of it there is, which
+ * is obvious in hindsight and was never once checked: every ceiling I wrote
+ * bounded the number of times we asked, and none of them bounded how much we
+ * were asking for.
+ *
+ * PER-VIDEO AND IN TOTAL. A three-hour recording is three times an hour-long
+ * one and there is no request count at which that stops being true, so the
+ * per-video cap is the one that prevents a single fetch from being the whole
+ * budget.
+ */
+const PAID_MINUTE_CEILING = 600;
+const PAID_MINUTES_PER_VIDEO = 180;
+let paidMinutes = 0;
+
 /** How many paid requests have been made, and what is left. */
 export function supadataSpend() {
-  return { calls: paidCalls, ceiling: PAID_CALL_CEILING, remaining: Math.max(0, PAID_CALL_CEILING - paidCalls) };
+  return {
+    calls: paidCalls,
+    ceiling: PAID_CALL_CEILING,
+    remaining: Math.max(0, PAID_CALL_CEILING - paidCalls),
+    // THE ONE THAT MATTERS. Requests are what this program does; minutes are
+    // what the provider charges for, and until now only the first was visible.
+    minutes: paidMinutes,
+    minuteCeiling: PAID_MINUTE_CEILING,
+    minutesRemaining: Math.max(0, PAID_MINUTE_CEILING - paidMinutes),
+    perVideoMinutes: PAID_MINUTES_PER_VIDEO,
+  };
 }
 
 /** Forget the spend, for a host that has been given fresh quota. */
 export function resetSupadataSpend() {
-  const spent = paidCalls;
+  const spent = { calls: paidCalls, minutes: paidMinutes };
   paidCalls = 0;
+  paidMinutes = 0;
   return spent;
 }
 
@@ -577,7 +612,7 @@ export async function fetchTranscript(videoId, languages = DEFAULT_LANGUAGES) {
  * @returns `{ language, text, cues, via }`.
  * @throws an error naming every route that was tried and why it failed.
  */
-export async function resolveTranscript(videoId, { apiKey, gensBase, languages = DEFAULT_LANGUAGES } = {}) {
+export async function resolveTranscript(videoId, { apiKey, gensBase, languages = DEFAULT_LANGUAGES, durationSeconds } = {}) {
   const failures = [];
   try {
     return { ...await fetchTranscript(videoId, languages), via: "timedtext" };
@@ -631,6 +666,29 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
       throw new Error(failures.join("; "));
     }
 
+    // ── WHAT THIS ONE VIDEO WILL COST, BEFORE ASKING FOR IT ────────────
+    //
+    // The provider charges for the length of the transcript, so the price of a
+    // request is known before it is made — the library already stores every
+    // video's duration, fetched for the length floor and until now used for
+    // nothing else. A cost that can be computed and is not is a cost nobody
+    // can refuse.
+    //
+    // UNKNOWN LENGTH IS PRICED AS THE PER-VIDEO CAP, not as free. "We do not
+    // know how long this is" is not a reason to buy it blind, and pricing the
+    // unknown at zero is precisely how a budget stops bounding anything.
+    const minutes = Number.isFinite(Number(durationSeconds)) && Number(durationSeconds) > 0
+      ? Math.ceil(Number(durationSeconds) / 60)
+      : PAID_MINUTES_PER_VIDEO;
+    if (minutes > PAID_MINUTES_PER_VIDEO) {
+      failures.push(`supadata: this video is ${minutes} minutes, over the ${PAID_MINUTES_PER_VIDEO}-minute per-video cap`);
+      throw new Error(failures.join("; "));
+    }
+    if (paidMinutes + minutes > PAID_MINUTE_CEILING) {
+      failures.push(`supadata: ${paidMinutes} minute(s) bought since this host started; ${minutes} more would pass the ceiling of ${PAID_MINUTE_CEILING}`);
+      throw new Error(failures.join("; "));
+    }
+
     // THE CEILING IS CHECKED BEFORE THE KEYS ARE, because a key that has quota
     // is not permission to spend without limit — that was the assumption that
     // emptied five of them.
@@ -652,6 +710,9 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
         // reached the provider and still counted against a quota; counting on
         // success would meter only the calls that were worth making.
         paidCalls += 1;
+        // Counted with the call and before the await, for the same reason: a
+        // refused request still asked the provider for that many minutes.
+        paidMinutes += minutes;
         const got = { ...await fetchViaSupadata(videoId, usable[at], languages[0] ?? "en"), via: "supadata" };
         noteSupadataKey(usable[at], "ok");
         return got;

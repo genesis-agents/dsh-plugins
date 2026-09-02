@@ -170,6 +170,9 @@ function insightTranscriber(store) {
       apiKey: config.supadataKey,
       gensBase: seedBase(),
       languages: config.transcriptLanguages,
+      // THE PRICE, HANDED OVER RATHER THAN GUESSED. The row carries the length
+      // the collector already paid a watch-page request to learn.
+      durationSeconds: row?.durationSeconds,
     });
   };
 }
@@ -1385,6 +1388,7 @@ export function createHandler(store, logger, chat, web, ctx, missions) {
           apiKey: config.supadataKey,
           gensBase: seedBase(),
           languages: config.transcriptLanguages,
+          durationSeconds: row?.durationSeconds,
         });
         store.putTranscript(row.id, result.language, result.text, result.cues ?? []);
         sendJson(res, 200, { success: true, data: { language: result.language, text: result.text, cues: result.cues ?? [], via: result.via } });

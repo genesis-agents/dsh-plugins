@@ -53,7 +53,9 @@ test("the setting is split into keys however it was pasted", () => {
  * @param answer - given a key, either a payload or an HTTP status to fail with.
  * @returns `{ used, result, error }`.
  */
-async function chain(keys, answer) {
+async function chain(keys, answer, seconds = 10 * 60) {
+  // `null` means "the row has no duration", which is a different thing from a
+  // caller that did not care and took the default.
   const used = [];
   const inner = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
@@ -67,7 +69,13 @@ async function chain(keys, answer) {
       : { ok: true, status: 200, json: async () => said, text: async () => "" };
   };
   try {
-    return { used, result: await resolveTranscript("vid00000001", { apiKey: keys }), error: null };
+    // A NORMAL VIDEO, because these tests are about the key rotation and not
+    // about the budget. Without a duration the resolver prices a video at the
+    // per-video cap — the honest reading of "we do not know how long this is" —
+    // and three of them would exhaust the minute ceiling, so every test after
+    // the third would be asserting against a client that had stopped spending.
+    // The budget has tests of its own.
+    return { used, result: await resolveTranscript("vid00000001", { apiKey: keys, durationSeconds: seconds === null ? undefined : seconds }), error: null };
   } catch (cause) {
     return { used, result: null, error: cause };
   } finally {
@@ -302,23 +310,27 @@ test("past the ceiling the paid route is not taken at all", async () => {
   // gaining transcripts at no cost while the spend stays where it was put.
   resetSupadataSpend();
   resetSupadataHealth();
+  // THE CALL CEILING, REACHED WITHOUT TRIPPING THE MINUTE ONE. Both bound the
+  // same spending from different directions and the minute ceiling is the
+  // tighter of the two on any realistic video — which is the point of having
+  // it — so this test buys the shortest thing there is.
   const ceiling = supadataSpend().ceiling;
   // Burn to the ceiling with a fresh key each time, so cooldowns are not what
   // stops it — the ceiling has to be the thing that does.
   for (let at = 0; at < ceiling; at += 1) {
     resetSupadataHealth();
-    await chain(`burn${at}`, () => 500);
+    await chain(`burn${at}`, () => 500, 60);
   }
   assert.ok(supadataSpend().remaining === 0, `remaining ${supadataSpend().remaining} after burning the ceiling`);
 
   resetSupadataHealth();
-  const after = await chain("fresh-key", () => ({ content: "would have worked", lang: "en" }));
+  const after = await chain("fresh-key", () => ({ content: "would have worked", lang: "en" }), 60);
   assert.equal(after.used.length, 0, "a paid request was made past the ceiling");
   assert.match(String(after.error?.message ?? ""), /ceiling/, "the refusal does not say why");
 
   // And a reset restores it, for somebody who has just topped up.
   resetSupadataSpend();
-  const back = await chain("fresh-key", () => ({ content: "now it works", lang: "en" }));
+  const back = await chain("fresh-key", () => ({ content: "now it works", lang: "en" }), 60);
   assert.equal(back.result?.text, "now it works", "the ceiling could not be cleared");
 });
 
@@ -369,4 +381,64 @@ test("running out of credit is still per-key and still yields to the next", asyn
     : 402));
   assert.equal(result?.text, "the second key has credit");
   assert.equal(used.length, 2, "an out-of-credit key no longer yields to the next");
+});
+
+test("the budget is denominated in minutes, because that is what bills", async () => {
+  // MEASURED BY THE PERSON PAYING: 250 credits gone inside a second while the
+  // meter read "10 calls". Ten requests for 250 is 25 each, and 25 is the
+  // length of a podcast episode in minutes. A transcript is priced by how much
+  // of it there is.
+  //
+  // THE THIRD UNIT I HAVE HAD TO CORRECT. The budget counted VIDEOS, so sixty
+  // videos became three hundred requests. Then it counted REQUESTS, so ten
+  // requests became 250 credits. Every ceiling bounded how often we asked;
+  // none bounded how much we were asking for.
+  resetSupadataSpend();
+  await chain("k1", () => ({ content: "fine", lang: "en" }), 30 * 60);
+  assert.equal(supadataSpend().minutes, 30, "minutes are not being counted");
+  assert.equal(supadataSpend().calls, 1);
+});
+
+test("a video too long to afford is refused before it is asked for", async () => {
+  // The price is known BEFORE the request: the library already stores every
+  // video's duration, fetched for the length floor and until now used for
+  // nothing else. A cost that can be computed and is not is a cost nobody can
+  // refuse.
+  resetSupadataSpend();
+  const cap = supadataSpend().perVideoMinutes;
+  const { used, error } = await chain("k1", () => ({ content: "fine", lang: "en" }), (cap + 30) * 60);
+  assert.equal(used.length, 0, "a video over the per-video cap was bought anyway");
+  assert.match(String(error?.message), /per-video cap/);
+  assert.equal(supadataSpend().minutes, 0, "an unmade request was billed");
+});
+
+test("an unknown duration is priced at the cap, not at zero", async () => {
+  // "We do not know how long this is" is not a reason to buy it blind, and
+  // pricing the unknown at zero is precisely how a budget stops bounding
+  // anything — which is the shape of all three mistakes above.
+  resetSupadataSpend();
+  await chain("k1", () => ({ content: "fine", lang: "en" }), null);
+  assert.equal(
+    supadataSpend().minutes,
+    supadataSpend().perVideoMinutes,
+    "a video of unknown length was billed as free",
+  );
+});
+
+test("the minute ceiling stops spending even when calls are cheap", async () => {
+  // The two ceilings bound the same spending from different directions, and on
+  // any realistic video the minute one binds first. A hundred short requests
+  // and four long ones cost the same; only one of those was ever visible.
+  resetSupadataSpend();
+  const total = supadataSpend().minuteCeiling;
+  const each = 60;
+  for (let at = 0; at < Math.floor(total / each); at += 1) {
+    resetSupadataHealth();
+    await chain(`k${at}`, () => ({ content: "fine", lang: "en" }), each * 60);
+  }
+  assert.equal(supadataSpend().minutesRemaining, 0, "the ceiling was not reached");
+  resetSupadataHealth();
+  const over = await chain("another", () => ({ content: "fine", lang: "en" }), each * 60);
+  assert.equal(over.used.length, 0, "a request was made past the minute ceiling");
+  assert.match(String(over.error?.message), /ceiling/);
 });
