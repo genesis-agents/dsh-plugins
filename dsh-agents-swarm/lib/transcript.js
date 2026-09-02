@@ -757,11 +757,20 @@ export async function fetchTranscript(videoId, languages = DEFAULT_LANGUAGES) {
 /**
  * Whether a local yt-dlp can be used, decided once.
  *
- * `undefined` until asked, then true or false for the life of the process. The
- * answer cannot change without something being installed, and probing on every
- * video would spawn a process per video to learn a fact that does not move.
+ * A YES IS FOREVER; A NO IS RECHECKED. Present cannot become absent without
+ * somebody uninstalling it, so a true answer is kept for the life of the
+ * process and no video pays for a second probe.
+ *
+ * A false answer is different, and caching it was a trap I set and then walked
+ * into: the host reported `ytDlp: false`, the fix is to install it, and the
+ * status would have gone on saying false until the process restarted — so the
+ * one action the reader was told to take would have looked like it did nothing.
+ * Ten minutes is long enough that a library of videos costs one probe, and short
+ * enough that installing it takes effect while somebody is still watching.
  */
 let ytDlpUsable;
+let ytDlpProbedAt = 0;
+const YTDLP_RECHECK_MS = 10 * 60 * 1000;
 
 /**
  * Set the probe's answer without probing.
@@ -775,6 +784,8 @@ let ytDlpUsable;
  */
 export function setYtDlp(usable) {
   ytDlpUsable = usable === undefined ? undefined : usable === true;
+  // Far enough in the future that a forced `false` is not re-probed mid-test.
+  ytDlpProbedAt = Date.now();
 }
 
 /** Reset the cached probe. For tests, which install and uninstall it. */
@@ -787,7 +798,8 @@ export function forgetYtDlp() {
  * @returns true when it answers `--version`.
  */
 export async function hasYtDlp() {
-  if (ytDlpUsable !== undefined) return ytDlpUsable;
+  if (ytDlpUsable === true) return true;
+  if (ytDlpUsable === false && Date.now() - ytDlpProbedAt < YTDLP_RECHECK_MS) return false;
   try {
     const { spawn } = await import("node:child_process");
     ytDlpUsable = await new Promise((settle) => {
@@ -802,6 +814,7 @@ export async function hasYtDlp() {
   } catch {
     ytDlpUsable = false;
   }
+  ytDlpProbedAt = Date.now();
   return ytDlpUsable;
 }
 

@@ -15,7 +15,7 @@
 import { strict as assert } from "node:assert";
 import { beforeEach, test } from "node:test";
 
-import { fetchViaYtDlp, maskSupadataKey, resetSupadataHealth, resetSupadataSpend, setSupadataPacing, setYtDlp, supadataKeyHealth, supadataKeys, supadataPacingWait, supadataSpend, resolveTranscript } from "../lib/transcript.js";
+import { fetchViaYtDlp, forgetYtDlp, hasYtDlp, maskSupadataKey, resetSupadataHealth, resetSupadataSpend, setSupadataPacing, setYtDlp, supadataKeyHealth, supadataKeys, supadataPacingWait, supadataSpend, resolveTranscript } from "../lib/transcript.js";
 
 // A HOOK, NOT A CALL IN EVERY TEST. The key-health cache is module-level and
 // two tests here failed on state a third had left behind — a suite reporting
@@ -153,6 +153,31 @@ test("a failed yt-dlp does not stop the chain reaching the paid route", async ()
   const { used, result } = await chain("k1", () => ({ content: "fine", lang: "en" }), 10 * 60);
   assert.equal(used.length, 1, "the paid route was never reached");
   assert.equal(result?.via, "supadata");
+});
+
+test("installing yt-dlp takes effect without a restart", async () => {
+  // A TRAP I SET AND THEN WALKED INTO. The probe cached its answer for the life
+  // of the process, the host reported ytDlp: false, and the fix is to install
+  // it — so the status would have gone on saying false until something restarted
+  // the host. The one action the reader was told to take would have looked like
+  // it did nothing, which is the most expensive kind of wrong.
+  //
+  // A yes stays cached: present cannot become absent without an uninstall, and
+  // no video should pay for a second probe.
+  forgetYtDlp();
+  const first = await hasYtDlp();
+  assert.equal(typeof first, "boolean", "the probe did not answer");
+
+  // Forced true, then asked again: the answer must be kept without probing.
+  setYtDlp(true);
+  assert.equal(await hasYtDlp(), true, "a positive answer was thrown away");
+
+  // Forced false is held only for the recheck window, not for ever. Asserted
+  // through the seam rather than by waiting ten minutes for it.
+  setYtDlp(false);
+  assert.equal(await hasYtDlp(), false, "a fresh negative answer was not held at all");
+  forgetYtDlp();
+  setYtDlp(false);
 });
 
 test("the setting is split into keys however it was pasted", () => {
