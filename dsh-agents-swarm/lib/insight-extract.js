@@ -651,7 +651,7 @@ export function collectCandidates(store, config, scope = {}) {
     },
     "",
   );
-  return { rows, backlog, truncated, skipped, unconsidered };
+  return { rows, backlog, truncated, skipped, unconsidered, publishedAfter: publishedAfter ?? "" };
 }
 
 /**
@@ -1729,7 +1729,7 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
 
   say("reading", 0, 0);
   // The scope, when the reader asked for one. Absent on every scheduled pass.
-  let { rows, backlog, truncated, skipped, unconsidered } = collectCandidates(store, config, options.scope ?? {});
+  let { rows, backlog, truncated, skipped, unconsidered, publishedAfter } = collectCandidates(store, config, options.scope ?? {});
 
   // ── GO AND GET THE TRANSCRIPTS THE SCAN JUST SKIPPED ──────────────────
   //
@@ -1753,7 +1753,7 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
       onStep: (done, total) => { say("transcribing", done, total); },
     });
     if (transcribed.gained > 0) {
-      ({ rows, backlog, truncated, skipped, unconsidered } = collectCandidates(store, config, options.scope ?? {}));
+      ({ rows, backlog, truncated, skipped, unconsidered, publishedAfter } = collectCandidates(store, config, options.scope ?? {}));
     }
   }
 
@@ -1926,6 +1926,27 @@ export async function insightPassOnce(store, insightStore, chat, logger, options
     .map((row) => String(row.createdAt ?? ""))
     .filter((at) => ceiling === null || at < ceiling)
     .reduce((latest, value) => (value > latest ? value : latest), "");
+  // WHAT IS STILL WAITING, MEASURED FROM WHERE THE READER GOT TO.
+  //
+  // The scan's own estimate counts rows at or after the NEWEST row it happened
+  // to page in — which, once the per-type share leaves leftovers, is nowhere
+  // near the watermark. On this library that gap was the whole story: the tab
+  // said "26 还没读到" while the watermark sat at 2026-08-04 and a month of
+  // material had never been offered to anything. A backlog that shrinks while
+  // the queue grows is worse than no backlog at all, because it is the one
+  // number a reader uses to decide whether to intervene.
+  //
+  // The next pass will ask for `created_at > watermark` under the freshness
+  // floor. This asks the store exactly that, so the two cannot disagree.
+  if (watermark !== "" && typeof store.countUnread === "function") {
+    try {
+      const waiting = store.countUnread(watermark, publishedAfter ?? "");
+      if (Number.isFinite(waiting)) backlog = waiting;
+    } catch {
+      // A store without the helper keeps the scan-local estimate, which is a
+      // lower bound; `truncated` already says the slice was capped.
+    }
+  }
   const binned = rows.length - reached.size;
   for (const row of rows) {
     if (reached.has(String(row.id))) continue;

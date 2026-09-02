@@ -9617,7 +9617,13 @@ window.__ModuleLoader__.load({
 			unusable: { zh: "没有正文", en: "No usable text", hue: TONE.warn },
 			binned: { zh: "超出上限", en: "Over the ceiling", hue: TONE.muted },
 			read: { zh: "读了没抽到", en: "Read, nothing kept", hue: TONE.neutral },
-			extracted: { zh: "抽出了主张", en: "Claims extracted", hue: TONE.success }
+			// SOURCES, NOT CLAIMS. Every row in this ledger is one SOURCE and its
+			// outcome, so this is "how many sources ended up inside a claim" — a
+			// number several times larger than the claim count, because a claim
+			// stands on the sources that corroborate it. Labelled "抽出了主张" it
+			// read as the same quantity as the band's claim figure and contradicted
+			// it: 24 against 4, both correct, one of them mislabelled.
+			extracted: { zh: "进了主张", en: "Used in a claim", hue: TONE.success }
 		};
 
 		/**
@@ -9719,7 +9725,7 @@ window.__ModuleLoader__.load({
 		* @param onOpenMoment - opens a source in the library's own reader.
 		* @param tick - bumped by the pane when a pass ends, to re-read.
 		*/
-		function PassLedger({ zh, onOpenMoment, tick, awaiting }) {
+		function PassLedger({ zh, onOpenMoment, tick, awaiting, perPass }) {
 			const [open, setOpen] = useState(false);
 			const [data, setData] = useState(null);
 			const [error, setError] = useState("");
@@ -9837,7 +9843,14 @@ window.__ModuleLoader__.load({
 							}, "title"),
 							jsx("span", {
 								style: { font: FONT.micro, color: INK.quiet, fontFamily: MONO },
-								children: zh ? `看了 ${looked} 个信源` : `${looked} sources`
+								// THE SUM IS SHOWN, BECAUSE IT DOES NOT MATCH THE BAND ABOVE.
+								// This total includes the rows skipped before the scan counted
+								// them, so it is legitimately larger than 本轮扫过 — and read
+								// side by side without the arithmetic, "600 扫过" against
+								// "看了 628" is simply two numbers disagreeing.
+								children: zh
+									? (skipped > 0 ? `经手 ${looked} 个信源 = 扫过 ${looked - skipped} + 跳过 ${skipped}` : `经手 ${looked} 个信源`)
+									: (skipped > 0 ? `${looked} sources = ${looked - skipped} scanned + ${skipped} skipped` : `${looked} sources`)
 							}, "n"),
 							// THE SENTENCES THAT MUST BE TRUE WHILE SHUT. A reader who never
 							// opens this still learns whether anything BROKE and whether the
@@ -9876,10 +9889,20 @@ window.__ModuleLoader__.load({
 							// only ever seen a corner of. The pass now fetches transcripts
 							// itself, so this number is one that goes DOWN — which is the
 							// difference between a fault and a queue.
+							// THE TOOLTIP PROMISED SOMETHING THE SETTING HAD TURNED OFF.
+							// It said "every analysis fetches a batch, so this number comes
+							// down on its own" — flatly untrue at 每轮取 0, which is where it
+							// sits after the quota trouble, and the number had not moved in
+							// days. A tip that describes the default rather than the
+							// configuration is another figure fighting the one beside it.
 							!Number.isFinite(Number(awaiting)) || Number(awaiting) === 0 ? null : jsx("span", {
-								title: zh
-									? "每次分析会顺便去取一批转录，所以这个数字会自己减少。想快一点就在「运行分析」里把「顺便取多少份转录」调高。"
-									: "Every analysis fetches a batch of transcripts, so this number comes down on its own. Raise it in the Run analysis dialog to drain it faster.",
+								title: Number(perPass) > 0
+									? (zh
+										? `每次分析会顺便取 ${Number(perPass)} 份转录，所以这个数字会自己减少。想快一点就在「运行分析」里把「顺便取多少份转录」调高。`
+										: `Every analysis fetches ${Number(perPass)} transcripts, so this number comes down on its own. Raise it in the Run analysis dialog to drain it faster.`)
+									: (zh
+										? "每轮顺便取转录的份数现在是 0，所以这个数字不会自己减少。要补转录，在「运行分析」里把「顺便取多少份转录」调高，或单独跑一次取转录。"
+										: "Per-pass transcript fetching is set to 0, so this number will not come down on its own. Raise it in the Run analysis dialog, or run a transcript fetch on its own."),
 								style: { font: FONT.micro, color: INK.quiet },
 								children: zh
 									? `全库还有 ${awaiting} 个视频没有转录`
@@ -9890,9 +9913,12 @@ window.__ModuleLoader__.load({
 									? "只有已经取到转录的视频才能抽出可核验的引语；没有转录的会在送给模型之前跳过，不花模型调用。"
 									: "Only a video with a stored transcript can yield a checkable quote; the rest are skipped before the model is called, at no cost.",
 								style: { font: FONT.micro, color: `rgb(${TONE.warn})` },
+								// THE COUNT IS ALREADY IN THE HEADLINE'S ARITHMETIC, so this
+								// says WHY rather than repeating how many — the same number
+								// twice in one line reads as two findings.
 								children: zh
-									? `跳过 ${skipped} 个（没有转录）`
-									: `${skipped} skipped for want of a transcript`
+									? "跳过的都是没有转录的视频"
+									: "all skipped for want of a transcript"
 							}, "skipped"),
 							jsx("span", { style: { flex: 1 } }, "spacer"),
 							jsx("span", {
@@ -10534,9 +10560,21 @@ window.__ModuleLoader__.load({
 									borderRadius: RADIUS.lg, background: SURFACE.card
 								},
 								children: [
-									{ zh: "扫过", en: "rows read", value: last?.rows },
-									{ zh: "抽出主张", en: "claims", value: last?.claims },
-									{ zh: "通过核验", en: "verified", value: last?.verified },
+									// EVERY CELL SAYS 本轮, BECAUSE THE ONE BELOW IT DOES NOT.
+									//
+									// These four describe the last pass; the ledger under them
+									// describes the same pass in a different unit, and the claim
+									// list under THAT describes the whole board. Three scopes
+									// stacked with nothing saying so, and a reader comparing
+									// "抽出主张 4" against "主张 共 10 条" against "抽出了主张 24"
+									// is reading three true numbers as one contradiction.
+									//
+									// The unit is in the label too: this counts CLAIMS, while
+									// the ledger counts the SOURCES that produced them, and the
+									// two carried the same words.
+									{ zh: "本轮扫过", en: "rows this pass", value: last?.rows },
+									{ zh: "本轮主张", en: "claims this pass", value: last?.claims },
+									{ zh: "本轮核验", en: "verified this pass", value: last?.verified },
 									{ zh: "还没读到", en: "not yet read", value: last?.backlog, tone: TONE.warn }
 								].map((cell, index) => jsxs("div", {
 									style: {
@@ -11020,7 +11058,7 @@ window.__ModuleLoader__.load({
 					// `tick` rather than its own timer: the pane already re-reads when
 					// a pass ends, and a second poller against the same lifecycle is a
 					// second thing to keep in step.
-					jsx(PassLedger, { zh, onOpenMoment, tick, awaiting: status?.awaitingTranscript }, "ledger"),
+					jsx(PassLedger, { zh, onOpenMoment, tick, awaiting: status?.awaitingTranscript, perPass: status?.insightTranscribePerPass }, "ledger"),
 
 					// A SECTION LABEL, NOT A THIRD 16px HEADING.
 					//

@@ -603,6 +603,31 @@ export class SourceStore {
   }
 
   /**
+   * How many rows the next scan would still be offered.
+   *
+   * STRICTLY AFTER, AND UNDER THE SAME FRESHNESS FLOOR, because that is exactly
+   * what `collectCandidates` asks for: `created_at > watermark` intersected with
+   * `COALESCE(published_at, created_at) >= floor`. A backlog counted any other
+   * way is a number the queue never matches.
+   *
+   * `countCreatedSince` is `>=` and takes no floor, so it answers a different
+   * question and answering this one with it is how the tab came to say "26 still
+   * to read" while the reader sat a month behind.
+   * @param since - the watermark; rows at this instant are already read.
+   * @param publishedAfter - the freshness floor, or "" for none.
+   * @returns the count.
+   */
+  countUnread(since, publishedAfter = "") {
+    const where = ["created_at > ?"];
+    const params = [since];
+    if (typeof publishedAfter === "string" && publishedAfter !== "") {
+      where.push("COALESCE(published_at, created_at) >= ?");
+      params.push(publishedAfter);
+    }
+    return this.db.prepare(`SELECT COUNT(*) AS n FROM resources WHERE ${where.join(" AND ")}`).get(...params).n;
+  }
+
+  /**
    * Rows whose page has not been looked at for an image yet.
    *
    * Ordered newest first, because a reader looks at the top of the feed and a

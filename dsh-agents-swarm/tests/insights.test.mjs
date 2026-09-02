@@ -2659,6 +2659,59 @@ test("the scan window is bounded by what clustering costs, not by the model bill
   );
 });
 
+test("the backlog is what the next pass would be offered, not what this one paged in", async (t) => {
+  // "还没读到" is the one number a reader uses to decide whether to step in, and
+  // it counted rows at or after the NEWEST row this scan happened to page in.
+  //
+  // THE TWO ONLY DIVERGE WHEN THE PER-TYPE SHARE LEAVES LEFTOVERS, which is why
+  // this fixture needs two types and a first attempt with one proved nothing:
+  // with a single type the scan's newest row IS the watermark and both counts
+  // agree. Give a quiet type rows far newer than a busy type's leftovers and
+  // they come apart completely — the scan's edge lands on the quiet type's
+  // newest while the watermark stops at the busy type's first unconsidered row,
+  // which is exactly the live shape that had the tab reading "26 还没读到" with
+  // a month of material sitting unoffered behind it.
+  const { store, insights } = library(t);
+  const word = (n) => "w" + n.toString(36) + "x" + ((n * 7919) % 99991).toString(36);
+  const stamp = (seconds) => new Date(Date.UTC(2026, 0, 1, 0, 0, 0) + seconds * 1000).toISOString();
+  const body = (at) => ({
+    title: `${word(at * 3)} ${word(at * 3 + 1)} ${word(at * 3 + 2)}`,
+    abstract: Array.from({ length: 12 }, (_, k) => word(at * 100 + k)).join(" "),
+    publishedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+  });
+
+  const busy = 300;
+  for (let at = 0; at < busy; at += 1) {
+    store.put(resource("n" + String(at).padStart(4, "0"), { ...body(at), type: "NEWS", createdAt: stamp(at) }));
+  }
+  // Newer than anything the busy type will leave behind.
+  const quiet = 10;
+  for (let at = 0; at < quiet; at += 1) {
+    store.put(resource("p" + String(at).padStart(4, "0"), { ...body(9000 + at), type: "PAPER", createdAt: stamp(1000 + at) }));
+  }
+
+  store.setSetting("insightResourceTypes", ["NEWS", "PAPER"]);
+  store.setSetting("insightMaxRows", 120);
+  store.setSetting("insightMaxClusters", 4);
+  store.setSetting("insightMaxAgeDays", 0);
+
+  const chat = async function* () { yield { error: "no model here" }; };
+  const pass = await insightPassOnce(store, insights, chat, undefined, {});
+
+  assert.ok(pass.watermark !== "", "the watermark did not move, so this proves nothing about the backlog");
+  const everything = [
+    ...Array.from({ length: busy }, (_, at) => stamp(at)),
+    ...Array.from({ length: quiet }, (_, at) => stamp(1000 + at)),
+  ];
+  const offered = everything.filter((at) => at > pass.watermark).length;
+  assert.ok(offered > 100, `only ${offered} rows are above the watermark; the fixture is not exercising a real backlog`);
+  assert.equal(
+    pass.backlog,
+    offered,
+    `the tab would say ${pass.backlog} still to read while ${offered} rows sit above the watermark at ${pass.watermark}`,
+  );
+});
+
 /* ── the block is a conversation, not a skeleton ───────────────────────── */
 
 test("an excerpt is a continuous run, not every Nth line", () => {
