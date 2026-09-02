@@ -399,7 +399,49 @@ const PAID_MINUTE_CEILING = 600;
 // the first time either moves — which this batch has already paid for once,
 // with a default written down twice.
 const PAID_MINUTES_PER_VIDEO = 5 * 60;
+/**
+ * What an unknown length is RESERVED at, before the real one is known.
+ *
+ * IT IS NOT THE PER-VIDEO CAP, and using the cap here is what made the budget
+ * unusable. The library stores a duration only for videos whose feed carried
+ * one, so most of the untranscribed backlog has none — and pricing every one of
+ * them at five hours meant two requests consumed a ten-hour ceiling and the
+ * remaining ninety-six could never be bought at all. A budget that blocks the
+ * work it was sized for is not a safe budget, it is a broken one.
+ *
+ * An hour is roughly what these recordings run to. It is a RESERVATION, not a
+ * charge: the moment the transcript is in hand its true length is known, and
+ * {@link settleMinutes} replaces the estimate with it. Reserve high enough to
+ * be safe, settle at what was actually spent.
+ */
+const UNKNOWN_MINUTES = 60;
 let paidMinutes = 0;
+
+/**
+ * Replace a reservation with what the fetch actually cost.
+ *
+ * The provider bills the length of the recording, and the transcript says what
+ * that is — the last cue's end. Leaving the estimate in place would have the
+ * budget drift away from the bill in whichever direction the guess was wrong,
+ * and a ceiling measured in a made-up unit stops bounding anything real.
+ * @param reserved - the minutes taken before the request.
+ * @param got - the transcript, whose cues carry the true length.
+ */
+function settleMinutes(reserved, got) {
+  // `{ start, duration }`, BOTH IN SECONDS — the shape every fetcher in this
+  // file normalises to, not the provider's own `{ offset, duration }` in
+  // milliseconds. Reading the raw shape here settled a twelve-minute recording
+  // at one minute, because `offset` is absent after normalisation and the sum
+  // collapsed to the last cue's own length.
+  const cues = Array.isArray(got?.cues) ? got.cues : [];
+  const seconds = cues.reduce((latest, cue) => {
+    const end = Number(cue?.start ?? 0) + Number(cue?.duration ?? 0);
+    return Number.isFinite(end) && end > latest ? end : latest;
+  }, 0);
+  if (!Number.isFinite(seconds) || seconds <= 0) return;
+  const truly = Math.ceil(seconds / 60);
+  paidMinutes = Math.max(0, paidMinutes - reserved + truly);
+}
 
 /** How many paid requests have been made, and what is left. */
 export function supadataSpend() {
@@ -681,10 +723,12 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
     // UNKNOWN LENGTH IS PRICED AS THE PER-VIDEO CAP, not as free. "We do not
     // know how long this is" is not a reason to buy it blind, and pricing the
     // unknown at zero is precisely how a budget stops bounding anything.
-    const minutes = Number.isFinite(Number(durationSeconds)) && Number(durationSeconds) > 0
-      ? Math.ceil(Number(durationSeconds) / 60)
-      : PAID_MINUTES_PER_VIDEO;
-    if (minutes > PAID_MINUTES_PER_VIDEO) {
+    const known = Number.isFinite(Number(durationSeconds)) && Number(durationSeconds) > 0;
+    const minutes = known ? Math.ceil(Number(durationSeconds) / 60) : UNKNOWN_MINUTES;
+    // ONLY A KNOWN LENGTH CAN BE REFUSED FOR BEING TOO LONG. An unknown one is
+    // reserved at an estimate, and refusing on an estimate would decline videos
+    // for a length nobody has measured.
+    if (known && minutes > PAID_MINUTES_PER_VIDEO) {
       failures.push(`supadata: this video is ${minutes} minutes, over the ${PAID_MINUTES_PER_VIDEO}-minute per-video cap`);
       throw new Error(failures.join("; "));
     }
@@ -719,6 +763,8 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
         paidMinutes += minutes;
         const got = { ...await fetchViaSupadata(videoId, usable[at], languages[0] ?? "en"), via: "supadata" };
         noteSupadataKey(usable[at], "ok");
+        // The reservation was a guess; the transcript is the fact.
+        settleMinutes(minutes, got);
         return got;
       } catch (cause) {
         // Recorded before the message is folded into `failures`, so the tally

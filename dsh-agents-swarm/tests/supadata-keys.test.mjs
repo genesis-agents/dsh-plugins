@@ -412,16 +412,46 @@ test("a video too long to afford is refused before it is asked for", async () =>
   assert.equal(supadataSpend().minutes, 0, "an unmade request was billed");
 });
 
-test("an unknown duration is priced at the cap, not at zero", async () => {
+test("an unknown duration is reserved above zero, and below the per-video cap", async () => {
   // "We do not know how long this is" is not a reason to buy it blind, and
   // pricing the unknown at zero is precisely how a budget stops bounding
   // anything — which is the shape of all three mistakes above.
+  //
+  // BUT PRICING IT AT THE CAP BROKE THE BUDGET THE OTHER WAY, and that cost a
+  // day. The library stores a duration only for videos whose feed carried one,
+  // so nearly the whole untranscribed backlog has none; at five hours each, two
+  // requests consumed the ten-hour ceiling and the remaining ninety-six could
+  // never be bought at all. Measured live: two test fetches took
+  // `minutesRemaining` from 600 to 0. A budget that blocks the work it was
+  // sized for is not a safe budget, it is a broken one.
   resetSupadataSpend();
   await chain("k1", () => ({ content: "fine", lang: "en" }), null);
+  const spend = supadataSpend();
+  assert.ok(spend.minutes > 0, "a video of unknown length was billed as free");
+  assert.ok(
+    spend.minutes < spend.perVideoMinutes,
+    `an unknown length reserved ${spend.minutes} of a ${spend.perVideoMinutes}-minute cap; a backlog of them cannot be bought`,
+  );
+});
+
+test("the reservation is replaced by what the transcript says it actually was", async () => {
+  // A reservation is a guess and the transcript is the fact: the provider bills
+  // the length of the recording, and the last cue says what that is. Leaving
+  // the guess in place lets the budget drift away from the bill in whichever
+  // direction the guess was wrong, and a ceiling measured in a made-up unit
+  // bounds nothing real.
+  resetSupadataSpend();
+  const reserved = supadataSpend().minutes;
+  assert.equal(reserved, 0, "the fixture did not start clean");
+  // Twelve minutes of cues, against an unknown length reserved at an hour.
+  await chain("k1", () => ({
+    content: [{ text: "a", offset: 0, duration: 1000 }, { text: "b", offset: 719_000, duration: 1000 }],
+    lang: "en",
+  }), null);
   assert.equal(
     supadataSpend().minutes,
-    supadataSpend().perVideoMinutes,
-    "a video of unknown length was billed as free",
+    12,
+    `the estimate was left in place at ${supadataSpend().minutes} minutes instead of settling at the true 12`,
   );
 });
 
