@@ -835,6 +835,34 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
     // them to `/transcript/ingest` is doing the drain's work rather than
     // racing it. Videos proven to publish no captions are already excluded by
     // the store, so nothing here is a video anyone should ask about again.
+    // ── forget the absences taken on a blocked page ─────────────────────
+    //
+    // GUARDED BY A COUNT, like the purge, and for the same reason: this puts
+    // videos back on a queue that can spend money, so a caller that has not
+    // looked cannot supply the number.
+    if (req.method === "POST" && path === "/insights/absences/clear") {
+      let body;
+      try {
+        body = await readJson(req);
+      } catch (cause) {
+        sendJson(res, 400, { success: false, error: String(cause?.message ?? cause) });
+        return true;
+      }
+      const held = store.countVideosWithoutCaptions?.() ?? 0;
+      const claimed = Number(body?.expect);
+      if (!Number.isInteger(claimed) || claimed !== held) {
+        sendJson(res, 409, {
+          success: false,
+          error: `send {"expect": ${held}} to confirm; ${held} video(s) are marked as publishing no captions and the request said ${body?.expect ?? "nothing"}`,
+          held,
+        });
+        return true;
+      }
+      const cleared = store.clearTranscriptAbsences?.() ?? 0;
+      sendJson(res, 200, { success: true, data: { cleared, waiting: store.countVideosWithoutTranscript?.() ?? null } });
+      return true;
+    }
+
     if (req.method === "GET" && path === "/insights/awaiting") {
       const take = boundedInteger(params, "take", 1, 200, 50);
       sendJson(res, 200, {

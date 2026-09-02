@@ -1645,11 +1645,19 @@ export function transcriptFailureKind(error) {
   // rate-limited request can also mention a missing track in the same string:
   // the free routes are tried first and each appends its own failure, so one
   // message routinely carries four.
-  if (/429|rate.?limit|quota|too many requests|limit exceeded/.test(text)) return "quota";
+  if (/\b429\b|rate.?limit|quota|too many requests|limit exceeded/.test(text)) return "quota";
   // 400/404 from every route: the video genuinely has no caption track. Worth
   // separating because it is PERMANENT — no budget and no key will ever change
   // it, and a reader looking at the ledger should not be told to buy quota.
-  if (/400|404|no caption|not available|no transcript|no subtitles/.test(text)) return "absent";
+  // A PAGE WE WERE NOT SHOWN IS NOT A FACT ABOUT THE VIDEO, and this is tested
+  // BEFORE "absent" because the sentence contains the words "no player
+  // response" and would otherwise be read as a missing caption track. Marking
+  // it absent writes a permanent verdict into the library on the strength of a
+  // consent wall or a bot check — MEASURED: video zIwwkuB2NPQ was recorded as
+  // publishing no captions while yt-dlp fetched its English track the same
+  // minute, from a machine YouTube does not throttle.
+  if (/served something other than the video|carried no player response/.test(text)) return "other";
+  if (/\b400\b|\b404\b|no caption|not available|no transcript|no subtitles/.test(text)) return "absent";
   return "other";
 }
 

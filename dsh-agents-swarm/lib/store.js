@@ -573,6 +573,30 @@ export class SourceStore {
    * @param resourceId - the video.
    * @param reason - what every route answered, for the ledger.
    */
+  /**
+   * Forget every recorded absence, so they can be established again.
+   *
+   * NEEDED BECAUSE THE FIRST ONES WERE WRONG. A mark was written whenever the
+   * classifier said "absent", and one sentence it read that way — "this video
+   * publishes no caption track" — is what a BLOCKED caller sees whether or not
+   * the video has captions. Verdicts taken on that evidence are facts about the
+   * caller, not the video, and they cannot be repaired one at a time because
+   * nothing recorded which of them were sound.
+   *
+   * It clears the mark only. A transcript that was actually fetched keeps its
+   * text and cues and simply stops claiming the video has none.
+   * @returns how many marks were cleared.
+   */
+  clearTranscriptAbsences() {
+    const held = this.db.prepare("SELECT COUNT(*) AS n FROM transcripts WHERE absent_at IS NOT NULL").get().n;
+    this.db.exec("UPDATE transcripts SET absent_at = NULL, absent_reason = NULL WHERE absent_at IS NOT NULL");
+    // A row that existed ONLY to carry an absence has no text and no reason to
+    // stay. Left behind it says the video has an empty transcript, which reads
+    // as "fetched and blank" rather than "never got one".
+    this.db.exec("DELETE FROM transcripts WHERE (text IS NULL OR text = '') AND absent_at IS NULL");
+    return held;
+  }
+
   markTranscriptAbsent(resourceId, reason = "") {
     this.db.prepare(`
       INSERT INTO transcripts (resource_id, language, text, cues, fetched_at, absent_at, absent_reason)

@@ -2866,6 +2866,69 @@ test("the transcript queue can be read without starting a paid drain", (t) => {
   );
 });
 
+test("the status codes are classified, and the word boundaries survive the source", () => {
+  // THE REGEX WAS CORRUPTED IN THE FILE, and every existing test passed anyway.
+  // Six bytes of 0x08 sat where the source meant to carry a word-boundary
+  // escape, so the patterns read as literal backspaces: `HTTP 404` classified as
+  // "other" instead of "absent", `HTTP 429` as "other" instead of "quota". The
+  // one test that touched this used "timedtext: HTTP 404 no caption track",
+  // which matched on the words "no caption" and reported the right answer for
+  // the wrong reason, and the corruption survived every run.
+  //
+  // These cases carry NO other matchable words, so they can only pass if the
+  // numbers themselves match.
+  assert.equal(transcriptFailureKind(new Error("HTTP 404")), "absent");
+  assert.equal(transcriptFailureKind(new Error("HTTP 400 bad request")), "absent");
+  assert.equal(transcriptFailureKind(new Error("HTTP 429")), "quota");
+  // AND THE BOUNDARIES STILL BOUND. Replacing the broken escape with a bare
+  // number would make every test above pass while matching an id, a byte count,
+  // or a year that happens to contain the digits.
+  assert.equal(transcriptFailureKind(new Error("status 4040 nonsense")), "other");
+  assert.equal(transcriptFailureKind(new Error("read 1429 bytes")), "other");
+});
+
+test("a page we were not shown is not a fact about the video", () => {
+  // "no caption track" is what a BLOCKED caller sees whether or not the video
+  // has captions, and marking it absent writes a permanent verdict into the
+  // library on the strength of a consent wall. Measured: video zIwwkuB2NPQ was
+  // recorded as publishing no captions while yt-dlp fetched its English track
+  // the same minute from a machine YouTube does not throttle.
+  assert.equal(
+    transcriptFailureKind(new Error("the watch page carried no player response, so this caller was served something other than the video")),
+    "other",
+    "a blocked page was recorded as a permanent fact about the video",
+  );
+  // The real answer still is one: a player response that carries no tracks.
+  assert.equal(transcriptFailureKind(new Error("this video publishes no caption track")), "absent");
+});
+
+test("clearing the absences puts the videos back without touching real transcripts", (t) => {
+  // The first marks were taken on a sentence a blocked caller sees whether or
+  // not the video has captions, and nothing recorded which of them were sound —
+  // so they cannot be repaired one at a time.
+  const { store } = library(t);
+  store.put(resource("v1", { type: "YOUTUBE_VIDEO", createdAt: "2026-08-01T00:00:00.000Z" }));
+  store.put(resource("v2", { type: "YOUTUBE_VIDEO", createdAt: "2026-08-02T00:00:00.000Z" }));
+  store.put(resource("v3", { type: "YOUTUBE_VIDEO", createdAt: "2026-08-03T00:00:00.000Z" }));
+  store.markTranscriptAbsent("v1", "this video publishes no caption track");
+  store.markTranscriptAbsent("v2", "this video publishes no caption track");
+  store.putTranscript("v3", "en", "words that were really fetched", [{ start: 1, duration: 2, text: "words" }]);
+  assert.equal(store.countVideosWithoutCaptions(), 2);
+
+  assert.equal(store.clearTranscriptAbsences(), 2, "the clear did not report what it cleared");
+  assert.equal(store.countVideosWithoutCaptions(), 0);
+  assert.deepEqual(
+    store.videosWithoutTranscript(50).map((row) => row.id),
+    ["v1", "v2"],
+    "the videos did not go back on the queue they were wrongly taken off",
+  );
+  // AND THE REAL TRANSCRIPT IS UNTOUCHED. A clear that reached the fetched rows
+  // would turn a repair into a second, larger loss.
+  const kept = store.getTranscript("v3");
+  assert.equal(kept?.text, "words that were really fetched");
+  assert.equal(kept?.cues?.length, 1, "the cues were dropped, so the video can no longer be seeked");
+});
+
 /* ── the block is a conversation, not a skeleton ───────────────────────── */
 
 test("an excerpt is a continuous run, not every Nth line", () => {

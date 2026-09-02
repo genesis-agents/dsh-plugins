@@ -702,8 +702,32 @@ export async function fetchViaSupadata(videoId, apiKey, language = "en") {
 export async function fetchTranscript(videoId, languages = DEFAULT_LANGUAGES) {
   const page = await fetch(`https://www.youtube.com/watch?v=${videoId}`, { headers: PAGE_HEADERS });
   if (!page.ok) throw new Error(`watch page: HTTP ${page.status}`);
-  const tracks = captionTracksOf(await page.text());
-  if (tracks.length === 0) throw new Error("this video publishes no caption track");
+  const html = await page.text();
+  const tracks = captionTracksOf(html);
+  if (tracks.length === 0) {
+    // WHICH KIND OF NOTHING THIS IS, and getting it wrong retires a video for
+    // ever on the strength of a page we were never shown.
+    //
+    // No track table can mean the video publishes no captions, OR that YouTube
+    // handed this caller a consent wall, a bot check, or any other page without
+    // a player response in it. The two are indistinguishable by track count and
+    // the message said the first one outright — so a Host that YouTube throttles
+    // reported a fact about the VIDEO when the only fact available was about
+    // ITSELF.
+    //
+    // MEASURED, and this is not hypothetical: from this Host the timedtext
+    // endpoint answers 200 with an empty body, and video zIwwkuB2NPQ was
+    // reported as publishing no captions while yt-dlp on another machine
+    // fetched its English track the same minute. That verdict had already been
+    // written into the library as a permanent absence.
+    //
+    // A player response with no captionTracks in it is the real answer. Anything
+    // else is a page we should not be drawing conclusions from.
+    const sawPlayer = /"streamingData"|"videoDetails"|ytInitialPlayerResponse/.test(html);
+    throw new Error(sawPlayer
+      ? "this video publishes no caption track"
+      : "the watch page carried no player response, so this caller was served something other than the video");
+  }
   const track = pickTrack(tracks, languages);
   if (track?.baseUrl === undefined) throw new Error("no usable caption track");
   const captions = await fetch(track.baseUrl, { headers: PAGE_HEADERS });
