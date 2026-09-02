@@ -2626,3 +2626,34 @@ test("a video longer than the auto-read ceiling is deferred, not read", (t) => {
   assert.deepEqual(scan.rows.map((row) => row.id), ["normal"], "a six-hour recording was read automatically");
   assert.match(String(scan.skipped[0]?.reason ?? ""), /ceiling/, "it was skipped without saying why");
 });
+
+test("purging takes the evidence with the claims, in one transaction", (t) => {
+  // A half-emptied table is a board showing claims whose evidence is gone,
+  // which renders as a card citing sources it cannot name.
+  const { store, insights } = library(t);
+  store.put(resource("src"));
+  const id = claim(insights);
+  insights.addEvidence(id, [evidence("src", { resourceType: "NEWS" })]);
+  assert.equal(insights.count(), 1);
+  assert.equal(insights.listEvidence(id).length, 1);
+
+  assert.deepEqual(insights.purge(), { insights: 1, evidence: 1 });
+  assert.equal(insights.count(), 0);
+  assert.equal(insights.list({ take: 10 }).insights.length, 0);
+  // And the store is usable afterwards rather than left mid-transaction.
+  claim(insights, { statement: "A claim written after the board was emptied out" });
+  assert.equal(insights.count(), 1, "the store is unusable after a purge");
+});
+
+test("a purge takes the pinned rows too, because their subject is going", (t) => {
+  // A verdict is a person's own and normally outranks everything. A verdict on
+  // a claim quoted from a video's marketing blurb is a verdict on something
+  // that should never have been extracted — keeping it would preserve the
+  // judgement and discard its subject.
+  const { insights } = library(t);
+  const id = claim(insights);
+  insights.setStatus(id, "standing");
+  assert.equal(insights.get(id).pinnedStatus, "standing");
+  insights.purge();
+  assert.equal(insights.get(id), undefined, "a pinned claim survived a purge");
+});

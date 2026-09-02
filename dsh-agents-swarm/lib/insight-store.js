@@ -1670,6 +1670,39 @@ export class InsightStore {
   }
 
   /**
+   * Remove every claim and every piece of evidence.
+   *
+   * A DESTRUCTIVE OPERATION WITH NO UNDO, and it exists because the alternative
+   * was worse: a board holding the output of a pipeline that has since been
+   * rewritten is a board a reader has to filter by hand for ever, with nothing
+   * on screen saying which half is which.
+   *
+   * IT TAKES THE PINNED ROWS TOO. A verdict is a person's own and normally
+   * outranks everything — but a verdict on a claim quoted from a video's
+   * marketing blurb is a verdict on something that should never have been
+   * extracted, and keeping it would preserve the judgement while discarding its
+   * subject. Only a caller who has been told this should be calling it.
+   *
+   * ONE TRANSACTION. A half-emptied table is a board showing claims whose
+   * evidence is gone, which renders as a card citing sources it cannot name.
+   * @returns `{ insights, evidence }`, the counts removed.
+   */
+  purge() {
+    const insights = this.db.prepare("SELECT COUNT(*) AS n FROM insights").get().n;
+    const evidence = this.db.prepare("SELECT COUNT(*) AS n FROM insight_evidence").get().n;
+    this.db.exec("BEGIN");
+    try {
+      this.db.exec("DELETE FROM insight_evidence");
+      this.db.exec("DELETE FROM insights");
+      this.db.exec("COMMIT");
+    } catch (cause) {
+      this.db.exec("ROLLBACK");
+      throw cause;
+    }
+    return { insights, evidence };
+  }
+
+  /**
    * One row of health for `/insights/status`.
    *
    * `oldestScoredAt` and `neverScored` are the staleness canaries: a

@@ -693,6 +693,47 @@ export function createInsightRoutes({ store, chat, logger, sendJson, readJson, w
       return true;
     }
 
+    // ── empty the board and start again ─────────────────────────────────
+    //
+    // GUARDED BY A COUNT, NOT A FLAG. `{confirm: true}` is one keystroke from
+    // `{confirm: false}` and both are things a script writes by accident; the
+    // caller has to send the number of claims it believes it is destroying, and
+    // a stale number is refused. Somebody who has not looked cannot supply it.
+    //
+    // THE WATERMARK GOES WITH THEM. Deleting the claims without resetting it
+    // leaves a library that has been read and has nothing to show for it: the
+    // next pass carries on from where the old one stopped, re-reads nothing,
+    // and the board stays empty until new material arrives.
+    if (req.method === "POST" && path === "/insights/purge") {
+      let body;
+      try {
+        body = await readJson(req);
+      } catch (cause) {
+        sendJson(res, 400, { success: false, error: String(cause?.message ?? cause) });
+        return true;
+      }
+      const held = insights.count();
+      const claimed = Number(body?.expect);
+      if (!Number.isInteger(claimed) || claimed !== held) {
+        sendJson(res, 409, {
+          success: false,
+          error: `send {"expect": ${held}} to confirm; the board holds ${held} claim(s) and the request said ${body?.expect ?? "nothing"}`,
+          held,
+        });
+        return true;
+      }
+      const removed = insights.purge();
+      // Both records, because either may carry a watermark and the drain reads
+      // whichever the scheduled pass wrote. Cleared here rather than through
+      // the settings whitelist, which has never allowed these keys to be
+      // written from outside and should stay that way.
+      store.setSetting("insightLastRun", null);
+      store.setSetting("insightLastManualRun", null);
+      store.setSetting("insightLastGoodRun", null);
+      sendJson(res, 200, { success: true, data: { ...removed, watermark: "reset" } });
+      return true;
+    }
+
     // ── fetch transcripts, with no pass attached ────────────────────────
     //
     // A ROUTE OF ITS OWN BECAUSE IT IS A DIFFERENT JOB. The pass tops up as
