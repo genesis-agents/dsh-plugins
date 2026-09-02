@@ -312,6 +312,40 @@ const supadataHealth = new Map();
 const QUOTA_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
 /**
+ * Paid requests made since this host started, and the ceiling on them.
+ *
+ * THE NUMBER NOBODY WAS COUNTING, and its absence is the whole reason five keys
+ * emptied. The budget upstream counts VIDEOS — twelve a pass, sixty a drain —
+ * and the paid calls those become are two multiplications away: sixty videos
+ * against five keys is three hundred requests, and the figure on screen said
+ * sixty. Nothing anywhere computed the second number, so nothing could refuse
+ * it, report it, or notice it climbing.
+ *
+ * A CEILING RATHER THAN A WARNING. A meter that only reports is a meter
+ * somebody has to be watching, and this ran unattended. Past the ceiling the
+ * paid route is simply not taken; the free ones are unaffected, so the library
+ * keeps gaining transcripts at no cost while the spend stays where it was put.
+ *
+ * PER HOST LIFETIME, not per pass. Per-pass is what the video budget already
+ * is, and it is exactly the accounting that failed: twenty passes of a
+ * "reasonable" per-pass budget is not a reasonable total. This is the total.
+ */
+const PAID_CALL_CEILING = 200;
+let paidCalls = 0;
+
+/** How many paid requests have been made, and what is left. */
+export function supadataSpend() {
+  return { calls: paidCalls, ceiling: PAID_CALL_CEILING, remaining: Math.max(0, PAID_CALL_CEILING - paidCalls) };
+}
+
+/** Forget the spend, for a host that has been given fresh quota. */
+export function resetSupadataSpend() {
+  const spent = paidCalls;
+  paidCalls = 0;
+  return spent;
+}
+
+/**
  * Forget every key's recorded state.
  *
  * TWO CALLERS AND BOTH ARE REAL. A person who has just topped up their quota
@@ -524,6 +558,13 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
     //
     // So a refused key is skipped for a cooldown, and when every key is inside
     // one the request is not made at all: there is nothing left to ask.
+    // THE CEILING IS CHECKED BEFORE THE KEYS ARE, because a key that has quota
+    // is not permission to spend without limit — that was the assumption that
+    // emptied five of them.
+    if (paidCalls >= PAID_CALL_CEILING) {
+      failures.push(`supadata: ${paidCalls} paid requests made since this host started, at the ceiling of ${PAID_CALL_CEILING}; not spending more without a reset`);
+      throw new Error(failures.join("; "));
+    }
     const usable = keys.filter((key) => !isExhausted(key));
     if (usable.length === 0) {
       failures.push(`supadata: all ${keys.length} key(s) are out of quota; not asking again until the cooldown expires`);
@@ -534,6 +575,10 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
     for (let step = 0; step < usable.length; step += 1) {
       const at = (start + step) % usable.length;
       try {
+        // COUNTED BEFORE THE AWAIT, not after. A request that throws still
+        // reached the provider and still counted against a quota; counting on
+        // success would meter only the calls that were worth making.
+        paidCalls += 1;
         const got = { ...await fetchViaSupadata(videoId, usable[at], languages[0] ?? "en"), via: "supadata" };
         noteSupadataKey(usable[at], "ok");
         return got;

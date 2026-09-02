@@ -19,7 +19,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { SourceStore, RESOURCE_TYPES } from "./store.js";
 import { COLLECTORS, DEFAULT_COLLECT_INTERVAL_MINUTES, runCollector } from "./collect.js";
 import { registerLibraryTool } from "./tool.js";
-import { resolveTranscript, listCaptionTracks, transcriptFromXml, fetchVideoDetails, resetSupadataHealth, supadataKeyHealth, supadataKeys } from "./transcript.js";
+import { resolveTranscript, listCaptionTracks, transcriptFromXml, fetchVideoDetails, resetSupadataHealth, resetSupadataSpend, supadataKeyHealth, supadataKeys, supadataSpend } from "./transcript.js";
 import { translateBatch, isSupportedLanguage, BATCH_SIZE, TARGET_LANGUAGES } from "./translate.js";
 import { admissibleUrl, fetchDocument, readableText, readArticle, displayModeOf, documentUrlOf } from "./proxy.js";
 import { sourceFeeds } from "./sources.js";
@@ -1212,6 +1212,10 @@ export function createHandler(store, logger, chat, web, ctx, missions) {
           // with one exhausted was indistinguishable from a list of three —
           // and which one to replace was unanswerable from the product.
           supadataKeyHealth: supadataKeyHealth(readConfig(store).supadataKey),
+          // WHAT HAS BEEN SPENT AND WHAT IS LEFT. On the settings page beside
+          // the keys, because the question "is this costing me anything" was
+          // unanswerable from this product while it was costing something.
+          supadataSpend: supadataSpend(),
         },
       });
       return;
@@ -1234,7 +1238,17 @@ export function createHandler(store, logger, chat, web, ctx, missions) {
     // which exists to stop pointless retries — would punish the person who
     // fixed the problem by making them wait out a fact about yesterday.
     if (req.method === "POST" && path === "/config/supadata-reset") {
-      sendJson(res, 200, { success: true, data: { cleared: resetSupadataHealth(), keys: supadataKeyHealth(readConfig(store).supadataKey) } });
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          cleared: resetSupadataHealth(),
+          // The spend goes with the cooldowns: somebody topping up their quota
+          // is answering both facts at once, and leaving the ceiling in place
+          // would make the reset button work only halfway.
+          spent: resetSupadataSpend(),
+          keys: supadataKeyHealth(readConfig(store).supadataKey),
+        },
+      });
       return;
     }
 

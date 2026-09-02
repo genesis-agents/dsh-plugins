@@ -15,12 +15,12 @@
 import { strict as assert } from "node:assert";
 import { beforeEach, test } from "node:test";
 
-import { maskSupadataKey, resetSupadataHealth, supadataKeyHealth, supadataKeys, resolveTranscript } from "../lib/transcript.js";
+import { maskSupadataKey, resetSupadataHealth, resetSupadataSpend, supadataKeyHealth, supadataKeys, supadataSpend, resolveTranscript } from "../lib/transcript.js";
 
 // A HOOK, NOT A CALL IN EVERY TEST. The key-health cache is module-level and
 // two tests here failed on state a third had left behind — a suite reporting
 // the order it ran in rather than the behaviour it checks.
-beforeEach(() => { resetSupadataHealth(); });
+beforeEach(() => { resetSupadataHealth(); resetSupadataSpend(); });
 
 test("the setting is split into keys however it was pasted", () => {
   // A person pasting four keys uses whichever separator their clipboard
@@ -258,4 +258,51 @@ test("a success clears a key's cooldown by itself", async () => {
   await chain("k1\nk2", (key) => (key === "k1" ? 429 : { content: "k2 is fine", lang: "en" }));
   assert.equal(supadataKeyHealth("k1\nk2")[0].state, "quota");
   assert.equal(supadataKeyHealth("k1\nk2")[1].state, "ok", "the working key was marked spent");
+});
+
+test("paid calls are counted, and the ceiling refuses rather than warns", async () => {
+  // THE NUMBER NOBODY WAS COUNTING, and its absence is why five keys emptied.
+  // The budget upstream counts VIDEOS — twelve a pass, sixty a drain — and the
+  // paid calls those become are two multiplications away: sixty videos against
+  // five keys is three hundred requests, and the figure on screen said sixty.
+  // Nothing computed the second number, so nothing could refuse it, report it,
+  // or notice it climbing.
+  resetSupadataSpend();
+  assert.equal(supadataSpend().calls, 0);
+
+  // One video, five keys, all refusing: five paid requests, all counted.
+  await chain("k1\nk2\nk3\nk4\nk5", () => 500);
+  assert.equal(supadataSpend().calls, 5, "paid requests are not being counted");
+
+  // COUNTED ON FAILURE TOO. A request that throws still reached the provider
+  // and still counted against a quota; metering only successes would count the
+  // calls that were worth making and miss every one that was not — which is
+  // the entire population here, measured: 54 calls, 0 successes.
+  assert.equal(supadataSpend().remaining, supadataSpend().ceiling - 5);
+});
+
+test("past the ceiling the paid route is not taken at all", async () => {
+  // A METER THAT ONLY REPORTS IS A METER SOMEBODY HAS TO BE WATCHING, and this
+  // runs unattended. The free routes are unaffected, so the library keeps
+  // gaining transcripts at no cost while the spend stays where it was put.
+  resetSupadataSpend();
+  resetSupadataHealth();
+  const ceiling = supadataSpend().ceiling;
+  // Burn to the ceiling with a fresh key each time, so cooldowns are not what
+  // stops it — the ceiling has to be the thing that does.
+  for (let at = 0; at < ceiling; at += 1) {
+    resetSupadataHealth();
+    await chain(`burn${at}`, () => 500);
+  }
+  assert.ok(supadataSpend().remaining === 0, `remaining ${supadataSpend().remaining} after burning the ceiling`);
+
+  resetSupadataHealth();
+  const after = await chain("fresh-key", () => ({ content: "would have worked", lang: "en" }));
+  assert.equal(after.used.length, 0, "a paid request was made past the ceiling");
+  assert.match(String(after.error?.message ?? ""), /ceiling/, "the refusal does not say why");
+
+  // And a reset restores it, for somebody who has just topped up.
+  resetSupadataSpend();
+  const back = await chain("fresh-key", () => ({ content: "now it works", lang: "en" }));
+  assert.equal(back.result?.text, "now it works", "the ceiling could not be cleared");
 });
