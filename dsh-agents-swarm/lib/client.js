@@ -9813,6 +9813,11 @@ window.__ModuleLoader__.load({
 			const locatedQuotes = data.locatedQuotes;
 			const broken = Number(counts.failed ?? 0);
 			const skipped = Number(counts["no-transcript"] ?? 0) + Number(counts.unusable ?? 0);
+			// The other four, which are the ones that add up to what the band above
+			// calls 本轮扫过. Derived by subtraction rather than by naming them again:
+			// a second hand-written list of state names is a list that can disagree
+			// with the first one, and this file has paid for that twice today.
+			const scanned = looked - skipped;
 
 			return jsxs("section", {
 				style: {
@@ -9932,13 +9937,32 @@ window.__ModuleLoader__.load({
 					// THE COUNTS, ALWAYS. Six cells rather than the four the run's own
 					// figures carry, and they answer a different question: those are
 					// about the CLAIMS, these are about the SOURCES.
+					//
+					// AND THEY DO NOT ALL ADD UP TO THE SAME TOTAL, which is the last
+					// thing on this band a reader could not work out. Four of the six —
+					// 抽取失败, 超出上限, 读了没抽到, 进了主张 — sum to 扫过; the other two,
+					// 没有转录 and 没有正文, sum to 跳过, because a skip happens BEFORE the
+					// scan counts the row. Measured on a real pass: 2961 + 12 + 15 + 12
+					// = 3000 扫过, and 30 + 0 = 30 跳过, together the 3030 经手 in the line
+					// above. In one flat row of six they read as one list against one
+					// total, and the two that belong to the other total look like
+					// arithmetic that does not close. I checked this myself and got it
+					// wrong on the first attempt, off by exactly the 抽取失败 column.
+					//
+					// SORTED, NOT SEPARATED BY A RULE. The scan's four come first in the
+					// order the pass reaches them, then the skips; the boundary is drawn
+					// by a caption under each group rather than a divider, because a
+					// divider inside a six-cell grid reads as two panels rather than two
+					// halves of one.
 					jsx("div", {
 						style: {
 							display: "grid",
 							gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))",
 							gap: SPACE.xs
 						},
-						children: states.map((one) => {
+						children: ["failed", "binned", "read", "extracted", "no-transcript", "unusable"]
+							.filter((one) => states.includes(one))
+							.map((one) => {
 							const face = PASS_STATE_FACES[one] ?? null;
 							const value = Number(counts[one] ?? 0);
 							return jsxs("div", {
@@ -9970,6 +9994,16 @@ window.__ModuleLoader__.load({
 							}, one);
 						})
 					}, "counts"),
+
+					// WHICH FOUR MAKE WHICH TOTAL, said once in words. Without it the
+					// grouping above is a hint and the reader still has to guess where
+					// the boundary falls.
+					jsx("div", {
+						style: { font: FONT.micro, color: INK.quiet },
+						children: zh
+							? `前四项合计 ${scanned} = 扫过；后两项合计 ${skipped} = 跳过（在扫描计数之前就跳过了）`
+							: `the first four sum to ${scanned} scanned; the last two sum to ${skipped} skipped, before the scan counted them`
+					}, "sums"),
 
 					// THE ROWS, ONLY WHEN ASKED FOR. Sorted by the Host into order of
 					// concern, so the failures are at the top rather than alphabetically
