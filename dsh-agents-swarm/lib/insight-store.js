@@ -835,7 +835,14 @@ export class InsightStore {
     const holes = ids.map(() => "?").join(",");
     const rows = this.db.prepare(`
       SELECT e.insight_id, e.resource_id, e.stance, e.quote, e.source_key, e.speaker, e.added_at,
-             r.title AS title, r.source_url AS source_url, r.type AS type
+             r.title AS title, r.source_url AS source_url, r.type AS type,
+             -- WHEN THE SOURCE ITSELF WAS PUBLISHED, which is the one date on
+             -- this card that is about the world rather than about us. The card
+             -- carried only 首见 -- when this library first saw the claim -- so a
+             -- quote from a 2009 paper and one from this morning were dated
+             -- identically, and the difference was unavailable at the only
+             -- place a reader is looking.
+             r.published_at AS published_at
       FROM (
         SELECT insight_id, resource_id, stance, quote, source_key, speaker, added_at,
                ROW_NUMBER() OVER (PARTITION BY insight_id, stance ORDER BY added_at DESC) AS rn
@@ -853,6 +860,9 @@ export class InsightStore {
         stance: row.stance,
         quote: row.quote,
         sourceKey: row.source_key,
+        // Null when the feed carried no date, which is common and is not the
+        // same as old: the page renders nothing rather than guessing.
+        publishedAt: row.published_at ?? null,
         // Who said it, when the block said so. On the CARD PREVIEW as well as
         // on the detail, because the card is where a reader decides whether a
         // quote is worth opening — and "somebody named, on the record" and

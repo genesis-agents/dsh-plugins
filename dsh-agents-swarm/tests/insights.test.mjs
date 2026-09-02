@@ -2248,3 +2248,43 @@ test("an expired claim leaves the inbox and lands in its own seat", (t) => {
   assert.equal(counts.expired, 1);
   assert.equal(counts.pending, 1, "the inbox count still includes the retired claim");
 });
+
+test("a card's quote carries the source's own publication date", (t) => {
+  // THE CARD HAD ONE DATE AND IT WAS ABOUT US. `首见` is when this library first
+  // saw the CLAIM, so a quote from a 2009 paper and one from this morning were
+  // dated identically — and now that the tab is scoped to a horizon, that
+  // difference is the single thing deciding whether a reader should care.
+  const { store, insights } = library(t);
+  store.put(resource("src", { publishedAt: "2026-08-28T09:00:00.000Z" }));
+  const id = claim(insights);
+  insights.addEvidence(id, [evidence("src", { resourceType: "NEWS" })]);
+  const card = insights.list({ take: 10 }).insights.find((row) => row.id === id);
+  assert.equal(card.evidencePreview[0].publishedAt, "2026-08-28T09:00:00.000Z");
+});
+
+test("an undated source shows no date rather than ours", (t) => {
+  // Printing our collection time here would reintroduce the exact confusion
+  // this fixes: an undated source is not old, the feed simply did not say.
+  const { store, insights } = library(t);
+  store.put(resource("undated", { publishedAt: undefined }));
+  const id = claim(insights);
+  insights.addEvidence(id, [evidence("undated", { resourceType: "NEWS" })]);
+  const card = insights.list({ take: 10 }).insights.find((row) => row.id === id);
+  assert.equal(card.evidencePreview[0].publishedAt, null, "an absent date was filled in with something");
+});
+
+test("each source keeps its own date rather than the claim taking one", (t) => {
+  // A claim with three sources has three publication dates, and folding them
+  // into one number on the card would pick a winner silently.
+  const { store, insights } = library(t);
+  store.put(resource("old", { publishedAt: "2026-01-01T00:00:00.000Z" }));
+  store.put(resource("new", { publishedAt: "2026-08-30T00:00:00.000Z" }));
+  const id = claim(insights);
+  insights.addEvidence(id, [
+    evidence("old", { resourceType: "NEWS" }),
+    evidence("new", { resourceType: "NEWS", quote: "raised $3.5bn in a Series E round led by Lightspeed again" }),
+  ]);
+  const card = insights.list({ take: 10 }).insights.find((row) => row.id === id);
+  const dates = card.evidencePreview.map((one) => one.publishedAt).sort();
+  assert.deepEqual(dates, ["2026-01-01T00:00:00.000Z", "2026-08-30T00:00:00.000Z"]);
+});

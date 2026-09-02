@@ -8875,6 +8875,12 @@ window.__ModuleLoader__.load({
 							}, "against"),
 							jsx("span", {
 								title: formatStamp(row.firstSeenAt),
+								// OURS, AND NOW SAID SO. This is when the LIBRARY first saw the
+								// claim, and it used to be the only date on the card — so a
+								// quote from a 2009 paper and one from this morning read the
+								// same. The source's own date sits on the quote row now, which
+								// makes it worth naming which of the two this is.
+								title: zh ? "本库第一次看到这条主张的时间" : "when this library first saw the claim",
 								children: zh ? `首见 ${formatAgo(row.firstSeenAt, zh)}` : `first seen ${formatAgo(row.firstSeenAt, zh)}`
 							}, "first"),
 							jsx("span", { style: { flex: 1 } }, "gap"),
@@ -9027,6 +9033,30 @@ window.__ModuleLoader__.load({
 									jsx("span", { children: formatMoment(at) }, "at")
 								]
 							}, "at"),
+							// WHEN THE SOURCE WAS PUBLISHED, on the row that names it.
+							//
+							// THE CARD HAD ONE DATE AND IT WAS ABOUT US. `首见 9 小时前` is
+							// when this library first saw the CLAIM, so a quote from a 2009
+							// paper and one from this morning were dated identically — and
+							// the difference is the single thing that decides whether a
+							// reader should care, now that the tab is scoped to a horizon.
+							//
+							// ON THE QUOTE, NOT ON THE CARD. A claim with three sources has
+							// three publication dates and folding them into one number would
+							// pick a winner silently. The quote row is where a source is
+							// already named, linked and attributed; its date belongs beside
+							// its name.
+							//
+							// ABSENT WHEN THE FEED CARRIED NONE, rather than guessed. An
+							// undated source is not old, and printing our collection time
+							// here would reintroduce the exact confusion this fixes.
+							typeof piece?.publishedAt !== "string" || piece.publishedAt === "" ? null : jsx("span", {
+								title: zh
+									? `信源发布时间：${formatStamp(piece.publishedAt)}`
+									: `published ${formatStamp(piece.publishedAt)}`,
+								style: { flex: "none", color: INK.quiet, fontVariantNumeric: "tabular-nums" },
+								children: formatAgo(piece.publishedAt, zh)
+							}, "published"),
 							// A TALK WHOSE QUOTE IS NOT FROM THE TALK. Measured on the real
 							// library: five of ten video-backed quotes resolve to a second
 							// and five do not, because those five were copied out of the
