@@ -76,11 +76,26 @@ async function chain(keys, answer) {
 }
 
 test("a spent key costs one request, and the next key is tried", async () => {
-  // THE FAILURE THIS EXISTS FOR. One key at 429 used to mean every transcript
-  // in the library failed until somebody noticed and pasted a new one.
+  // THE FAILURE THIS EXISTS FOR. One key out of credit used to mean every
+  // transcript in the library failed until somebody noticed and pasted a new
+  // one.
+  //
+  // 402, NOT 429, AND THE DIFFERENCE COST SIX KEYS. This test said 429, and it
+  // taught the code the wrong lesson — the rotation learned that "the provider
+  // refused" means "this key is spent, try the next".
+  //
+  // 429 is Too Many Requests: a statement about the RATE OF THIS MACHINE, and
+  // every key in the list travels from the same address. So trying the next one
+  // is one more request from the address that was just refused, and six keys
+  // turned a single refusal into six. Measured, by a person adding keys one at
+  // a time and watching each go red on its second call: a brand-new key cannot
+  // be out of quota.
+  //
+  // Running out of CREDIT is 402, is per-key, and is the only thing this
+  // rotation is for.
   const { used, result } = await chain("k1\nk2\nk3", (key) => (key === "k3"
     ? { content: "the third key still has quota", lang: "en" }
-    : 429));
+    : 402));
   assert.equal(result?.text, "the third key still has quota", "a spent key ends the chain instead of yielding to the next");
   assert.equal(result?.via, "supadata", "the transcript is attributed to a route it did not come from");
   assert.deepEqual(used, ["k1", "k2", "k3"], "the keys were not tried in order, or one was skipped");
@@ -128,7 +143,7 @@ test("the failure names the key by position and never by value", async () => {
   // `failures.join("; ")` as the error body, so a key printed here leaves the
   // machine — and "key 3 of 4" is what a person needs in order to know which
   // one to replace without it ever being printed.
-  const { error } = await chain("sk-live-aaaa\nsk-live-bbbb", () => 429);
+  const { error } = await chain("sk-live-aaaa\nsk-live-bbbb", () => 402);
   const said = String(error?.message);
   assert.ok(!said.includes("sk-live-aaaa"), "a key is in the error message the route sends to the browser");
   assert.ok(!said.includes("sk-live-bbbb"), "a key is in the error message the route sends to the browser");
@@ -222,12 +237,12 @@ test("an exhausted key is not asked again, so a batch cannot burn the list per v
   // pins it. It is wrong when the key was already known to be spent, and
   // nothing remembered.
   const keys = "k1\nk2\nk3\nk4\nk5";
-  const first = await chain(keys, () => 429);
+  const first = await chain(keys, () => 402);
   assert.ok(first.used.length > 1, `the first video probed only ${first.used.length} key(s); the list is not being tried`);
 
   // Every video after it makes NO paid call at all — the whole burn, gone.
   for (const _ of [1, 2, 3, 4]) {
-    const again = await chain(keys, () => 429);
+    const again = await chain(keys, () => 402);
     assert.equal(again.used.length, 0, `${again.used.length} paid call(s) against keys already known to be out of quota`);
   }
 });
@@ -237,7 +252,7 @@ test("a key that starts working again comes back without a restart", async () =>
   // has just topped up. `resetSupadataHealth` is the door for the person who
   // fixed the quota and should not wait six hours to find out — and it is the
   // same door `POST /config/supadata-reset` opens.
-  const spent = await chain("k1", () => 429);
+  const spent = await chain("k1", () => 402);
   assert.equal(spent.used.length, 1);
   assert.equal(supadataKeyHealth("k1")[0].state, "quota");
 
@@ -255,7 +270,7 @@ test("a success clears a key's cooldown by itself", async () => {
   // The other direction, and it matters as much: a key restored on the
   // provider's side must come back without anybody pressing anything, or the
   // reset button becomes a step people have to know about.
-  await chain("k1\nk2", (key) => (key === "k1" ? 429 : { content: "k2 is fine", lang: "en" }));
+  await chain("k1\nk2", (key) => (key === "k1" ? 402 : { content: "k2 is fine", lang: "en" }));
   assert.equal(supadataKeyHealth("k1\nk2")[0].state, "quota");
   assert.equal(supadataKeyHealth("k1\nk2")[1].state, "ok", "the working key was marked spent");
 });
@@ -305,4 +320,53 @@ test("past the ceiling the paid route is not taken at all", async () => {
   resetSupadataSpend();
   const back = await chain("fresh-key", () => ({ content: "now it works", lang: "en" }));
   assert.equal(back.result?.text, "now it works", "the ceiling could not be cleared");
+});
+
+test("a rate limit stands the whole client down, and never blames a key", async () => {
+  // THE BUG THAT BURNED SIX KEYS, and the evidence that found it: a person
+  // added a fresh key, watched it turn 配额用尽 on its second call, added
+  // another, and repeated — six times. A key that has never been used cannot be
+  // out of quota. What was being refused was the MACHINE.
+  //
+  // 429 is Too Many Requests. It is a statement about the rate of the
+  // requester, and every key in the list travels from the same address, so the
+  // rotation's "a spent key yields to the next" turned one refusal into one per
+  // key — and each new key the person added was consumed by the next pass.
+  const { used, error } = await chain("k1\nk2\nk3\nk4\nk5", () => 429);
+  assert.equal(used.length, 1, `a rate limit tried ${used.length} keys; every one after the first is a request from the address that was just refused`);
+  assert.match(String(error?.message), /429/);
+
+  // AND IT IS NOT RECORDED AS THE KEY'S FAULT. `limited` is a fact about this
+  // host; `quota` is a fact about an account. Reporting the first as the second
+  // is what sent somebody out to buy five more keys.
+  const health = supadataKeyHealth("k1\nk2\nk3\nk4\nk5");
+  const touched = health.filter((one) => one.calls > 0);
+  assert.equal(touched.length, 1, "more than one key was marked by a single rate limit");
+  assert.equal(touched[0].state, "limited", `a rate limit was recorded as ${touched[0].state}`);
+  assert.equal(touched[0].quota, 0, "a rate limit was counted against the key's credit");
+});
+
+test("while rate limited, no key is tried at all", async () => {
+  // The backoff is about the client, so it holds for every key including one
+  // added a second later — which is exactly the case that kept happening.
+  await chain("k1", () => 429);
+  const after = await chain("k1\nbrand-new-key", () => ({ content: "would have worked", lang: "en" }));
+  assert.equal(after.used.length, 0, "a fresh key was spent during the backoff");
+  assert.match(String(after.error?.message), /rate limited|standing down/i);
+
+  // And the reset clears it, for somebody who has waited or changed address.
+  resetSupadataHealth();
+  const back = await chain("k1", () => ({ content: "back", lang: "en" }));
+  assert.equal(back.result?.text, "back", "the backoff could not be cleared");
+});
+
+test("running out of credit is still per-key and still yields to the next", async () => {
+  // The distinction is the whole fix: 402 is an account fact and the next key
+  // may genuinely have credit; 429 is a client fact and the next key cannot
+  // help. Collapsing them either wastes the key list or wastes the quota.
+  const { used, result } = await chain("k1\nk2", (key) => (key === "k2"
+    ? { content: "the second key has credit", lang: "en" }
+    : 402));
+  assert.equal(result?.text, "the second key has credit");
+  assert.equal(used.length, 2, "an out-of-credit key no longer yields to the next");
 });

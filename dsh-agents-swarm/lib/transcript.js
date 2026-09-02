@@ -312,6 +312,46 @@ const supadataHealth = new Map();
 const QUOTA_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
 /**
+ * When this HOST was last rate-limited, and how long it then stands down.
+ *
+ * 429 IS ABOUT THE CALLER, NOT ABOUT THE KEY, and modelling it per-key was the
+ * mistake that burned six of them.
+ *
+ * The evidence is unambiguous and it took a person adding keys one at a time to
+ * produce it: a brand-new key, on its second call, answered HTTP 429. A key
+ * that has never been used cannot be out of quota. What was being refused was
+ * this machine — Too Many Requests is a statement about the rate of the
+ * requester, and every key in the list travels from the same IP.
+ *
+ * So "a spent key yields to the next" — which the code did, which an existing
+ * test pins, and which the module's own comment argues for — is right for
+ * running out of CREDIT and exactly backwards for being rate-limited: trying
+ * the next key is one more request from the address that was just told to slow
+ * down. Six keys turned one refusal into six.
+ *
+ * A 429 now stands the whole client down. Not the key: the client.
+ *
+ * TWENTY MINUTES, not six hours. A rate limit is a speed complaint and clears
+ * on its own; a credit exhaustion is a billing fact and does not. Treating the
+ * first like the second would idle a working account for a quarter of a day.
+ */
+const RATE_LIMIT_BACKOFF_MS = 20 * 60 * 1000;
+let rateLimitedAt = 0;
+
+/** Whether a 402/403 means this key is out of credit, as opposed to too fast. */
+function isCreditExhausted(cause) {
+  const status = Number(cause?.status);
+  if (status === 402 || status === 403) return true;
+  return /out of credit|insufficient|quota exceeded|limit exceeded/i.test(String(cause?.message ?? cause ?? ""));
+}
+
+/** Whether an answer is the provider telling this client to slow down. */
+function isRateLimited(cause) {
+  if (Number(cause?.status) === 429) return true;
+  return /\b429\b|too many requests|rate.?limit/i.test(String(cause?.message ?? cause ?? ""));
+}
+
+/**
  * Paid requests made since this host started, and the ceiling on them.
  *
  * THE NUMBER NOBODY WAS COUNTING, and its absence is the whole reason five keys
@@ -360,6 +400,16 @@ export function resetSupadataSpend() {
 export function resetSupadataHealth() {
   const held = supadataHealth.size;
   supadataHealth.clear();
+  // THE CLIENT BACKOFF GOES WITH THEM. It is the third piece of state that
+  // stops a request, and leaving it behind makes the reset button work only
+  // two thirds of the way — a person who has just sorted out their rate limit
+  // would clear the key cooldowns, press the button, and still be stood down.
+  //
+  // It is also what made six tests fail as a group: one test triggering a 429
+  // stood the whole module down for twenty minutes, so every test after it was
+  // asserting against a client that had already given up. A suite reporting
+  // the order it ran in, again.
+  rateLimitedAt = 0;
   return held;
 }
 
@@ -371,7 +421,7 @@ function isExhausted(key, now = Date.now()) {
 }
 
 function noteSupadataKey(key, outcome, error = "") {
-  const held = supadataHealth.get(key) ?? { calls: 0, ok: 0, quota: 0, failed: 0, lastError: "", lastAt: "", exhaustedAt: 0 };
+  const held = supadataHealth.get(key) ?? { calls: 0, ok: 0, quota: 0, limited: 0, failed: 0, lastError: "", lastAt: "", exhaustedAt: 0 };
   held.calls += 1;
   held[outcome] += 1;
   held.lastAt = new Date().toISOString();
@@ -411,13 +461,26 @@ export function maskSupadataKey(key) {
 
 export function supadataKeyHealth(raw) {
   return supadataKeys(raw).map((key, at) => {
-    const held = supadataHealth.get(key) ?? { calls: 0, ok: 0, quota: 0, failed: 0, lastError: "", lastAt: "", exhaustedAt: 0 };
+    const held = supadataHealth.get(key) ?? { calls: 0, ok: 0, quota: 0, limited: 0, failed: 0, lastError: "", lastAt: "", exhaustedAt: 0 };
     // The state is the LAST thing that happened, not a ratio: a key that served
     // a thousand transcripts and is now out of quota is out of quota, and an
     // average would report it as healthy for a long time.
+    // THREE STATES, NOT TWO, AND THE THIRD IS NOT THIS KEY'S FAULT.
+    //
+    // "limited" is the provider telling THIS MACHINE to slow down, and it was
+    // being reported as 配额用尽 on the key that happened to be next in the
+    // rotation. A person watching that added a key, watched it turn red on its
+    // second call, and added another — six times. Nothing was wrong with any of
+    // them.
+    //
+    // The state is the LAST thing that happened, so a key rate-limited a moment
+    // ago and one genuinely out of credit are told apart at a glance.
     const state = held.calls === 0
       ? "untried"
-      : (held.lastError === "" ? "ok" : (held.quota > 0 && /quota|429|rate.?limit/i.test(held.lastError) ? "quota" : "failing"));
+      : (held.lastError === "" ? "ok"
+        : (held.limited > 0 && isRateLimited({ message: held.lastError }) ? "limited"
+          : (held.quota > 0 ? "quota" : "failing")));
+
     // MASKED, NEVER WHOLE. Enough to tell one row from another and to match a
     // row against the key in somebody's password manager; not enough to use.
     // This is the same trade every key-holding product makes, and it is what
@@ -558,6 +621,16 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
     //
     // So a refused key is skipped for a cooldown, and when every key is inside
     // one the request is not made at all: there is nothing left to ask.
+    // THE CLIENT-WIDE BACKOFF IS CHECKED FIRST, ahead of the ceiling and ahead
+    // of any key, because it is the only one of the three that is about this
+    // machine rather than about an account. While it holds there is nothing to
+    // try: every key would travel from the same address that was just refused.
+    const cooling = Date.now() - rateLimitedAt;
+    if (rateLimitedAt !== 0 && cooling < RATE_LIMIT_BACKOFF_MS) {
+      failures.push(`supadata: rate limited ${Math.round(cooling / 60000)} minute(s) ago; standing down for ${Math.round(RATE_LIMIT_BACKOFF_MS / 60000)}`);
+      throw new Error(failures.join("; "));
+    }
+
     // THE CEILING IS CHECKED BEFORE THE KEYS ARE, because a key that has quota
     // is not permission to spend without limit — that was the assumption that
     // emptied five of them.
@@ -586,9 +659,14 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
         // Recorded before the message is folded into `failures`, so the tally
         // sees the individual answer rather than the joined string every route
         // above it also contributed to.
+        // THREE DIFFERENT ANSWERS, AND THEY WERE ALL ONE. "quota" used to mean
+        // any of 429, "rate limit" or "quota exceeded", so a speed complaint
+        // about this machine was recorded as a fact about a key — and a fresh
+        // key inherited the label the moment it was tried.
+        const limited = isRateLimited(cause);
         noteSupadataKey(
           usable[at],
-          /quota|429|rate.?limit|too many requests/i.test(String(cause?.message ?? cause)) ? "quota" : "failed",
+          limited ? "limited" : (isCreditExhausted(cause) ? "quota" : "failed"),
           String(cause?.message ?? cause),
         );
         // WHICH key failed, by position. The keys themselves must not reach
@@ -600,6 +678,13 @@ export async function resolveTranscript(videoId, { apiKey, gensBase, languages =
         // are the same answer from every key in the list, so trying the
         // other three spends three requests to be told the same thing.
         if (cause?.status === 400 || cause?.status === 404) break;
+        // A RATE LIMIT ENDS EVERYTHING, not just this key's turn. Trying the
+        // next one is one more request from the address that was just told to
+        // slow down — which is how six keys turned a single refusal into six.
+        if (limited) {
+          rateLimitedAt = Date.now();
+          break;
+        }
         // A 429 DOES NOT BREAK, and an existing test says why: holding several
         // keys is pointless if one refusal ends the attempt — the next key may
         // genuinely have quota, and finding that out is the whole reason the
