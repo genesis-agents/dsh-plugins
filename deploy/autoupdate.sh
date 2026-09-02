@@ -89,7 +89,20 @@ running_pass() {
         const j=JSON.parse(d).data||{};
         const live=[j.insightLastManualRun,j.insightLastRun].filter(r=>r&&r.running===true)
           .some(r=>Date.now()-Date.parse(r.at||"")<4*60*1000);
-        process.stdout.write(j.manualRunInFlight===true||live?"1":"0");
+        // A TRANSCRIPT DRAIN COUNTS TOO, and it was the one kind of in-flight
+        // work this probe did not know about. A drain of a hundred videos runs
+        // for hours — three free routes and a paced paid one, per video — and a
+        // deploy landing in the middle of it kills the process and loses every
+        // video not yet reached, silently, with the tab reporting nothing worse
+        // than a backlog that stopped moving. Two of them died that way this
+        // afternoon before anybody noticed the pattern.
+        //
+        // NO FRESHNESS WINDOW ON THIS ONE, unlike the pass records above: the
+        // flag lives in the process, so it cannot outlive the run the way a
+        // written record can. If the process is gone the flag is gone with it,
+        // and the probe answers empty, which this script already reads as
+        // "proceed". The DEFER_MAX ceiling below is the backstop either way.
+        process.stdout.write(j.manualRunInFlight===true||j.transcriptDraining===true||live?"1":"0");
       }catch(e){process.stdout.write("")}})' 2>/dev/null
 }
 
@@ -123,7 +136,7 @@ if [ -n "$LIVE" ] && [ "$LIVE" -gt 0 ] 2>/dev/null; then
   case "$SINCE" in ''|*[!0-9]*) SINCE="$NOW"; printf '%s' "$NOW" > "$DEFER_MARK" ;; esac
   WAITED=$(( NOW - SINCE ))
   if [ "$WAITED" -lt "$DEFER_MAX" ]; then
-    say "deferring $(git rev-parse --short "$REMOTE"): $LIVE mission(s) running (${WAITED}s so far, giving up at ${DEFER_MAX}s)"
+    say "deferring $(git rev-parse --short "$REMOTE"): $LIVE piece(s) of work in flight (${WAITED}s so far, giving up at ${DEFER_MAX}s)"
     exit 0
   fi
   say "WARNING proceeding over $LIVE running mission(s) after ${WAITED}s; resume is armed for each"
